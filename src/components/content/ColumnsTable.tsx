@@ -8,7 +8,7 @@ import {
   type ColumnDef,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowUpDown, ArrowUp, ArrowDown, Search, Key, Link2, ShieldCheck, Circle, CircleDot } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, Search, X, Key, Link2, ShieldCheck, Circle, CircleDot } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -92,7 +92,7 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, onNav
     {
       id: "nullable",
       accessorFn: (row) => notNullSet.has(row.idx) ? "NOT NULL" : row.nullable ? "yes" : "no",
-      header: "Null",
+      header: "Nullable",
       cell: ({ row }) => {
         const col = row.original;
         if (notNullSet.has(col.idx)) {
@@ -167,19 +167,25 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, onNav
 
   return (
     <div>
-      {/* Search */}
-      <div className="relative mb-3 max-w-sm">
-        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search columns..."
-          value={globalFilter}
-          onChange={(e) => setGlobalFilter(e.target.value)}
-          className="pl-8 h-9 text-sm"
-        />
-      </div>
-
-      {/* Table */}
       <div className="border rounded-md">
+        {/* Search inside table border */}
+        <div className="relative border-b border-border px-3 py-2">
+          <Search className="absolute left-5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search columns..."
+            value={globalFilter}
+            onChange={(e) => setGlobalFilter(e.target.value)}
+            className="pl-8 pr-8 h-8 text-sm border-0 shadow-none focus-visible:ring-0 bg-transparent"
+          />
+          {globalFilter && (
+            <button
+              onClick={() => setGlobalFilter("")}
+              className="absolute right-5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
         <Table>
           <TableHeader className="sticky top-0 bg-muted/80 backdrop-blur-sm z-10">
             {table.getHeaderGroups().map((headerGroup) => (
