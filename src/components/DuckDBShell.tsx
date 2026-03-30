@@ -149,7 +149,7 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
           {error}
         </div>
       )}
-      <div ref={containerRef} className={`flex-1 min-h-0 overflow-hidden ${loading ? "hidden" : ""}`} />
+      <div ref={containerRef} className={`flex-1 min-h-0 overflow-hidden ${loading ? "hidden" : ""}`} style={{ padding: "8px 12px 4px" }} />
     </div>
   );
 }
