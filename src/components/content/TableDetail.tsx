@@ -1,20 +1,12 @@
 import { useMemo, useState } from "react";
-import { Table2, Copy, Check, Key, Link2, ShieldCheck, Circle, CircleDot } from "lucide-react";
+import { Table2, Copy, Check, Key, Link2, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { useSettings } from "@/lib/settings";
 import type { TableInfo } from "vgi/client";
-import { getColumns, getForeignKeys, type ForeignKeyInfo } from "@/lib/service";
+import { getColumns, getForeignKeys } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
+import { ColumnsTable } from "./ColumnsTable";
 
 interface Props {
   table: TableInfo;
@@ -25,7 +17,6 @@ interface Props {
 export function TableDetail({ table, catalogName, onNavigate }: Props) {
   const columns = getColumns(table);
   const foreignKeys = getForeignKeys(table);
-  const { settings } = useSettings();
   const sampleSql = `SELECT * FROM ${catalogName}.${table.schemaName}.${table.name} LIMIT 10;`;
   const [copied, setCopied] = useState(false);
 
@@ -87,74 +78,13 @@ export function TableDetail({ table, catalogName, onNavigate }: Props) {
 
         {/* Columns Tab */}
         <TabsContent value="columns" className="mt-4">
-          {columns.length > 0 && (
-            <div className="border rounded-md">
-              <Table>
-                <TableHeader className="sticky top-0 bg-muted/80 backdrop-blur-sm z-10">
-                  <TableRow>
-                    <TableHead className="text-xs w-[30%]">Name</TableHead>
-                    <TableHead className="text-xs w-[20%]">Type</TableHead>
-                    <TableHead className="text-xs w-[8%]">Null</TableHead>
-                    <TableHead className="text-xs">Comment</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {columns.map((col, idx) => {
-                    const fk = fkByColumn.get(col.name);
-                    return (
-                      <TableRow key={col.name} className="even:bg-muted/20">
-                        <TableCell className="font-mono text-sm font-medium py-1.5">
-                          <span className="flex items-center gap-1.5">
-                            {col.name}
-                            {pkColumns.has(idx) && (
-                              <Key className="h-3 w-3 text-amber-500 shrink-0" title="Primary key" />
-                            )}
-                            {fk && (
-                              <button
-                                className="shrink-0 hover:text-primary transition-colors"
-                                title={`References ${fk.referencedSchema}.${fk.referencedTable}(${fk.referencedColumns.join(", ")})`}
-                                onClick={() => onNavigate?.({
-                                  type: "table",
-                                  name: fk.referencedTable,
-                                  schema: fk.referencedSchema,
-                                })}
-                              >
-                                <Link2 className="h-3 w-3 text-primary/60" />
-                              </button>
-                            )}
-                          </span>
-                        </TableCell>
-                        <TableCell className="font-mono text-sm text-muted-foreground py-1.5">
-                          {settings.showDuckDBTypes ? col.duckdbType : col.arrowType}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground py-1.5">
-                          {notNullSet.has(idx) ? (
-                            <span className="flex items-center gap-1" title="NOT NULL constraint">
-                              <ShieldCheck className="h-3.5 w-3.5 text-amber-600" />
-                            </span>
-                          ) : col.nullable ? (
-                            <Circle className="h-3.5 w-3.5 text-muted-foreground/30" title="Nullable" />
-                          ) : (
-                            <CircleDot className="h-3.5 w-3.5 text-foreground/70" title="Not nullable" />
-                          )}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground py-1.5">
-                          {col.comment && (
-                            <span className="text-foreground/70 text-xs">{col.comment}</span>
-                          )}
-                          {col.defaultValue && (
-                            <span className="ml-2 text-xs text-muted-foreground">
-                              default: <code className="bg-muted px-1 rounded">{col.defaultValue}</code>
-                            </span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+          <ColumnsTable
+            columns={columns}
+            pkColumns={pkColumns}
+            notNullSet={notNullSet}
+            fkByColumn={fkByColumn}
+            onNavigate={onNavigate}
+          />
         </TabsContent>
 
         {/* Constraints Tab */}

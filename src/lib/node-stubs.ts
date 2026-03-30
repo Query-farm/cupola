@@ -48,9 +48,12 @@ export function createGunzip() { return new PassThrough(); }
 export function randomBytes(n: number): Uint8Array { return new Uint8Array(n); }
 export function createHmac() { return { update() { return this; }, digest() { return ""; } }; }
 
-// node:fs stubs
-export function readFileSync(): never { throw new Error("fs not available in browser"); }
-export function writeFileSync(): never { throw new Error("fs not available in browser"); }
+// node:fs stubs (must not throw — Astro SSR pipeline may call these during dev)
+export function readFileSync(): string { return ""; }
+export function writeFileSync(): void {}
 export function existsSync(): boolean { return false; }
+export function mkdirSync(): void {}
+export function readdirSync(): string[] { return []; }
+export function statSync(): null { return null; }
 
 export default { Readable, Writable, Duplex, Transform, PassThrough };
