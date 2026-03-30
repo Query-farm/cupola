@@ -68,10 +68,29 @@ function loadScripts(): Promise<void> {
 
 export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onToggleMaximize, onShellReady }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const perspectiveRef = useRef<HTMLDivElement>(null);
   const { settings } = useSettings();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const [activeTab, setActiveTab] = useState<"shell" | "perspective">("shell");
+  const [perspectiveLoading, setPerspectiveLoading] = useState(false);
+
+  // Expose a callback for the shell to trigger Perspective view
+  useEffect(() => {
+    (window as any).__showPerspective = async (arrowBuffer: Uint8Array) => {
+      setActiveTab("perspective");
+      setPerspectiveLoading(true);
+      try {
+        await loadPerspective(perspectiveRef.current!, arrowBuffer);
+      } catch (e: any) {
+        console.error("Perspective load error:", e);
+      } finally {
+        setPerspectiveLoading(false);
+      }
+    };
+    return () => { delete (window as any).__showPerspective; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,20 +127,32 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
     };
   }, [serviceUrl, catalogName]);
 
-  // Refit terminal when maximized/minimized
+  // Refit terminal when maximized/minimized or switching back to shell tab
   useEffect(() => {
-    if ((window as any).__shellFitAddon) {
+    if (activeTab === "shell" && (window as any).__shellFitAddon) {
       setTimeout(() => (window as any).__shellFitAddon.fit(), 50);
     }
-  }, [maximized]);
+  }, [maximized, activeTab]);
+
+  const tabClass = (tab: string) =>
+    `px-3 py-1 text-xs font-mono cursor-pointer transition-colors ${
+      activeTab === tab
+        ? "text-[#6ba034] border-b border-[#6ba034]"
+        : "text-[#f5f0e0]/40 hover:text-[#f5f0e0]/70"
+    }`;
 
   return (
     <div className="flex flex-col h-full bg-[#1a1a0e]">
       {/* Header bar */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#2a2a1e] bg-[#1a1a0e] shrink-0">
-        <span className="text-xs font-mono text-[#6ba034]">
-          DuckDB Shell — {catalogName}
-        </span>
+        <div className="flex items-center gap-1">
+          <button className={tabClass("shell")} onClick={() => setActiveTab("shell")}>
+            Shell
+          </button>
+          <button className={tabClass("perspective")} onClick={() => setActiveTab("perspective")}>
+            Perspective
+          </button>
+        </div>
         <div className="flex items-center gap-1">
           <button
             onClick={onToggleMaximize}
@@ -141,34 +172,49 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
       </div>
 
       {/* Terminal container */}
-      {loading && !error && (
+      {loading && !error && activeTab === "shell" && (
         <div className="flex-1 flex items-center justify-center text-[#6ba034] text-sm">
           Loading DuckDB-WASM...
         </div>
       )}
-      {error && (
+      {error && activeTab === "shell" && (
         <div className="flex-1 flex items-center justify-center text-red-400 text-sm">
           {error}
         </div>
       )}
       <div
         ref={containerRef}
-        className={`flex-1 min-h-0 overflow-hidden ${loading ? "hidden" : ""}`}
+        className={`flex-1 min-h-0 overflow-hidden ${loading || activeTab !== "shell" ? "hidden" : ""}`}
         style={{ padding: "8px 12px 4px" }}
         onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
         onDrop={(e) => {
           e.preventDefault();
           const data = e.dataTransfer.getData("text/plain");
           if (data && cleanupRef.current) {
-            // Parse tree item ID → useful text
             const text = treeIdToShellText(data);
             if (text) {
-              // Use the insertText from the shell
               (window as any).__shellInsertText?.(text);
             }
           }
         }}
       />
+
+      {/* Perspective viewer */}
+      <div
+        ref={perspectiveRef}
+        className={`flex-1 min-h-0 overflow-hidden ${activeTab !== "perspective" ? "hidden" : ""}`}
+      >
+        {perspectiveLoading && (
+          <div className="flex items-center justify-center h-full text-[#6ba034] text-sm">
+            Loading Perspective...
+          </div>
+        )}
+        {!perspectiveLoading && activeTab === "perspective" && !perspectiveRef.current?.querySelector("perspective-viewer") && (
+          <div className="flex items-center justify-center h-full text-[#f5f0e0]/40 text-sm font-mono">
+            Run a query then type .perspective to view results here
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -372,7 +418,8 @@ function initShell(
         if (!lastArrowBuffer) {
           writeln("No result to view. Run a query first.", "31");
         } else {
-          openPerspective(lastArrowBuffer);
+          (window as any).__showPerspective?.(lastArrowBuffer);
+          writeln("Switched to Perspective viewer", "32");
         }
         continue;
       }
@@ -734,29 +781,6 @@ function initShell(
     writeln(`Downloaded result.${ext} (${numRows} row${numRows !== 1 ? "s" : ""}, ${totalCols} column${totalCols !== 1 ? "s" : ""})`, "32");
   }
 
-  /** Open last Arrow result in a Perspective viewer tab. */
-  function openPerspective(arrowBuffer: Uint8Array) {
-    const bc = new BroadcastChannel("vgi-perspective");
-    const popup = window.open("/shell/perspective.html", "_blank");
-    if (!popup) {
-      writeln("Popup blocked. Allow popups for this site.", "31");
-      bc.close();
-      return;
-    }
-    // Wait for the viewer to signal ready, then send Arrow data
-    bc.onmessage = (e) => {
-      if (e.data?.type === "perspective-ready") {
-        // Send a standalone copy — arrowBuffer may be a view into a larger ArrayBuffer
-        const copy = new Uint8Array(arrowBuffer).buffer;
-        bc.postMessage({ type: "arrow-data", buffer: copy });
-        bc.close();
-      }
-    };
-    // Timeout after 15s
-    setTimeout(() => { bc.close(); }, 15000);
-    writeln("Opened Perspective viewer", "32");
-  }
-
   worker.postMessage({ type: "init" });
 
   // Insert text into the terminal's current input line.
@@ -798,6 +822,56 @@ function isInputEmpty(term: any): boolean {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Perspective viewer — loads CDN scripts and renders inline
+// ---------------------------------------------------------------------------
+
+const PERSPECTIVE_CDN = [
+  "https://cdn.jsdelivr.net/npm/@perspective-dev/client/dist/cdn/perspective.js",
+  "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer/dist/cdn/perspective-viewer.js",
+  "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer-datagrid/dist/cdn/perspective-viewer-datagrid.js",
+  "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer-d3fc/dist/cdn/perspective-viewer-d3fc.js",
+];
+const PERSPECTIVE_CSS = "https://cdn.jsdelivr.net/npm/@finos/perspective-viewer@3.8.0/dist/css/pro-dark.css";
+
+let perspectiveLoaded = false;
+let perspectiveWorker: any = null;
+
+async function loadPerspective(container: HTMLElement, arrowBuffer: Uint8Array) {
+  // Load CSS once
+  if (!document.querySelector(`link[href="${PERSPECTIVE_CSS}"]`)) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = PERSPECTIVE_CSS;
+    link.crossOrigin = "anonymous";
+    document.head.appendChild(link);
+  }
+
+  // Load scripts via dynamic import (ES modules)
+  if (!perspectiveLoaded) {
+    const perspective = await import(/* @vite-ignore */ PERSPECTIVE_CDN[0]);
+    // Import viewer + plugins (register custom elements)
+    await Promise.all(PERSPECTIVE_CDN.slice(1).map(url => import(/* @vite-ignore */ url)));
+    perspectiveWorker = await perspective.default.worker();
+    perspectiveLoaded = true;
+  }
+
+  // Create or reuse the viewer element
+  let viewer = container.querySelector("perspective-viewer") as any;
+  if (!viewer) {
+    viewer = document.createElement("perspective-viewer");
+    viewer.setAttribute("theme", "Pro Dark");
+    viewer.style.width = "100%";
+    viewer.style.height = "100%";
+    container.appendChild(viewer);
+  }
+
+  // Load Arrow data
+  const copy = new Uint8Array(arrowBuffer);
+  const table = await perspectiveWorker.table(copy.buffer);
+  await viewer.load(table);
 }
 
 /**
