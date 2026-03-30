@@ -135,9 +135,9 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
   }, [maximized, activeTab]);
 
   const tabClass = (tab: string) =>
-    `px-3 py-1 text-xs font-mono cursor-pointer transition-colors ${
+    `px-4 py-1.5 text-sm font-semibold font-mono cursor-pointer transition-colors ${
       activeTab === tab
-        ? "text-[#6ba034] border-b border-[#6ba034]"
+        ? "text-[#6ba034] border-b-2 border-[#6ba034]"
         : "text-[#f5f0e0]/40 hover:text-[#f5f0e0]/70"
     }`;
 
