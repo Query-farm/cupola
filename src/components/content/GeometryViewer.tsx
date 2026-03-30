@@ -56,11 +56,12 @@ function LeafletMap({ wkb }: { wkb: Uint8Array }) {
 
     // Dynamic import Leaflet to avoid SSR issues
     let cancelled = false;
+    let map: any = null;
     (async () => {
       const L = await import("leaflet");
       if (cancelled || !mapRef.current) return;
 
-      const map = L.map(mapRef.current);
+      map = L.map(mapRef.current);
 
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -91,14 +92,11 @@ function LeafletMap({ wkb }: { wkb: Uint8Array }) {
       if (bounds.isValid()) {
         map.fitBounds(bounds, { padding: [40, 40], maxZoom: 17 });
       }
-
-      return () => {
-        map.remove();
-      };
     })();
 
     return () => {
       cancelled = true;
+      map?.remove();
     };
   }, [wkb]);
 

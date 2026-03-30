@@ -377,9 +377,15 @@ function initShell(
 
   worker.postMessage({ type: "init" });
 
-  // Insert text into the terminal's current input line
+  // Insert text into the terminal's current input line.
+  // If the input is empty and the text looks like a table name, wrap it in SELECT * FROM.
   function insertText(text: string) {
-    term.paste(text);
+    const isTable = text.includes(".") && !text.includes(" ") && !text.includes("(");
+    if (isTable && isInputEmpty(term)) {
+      term.paste(`SELECT * FROM ${text} LIMIT 100;`);
+    } else {
+      term.paste(text);
+    }
     term.focus();
   }
 
@@ -396,6 +402,20 @@ function initShell(
     },
     insertText,
   };
+}
+
+/** Check if the terminal's current input line is empty (just the prompt). */
+function isInputEmpty(term: any): boolean {
+  try {
+    const buf = term.buffer?.active;
+    if (!buf) return true;
+    const line = buf.getLine(buf.cursorY)?.translateToString(true) || "";
+    // The prompt is "D > " (4 visible chars). If the line is just the prompt, input is empty.
+    const trimmed = line.trimEnd();
+    return trimmed === "D >" || trimmed === "" || buf.cursorX <= 4;
+  } catch {
+    return false;
+  }
 }
 
 /**
