@@ -840,13 +840,45 @@ let perspectiveLoaded = false;
 let perspectiveWorker: any = null;
 
 async function loadPerspective(container: HTMLElement, arrowBuffer: Uint8Array) {
-  // Load CSS once
+  // Load base theme CSS + VGI overrides once
   if (!document.querySelector(`link[href="${PERSPECTIVE_CSS}"]`)) {
     const link = document.createElement("link");
     link.rel = "stylesheet";
     link.href = PERSPECTIVE_CSS;
     link.crossOrigin = "anonymous";
     document.head.appendChild(link);
+
+    // Override Pro Dark variables to match VGI warm palette
+    const style = document.createElement("style");
+    style.textContent = `
+      perspective-viewer, perspective-viewer-datagrid {
+        --root--background: #1a1a0e;
+        --plugin--background: #1a1a0e;
+        --active--color: #6ba034;
+        --inactive--color: rgba(245, 240, 224, 0.35);
+        --icon--color: #f5f0e0;
+        --warning--color: #2a2a1e;
+        --warning--background: #2a2a1e;
+        --modal-target--background: rgba(26, 26, 14, 0.7);
+        --d3fc-series-1: #6ba034;
+        --d3fc-series-2: #4a7c23;
+        --d3fc-series-3: #8bc34a;
+        --d3fc-series-4: #a5d64b;
+        --d3fc-series-5: #2d5016;
+        --d3fc-series-6: #c8e6a0;
+        --d3fc-gridline--color: #2a2a1e;
+        --d3fc-tooltip--background--color: #1a1a0e;
+        color: #f5f0e0;
+      }
+      perspective-viewer-datagrid regular-table table thead tr:last-child th {
+        border-bottom-color: #3a3a28 !important;
+      }
+      perspective-viewer-datagrid regular-table table tbody tr td,
+      perspective-viewer-datagrid regular-table table thead tr th {
+        border-color: #2a2a1e !important;
+      }
+    `;
+    document.head.appendChild(style);
   }
 
   // Load scripts via dynamic import (ES modules)
