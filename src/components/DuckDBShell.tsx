@@ -332,7 +332,9 @@ function initShell(
       }
 
       queryRunning = true;
+      const t0 = performance.now();
       const result = await runQueryAsync(trimmed);
+      const elapsed = performance.now() - t0;
       clearProgressBar();
       queryRunning = false;
 
@@ -341,7 +343,7 @@ function initShell(
       } else if (result.arrowBuffers && result.arrowBuffers.length > 0) {
         try {
           const table = tableFromIPC(result.arrowBuffers[0]);
-          await printTable(table);
+          await printTable(table, elapsed);
         } catch (err: any) {
           writeln(`Failed to render: ${err.message}`, "31");
         }
@@ -382,50 +384,219 @@ function initShell(
     return String(val);
   }
 
-  // Table rendering using columnify for smart width management
-  async function printTable(table: any) {
+  // Duckbox-style table rendering using cli-table3
+  async function printTable(table: any, elapsedMs?: number) {
     const fields = table.schema.fields;
     const numRows = table.numRows;
-    const numCols = fields.length;
-    if (numCols === 0) { writeln("(empty)"); return; }
+    const totalCols = fields.length;
+    if (totalCols === 0) { writeln("(empty)"); return; }
 
-    // Build row objects
-    const data: Record<string, string>[] = [];
-    for (let r = 0; r < Math.min(numRows, 500); r++) {
-      const row: Record<string, string> = {};
-      for (let c = 0; c < numCols; c++) {
-        const val = table.getChildAt(c)?.get(r);
-        row[fields[c].name] = formatVal(val, fields[c]);
+    const displayRows = Math.min(numRows, 500);
+
+    // Build formatted string grid: rows[r][c]
+    const grid: string[][] = [];
+    for (let r = 0; r < displayRows; r++) {
+      const row: string[] = [];
+      for (let c = 0; c < totalCols; c++) {
+        row.push(formatVal(table.getChildAt(c)?.get(r), fields[c]));
       }
-      data.push(row);
+      grid.push(row);
     }
+
+    // Measure ideal widths and get type names
+    const MAX_COL_WIDTH = 20;
+    const names: string[] = fields.map((f: any) => f.name);
+    const types: string[] = fields.map((f: any) => fieldToDuckDBType(f));
+    const isNumeric: boolean[] = fields.map((f: any) => isNumericField(f));
+    const idealWidths: number[] = [];
+    for (let c = 0; c < totalCols; c++) {
+      let w = Math.max(names[c].length, types[c].length);
+      for (let r = 0; r < displayRows; r++) w = Math.max(w, grid[r][c].length);
+      idealWidths.push(Math.min(w, MAX_COL_WIDTH));
+    }
+
+    // Determine which columns fit in terminal width
+    // Each column uses: 1(pad) + width + 1(pad) + 1(border) = width + 3
+    // Plus 1 for the left border
+    const termW = term.cols;
+    const calcTotal = (widths: number[]) => 1 + widths.reduce((s, w) => s + w + 3, 0);
+
+    let visibleIndices: number[];
+    let ellipsisPos: number | null = null; // insert position in visible array
+
+    if (calcTotal(idealWidths) <= termW) {
+      // All columns fit
+      visibleIndices = idealWidths.map((_, i) => i);
+    } else {
+      // Zig-zag prune from middle
+      const ELLIPSIS_COST = 4; // "│ … │" = 1 + 3
+      const hidden = new Set<number>();
+      const mid = Math.floor(totalCols / 2);
+      // Build zig-zag order: mid, mid-1, mid+1, mid-2, mid+2, ...
+      const order: number[] = [mid];
+      for (let d = 1; d < totalCols; d++) {
+        if (mid - d >= 0) order.push(mid - d);
+        if (mid + d < totalCols) order.push(mid + d);
+      }
+
+      for (const idx of order) {
+        hidden.add(idx);
+        const remaining = idealWidths.filter((_, i) => !hidden.has(i));
+        if (calcTotal(remaining) + ELLIPSIS_COST <= termW) break;
+      }
+
+      visibleIndices = [];
+      let insertedEllipsis = false;
+      for (let i = 0; i < totalCols; i++) {
+        if (hidden.has(i)) {
+          if (!insertedEllipsis) {
+            ellipsisPos = visibleIndices.length;
+            insertedEllipsis = true;
+          }
+        } else {
+          visibleIndices.push(i);
+        }
+      }
+      // If ellipsis not yet placed (all hidden cols were at end), place at end
+      if (hidden.size > 0 && ellipsisPos === null) {
+        ellipsisPos = visibleIndices.length;
+      }
+    }
+
+    const shownCount = visibleIndices.length;
+    const hiddenCount = totalCols - shownCount;
 
     try {
-      const columnify = (await import(/* @vite-ignore */ "columnify")).default;
-      const output = columnify(data, {
-        maxLineWidth: term.cols - 1,
-        truncate: true,
-        truncateMarker: "…",
-        preserveNewLines: false,
-        showHeaders: true,
-        headingTransform: (h: string) => "\x1b[1m" + h + "\x1b[0m",
-        dataTransform: (val: string) => val === "NULL" ? "\x1b[2mNULL\x1b[0m" : val,
-        columnSplitter: " \x1b[2m│\x1b[0m ",
-        config: Object.fromEntries(
-          fields.map((f: any) => [f.name, { maxWidth: Math.min(50, Math.max(term.cols / 3, 12)) }])
-        ),
-      });
-      for (const line of output.split("\n")) {
+      const Table = (await import(/* @vite-ignore */ "cli-table3")).default;
+
+      // Build colWidths and colAligns arrays, inserting ellipsis column
+      const colWidths: number[] = [];
+      const colAligns: ("left" | "right" | "center")[] = [];
+      const headerRow: any[] = [];
+      const typeRow: any[] = [];
+
+      for (let vi = 0; vi < shownCount; vi++) {
+        if (ellipsisPos === vi) {
+          colWidths.push(3); // " … " = 1 pad + 1 char + 1 pad
+          colAligns.push("center");
+          headerRow.push({ content: "…", hAlign: "center" as const });
+          typeRow.push({ content: " ", hAlign: "center" as const });
+        }
+        const ci = visibleIndices[vi];
+        colWidths.push(idealWidths[ci] + 2); // +2 for padding
+        colAligns.push(isNumeric[ci] ? "right" : "left");
+        headerRow.push({ content: `\x1b[1m${truncStr(names[ci], idealWidths[ci])}\x1b[0m`, hAlign: "center" as const });
+        typeRow.push({ content: `\x1b[2m${truncStr(types[ci], idealWidths[ci])}\x1b[0m`, hAlign: "center" as const });
+      }
+      // Ellipsis at end
+      if (ellipsisPos === shownCount) {
+        colWidths.push(3);
+        colAligns.push("center");
+        headerRow.push({ content: "…", hAlign: "center" as const });
+        typeRow.push({ content: " ", hAlign: "center" as const });
+      }
+
+      const tableOpts = {
+        colWidths,
+        colAligns,
+        chars: { "mid": "", "left-mid": "", "mid-mid": "", "right-mid": "" },
+        style: { head: [], border: [], "padding-left": 1, "padding-right": 1, compact: true },
+      };
+
+      // Header table (names + types, with bottom border as separator)
+      const hdrTbl = new Table(tableOpts);
+      hdrTbl.push(headerRow);
+      hdrTbl.push(typeRow);
+      const hdrOutput = hdrTbl.toString();
+      for (const line of hdrOutput.split("\n")) {
         rl.println(line);
       }
-    } catch {
-      // Fallback: simple dump
-      for (const row of data) {
-        rl.println(Object.values(row).join(" | "));
-      }
-    }
 
-    rl.println(`\x1b[2m(${numRows} row${numRows !== 1 ? "s" : ""})\x1b[0m`);
+      // Data table (no top border — header's bottom border is the separator)
+      const dataTbl = new Table({
+        ...tableOpts,
+        chars: { ...tableOpts.chars, "top": "", "top-mid": "", "top-left": "", "top-right": "" },
+      });
+      for (let r = 0; r < displayRows; r++) {
+        const row: any[] = [];
+        for (let vi = 0; vi < shownCount; vi++) {
+          if (ellipsisPos === vi) {
+            row.push({ content: "…", hAlign: "center" as const });
+          }
+          const ci = visibleIndices[vi];
+          const val = grid[r][ci];
+          const display = val === "NULL"
+            ? `\x1b[2mNULL\x1b[0m`
+            : truncStr(val, idealWidths[ci]);
+          row.push(isNumeric[ci] ? { content: display, hAlign: "right" as const } : display);
+        }
+        if (ellipsisPos === shownCount) {
+          row.push({ content: "…", hAlign: "center" as const });
+        }
+        dataTbl.push(row);
+      }
+      const dataOutput = dataTbl.toString();
+      for (const line of dataOutput.split("\n")) {
+        rl.println(line);
+      }
+
+      // Footer
+      const rowText = `${numRows} row${numRows !== 1 ? "s" : ""}`;
+      const colText = hiddenCount > 0
+        ? `${totalCols} columns (${shownCount} shown)`
+        : `${totalCols} column${totalCols !== 1 ? "s" : ""}`;
+      const timeText = elapsedMs != null
+        ? (elapsedMs < 1000 ? `${Math.round(elapsedMs)}ms` : `${(elapsedMs / 1000).toFixed(2)}s`)
+        : "";
+      const footerParts = [rowText, totalCols > 1 ? colText : "", timeText].filter(Boolean);
+      rl.println(`\x1b[2m${footerParts.join("    ")}\x1b[0m`);
+    } catch (err: any) {
+      // Fallback: simple pipe-separated
+      for (const row of grid) {
+        rl.println(row.join(" | "));
+      }
+      rl.println(`(${numRows} row${numRows !== 1 ? "s" : ""})`);
+    }
+  }
+
+  /** Truncate a string to maxLen, appending … if needed. */
+  function truncStr(s: string, maxLen: number): string {
+    if (s.length <= maxLen) return s;
+    return s.slice(0, maxLen - 1) + "…";
+  }
+
+  /** Check if an Arrow field represents a numeric type. */
+  function isNumericField(field: any): boolean {
+    const t = field.type?.toString() || "";
+    return /^(Int|Uint|Float|Decimal|float|int|uint|double)/i.test(t) ||
+      t.startsWith("Duration");
+  }
+
+  /** Map Arrow field to a short DuckDB type name for the type row. */
+  function fieldToDuckDBType(field: any): string {
+    const t = field.type?.toString() || "?";
+    const map: Record<string, string> = {
+      "Utf8": "varchar", "LargeUtf8": "varchar",
+      "Int8": "tinyint", "Int16": "smallint", "Int32": "int32", "Int64": "int64",
+      "Uint8": "utinyint", "Uint16": "usmallint", "Uint32": "uint32", "Uint64": "uint64",
+      "Float16": "float", "Float32": "float", "Float64": "double",
+      "Bool": "boolean", "Binary": "blob", "LargeBinary": "blob",
+    };
+    if (map[t]) return map[t];
+    if (t.startsWith("Dictionary<")) {
+      const inner = t.match(/,\s*(.+)>$/)?.[1];
+      return inner && map[inner] ? map[inner] : "varchar";
+    }
+    if (t.startsWith("Timestamp")) return "timestamp";
+    if (t.startsWith("Date")) return "date";
+    if (t.startsWith("Time")) return "time";
+    if (t.startsWith("Decimal")) return "decimal";
+    if (t.startsWith("Struct")) return "struct";
+    if (t.includes("List")) return "list";
+    // Check extension metadata for geometry
+    const ext = field.metadata?.get?.("ARROW:extension:name");
+    if (ext?.startsWith("geoarrow.")) return "geometry";
+    return t.toLowerCase();
   }
 
   worker.postMessage({ type: "init" });
