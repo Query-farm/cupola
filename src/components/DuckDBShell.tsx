@@ -253,6 +253,7 @@ function initShell(
   let queryRunning = false;
   let outputMode: "box" | "line" = "box";
   let lastTable: any = null;
+  let lastArrowBuffer: Uint8Array | null = null;
 
   worker.onmessage = (e: MessageEvent) => {
     const d = e.data;
@@ -341,6 +342,7 @@ function initShell(
         writeln(".mode line         One field per line, vertical display");
         writeln(".download csv      Download last result as CSV");
         writeln(".download excel    Download last result as Excel");
+        writeln(".perspective       Open last result in Perspective viewer");
         continue;
       }
       if (trimmed.startsWith(".mode")) {
@@ -366,6 +368,14 @@ function initShell(
         }
         continue;
       }
+      if (trimmed === ".perspective") {
+        if (!lastArrowBuffer) {
+          writeln("No result to view. Run a query first.", "31");
+        } else {
+          openPerspective(lastArrowBuffer);
+        }
+        continue;
+      }
 
       queryRunning = true;
       const t0 = performance.now();
@@ -378,7 +388,8 @@ function initShell(
         writeln(`Error: ${result.error || "unknown"}`, "31");
       } else if (result.arrowBuffers && result.arrowBuffers.length > 0) {
         try {
-          const table = tableFromIPC(result.arrowBuffers[0]);
+          lastArrowBuffer = result.arrowBuffers[0];
+          const table = tableFromIPC(lastArrowBuffer);
           lastTable = table;
           if (outputMode === "line") {
             printLine(table, elapsed);
@@ -721,6 +732,29 @@ function initShell(
     URL.revokeObjectURL(url);
 
     writeln(`Downloaded result.${ext} (${numRows} row${numRows !== 1 ? "s" : ""}, ${totalCols} column${totalCols !== 1 ? "s" : ""})`, "32");
+  }
+
+  /** Open last Arrow result in a Perspective viewer tab. */
+  function openPerspective(arrowBuffer: Uint8Array) {
+    const bc = new BroadcastChannel("vgi-perspective");
+    const popup = window.open("/shell/perspective.html", "_blank");
+    if (!popup) {
+      writeln("Popup blocked. Allow popups for this site.", "31");
+      bc.close();
+      return;
+    }
+    // Wait for the viewer to signal ready, then send Arrow data
+    bc.onmessage = (e) => {
+      if (e.data?.type === "perspective-ready") {
+        // Send a standalone copy — arrowBuffer may be a view into a larger ArrayBuffer
+        const copy = new Uint8Array(arrowBuffer).buffer;
+        bc.postMessage({ type: "arrow-data", buffer: copy });
+        bc.close();
+      }
+    };
+    // Timeout after 15s
+    setTimeout(() => { bc.close(); }, 15000);
+    writeln("Opened Perspective viewer", "32");
   }
 
   worker.postMessage({ type: "init" });

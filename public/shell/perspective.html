@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Query Results — Perspective</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@finos/perspective-viewer@3.8.0/dist/css/themes.css" crossorigin="anonymous">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { width: 100vw; height: 100vh; overflow: hidden; background: #1a1a2e; }
+  perspective-viewer { width: 100%; height: 100%; }
+  #loading {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    color: #b8b0a0; font-family: "SF Mono", monospace; font-size: 14px;
+  }
+  #loading .spinner { display: inline-block; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="loading"><span class="spinner">&#x280B;</span> Waiting for data...</div>
+<perspective-viewer id="viewer" theme="Pro Dark" style="display:none"></perspective-viewer>
+
+<script type="module">
+  import perspective from "https://cdn.jsdelivr.net/npm/@perspective-dev/client/dist/cdn/perspective.js";
+  import "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer/dist/cdn/perspective-viewer.js";
+  import "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer-datagrid/dist/cdn/perspective-viewer-datagrid.js";
+  import "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer-d3fc/dist/cdn/perspective-viewer-d3fc.js";
+
+  const viewer = document.getElementById('viewer');
+  const loading = document.getElementById('loading');
+  const worker = await perspective.worker();
+
+  const bc = new BroadcastChannel('vgi-perspective');
+  bc.onmessage = async (e) => {
+    if (e.data?.type === 'arrow-data') {
+      bc.close();
+      try {
+        const data = e.data.buffer instanceof ArrayBuffer
+          ? new Uint8Array(e.data.buffer)
+          : e.data.buffer;
+        const table = await worker.table(data);
+        await viewer.load(table);
+        loading.style.display = 'none';
+        viewer.style.display = '';
+      } catch (err) {
+        loading.textContent = 'Error: ' + err.message;
+        console.error('Perspective load error:', err);
+      }
+    }
+  };
+  // Signal ready to receive data
+  bc.postMessage({ type: 'perspective-ready' });
+</script>
+</body>
+</html>
