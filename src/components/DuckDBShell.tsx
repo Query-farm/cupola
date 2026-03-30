@@ -503,8 +503,11 @@ function initShell(
         style: { head: [], border: [], "padding-left": 1, "padding-right": 1, compact: true },
       };
 
-      // Header table (names + types, with bottom border as separator)
-      const hdrTbl = new Table(tableOpts);
+      // Header table — bottom border uses ├┼┤ (separator style, not └┴┘)
+      const hdrTbl = new Table({
+        ...tableOpts,
+        chars: { ...tableOpts.chars, "bottom": "─", "bottom-mid": "┼", "bottom-left": "├", "bottom-right": "┤" },
+      });
       hdrTbl.push(headerRow);
       hdrTbl.push(typeRow);
       const hdrOutput = hdrTbl.toString();
@@ -512,7 +515,7 @@ function initShell(
         rl.println(line);
       }
 
-      // Data table (no top border — header's bottom border is the separator)
+      // Data table — no top border (header's bottom is the separator)
       const dataTbl = new Table({
         ...tableOpts,
         chars: { ...tableOpts.chars, "top": "", "top-mid": "", "top-left": "", "top-right": "" },
