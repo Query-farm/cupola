@@ -146,53 +146,91 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
   }
 }
 
-/** Query result from a table function call. */
-export interface QueryResult {
+/** Query result page from a table function call. */
+export interface QueryPage {
   columns: string[];
   rows: Record<string, any>[];
-  truncated: boolean;
+  hasMore: boolean;
+  totalFetched: number;
 }
 
-const MAX_PREVIEW_ROWS = 100;
+const PAGE_SIZE = 50;
 
-/** Fetch preview rows from a table by calling its backing table function. */
-export async function queryTable(
+/**
+ * Create a paginated table query session.
+ * Returns an object with `loadNextPage()` and `close()` methods.
+ * Each call to `loadNextPage()` fetches the next PAGE_SIZE rows.
+ */
+export function createTableQuery(
   serviceUrl: string,
   catalogName: string,
   functionName: string,
-): Promise<QueryResult> {
+) {
   const token = getAuthToken();
   const rpc = httpConnect(serviceUrl, {
     authorization: token ? `Bearer ${token}` : undefined,
   });
   const client = new VgiClient(rpc);
 
-  try {
-    const attach = await client.catalogAttach(catalogName);
-    const rows: Record<string, any>[] = [];
-    let columns: string[] = [];
-    let truncated = false;
+  let iterator: AsyncIterator<Record<string, any>[]> | null = null;
+  let columns: string[] = [];
+  let totalFetched = 0;
+  let exhausted = false;
+  let attached = false;
 
-    for await (const batch of client.tableFunctionRows({
-      functionName,
-      arguments: new Arguments(),
-    })) {
-      for (const row of batch) {
+  async function ensureAttached() {
+    if (!attached) {
+      await client.catalogAttach(catalogName);
+      attached = true;
+      iterator = client.tableFunctionRows({
+        functionName,
+        arguments: new Arguments(),
+      })[Symbol.asyncIterator]();
+    }
+  }
+
+  // Buffer for rows from partial batches
+  let buffer: Record<string, any>[] = [];
+
+  async function loadNextPage(): Promise<QueryPage> {
+    await ensureAttached();
+    if (exhausted) {
+      return { columns, rows: [], hasMore: false, totalFetched };
+    }
+
+    const pageRows: Record<string, any>[] = [...buffer];
+    buffer = [];
+
+    while (pageRows.length < PAGE_SIZE && !exhausted) {
+      const result = await iterator!.next();
+      if (result.done) {
+        exhausted = true;
+        break;
+      }
+      for (const row of result.value) {
         if (columns.length === 0) {
           columns = Object.keys(row);
         }
-        if (rows.length >= MAX_PREVIEW_ROWS) {
-          truncated = true;
-          break;
+        if (pageRows.length < PAGE_SIZE) {
+          pageRows.push(row);
+        } else {
+          buffer.push(row);
         }
-        rows.push(row);
       }
-      if (truncated) break;
     }
 
-    await client.catalogDetach(attach.attachId);
-    return { columns, rows, truncated };
-  } finally {
+    totalFetched += pageRows.length;
+    return {
+      columns,
+      rows: pageRows,
+      hasMore: !exhausted || buffer.length > 0,
+      totalFetched,
+    };
+  }
+
+  function close() {
     client.close();
   }
+
+  return { loadNextPage, close };
 }

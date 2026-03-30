@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { Loader2, AlertCircle } from "lucide-react";
-import { queryTable, getServiceUrl, type QueryResult } from "@/lib/service";
+import { useEffect, useState, useRef, useCallback } from "react";
+import { Loader2, AlertCircle, ChevronDown } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { createTableQuery, getServiceUrl } from "@/lib/service";
 import { DataGrid } from "./DataGrid";
 
 interface Props {
@@ -9,30 +10,65 @@ interface Props {
 }
 
 export function DataPreview({ catalogName, functionName }: Props) {
-  const [result, setResult] = useState<QueryResult | null>(null);
+  const [columns, setColumns] = useState<string[]>([]);
+  const [rows, setRows] = useState<Record<string, any>[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const queryRef = useRef<ReturnType<typeof createTableQuery> | null>(null);
 
+  // Load initial page
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    setResult(null);
+    setRows([]);
+    setColumns([]);
+    setHasMore(false);
+
+    // Clean up previous query session
+    queryRef.current?.close();
 
     const serviceUrl = getServiceUrl();
-    queryTable(serviceUrl, catalogName, functionName)
-      .then((r) => {
-        if (!cancelled) setResult(r);
+    const query = createTableQuery(serviceUrl, catalogName, functionName);
+    queryRef.current = query;
+
+    query.loadNextPage()
+      .then((page) => {
+        if (cancelled) return;
+        setColumns(page.columns);
+        setRows(page.rows);
+        setHasMore(page.hasMore);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load data");
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Failed to load data");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      query.close();
+    };
   }, [catalogName, functionName]);
+
+  // Load more pages
+  const loadMore = useCallback(async () => {
+    if (!queryRef.current || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await queryRef.current.loadNextPage();
+      setRows((prev) => [...prev, ...page.rows]);
+      setHasMore(page.hasMore);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load more data");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore]);
 
   if (loading) {
     return (
@@ -52,7 +88,7 @@ export function DataPreview({ catalogName, functionName }: Props) {
     );
   }
 
-  if (!result || result.rows.length === 0) {
+  if (rows.length === 0) {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground">
         No rows returned.
@@ -60,5 +96,32 @@ export function DataPreview({ catalogName, functionName }: Props) {
     );
   }
 
-  return <DataGrid columns={result.columns} rows={result.rows} truncated={result.truncated} />;
+  return (
+    <div>
+      <DataGrid columns={columns} rows={rows} />
+
+      {/* Footer: count + load more */}
+      <div className="flex items-center justify-between mt-3">
+        <span className="text-xs text-muted-foreground">
+          {rows.length.toLocaleString()} rows loaded
+        </span>
+        {hasMore && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="h-7 text-xs gap-1.5"
+          >
+            {loadingMore ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <ChevronDown className="h-3 w-3" />
+            )}
+            Load more
+          </Button>
+        )}
+      </div>
+    </div>
+  );
 }
