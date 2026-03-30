@@ -128,7 +128,7 @@ function SqlBar() {
   };
 
   return (
-    <div className="flex flex-col gap-1 px-3 py-2 bg-[#242730] border-t border-[#3a3d47]">
+    <div className="flex flex-col gap-1 px-3 py-2 bg-[#242730] border-t border-[#3a3d47] relative z-50">
       <div className="flex items-start gap-2">
         <textarea
           ref={textareaRef}
@@ -180,7 +180,7 @@ function KeplerMapInner() {
 
   return (
     <div ref={containerRef} className="w-full h-full flex flex-col">
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <div style={{ height: mapHeight, width: dims.width, position: "relative", overflow: "hidden" }}>
         <KeplerGl
           id="map"
           width={dims.width}
