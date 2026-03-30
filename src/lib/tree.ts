@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { Database, Folder, FolderOpen, Table2, Eye, FunctionSquare, Columns3 } from "lucide-react";
+import { Database, Folder, FolderOpen, Table2, Eye, FunctionSquare, Columns3, TerminalSquare } from "lucide-react";
 import type { CatalogData, ResolvedSchema, ColumnInfo } from "./service";
 import { getColumns } from "./service";
 
@@ -62,11 +62,13 @@ export function parseSelection(id: string): Selection | null {
 export interface BuildTreeOptions {
   showDuckDBTypes?: boolean;
   hideTableBackingFunctions?: boolean;
+  /** When provided, adds a paste action button to table nodes. */
+  onTableAction?: (schema: string, table: string) => void;
 }
 
 /** Build the full tree from catalog data. Root node is the catalog. */
 export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = {}): TreeDataItem[] {
-  const { showDuckDBTypes = true, hideTableBackingFunctions = true } = options;
+  const { showDuckDBTypes = true, hideTableBackingFunctions = true, onTableAction } = options;
   const sortedSchemas = [...catalog.schemas].sort((a, b) =>
     a.info.name.localeCompare(b.info.name)
   );
@@ -77,13 +79,13 @@ export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = 
     selectedIcon: Database,
     openIcon: Database,
     children: sortedSchemas.map((s) =>
-      buildSchemaNode(catalog.catalogName, s, showDuckDBTypes, hideTableBackingFunctions, s.info.name === catalog.defaultSchema)
+      buildSchemaNode(catalog.catalogName, s, showDuckDBTypes, hideTableBackingFunctions, s.info.name === catalog.defaultSchema, onTableAction)
     ),
   };
   return [root];
 }
 
-function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDBTypes: boolean, hideTableBackingFunctions: boolean, isDefault: boolean): TreeDataItem {
+function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDBTypes: boolean, hideTableBackingFunctions: boolean, isDefault: boolean, onTableAction?: (schema: string, table: string) => void): TreeDataItem {
   const schemaId = `${catalogName}::${schema.info.name}`;
   const children: TreeDataItem[] = [];
 
@@ -107,6 +109,13 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
       icon: Table2,
       selectedIcon: Table2,
       children: columnChildren.length > 0 ? columnChildren : undefined,
+      actions: onTableAction
+        ? React.createElement("button", {
+            className: "opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-primary transition-all",
+            title: `Paste ${schema.info.name}.${table.name} into shell`,
+            onClick: (e: React.MouseEvent) => { e.stopPropagation(); onTableAction(schema.info.name, table.name); },
+          }, React.createElement(TerminalSquare, { className: "h-3 w-3" }))
+        : undefined,
     });
   }
 
