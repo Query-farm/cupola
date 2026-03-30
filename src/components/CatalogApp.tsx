@@ -157,7 +157,7 @@ function ContentPanel({
 
   if (selection.type === "table") {
     const table = schema.tables.find((t) => t.name === selection.name);
-    if (table) return <TableDetail table={table} />;
+    if (table) return <TableDetail table={table} catalogName={data.catalogName} onNavigate={onNavigate} />;
   }
 
   if (selection.type === "view") {

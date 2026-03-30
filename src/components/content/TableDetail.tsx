@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Table2, Copy, Check, Key, Link2, ShieldCheck } from "lucide-react";
+import { Table2, Copy, Check, Key, Link2, ShieldCheck, Circle, CircleDot } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -14,16 +14,19 @@ import {
 import { useSettings } from "@/lib/settings";
 import type { TableInfo } from "vgi/client";
 import { getColumns, getForeignKeys } from "@/lib/service";
+import type { Selection } from "@/lib/tree";
 
 interface Props {
   table: TableInfo;
+  catalogName: string;
+  onNavigate?: (selection: Selection) => void;
 }
 
-export function TableDetail({ table }: Props) {
+export function TableDetail({ table, catalogName, onNavigate }: Props) {
   const columns = getColumns(table);
   const foreignKeys = getForeignKeys(table);
   const { settings } = useSettings();
-  const sampleSql = `SELECT * FROM ${table.schemaName}.${table.name} LIMIT 10;`;
+  const sampleSql = `SELECT * FROM ${catalogName}.${table.schemaName}.${table.name} LIMIT 10;`;
   const [copied, setCopied] = useState(false);
 
   // Build constraint lookup sets
@@ -83,8 +86,15 @@ export function TableDetail({ table }: Props) {
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground py-2">
                       {notNullSet.has(idx) ? (
-                        <span className="text-foreground font-medium">NOT NULL</span>
-                      ) : col.nullable ? "yes" : "no"}
+                        <span className="flex items-center gap-1" title="NOT NULL constraint">
+                          <ShieldCheck className="h-3.5 w-3.5 text-amber-600" />
+                          <span className="text-foreground font-medium text-xs">NOT NULL</span>
+                        </span>
+                      ) : col.nullable ? (
+                        <Circle className="h-3.5 w-3.5 text-muted-foreground/50" title="Nullable" />
+                      ) : (
+                        <CircleDot className="h-3.5 w-3.5 text-foreground/70" title="Not nullable" />
+                      )}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground py-2">
                       {col.comment && (
@@ -163,9 +173,16 @@ export function TableDetail({ table }: Props) {
                       {fk.columns.join(", ")}
                     </span>
                     <span className="text-muted-foreground">references</span>
-                    <span className="font-mono text-primary font-medium">
+                    <button
+                      className="font-mono text-primary font-medium hover:underline cursor-pointer"
+                      onClick={() => onNavigate?.({
+                        type: "table",
+                        name: fk.referencedTable,
+                        schema: fk.referencedSchema,
+                      })}
+                    >
                       {fk.referencedSchema}.{fk.referencedTable}
-                    </span>
+                    </button>
                     <span className="font-mono text-muted-foreground">
                       ({fk.referencedColumns.join(", ")})
                     </span>
