@@ -5,7 +5,7 @@
 // Import from client-only connect alias to avoid bundling Node.js server-side code.
 // See astro.config.mjs for the alias resolution.
 import { httpConnect } from "@query-farm/vgi-rpc/connect";
-import { VgiClient, deserializeSchema, deserializeBatch, iterRows } from "vgi/client";
+import { VgiClient, Arguments, deserializeSchema, deserializeBatch, iterRows } from "vgi/client";
 import type {
   AttachId,
   SchemaInfo,
@@ -141,6 +141,57 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
 
     await client.catalogDetach(attachId);
     return { catalogName, defaultSchema, schemas };
+  } finally {
+    client.close();
+  }
+}
+
+/** Query result from a table function call. */
+export interface QueryResult {
+  columns: string[];
+  rows: Record<string, any>[];
+  truncated: boolean;
+}
+
+const MAX_PREVIEW_ROWS = 100;
+
+/** Fetch preview rows from a table by calling its backing table function. */
+export async function queryTable(
+  serviceUrl: string,
+  catalogName: string,
+  functionName: string,
+): Promise<QueryResult> {
+  const token = getAuthToken();
+  const rpc = httpConnect(serviceUrl, {
+    authorization: token ? `Bearer ${token}` : undefined,
+  });
+  const client = new VgiClient(rpc);
+
+  try {
+    const attach = await client.catalogAttach(catalogName);
+    const rows: Record<string, any>[] = [];
+    let columns: string[] = [];
+    let truncated = false;
+
+    for await (const batch of client.tableFunctionRows({
+      functionName,
+      arguments: new Arguments(),
+    })) {
+      for (const row of batch) {
+        if (columns.length === 0) {
+          columns = Object.keys(row);
+        }
+        if (rows.length >= MAX_PREVIEW_ROWS) {
+          truncated = true;
+          break;
+        }
+        rows.push(row);
+      }
+      if (truncated) break;
+    }
+
+    await client.catalogDetach(attach.attachId);
+    return { columns, rows, truncated };
   } finally {
     client.close();
   }

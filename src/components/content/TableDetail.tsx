@@ -2,10 +2,12 @@ import { useMemo, useState } from "react";
 import { Table2, Copy, Check, Key, Link2, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { TableInfo } from "vgi/client";
 import { getColumns, getForeignKeys, type ForeignKeyInfo } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
 import { ColumnsTable } from "./ColumnsTable";
+import { DataPreview } from "./DataPreview";
 
 interface Props {
   table: TableInfo;
@@ -18,6 +20,7 @@ export function TableDetail({ table, catalogName, onNavigate }: Props) {
   const foreignKeys = getForeignKeys(table);
   const sampleSql = `SELECT * FROM ${catalogName}.${table.schemaName}.${table.name} LIMIT 10;`;
   const [copied, setCopied] = useState(false);
+  const [dataLoaded, setDataLoaded] = useState(false);
 
   // Build constraint lookup sets
   const notNullSet = new Set(table.notNullConstraints);
@@ -59,21 +62,7 @@ export function TableDetail({ table, catalogName, onNavigate }: Props) {
         <p className="text-muted-foreground mb-3">{table.comment}</p>
       )}
 
-      {/* Sample SQL bar */}
-      <div className="flex items-center gap-2 bg-muted/60 rounded-md px-3 py-2 mb-4">
-        <code className="flex-1 text-xs font-mono text-muted-foreground truncate">{sampleSql}</code>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleCopy}
-          className="h-6 px-2 text-xs shrink-0"
-        >
-          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-          <span className="ml-1">{copied ? "Copied" : "Copy"}</span>
-        </Button>
-      </div>
-
-      {/* FK summary chips (if any) */}
+      {/* FK/constraint chips */}
       {hasConstraints && (
         <div className="flex flex-wrap gap-2 mb-4">
           {foreignKeys.map((fk, i) => (
@@ -125,14 +114,58 @@ export function TableDetail({ table, catalogName, onNavigate }: Props) {
         </div>
       )}
 
-      {/* Columns table */}
-      <ColumnsTable
-        columns={columns}
-        pkColumns={pkColumns}
-        notNullSet={notNullSet}
-        fkByColumn={fkByColumn}
-        onNavigate={onNavigate}
-      />
+      {/* Tabs: Schema | Data */}
+      <Tabs
+        defaultValue="schema"
+        onValueChange={(val) => {
+          if (val === "data" && !dataLoaded) setDataLoaded(true);
+        }}
+      >
+        <TabsList className="border border-border bg-card shadow-sm h-9 p-1 gap-1">
+          <TabsTrigger value="schema" className="data-active:bg-primary data-active:text-primary-foreground rounded-md px-3">
+            Schema
+            <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{columns.length}</Badge>
+          </TabsTrigger>
+          <TabsTrigger value="data" className="data-active:bg-primary data-active:text-primary-foreground rounded-md px-3">
+            Data
+          </TabsTrigger>
+        </TabsList>
+
+        {/* Schema Tab */}
+        <TabsContent value="schema" className="mt-4">
+          {/* Sample SQL bar */}
+          <div className="flex items-center gap-2 bg-muted/60 rounded-md px-3 py-2 mb-4">
+            <code className="flex-1 text-xs font-mono text-muted-foreground truncate">{sampleSql}</code>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleCopy}
+              className="h-6 px-2 text-xs shrink-0"
+            >
+              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              <span className="ml-1">{copied ? "Copied" : "Copy"}</span>
+            </Button>
+          </div>
+
+          <ColumnsTable
+            columns={columns}
+            pkColumns={pkColumns}
+            notNullSet={notNullSet}
+            fkByColumn={fkByColumn}
+            onNavigate={onNavigate}
+          />
+        </TabsContent>
+
+        {/* Data Tab — lazy loaded */}
+        <TabsContent value="data" className="mt-4">
+          {dataLoaded && (
+            <DataPreview
+              catalogName={catalogName}
+              functionName={table.name}
+            />
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
