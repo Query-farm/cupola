@@ -22,10 +22,11 @@ function getStore() {
   const reducer = combineReducers({
     keplerGl: keplerGlReducer.initialState({
       uiState: {
+        currentModal: null, // suppress "Add Data" modal — data comes from SQL panel
         mapControls: {
           ...DEFAULT_MAP_CONTROLS,
           sqlPanel: {
-            active: false,
+            active: true, // open SQL panel by default
             activeMapIndex: 0,
             disableClose: false,
             show: true,
