@@ -71,18 +71,18 @@ export function TableDetail({ table, catalogName, onNavigate }: Props) {
 
       {/* Tabs */}
       <Tabs defaultValue="columns" className="flex-1">
-        <TabsList>
-          <TabsTrigger value="columns">
+        <TabsList className="border border-border bg-card shadow-sm h-9 p-1 gap-1">
+          <TabsTrigger value="columns" className="data-active:bg-primary data-active:text-primary-foreground rounded-md px-3">
             Columns
             <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{columns.length}</Badge>
           </TabsTrigger>
-          <TabsTrigger value="constraints">
+          <TabsTrigger value="constraints" className="data-active:bg-primary data-active:text-primary-foreground rounded-md px-3">
             Constraints
             {constraintCount > 0 && (
               <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{constraintCount}</Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="sql">SQL</TabsTrigger>
+          <TabsTrigger value="sql" className="data-active:bg-primary data-active:text-primary-foreground rounded-md px-3">SQL</TabsTrigger>
         </TabsList>
 
         {/* Columns Tab */}
