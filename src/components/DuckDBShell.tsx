@@ -835,6 +835,7 @@ const PERSPECTIVE_CDN = [
   "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer/dist/cdn/perspective-viewer.js",
   "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer-datagrid/dist/cdn/perspective-viewer-datagrid.js",
   "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer-d3fc/dist/cdn/perspective-viewer-d3fc.js",
+  "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer-openlayers/dist/cdn/perspective-viewer-openlayers.js",
 ];
 const PERSPECTIVE_CSS = "https://cdn.jsdelivr.net/npm/@finos/perspective-viewer@3.8.0/dist/css/pro.css";
 
