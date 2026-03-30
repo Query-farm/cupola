@@ -12,14 +12,22 @@ import type { Table } from "apache-arrow";
 export class VgiDuckDBConnection {
   async query(statement: string): Promise<Table> {
     const queryFn = (window as any).__duckdbQuery;
-    if (!queryFn) throw new Error("DuckDB shell not initialized");
+    if (!queryFn) throw new Error("DuckDB shell not initialized — open the SQL Shell tab first");
+    console.log("[VgiDuckDB] query:", statement.slice(0, 120));
     const result = await queryFn(statement);
-    if (!result.ok) throw new Error(result.error || "Query failed");
-    if (!result.arrowBuffers?.length) {
-      // Return empty table for non-SELECT statements
-      return tableFromIPC(new Uint8Array(0));
+    if (!result.ok) {
+      console.error("[VgiDuckDB] error:", result.error);
+      throw new Error(result.error || "Query failed");
     }
-    return tableFromIPC(result.arrowBuffers[0]);
+    if (!result.arrowBuffers?.length) {
+      console.log("[VgiDuckDB] OK (no result rows)");
+      // Return empty table — use Arrow's empty schema
+      const { makeTable } = await import("apache-arrow");
+      return makeTable({});
+    }
+    const table = tableFromIPC(result.arrowBuffers[0]);
+    console.log("[VgiDuckDB] result:", table.numRows, "rows,", table.schema.fields.length, "cols");
+    return table;
   }
 
   async insertArrowTable(_arrowTable: Table, _opts: { name: string }): Promise<void> {
