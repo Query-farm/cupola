@@ -20,6 +20,7 @@ interface Props {
   columnNames: string[];
   columnInfo?: ColumnInfo[];
   rows: Record<string, any>[];
+  startRow?: number;
 }
 
 /** DuckDB types that should be right-aligned. */
@@ -36,7 +37,7 @@ function isNumericType(duckdbType: string): boolean {
   return NUMERIC_TYPES.has(base);
 }
 
-export function DataGrid({ columnNames, columnInfo, rows }: Props) {
+export function DataGrid({ columnNames, columnInfo, rows, startRow = 0 }: Props) {
   // Build a map of column name → ColumnInfo for type lookups
   const infoByName = useMemo(() => {
     const map = new Map<string, ColumnInfo>();
@@ -94,7 +95,7 @@ export function DataGrid({ columnNames, columnInfo, rows }: Props) {
           {table.getRowModel().rows.map((row, idx) => (
             <TableRow key={row.id} className="even:bg-muted/15 hover:bg-accent/5">
               <TableCell className="text-xs text-muted-foreground/40 text-right pr-3 font-mono py-1 w-10">
-                {idx + 1}
+                {startRow + idx + 1}
               </TableCell>
               {row.getVisibleCells().map((cell) => (
                 <TableCell key={cell.id} className="text-xs py-1 whitespace-nowrap max-w-[400px] truncate">

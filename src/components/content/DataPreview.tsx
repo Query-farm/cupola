@@ -1,8 +1,18 @@
 import { useEffect, useState, useRef, useCallback } from "react";
-import { Loader2, AlertCircle, ChevronDown } from "lucide-react";
+import { Loader2, AlertCircle, ChevronLeft, ChevronRight, ChevronsLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { createTableQuery, getServiceUrl, type ColumnInfo } from "@/lib/service";
 import { DataGrid } from "./DataGrid";
+
+const PAGE_SIZES = [25, 50, 100, 200];
+const DEFAULT_PAGE_SIZE = 50;
 
 interface Props {
   catalogName: string;
@@ -11,24 +21,27 @@ interface Props {
 }
 
 export function DataPreview({ catalogName, functionName, columnInfo }: Props) {
+  const [allRows, setAllRows] = useState<Record<string, any>[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
-  const [rows, setRows] = useState<Record<string, any>[]>([]);
-  const [hasMore, setHasMore] = useState(false);
+  const [serverHasMore, setServerHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [fetchingMore, setFetchingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const queryRef = useRef<ReturnType<typeof createTableQuery> | null>(null);
+  const closedRef = useRef(false);
 
-  // Load initial page
+  // Fetch initial data
   useEffect(() => {
-    let cancelled = false;
+    closedRef.current = false;
     setLoading(true);
     setError(null);
-    setRows([]);
+    setAllRows([]);
     setColumns([]);
-    setHasMore(false);
+    setServerHasMore(false);
+    setPage(0);
 
-    // Clean up previous query session
     queryRef.current?.close();
 
     const serviceUrl = getServiceUrl();
@@ -36,40 +49,59 @@ export function DataPreview({ catalogName, functionName, columnInfo }: Props) {
     queryRef.current = query;
 
     query.loadNextPage()
-      .then((page) => {
-        if (cancelled) return;
-        setColumns(page.columns);
-        setRows(page.rows);
-        setHasMore(page.hasMore);
+      .then((result) => {
+        if (closedRef.current) return;
+        setColumns(result.columns);
+        setAllRows(result.rows);
+        setServerHasMore(result.hasMore);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (closedRef.current) return;
         setError(err instanceof Error ? err.message : "Failed to load data");
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!closedRef.current) setLoading(false);
       });
 
     return () => {
-      cancelled = true;
-      query.close();
+      closedRef.current = true;
+      // Don't close the query here — we need it for "load more"
     };
   }, [catalogName, functionName]);
 
-  // Load more pages
-  const loadMore = useCallback(async () => {
-    if (!queryRef.current || loadingMore) return;
-    setLoadingMore(true);
+  // Fetch more rows from server
+  const fetchMore = useCallback(async () => {
+    if (!queryRef.current || fetchingMore || !serverHasMore) return;
+    setFetchingMore(true);
     try {
-      const page = await queryRef.current.loadNextPage();
-      setRows((prev) => [...prev, ...page.rows]);
-      setHasMore(page.hasMore);
+      const result = await queryRef.current.loadNextPage();
+      setAllRows((prev) => [...prev, ...result.rows]);
+      setServerHasMore(result.hasMore);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load more data");
     } finally {
-      setLoadingMore(false);
+      setFetchingMore(false);
     }
-  }, [loadingMore]);
+  }, [fetchingMore, serverHasMore]);
+
+  // Current page window
+  const totalLoaded = allRows.length;
+  const totalPages = Math.max(1, Math.ceil(totalLoaded / pageSize));
+  const startIdx = page * pageSize;
+  const endIdx = Math.min(startIdx + pageSize, totalLoaded);
+  const pageRows = allRows.slice(startIdx, endIdx);
+  const isLastPage = endIdx >= totalLoaded;
+  const canLoadMore = isLastPage && serverHasMore;
+
+  // Auto-advance: when user is on last page and clicks next, fetch more
+  const handleNext = useCallback(async () => {
+    if (page + 1 < totalPages) {
+      setPage(page + 1);
+    } else if (serverHasMore) {
+      await fetchMore();
+      setPage(page + 1);
+    }
+  }, [page, totalPages, serverHasMore, fetchMore]);
 
   if (loading) {
     return (
@@ -89,7 +121,7 @@ export function DataPreview({ catalogName, functionName, columnInfo }: Props) {
     );
   }
 
-  if (rows.length === 0) {
+  if (allRows.length === 0) {
     return (
       <div className="flex items-center justify-center py-16 text-muted-foreground">
         No rows returned.
@@ -99,29 +131,79 @@ export function DataPreview({ catalogName, functionName, columnInfo }: Props) {
 
   return (
     <div>
-      <DataGrid columnNames={columns} columnInfo={columnInfo} rows={rows} />
+      <DataGrid columnNames={columns} columnInfo={columnInfo} rows={pageRows} startRow={startIdx} />
 
-      {/* Footer: count + load more */}
-      <div className="flex items-center justify-between mt-3">
-        <span className="text-xs text-muted-foreground">
-          {rows.length.toLocaleString()} rows loaded
+      {/* Pagination footer */}
+      <div className="flex items-center justify-between mt-3 gap-4">
+        {/* Left: row info */}
+        <span className="text-xs text-muted-foreground whitespace-nowrap">
+          Rows {startIdx + 1}&ndash;{endIdx} of {totalLoaded.toLocaleString()}{serverHasMore ? "+" : ""} loaded
         </span>
-        {hasMore && (
+
+        {/* Center: page controls */}
+        <div className="flex items-center gap-1">
           <Button
             variant="outline"
             size="sm"
-            onClick={loadMore}
-            disabled={loadingMore}
-            className="h-7 text-xs gap-1.5"
+            onClick={() => setPage(0)}
+            disabled={page === 0}
+            className="h-7 w-7 p-0"
+            title="First page"
           >
-            {loadingMore ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <ChevronDown className="h-3 w-3" />
-            )}
-            Load more
+            <ChevronsLeft className="h-3.5 w-3.5" />
           </Button>
-        )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setPage(page - 1)}
+            disabled={page === 0}
+            className="h-7 w-7 p-0"
+            title="Previous page"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </Button>
+          <span className="text-xs text-muted-foreground px-2 whitespace-nowrap">
+            Page {page + 1}{!serverHasMore ? ` of ${totalPages}` : ""}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleNext}
+            disabled={isLastPage && !serverHasMore}
+            className="h-7 w-7 p-0"
+            title={canLoadMore ? "Load next page" : "Next page"}
+          >
+            {fetchingMore ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )}
+          </Button>
+        </div>
+
+        {/* Right: page size selector */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground whitespace-nowrap">Rows per page</span>
+          <Select
+            value={String(pageSize)}
+            onValueChange={(val) => {
+              const newSize = Number(val);
+              setPageSize(newSize);
+              setPage(0);
+            }}
+          >
+            <SelectTrigger className="h-7 w-[70px] text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PAGE_SIZES.map((size) => (
+                <SelectItem key={size} value={String(size)} className="text-xs">
+                  {size}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
     </div>
   );
