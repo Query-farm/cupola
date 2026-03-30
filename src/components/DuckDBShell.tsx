@@ -149,7 +149,7 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
           {error}
         </div>
       )}
-      <div ref={containerRef} className={`flex-1 ${loading ? "hidden" : ""}`} style={{ padding: "4px 8px" }} />
+      <div ref={containerRef} className={`flex-1 min-h-0 overflow-hidden ${loading ? "hidden" : ""}`} />
     </div>
   );
 }
@@ -184,13 +184,17 @@ function initShell(
   term.loadAddon(rl);
   term.open(container);
   try { term.loadAddon(new WGA.WebglAddon()); } catch { /* canvas fallback */ }
-  fitAddon.fit();
 
   // Store for resize handling
   (window as any).__shellFitAddon = fitAddon;
 
   const resizeObserver = new ResizeObserver(() => fitAddon.fit());
   resizeObserver.observe(container);
+
+  // Delayed fit — container may not have final dimensions on first render
+  fitAddon.fit();
+  requestAnimationFrame(() => fitAddon.fit());
+  setTimeout(() => fitAddon.fit(), 100);
 
   // Write helpers
   function writeln(msg: string, color?: string) {
