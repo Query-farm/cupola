@@ -160,16 +160,17 @@ async function init() {
     runQuery("SET enable_progress_bar_print=false");
     runQuery("SET autoinstall_known_extensions=false");
     runQuery("SET autoload_known_extensions=true");
-    const origin = self.location.origin;
-    runQuery(`SET custom_extension_repository='${origin}/extensions'`);
-    postMessage({ type: 'log', msg: `Extension repo: ${origin}/extensions`, cls: 'ok' });
+    // Derive base URL from worker location (e.g., /shell/worker.js → /shell)
+    const workerBase = self.location.href.replace(/\/[^/]*$/, '');
+    runQuery(`SET custom_extension_repository='${workerBase}/extensions'`);
+    postMessage({ type: 'log', msg: `Extension repo: ${workerBase}/extensions`, cls: 'ok' });
 
     postMessage({ type: 'log', msg: '', cls: '' });
 
     const exts = ['json', 'icu', 'autocomplete', 'vgi'];
     for (const ext of exts) {
         postMessage({ type: 'log', msg: `Loading ${ext}...`, cls: 'info' });
-        const r = runQuery(`LOAD '${origin}/extensions/v1.5.1/wasm_eh/${ext}.duckdb_extension.wasm'`);
+        const r = runQuery(`LOAD '${workerBase}/extensions/v1.5.1/wasm_eh/${ext}.duckdb_extension.wasm'`);
         postMessage({ type: 'log', msg: `LOAD ${ext}  ` + (r.ok ? 'OK' : r.error), cls: r.ok ? 'ok' : 'err' });
     }
 

@@ -126,7 +126,7 @@ export function CatalogApp() {
         <Sidebar catalog={data} selection={selection} onSelect={navigate} onOpenShell={() => {
           // Open shell in same tab with service URL, token, and catalog
           const token = getAuthToken();
-          const shellUrl = `/shell/?service=${encodeURIComponent(serviceUrl)}&catalog=${encodeURIComponent(data.catalogName)}${token ? '#token=' + encodeURIComponent(token) : ''}`;
+          const shellUrl = `/shell/index.html?service=${encodeURIComponent(serviceUrl)}&catalog=${encodeURIComponent(data.catalogName)}${token ? '#token=' + encodeURIComponent(token) : ''}`;
           window.location.href = shellUrl;
         }} />
         <main className="flex-1 overflow-y-auto p-6">

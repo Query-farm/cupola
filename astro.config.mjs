@@ -20,11 +20,19 @@ export default defineConfig({
           server.middlewares.use((_req, res, next) => {
             res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
             res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+            // Allow cross-origin resources (CDN scripts, WASM files)
+            res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
             next();
           });
         },
       },
     ],
+    server: {
+      fs: {
+        // Allow serving symlinked files from wasm-upgrades build
+        allow: ['..'],
+      },
+    },
     resolve: {
       alias: {
         // Use the client-only connect module directly to avoid bundling
