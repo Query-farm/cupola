@@ -162,6 +162,7 @@ export function TableDetail({ table, catalogName, onNavigate }: Props) {
             <DataPreview
               catalogName={catalogName}
               functionName={table.name}
+              columnInfo={columns}
             />
           )}
         </TabsContent>

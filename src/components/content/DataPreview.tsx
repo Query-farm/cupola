@@ -1,15 +1,16 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { Loader2, AlertCircle, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { createTableQuery, getServiceUrl } from "@/lib/service";
+import { createTableQuery, getServiceUrl, type ColumnInfo } from "@/lib/service";
 import { DataGrid } from "./DataGrid";
 
 interface Props {
   catalogName: string;
   functionName: string;
+  columnInfo?: ColumnInfo[];
 }
 
-export function DataPreview({ catalogName, functionName }: Props) {
+export function DataPreview({ catalogName, functionName, columnInfo }: Props) {
   const [columns, setColumns] = useState<string[]>([]);
   const [rows, setRows] = useState<Record<string, any>[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -98,7 +99,7 @@ export function DataPreview({ catalogName, functionName }: Props) {
 
   return (
     <div>
-      <DataGrid columns={columns} rows={rows} />
+      <DataGrid columnNames={columns} columnInfo={columnInfo} rows={rows} />
 
       {/* Footer: count + load more */}
       <div className="flex items-center justify-between mt-3">

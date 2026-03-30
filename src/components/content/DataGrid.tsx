@@ -14,28 +14,59 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatCellValue, isNullValue } from "@/lib/format";
+import type { ColumnInfo } from "@/lib/service";
 
 interface Props {
-  columns: string[];
+  columnNames: string[];
+  columnInfo?: ColumnInfo[];
   rows: Record<string, any>[];
 }
 
-export function DataGrid({ columns, rows }: Props) {
+/** DuckDB types that should be right-aligned. */
+const NUMERIC_TYPES = new Set([
+  "TINYINT", "SMALLINT", "INTEGER", "BIGINT",
+  "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT",
+  "FLOAT", "DOUBLE", "DECIMAL",
+  "HUGEINT", "UHUGEINT",
+]);
+
+function isNumericType(duckdbType: string): boolean {
+  // Handle parameterized types like DECIMAL(18,2)
+  const base = duckdbType.split("(")[0].toUpperCase();
+  return NUMERIC_TYPES.has(base);
+}
+
+export function DataGrid({ columnNames, columnInfo, rows }: Props) {
+  // Build a map of column name → ColumnInfo for type lookups
+  const infoByName = useMemo(() => {
+    const map = new Map<string, ColumnInfo>();
+    if (columnInfo) {
+      for (const col of columnInfo) map.set(col.name, col);
+    }
+    return map;
+  }, [columnInfo]);
+
   const tableColumns = useMemo<ColumnDef<Record<string, any>>[]>(
     () =>
-      columns.map((col) => ({
-        accessorKey: col,
-        header: col,
-        cell: ({ getValue, column }) => {
-          const val = getValue();
-          if (isNullValue(val)) {
-            return <span className="text-muted-foreground/30 italic">NULL</span>;
-          }
-          const display = formatCellValue(val, column.id);
-          return <span className="font-mono">{display}</span>;
-        },
-      })),
-    [columns]
+      columnNames.map((col) => {
+        const info = infoByName.get(col);
+        const numeric = info ? isNumericType(info.duckdbType) : false;
+        return {
+          accessorKey: col,
+          header: () => (
+            <span className={numeric ? "text-right block" : ""}>{col}</span>
+          ),
+          cell: ({ getValue, column }) => {
+            const val = getValue();
+            if (isNullValue(val)) {
+              return <span className={`text-muted-foreground/30 italic ${numeric ? "text-right block" : ""}`}>NULL</span>;
+            }
+            const display = formatCellValue(val, column.id);
+            return <span className={`font-mono ${numeric ? "text-right block tabular-nums" : ""}`}>{display}</span>;
+          },
+        };
+      }),
+    [columnNames, infoByName]
   );
 
   const table = useReactTable({
