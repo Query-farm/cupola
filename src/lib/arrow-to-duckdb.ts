@@ -59,6 +59,14 @@ function mapTypeString(s: string): string {
   if (s.startsWith("Date32<")) return "DATE";
   if (s.startsWith("Date64<")) return "DATE";
 
+  // Dictionary types: Dictionary<IndexType, ValueType>
+  // DuckDB uses dictionary encoding for ENUM and low-cardinality columns.
+  // The DuckDB type is determined by the value type (e.g., Dictionary<Int16, Utf8> → VARCHAR).
+  const dictMatch = s.match(/^Dictionary<[^,]+,\s*(.+)>$/);
+  if (dictMatch) {
+    return mapTypeString(dictMatch[1]);
+  }
+
   // List types: List<Field> or LargeList<Field>
   const listMatch = s.match(/^(?:Large)?List<(.+)>$/);
   if (listMatch) {
