@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import { formatCellValue, isNullValue } from "@/lib/format";
 import type { ColumnInfo } from "@/lib/service";
+import { GeometryViewer } from "./GeometryViewer";
 
 interface Props {
   columnNames: string[];
@@ -52,15 +53,21 @@ export function DataGrid({ columnNames, columnInfo, rows, startRow = 0 }: Props)
       columnNames.map((col) => {
         const info = infoByName.get(col);
         const numeric = info ? isNumericType(info.duckdbType) : false;
+        const isGeometry = info?.duckdbType === "GEOMETRY";
         return {
           accessorKey: col,
           header: () => (
             <span className={numeric ? "text-right block" : ""}>{col}</span>
           ),
-          cell: ({ getValue, column }) => {
+          cell: ({ getValue, column, row }) => {
             const val = getValue();
             if (isNullValue(val)) {
               return <span className={`text-muted-foreground/30 italic ${numeric ? "text-right block" : ""}`}>NULL</span>;
+            }
+            // Geometry: render clickable map viewer
+            if (isGeometry && val instanceof Uint8Array) {
+              const rowIdx = startRow + row.index + 1;
+              return <GeometryViewer wkb={val} label={`Row ${rowIdx}`} />;
             }
             const display = formatCellValue(val, column.id);
             return <span className={`font-mono ${numeric ? "text-right block tabular-nums" : ""}`}>{display}</span>;
