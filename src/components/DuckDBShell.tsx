@@ -222,6 +222,23 @@ function initShell(
     rl.println(c + msg + r);
   }
 
+  // Progress bar
+  let progressLine = false;
+  function renderProgressBar(pct: number) {
+    const width = Math.max(20, term.cols - 10);
+    const filled = Math.round((pct / 100) * width);
+    const bar = "\x1b[32m" + "█".repeat(filled) + "\x1b[2m" + "░".repeat(width - filled) + "\x1b[0m";
+    const label = ` ${Math.round(pct)}%`;
+    term.write(`\r${bar}${label}\x1b[K`);
+    progressLine = true;
+  }
+  function clearProgressBar() {
+    if (progressLine) {
+      term.write("\r\x1b[K");
+      progressLine = false;
+    }
+  }
+
   // Worker
   const worker = new Worker("/shell/worker.js");
 
@@ -283,7 +300,7 @@ function initShell(
     }
 
     if (d.type === "progress") {
-      // Could render a progress bar — skip for now
+      if (queryRunning) renderProgressBar(d.percentage);
       return;
     }
   };
@@ -316,6 +333,7 @@ function initShell(
 
       queryRunning = true;
       const result = await runQueryAsync(trimmed);
+      clearProgressBar();
       queryRunning = false;
 
       if (!result.ok) {
