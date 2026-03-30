@@ -17,11 +17,9 @@ export function SettingsModal() {
 
   return (
     <Dialog>
-      <DialogTrigger asChild>
-        <button className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
-          <Settings className="h-4 w-4" />
-          Settings
-        </button>
+      <DialogTrigger className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
+        <Settings className="h-4 w-4" />
+        Settings
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
