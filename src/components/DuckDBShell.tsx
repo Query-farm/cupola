@@ -3,10 +3,12 @@
  * Loads xterm.js + addons from CDN to avoid SSR/bundling issues.
  * Shell logic adapted from public/shell/index.html.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, lazy, Suspense } from "react";
 import { Maximize2, Minimize2, X } from "lucide-react";
 import { getAuthToken } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
+
+const KeplerMap = lazy(() => import("./KeplerMap").then((m) => ({ default: m.KeplerMap })));
 
 interface Props {
   serviceUrl: string;
@@ -73,7 +75,7 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
-  const [activeTab, setActiveTab] = useState<"shell" | "perspective">("shell");
+  const [activeTab, setActiveTab] = useState<"shell" | "perspective" | "map">("shell");
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
 
   // Expose a callback for the shell to trigger Perspective view
@@ -89,7 +91,13 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
         setPerspectiveLoading(false);
       }
     };
-    return () => { delete (window as any).__showPerspective; };
+    (window as any).__showKepler = () => {
+      setActiveTab("map");
+    };
+    return () => {
+      delete (window as any).__showPerspective;
+      delete (window as any).__showKepler;
+    };
   }, []);
 
   useEffect(() => {
@@ -154,6 +162,9 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
           <button className={tabCls("perspective")} onClick={() => setActiveTab("perspective")}>
             Perspective
           </button>
+          <button className={tabCls("map")} onClick={() => setActiveTab("map")}>
+            Map
+          </button>
         </div>
         <div className="flex items-center gap-1 pb-1">
           <button
@@ -217,6 +228,19 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
           </div>
         )}
       </div>
+
+      {/* Kepler.gl map */}
+      {activeTab === "map" && (
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <Suspense fallback={
+            <div className="flex items-center justify-center h-full text-gray-500 text-sm bg-white">
+              Loading Kepler.gl...
+            </div>
+          }>
+            <KeplerMap />
+          </Suspense>
+        </div>
+      )}
     </div>
   );
 }
@@ -391,6 +415,7 @@ function initShell(
         writeln(".download csv      Download last result as CSV");
         writeln(".download excel    Download last result as Excel");
         writeln(".perspective       Open last result in Perspective viewer");
+        writeln(".kepler            Switch to Map tab");
         continue;
       }
       if (trimmed.startsWith(".mode")) {
@@ -423,6 +448,11 @@ function initShell(
           (window as any).__showPerspective?.(lastArrowBuffer);
           writeln("Switched to Perspective viewer", "32");
         }
+        continue;
+      }
+      if (trimmed === ".kepler") {
+        (window as any).__showKepler?.();
+        writeln("Switched to Map tab", "32");
         continue;
       }
 
@@ -785,6 +815,9 @@ function initShell(
 
   worker.postMessage({ type: "init" });
 
+  // Expose query function for kepler.gl's DuckDB adapter
+  (window as any).__duckdbQuery = (sql: string) => runQueryAsync(sql);
+
   // Insert text into the terminal's current input line.
   // If the input is empty and the text looks like a table name, wrap it in SELECT * FROM.
   function insertText(text: string) {
@@ -807,6 +840,7 @@ function initShell(
       try { term.dispose(); } catch {} // WebGL addon dispose can throw after DOM removal
       delete (window as any).__shellFitAddon;
       delete (window as any).__shellInsertText;
+      delete (window as any).__duckdbQuery;
     },
     insertText,
   };
