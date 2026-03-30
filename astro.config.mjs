@@ -11,7 +11,20 @@ export default defineConfig({
   integrations: [react()],
 
   vite: {
-    plugins: [tailwindcss()],
+    plugins: [
+      tailwindcss(),
+      // COOP/COEP headers required for SharedArrayBuffer (DuckDB-WASM shell)
+      {
+        name: 'coop-coep-headers',
+        configureServer(server) {
+          server.middlewares.use((_req, res, next) => {
+            res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+            res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+            next();
+          });
+        },
+      },
+    ],
     resolve: {
       alias: {
         // Use the client-only connect module directly to avoid bundling

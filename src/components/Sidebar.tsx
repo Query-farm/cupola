@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Search } from "lucide-react";
+import { Search, TerminalSquare } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { TreeView } from "@/components/tree-view";
 import { SettingsModal } from "@/components/SettingsModal";
@@ -11,9 +11,10 @@ interface Props {
   catalog: CatalogData;
   selection: Selection | null;
   onSelect: (selection: Selection | null) => void;
+  onOpenShell?: () => void;
 }
 
-export function Sidebar({ catalog, selection, onSelect }: Props) {
+export function Sidebar({ catalog, selection, onSelect, onOpenShell }: Props) {
   const [search, setSearch] = useState("");
   const { settings } = useSettings();
   const treeData = useMemo(() => buildTreeData(catalog, {
@@ -62,8 +63,17 @@ export function Sidebar({ catalog, selection, onSelect }: Props) {
         />
       </div>
 
-      {/* Settings + Copyright */}
+      {/* Shell + Settings + Copyright */}
       <div className="border-t border-border">
+        {onOpenShell && (
+          <button
+            onClick={onOpenShell}
+            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          >
+            <TerminalSquare className="h-4 w-4" />
+            SQL Shell
+          </button>
+        )}
         <SettingsModal />
         <div className="px-3 pb-3 text-xs text-muted-foreground/60">
           &copy; 2026 &#x1F69C; <a href="https://query.farm" className="hover:text-primary transition-colors">Query.Farm LLC</a>

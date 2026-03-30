@@ -123,7 +123,12 @@ export function CatalogApp() {
         refreshing={refreshing}
       />
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar catalog={data} selection={selection} onSelect={navigate} />
+        <Sidebar catalog={data} selection={selection} onSelect={navigate} onOpenShell={() => {
+          // Open shell in same tab with service URL, token, and catalog
+          const token = getAuthToken();
+          const shellUrl = `/shell/?service=${encodeURIComponent(serviceUrl)}&catalog=${encodeURIComponent(data.catalogName)}${token ? '#token=' + encodeURIComponent(token) : ''}`;
+          window.location.href = shellUrl;
+        }} />
         <main className="flex-1 overflow-y-auto p-6">
           <ContentPanel data={data} selection={selection} serviceUrl={serviceUrl} onNavigate={navigate} />
         </main>

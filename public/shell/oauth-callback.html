@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Authentication</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" crossorigin="anonymous">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+  }
+  @media (prefers-color-scheme: light) {
+    body { background-color: #faf8f0; color: #2c2c1e; }
+    .card { background: white; border: 1px solid #f0ece0; }
+    .icon-circle-success { background: #e8f5e0; }
+    .icon-success { color: #4a7c23; }
+    .icon-circle-error { background: #fde8e8; }
+    .icon-error { color: #c53030; }
+    .subtitle { color: #6b6b5a; }
+    .footer-text { color: #6b6b5a; }
+    .footer-link { color: #4a7c23; }
+    .footer-link:hover { color: #2d5016; }
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background-color: #1a1a0e; color: #f5f0e0; }
+    .card { background: #252518; border: 1px solid #3a3a28; }
+    .icon-circle-success { background: #2d501640; }
+    .icon-success { color: #6ba034; }
+    .icon-circle-error { background: #c5303020; }
+    .icon-error { color: #fc8181; }
+    .subtitle { color: #b8b0a0; }
+    .footer-text { color: #b8b0a0; }
+    .footer-link { color: #6ba034; }
+    .footer-link:hover { color: #4a7c23; }
+  }
+  .card {
+    max-width: 560px;
+    width: 100%;
+    border-radius: 12px;
+    padding: 2.5rem;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+  }
+  .logos { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; flex-shrink: 0; }
+  .logo { width: 120px; height: 120px; }
+  .logo-duckdb { width: 100px; }
+  .content { text-align: left; }
+  .status-row { display: flex; align-items: center; gap: 0.625rem; margin-bottom: 0.5rem; }
+  .icon-circle {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .icon-circle svg { width: 20px; height: 20px; }
+  h1 { font-size: 1.375rem; font-weight: 600; }
+  .subtitle { font-size: 0.938rem; line-height: 1.5; }
+  .footer {
+    margin-top: 2rem;
+    font-size: 0.8125rem;
+    text-align: center;
+  }
+  .footer-link { text-decoration: none; transition: color 0.15s; }
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div class="logos">
+    <a href="https://query.farm"><img class="logo" src="./img/logo-hero.png" alt="VGI"></a>
+    <a href="https://duckdb.org"><img class="logo-duckdb" src="./img/DuckDB_Logo-horizontal.svg" alt="DuckDB"></a>
+  </div>
+  <div class="content" id="content">
+    <div class="status-row">
+      <div class="icon-circle icon-circle-success" id="icon-circle">
+        <svg id="icon-svg" class="icon-success" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+        </svg>
+      </div>
+      <h1 id="title">Completing authentication...</h1>
+    </div>
+    <p class="subtitle" id="message"></p>
+  </div>
+</div>
+<div class="footer">
+  <span class="footer-text">&copy; 2026 &#x1F69C; <a href="https://query.farm" class="footer-link">Query.Farm LLC</a></span>
+</div>
+
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  const error = params.get('error');
+  const errorDesc = params.get('error_description');
+  const state = params.get('state');
+
+  const msg = error
+    ? { type: 'oauth-callback', error, errorDesc }
+    : code
+    ? { type: 'oauth-callback', code, state }
+    : { type: 'oauth-callback', error: 'no_code', errorDesc: 'No authorization code received' };
+
+  // Send the auth code/error back via BroadcastChannel (works with COOP: same-origin)
+  // or window.opener.postMessage (works without COOP)
+  if (window.opener) {
+    window.opener.postMessage(msg, '*');
+  }
+  if (typeof BroadcastChannel !== 'undefined') {
+    const bc = new BroadcastChannel('duckdb-wasm-oauth');
+    bc.postMessage(msg);
+    bc.close();
+  }
+
+  // Update the UI
+  const title = document.getElementById('title');
+  const message = document.getElementById('message');
+  const iconCircle = document.getElementById('icon-circle');
+  const iconSvg = document.getElementById('icon-svg');
+
+  if (error || !code) {
+    title.textContent = 'Authentication Failed';
+    message.textContent = errorDesc || error || 'No authorization code received';
+    iconCircle.className = 'icon-circle icon-circle-error';
+    iconSvg.className = 'icon-error';
+    iconSvg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>';
+  } else {
+    title.textContent = 'Authentication Successful';
+    message.textContent = 'You can close this window.';
+    setTimeout(() => window.close(), 1500);
+  }
+</script>
+</body>
+</html>
