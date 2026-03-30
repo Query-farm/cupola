@@ -4,8 +4,10 @@ import { type Selection } from "@/lib/tree";
 import { getAuthToken } from "@/lib/auth";
 import { SettingsProvider } from "@/lib/settings";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
+import { lazy, Suspense } from "react";
 import { Header } from "./Header";
 import { Sidebar } from "./Sidebar";
+const DuckDBShell = lazy(() => import("./DuckDBShell").then(m => ({ default: m.DuckDBShell })));
 import { CatalogOverview } from "./content/CatalogOverview";
 import { SchemaDetail } from "./content/SchemaDetail";
 import { TableDetail } from "./content/TableDetail";
@@ -18,6 +20,8 @@ export function CatalogApp() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [shellOpen, setShellOpen] = useState(false);
+  const [shellMaximized, setShellMaximized] = useState(false);
   const serviceUrl = useMemo(() => getServiceUrl(), []);
 
   // Navigate: update selection, URL hash, and page title
@@ -123,15 +127,26 @@ export function CatalogApp() {
         refreshing={refreshing}
       />
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar catalog={data} selection={selection} onSelect={navigate} onOpenShell={() => {
-          // Open shell in same tab with service URL, token, and catalog
-          const token = getAuthToken();
-          const shellUrl = `/shell/index.html?service=${encodeURIComponent(serviceUrl)}&catalog=${encodeURIComponent(data.catalogName)}${token ? '#token=' + encodeURIComponent(token) : ''}`;
-          window.location.href = shellUrl;
-        }} />
-        <main className="flex-1 overflow-y-auto p-6">
-          <ContentPanel data={data} selection={selection} serviceUrl={serviceUrl} onNavigate={navigate} />
-        </main>
+        {!shellMaximized && (
+          <Sidebar catalog={data} selection={selection} onSelect={(sel) => { if (shellOpen) { setShellOpen(false); setShellMaximized(false); } navigate(sel); }} onOpenShell={() => setShellOpen(true)} treeOnly={shellOpen} />
+        )}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {shellOpen ? (
+            <Suspense fallback={<div className="flex-1 flex items-center justify-center bg-[#1a1a0e] text-[#6ba034]">Loading...</div>}>
+              <DuckDBShell
+                serviceUrl={serviceUrl}
+                catalogName={data.catalogName}
+                onClose={() => { setShellOpen(false); setShellMaximized(false); }}
+                maximized={shellMaximized}
+                onToggleMaximize={() => setShellMaximized(!shellMaximized)}
+              />
+            </Suspense>
+          ) : (
+            <main className="flex-1 overflow-y-auto p-6">
+              <ContentPanel data={data} selection={selection} serviceUrl={serviceUrl} onNavigate={navigate} />
+            </main>
+          )}
+        </div>
       </div>
     </div>
     </SettingsProvider>

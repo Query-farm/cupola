@@ -12,9 +12,11 @@ interface Props {
   selection: Selection | null;
   onSelect: (selection: Selection | null) => void;
   onOpenShell?: () => void;
+  /** When true, tree clicks only expand/collapse — don't navigate to content. */
+  treeOnly?: boolean;
 }
 
-export function Sidebar({ catalog, selection, onSelect, onOpenShell }: Props) {
+export function Sidebar({ catalog, selection, onSelect, onOpenShell, treeOnly }: Props) {
   const [search, setSearch] = useState("");
   const { settings } = useSettings();
   const treeData = useMemo(() => buildTreeData(catalog, {
@@ -29,6 +31,8 @@ export function Sidebar({ catalog, selection, onSelect, onOpenShell }: Props) {
   );
 
   function handleSelectChange(item: { id: string } | undefined) {
+    // In treeOnly mode, just let the tree expand/collapse — don't navigate
+    if (treeOnly) return;
     if (!item) {
       onSelect(null);
       return;
