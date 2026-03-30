@@ -134,26 +134,28 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
     }
   }, [maximized, activeTab]);
 
-  const tabClass = (tab: string) =>
-    `px-4 py-1.5 text-sm font-semibold font-mono cursor-pointer transition-colors ${
-      activeTab === tab
-        ? "text-[#6ba034] border-b-2 border-[#6ba034]"
-        : "text-[#f5f0e0]/40 hover:text-[#f5f0e0]/70"
+  const tabCls = (tab: string) => {
+    const active = activeTab === tab;
+    return `px-4 py-1.5 text-sm font-semibold font-mono cursor-pointer transition-colors rounded-t-md ${
+      active
+        ? "bg-[#1a1a0e] text-[#6ba034] border border-[#3a3a28] border-b-0 relative z-10"
+        : "bg-[#24241a] text-[#f5f0e0]/40 hover:text-[#f5f0e0]/70 border border-transparent hover:bg-[#2a2a1e]"
     }`;
+  };
 
   return (
     <div className="flex flex-col h-full bg-[#1a1a0e]">
-      {/* Header bar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#2a2a1e] bg-[#1a1a0e] shrink-0">
-        <div className="flex items-center gap-1">
-          <button className={tabClass("shell")} onClick={() => setActiveTab("shell")}>
+      {/* Tab bar */}
+      <div className="flex items-center justify-between px-2 pt-1 bg-[#2a2a1e] shrink-0 border-b border-[#3a3a28]">
+        <div className="flex items-end gap-0.5 -mb-px">
+          <button className={tabCls("shell")} onClick={() => setActiveTab("shell")}>
             SQL Shell
           </button>
-          <button className={tabClass("perspective")} onClick={() => setActiveTab("perspective")}>
+          <button className={tabCls("perspective")} onClick={() => setActiveTab("perspective")}>
             Perspective
           </button>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 pb-1">
           <button
             onClick={onToggleMaximize}
             className="p-1 text-[#f5f0e0]/40 hover:text-[#f5f0e0] transition-colors"
