@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { fetchCatalog, getServiceUrl, type CatalogData } from "@/lib/service";
 import { type Selection } from "@/lib/tree";
 import { getAuthToken } from "@/lib/auth";
@@ -22,6 +22,7 @@ export function CatalogApp() {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [shellOpen, setShellOpen] = useState(false);
   const [shellMaximized, setShellMaximized] = useState(false);
+  const shellInsertRef = useRef<((text: string) => void) | null>(null);
   const serviceUrl = useMemo(() => getServiceUrl(), []);
 
   // Navigate: update selection, URL hash, and page title
@@ -128,7 +129,7 @@ export function CatalogApp() {
       />
       <div className="flex flex-1 overflow-hidden">
         {!shellMaximized && (
-          <Sidebar catalog={data} selection={selection} onSelect={(sel) => { if (shellOpen) { setShellOpen(false); setShellMaximized(false); } navigate(sel); }} onOpenShell={() => setShellOpen(true)} treeOnly={shellOpen} />
+          <Sidebar catalog={data} selection={selection} onSelect={(sel) => { if (shellOpen) { setShellOpen(false); setShellMaximized(false); } navigate(sel); }} onOpenShell={() => setShellOpen(true)} treeOnly={shellOpen} onShellInsert={shellOpen ? (text) => shellInsertRef.current?.(text) : undefined} />
         )}
         <div className="flex-1 flex flex-col overflow-hidden">
           {shellOpen ? (
@@ -136,9 +137,10 @@ export function CatalogApp() {
               <DuckDBShell
                 serviceUrl={serviceUrl}
                 catalogName={data.catalogName}
-                onClose={() => { setShellOpen(false); setShellMaximized(false); }}
+                onClose={() => { setShellOpen(false); setShellMaximized(false); shellInsertRef.current = null; }}
                 maximized={shellMaximized}
                 onToggleMaximize={() => setShellMaximized(!shellMaximized)}
+                onShellReady={(insert) => { shellInsertRef.current = insert; }}
               />
             </Suspense>
           ) : (

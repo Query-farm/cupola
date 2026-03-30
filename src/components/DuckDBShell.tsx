@@ -13,6 +13,8 @@ interface Props {
   onClose: () => void;
   maximized: boolean;
   onToggleMaximize: () => void;
+  /** Called when the shell is ready, with a function to insert text into the terminal. */
+  onShellReady?: (insertText: (text: string) => void) => void;
 }
 
 // CDN script URLs (matching public/shell/index.html versions)
@@ -63,7 +65,7 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onToggleMaximize }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onToggleMaximize, onShellReady }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -86,12 +88,13 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
 
         setLoading(false);
 
-        const cleanup = initShell(
+        const { cleanup, insertText } = initShell(
           containerRef.current,
           { serviceUrl, catalogName, token: getAuthToken() },
           { tableFromIPC, Readline }
         );
         cleanupRef.current = cleanup;
+        onShellReady?.(insertText);
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load shell");
       }
@@ -159,7 +162,7 @@ function initShell(
   container: HTMLElement,
   config: { serviceUrl: string; catalogName: string; token: string | null },
   modules: { tableFromIPC: any; Readline: any }
-): () => void {
+): { cleanup: () => void; insertText: (text: string) => void } {
   const { tableFromIPC, Readline } = modules;
   const T = (window as any).Terminal;
   const FA = (window as any).FitAddon;
@@ -351,11 +354,19 @@ function initShell(
 
   worker.postMessage({ type: "init" });
 
-  // Cleanup
-  return () => {
-    resizeObserver.disconnect();
-    worker.terminate();
-    term.dispose();
-    delete (window as any).__shellFitAddon;
+  // Insert text into the terminal's current input line
+  function insertText(text: string) {
+    term.paste(text);
+    term.focus();
+  }
+
+  return {
+    cleanup: () => {
+      resizeObserver.disconnect();
+      worker.terminate();
+      term.dispose();
+      delete (window as any).__shellFitAddon;
+    },
+    insertText,
   };
 }
