@@ -836,7 +836,7 @@ const PERSPECTIVE_CDN = [
   "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer-datagrid/dist/cdn/perspective-viewer-datagrid.js",
   "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer-d3fc/dist/cdn/perspective-viewer-d3fc.js",
 ];
-const PERSPECTIVE_CSS = "https://cdn.jsdelivr.net/npm/@finos/perspective-viewer@3.8.0/dist/css/gruvbox-dark.css";
+const PERSPECTIVE_CSS = "https://cdn.jsdelivr.net/npm/@finos/perspective-viewer@3.8.0/dist/css/pro.css";
 
 let perspectiveLoaded = false;
 let perspectiveWorker: any = null;
@@ -865,7 +865,7 @@ async function loadPerspective(container: HTMLElement, arrowBuffer: Uint8Array) 
   let viewer = container.querySelector("perspective-viewer") as any;
   if (!viewer) {
     viewer = document.createElement("perspective-viewer");
-    viewer.setAttribute("theme", "Gruvbox Dark");
+    viewer.setAttribute("theme", "Pro Light");
     viewer.style.width = "100%";
     viewer.style.height = "100%";
     container.appendChild(viewer);
