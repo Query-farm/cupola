@@ -1,0 +1,65 @@
+[     440ms] [ERROR] In HTML, %s cannot be a descendant of <%s>.
+This will cause a hydration error.%s <button> button 
+
+  ...
+    <Primitive.div data-state="open" data-disabled={undefined} data-orientation="vertical" ref={null}>
+      <div data-state="open" data-disabled={undefined} data-orientation="vertical" ref={null}>
+        <_c8 className="group roun..." onClick={function onClick} draggable={false} onDragStart={function onDragStart} ...>
+          <AccordionHeader asChild={true}>
+            <Primitive.h3 data-orientation="vertical" data-state="open" data-disabled={undefined} asChild={true} ...>
+              <Primitive.h3.Slot data-orientation="vertical" data-state="open" data-disabled={undefined} ref={null}>
+                <Primitive.h3.SlotClone data-orientation="vertical" data-state="open" data-disabled={undefined} ...>
+                  <div data-orientation="vertical" data-state="open" data-disabled={undefined} ref={null}>
+                    <AccordionTrigger ref={null} className={"flex fle..."} onClick={function onClick} draggable={false} ...>
+                      <AccordionCollectionItemSlot scope={undefined}>
+                        <AccordionCollectionItemSlot.Slot data-radix-collection-item="" ref={function}>
+                          <AccordionCollectionItemSlot.SlotClone data-radix-collection-item="" ref={function}>
+                            <CollapsibleTrigger aria-disabled={undefined} data-orientation="vertical" id="radix-_r1r_1_" ...>
+                              <Primitive.button type="button" aria-controls="radix-_r1r_2_" aria-expanded={true} ...>
+>                               <button
+>                                 type="button"
+>                                 aria-controls="radix-_r1r_2_"
+>                                 aria-expanded={true}
+>                                 data-state="open"
+>                                 data-disabled={undefined}
+>                                 disabled={undefined}
+>                                 aria-disabled={undefined}
+>                                 data-orientation="vertical"
+>                                 id="radix-_r1r_1_"
+>                                 className={"flex flex-1 w-full items-center py-2 first:[&[data-state=open]>svg]:fir..."}
+>                                 onClick={function handleEvent}
+>                                 draggable={false}
+>                                 onDragStart={function onDragStart}
+>                                 onDragOver={function onDragOver}
+>                                 onDragLeave={function onDragLeave}
+>                                 onDrop={function onDrop}
+>                                 data-radix-collection-item=""
+>                                 ref={function}
+>                               >
+                                  <ChevronRight>
+                                  <TreeIcon>
+                                  <span>
+                                  <TreeActions isSelected={true}>
+                                    <div className="ml-auto sh...">
+>                                     <button
+>                                       className="p-0.5 text-muted-foreground hover:text-primary transition-colors cu..."
+>                                       title="Refresh catalog"
+>                                       disabled={false}
+>                                       onClick={function onClick}
+>                                     >
+        ...
+ @ http://localhost:4321/node_modules/.vite/deps/chunk-UTQ67KV7.js?v=ceda4d38:2155
+[     440ms] [ERROR] <%s> cannot contain a nested %s.
+See this log for the ancestor stack trace. button <button> @ http://localhost:4321/node_modules/.vite/deps/chunk-UTQ67KV7.js?v=ceda4d38:2162
+[   67672ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4321/src/styles/global.css:0
+[   67672ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4321/@id/__x00__astro:toolbar:internal:0
+[   68000ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4321/@id/astro:scripts/before-hydration.js:0
+[   68002ms] Failed to fetch dynamically imported module: http://localhost:4321/@id/astro:scripts/before-hydration.js
+[   68000ms] [ERROR] WebSocket connection to 'ws://localhost:4321/?token=L1VULj8oUcOT' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:4321/@vite/client:1476
+[   68001ms] [ERROR] WebSocket connection to 'ws://localhost:5173/?token=L1VULj8oUcOT' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:4321/@vite/client:1486
+[   68001ms] [ERROR] [vite] failed to connect to websocket.
+your current setup:
+  (browser) localhost:4321/ <--[HTTP]--> localhost:5173/ (server)
+  (browser) localhost:4321/ <--[WebSocket (failing)]--> localhost:5173/ (server)
+Check out your Vite / network configuration and https://vite.dev/config/server-options.html#server-hmr . @ http://localhost:4321/@vite/client:1496
+[   68003ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4321/favicon.svg:0

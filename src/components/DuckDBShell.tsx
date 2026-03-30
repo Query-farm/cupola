@@ -341,7 +341,7 @@ function initShell(
       } else if (result.arrowBuffers && result.arrowBuffers.length > 0) {
         try {
           const table = tableFromIPC(result.arrowBuffers[0]);
-          printTable(table);
+          await printTable(table);
         } catch (err: any) {
           writeln(`Failed to render: ${err.message}`, "31");
         }
@@ -351,43 +351,78 @@ function initShell(
     }
   }
 
-  // Table rendering
-  function printTable(table: any) {
+  // Format a value based on Arrow field type.
+  // Arrow JS get() already converts Date/Timestamp to epoch milliseconds.
+  function formatVal(val: any, field: any): string {
+    if (val === null || val === undefined) return "NULL";
+    if (val instanceof Uint8Array) return "[binary]";
+    const typeStr: string = field.type?.toString() || "";
+    const num = typeof val === "bigint" ? Number(val) : val;
+    if (typeof num === "number" && !isNaN(num)) {
+      if (typeStr.startsWith("Date")) {
+        const d = new Date(num);
+        if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
+      }
+      if (typeStr.startsWith("Timestamp")) {
+        const d = new Date(num);
+        if (!isNaN(d.getTime())) {
+          const s = d.toISOString().replace("T", " ").replace("Z", "");
+          return s.endsWith(".000") ? s.slice(0, -4) : s;
+        }
+      }
+      if (typeStr.startsWith("Time")) {
+        const totalSec = Math.floor(num / 1000);
+        const h = Math.floor(totalSec / 3600);
+        const m = Math.floor((totalSec % 3600) / 60);
+        const s = totalSec % 60;
+        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+      }
+    }
+    if (typeof val === "bigint") return val.toString();
+    return String(val);
+  }
+
+  // Table rendering using columnify for smart width management
+  async function printTable(table: any) {
     const fields = table.schema.fields;
     const numRows = table.numRows;
     const numCols = fields.length;
     if (numCols === 0) { writeln("(empty)"); return; }
 
-    const headers = fields.map((f: any) => f.name);
-    const colWidths = headers.map((h: string) => h.length);
-    const rows: string[][] = [];
-
+    // Build row objects
+    const data: Record<string, string>[] = [];
     for (let r = 0; r < Math.min(numRows, 500); r++) {
-      const row: string[] = [];
+      const row: Record<string, string> = {};
       for (let c = 0; c < numCols; c++) {
         const val = table.getChildAt(c)?.get(r);
-        let str: string;
-        if (val === null || val === undefined) str = "NULL";
-        else if (val instanceof Uint8Array) str = "[binary]";
-        else if (typeof val === "bigint") str = val.toString();
-        else str = String(val);
-        row.push(str);
-        colWidths[c] = Math.max(colWidths[c], Math.min(str.length, 50));
+        row[fields[c].name] = formatVal(val, fields[c]);
       }
-      rows.push(row);
+      data.push(row);
     }
 
-    const pad = (s: string, w: number) => s.length > w ? s.slice(0, w - 1) + "~" : s.padEnd(w);
-    const sep = " \x1b[2m|\x1b[0m ";
-
-    rl.println("\x1b[1m" + headers.map((h: string, i: number) => pad(h, colWidths[i])).join(sep) + "\x1b[0m");
-    rl.println(colWidths.map((w: number) => "\x1b[2m" + "-".repeat(w) + "\x1b[0m").join("\x1b[2m-+-\x1b[0m"));
-
-    for (const row of rows) {
-      rl.println(row.map((v, i) => {
-        const s = pad(v, colWidths[i]);
-        return v === "NULL" ? "\x1b[2m" + s + "\x1b[0m" : s;
-      }).join(sep));
+    try {
+      const columnify = (await import(/* @vite-ignore */ "columnify")).default;
+      const output = columnify(data, {
+        maxLineWidth: term.cols - 1,
+        truncate: true,
+        truncateMarker: "…",
+        preserveNewLines: false,
+        showHeaders: true,
+        headingTransform: (h: string) => "\x1b[1m" + h + "\x1b[0m",
+        dataTransform: (val: string) => val === "NULL" ? "\x1b[2mNULL\x1b[0m" : val,
+        columnSplitter: " \x1b[2m│\x1b[0m ",
+        config: Object.fromEntries(
+          fields.map((f: any) => [f.name, { maxWidth: Math.min(50, Math.max(term.cols / 3, 12)) }])
+        ),
+      });
+      for (const line of output.split("\n")) {
+        rl.println(line);
+      }
+    } catch {
+      // Fallback: simple dump
+      for (const row of data) {
+        rl.println(Object.values(row).join(" | "));
+      }
     }
 
     rl.println(`\x1b[2m(${numRows} row${numRows !== 1 ? "s" : ""})\x1b[0m`);

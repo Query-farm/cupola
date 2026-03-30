@@ -1,0 +1,55 @@
+[      79ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:4321/?service=http://localhost:9003:0
+[   13015ms] [ERROR] WebSocket connection to 'ws://localhost:4321/?token=_f6S-HLPGcsi' failed:  @ http://localhost:4321/@vite/client:1476
+[   18025ms] [ERROR] In HTML, %s cannot be a descendant of <%s>.
+This will cause a hydration error.%s <button> button 
+
+  ...
+    <Primitive.div data-state="open" data-disabled={undefined} data-orientation="vertical" ref={null}>
+      <div data-state="open" data-disabled={undefined} data-orientation="vertical" ref={null}>
+        <_c8 className="group roun..." onClick={function onClick} draggable={false} onDragStart={function onDragStart} ...>
+          <AccordionHeader asChild={true}>
+            <Primitive.h3 data-orientation="vertical" data-state="open" data-disabled={undefined} asChild={true} ...>
+              <Primitive.h3.Slot data-orientation="vertical" data-state="open" data-disabled={undefined} ref={null}>
+                <Primitive.h3.SlotClone data-orientation="vertical" data-state="open" data-disabled={undefined} ...>
+                  <div data-orientation="vertical" data-state="open" data-disabled={undefined} ref={null}>
+                    <AccordionTrigger ref={null} className={"flex fle..."} onClick={function onClick} draggable={false} ...>
+                      <AccordionCollectionItemSlot scope={undefined}>
+                        <AccordionCollectionItemSlot.Slot data-radix-collection-item="" ref={function}>
+                          <AccordionCollectionItemSlot.SlotClone data-radix-collection-item="" ref={function}>
+                            <CollapsibleTrigger aria-disabled={undefined} data-orientation="vertical" id="radix-_r1r_1_" ...>
+                              <Primitive.button type="button" aria-controls="radix-_r1r_2_" aria-expanded={true} ...>
+>                               <button
+>                                 type="button"
+>                                 aria-controls="radix-_r1r_2_"
+>                                 aria-expanded={true}
+>                                 data-state="open"
+>                                 data-disabled={undefined}
+>                                 disabled={undefined}
+>                                 aria-disabled={undefined}
+>                                 data-orientation="vertical"
+>                                 id="radix-_r1r_1_"
+>                                 className={"flex flex-1 w-full items-center py-2 first:[&[data-state=open]>svg]:fir..."}
+>                                 onClick={function handleEvent}
+>                                 draggable={false}
+>                                 onDragStart={function onDragStart}
+>                                 onDragOver={function onDragOver}
+>                                 onDragLeave={function onDragLeave}
+>                                 onDrop={function onDrop}
+>                                 data-radix-collection-item=""
+>                                 ref={function}
+>                               >
+                                  <ChevronRight>
+                                  <TreeIcon>
+                                  <span>
+                                  <TreeActions isSelected={true}>
+                                    <div className="ml-auto sh...">
+>                                     <button
+>                                       className="p-0.5 text-muted-foreground hover:text-primary transition-colors cu..."
+>                                       title="Refresh catalog"
+>                                       disabled={false}
+>                                       onClick={function onClick}
+>                                     >
+        ...
+ @ http://localhost:4321/node_modules/.vite/deps/chunk-UTQ67KV7.js?v=77db7bd4:2155
+[   18025ms] [ERROR] <%s> cannot contain a nested %s.
+See this log for the ancestor stack trace. button <button> @ http://localhost:4321/node_modules/.vite/deps/chunk-UTQ67KV7.js?v=77db7bd4:2162
