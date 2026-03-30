@@ -9,11 +9,10 @@ import { createStore, combineReducers, applyMiddleware, compose } from "redux";
 import keplerGlReducer, { enhanceReduxMiddleware, uiStateUpdaters } from "@kepler.gl/reducers";
 import { addDataToMap } from "@kepler.gl/actions";
 import { initApplicationConfig } from "@kepler.gl/utils";
-import { VgiDuckDBAdapter } from "@/lib/vgi-duckdb-adapter";
+import { VgiDuckDBAdapter, VgiDuckDBConnection } from "@/lib/vgi-duckdb-adapter";
 import { Play } from "lucide-react";
 
 let KeplerGl: any = null;
-let arrowSchemaToFields: any = null;
 let keplerStore: any = null;
 let configInitialized = false;
 let queryCounter = 0;
@@ -60,29 +59,38 @@ function SqlBar() {
     setStatus("Running...");
 
     try {
-      const result = await queryFn(trimmed);
-      if (!result.ok) {
-        setStatus(`Error: ${result.error}`);
-        return;
-      }
-      if (!result.arrowBuffers?.length) {
-        setStatus("OK (no results)");
-        return;
-      }
+      // Use the same pipeline as @kepler.gl/duckdb's SqlPanel:
+      // 1. Create temp table from query
+      // 2. Get DuckDB column types
+      // 3. Cast GEOMETRY→WKB, BIGINT→DOUBLE
+      // 4. Set GeoArrow metadata
+      // 5. Dispatch to addDataToMap with format: 'arrow'
 
-      const { tableFromIPC } = await import("apache-arrow");
-      const table = tableFromIPC(result.arrowBuffers[0]);
+      const conn = new VgiDuckDBConnection();
+      const duckdbUtils = await import("@kepler.gl/duckdb");
+      const { arrowSchemaToFields: schemaToFields } = await import("@kepler.gl/processors");
 
-      // Convert Arrow schema to kepler fields if available
-      let fields: any[] | undefined;
-      if (arrowSchemaToFields) {
-        try {
-          // Get DuckDB column types for proper geometry handling
-          const adapter = new VgiDuckDBAdapter();
-          const conn = await adapter.connect();
-          fields = arrowSchemaToFields(table);
-        } catch {}
-      }
+      const tempTable = "memory.main.temp_keplergl_table";
+
+      // 1) Create temp table in the in-memory default database (VGI catalog is read-only)
+      await conn.query(`CREATE OR REPLACE TABLE ${tempTable} AS ${trimmed}`);
+
+      // 2) Get DuckDB types
+      const duckDbColumns = await duckdbUtils.getDuckDBColumnTypes(conn, tempTable);
+      const tableDuckDBTypes = duckdbUtils.getDuckDBColumnTypesMap(duckDbColumns);
+
+      // 3) Cast types for kepler (GEOMETRY → WKB, BIGINT → DOUBLE)
+      const castQuery = duckdbUtils.castDuckDBTypesForKepler(tempTable, duckDbColumns);
+      const arrowTable = await conn.query(castQuery);
+
+      // 4) Set GeoArrow extension metadata
+      duckdbUtils.setGeoArrowWKBExtension(arrowTable, duckDbColumns);
+
+      // 5) Drop temp table
+      await conn.query(`DROP TABLE ${tempTable};`);
+
+      // Convert to kepler fields
+      const keplerFields = schemaToFields(arrowTable, tableDuckDBTypes);
 
       queryCounter++;
       const label = trimmed.length > 40 ? trimmed.slice(0, 37) + "..." : trimmed;
@@ -94,15 +102,11 @@ function SqlBar() {
               info: {
                 id: `query_${queryCounter}`,
                 label,
+                format: "arrow",
               },
               data: {
-                fields: fields || table.schema.fields.map((f: any) => ({
-                  name: f.name,
-                  type: "string",
-                  format: "",
-                  analyzerType: "STRING",
-                })),
-                rows: table,
+                fields: keplerFields,
+                rows: arrowTable as any,
               },
             },
           ],
@@ -112,7 +116,7 @@ function SqlBar() {
         })
       );
 
-      setStatus(`Added ${table.numRows} rows as layer`);
+      setStatus(`Added ${arrowTable.numRows} rows as layer`);
     } catch (e: any) {
       setStatus(`Error: ${e.message}`);
     } finally {
@@ -210,11 +214,6 @@ export function KeplerMap() {
         ]);
 
         KeplerGl = keplerComponents.default || keplerComponents.KeplerGl;
-
-        // Try to get arrowSchemaToFields for proper field mapping
-        try {
-          arrowSchemaToFields = (duckdbModule as any).arrowSchemaToFields;
-        } catch {}
 
         if (!configInitialized) {
           initApplicationConfig({
