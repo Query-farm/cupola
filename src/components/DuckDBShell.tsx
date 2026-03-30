@@ -251,6 +251,8 @@ function initShell(
   if (cancelSAB) worker.postMessage({ type: "init-cancel-sab", sab: cancelSAB });
 
   let queryRunning = false;
+  let outputMode: "box" | "line" = "box";
+  let lastTable: any = null;
 
   worker.onmessage = (e: MessageEvent) => {
     const d = e.data;
@@ -324,10 +326,44 @@ function initShell(
     while (true) {
       const sql = await rl.read("\x1b[32mD\x1b[0m > ");
       const trimmed = sql.trim();
-      if (!trimmed) continue;
+      if (!trimmed) {
+        // Remove blank entry that readline already pushed to history
+        if (rl.history?.length) rl.history.pop();
+        continue;
+      }
       if (trimmed === ".exit" || trimmed === "\\q") {
-        // Don't actually exit — just print hint
         writeln("Use the X button to close the shell.", "33");
+        continue;
+      }
+      if (trimmed === ".help" || trimmed === "\\?") {
+        writeln(".help              Show this help");
+        writeln(".mode box          Table output with box drawing (default)");
+        writeln(".mode line         One field per line, vertical display");
+        writeln(".download csv      Download last result as CSV");
+        writeln(".download excel    Download last result as Excel");
+        continue;
+      }
+      if (trimmed.startsWith(".mode")) {
+        const arg = trimmed.split(/\s+/)[1]?.toLowerCase();
+        if (arg === "box" || arg === "line") {
+          outputMode = arg;
+          writeln(`Output mode: ${arg}`, "33");
+        } else {
+          writeln("Usage: .mode [box|line]", "33");
+        }
+        continue;
+      }
+      if (trimmed.startsWith(".download")) {
+        const fmt = trimmed.split(/\s+/)[1]?.toLowerCase();
+        if (!lastTable) {
+          writeln("No result to download. Run a query first.", "31");
+        } else if (fmt === "csv") {
+          downloadFile(lastTable, "csv");
+        } else if (fmt === "excel" || fmt === "xlsx") {
+          downloadFile(lastTable, "excel");
+        } else {
+          writeln("Usage: .download [csv|excel]", "33");
+        }
         continue;
       }
 
@@ -343,7 +379,12 @@ function initShell(
       } else if (result.arrowBuffers && result.arrowBuffers.length > 0) {
         try {
           const table = tableFromIPC(result.arrowBuffers[0]);
-          await printTable(table, elapsed);
+          lastTable = table;
+          if (outputMode === "line") {
+            printLine(table, elapsed);
+          } else {
+            await printTable(table, elapsed);
+          }
         } catch (err: any) {
           writeln(`Failed to render: ${err.message}`, "31");
         }
@@ -602,6 +643,86 @@ function initShell(
     return t.toLowerCase();
   }
 
+  /** Line mode: render each record vertically, one field per line. */
+  function printLine(table: any, elapsedMs?: number) {
+    const fields = table.schema.fields;
+    const numRows = table.numRows;
+    const totalCols = fields.length;
+    if (totalCols === 0) { writeln("(empty)"); return; }
+
+    const displayRows = Math.min(numRows, 500);
+    const names: string[] = fields.map((f: any) => f.name);
+    const maxNameLen = Math.max(...names.map((n: string) => n.length));
+    const lineWidth = Math.min(term.cols, maxNameLen + 30);
+
+    for (let r = 0; r < displayRows; r++) {
+      // Record header
+      const label = ` RECORD ${r + 1} `;
+      const dashCount = Math.max(0, lineWidth - label.length - 1);
+      rl.println(`\x1b[2m─${label}${"─".repeat(dashCount)}\x1b[0m`);
+      // Fields
+      for (let c = 0; c < totalCols; c++) {
+        const val = formatVal(table.getChildAt(c)?.get(r), fields[c]);
+        const name = names[c].padStart(maxNameLen);
+        const display = val === "NULL" ? `\x1b[2mNULL\x1b[0m` : val;
+        rl.println(`${name} = ${display}`);
+      }
+    }
+
+    // Footer
+    const rowText = `${numRows} row${numRows !== 1 ? "s" : ""}`;
+    const colText = `${totalCols} column${totalCols !== 1 ? "s" : ""}`;
+    const timeText = elapsedMs != null
+      ? (elapsedMs < 1000 ? `${Math.round(elapsedMs)}ms` : `${(elapsedMs / 1000).toFixed(2)}s`)
+      : "";
+    const footerParts = [rowText, colText, timeText].filter(Boolean);
+    rl.println(`\x1b[2m${footerParts.join("    ")}\x1b[0m`);
+  }
+
+  /** Download the last result as CSV or Excel. */
+  function downloadFile(table: any, format: "csv" | "excel") {
+    const fields = table.schema.fields;
+    const numRows = table.numRows;
+    const totalCols = fields.length;
+
+    // Build CSV content
+    const csvEscape = (s: string) => {
+      if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+        return '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    };
+
+    const header = fields.map((f: any) => csvEscape(f.name)).join(",");
+    const rows: string[] = [header];
+    for (let r = 0; r < numRows; r++) {
+      const cells: string[] = [];
+      for (let c = 0; c < totalCols; c++) {
+        cells.push(csvEscape(formatVal(table.getChildAt(c)?.get(r), fields[c])));
+      }
+      rows.push(cells.join(","));
+    }
+
+    const bom = format === "excel" ? "\uFEFF" : "";
+    const content = bom + rows.join("\n") + "\n";
+    const ext = format === "excel" ? "xlsx" : "csv";
+    const mime = format === "excel"
+      ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      : "text/csv;charset=utf-8";
+
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `result.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    writeln(`Downloaded result.${ext} (${numRows} row${numRows !== 1 ? "s" : ""}, ${totalCols} column${totalCols !== 1 ? "s" : ""})`, "32");
+  }
+
   worker.postMessage({ type: "init" });
 
   // Insert text into the terminal's current input line.
@@ -623,7 +744,7 @@ function initShell(
     cleanup: () => {
       resizeObserver.disconnect();
       worker.terminate();
-      term.dispose();
+      try { term.dispose(); } catch {} // WebGL addon dispose can throw after DOM removal
       delete (window as any).__shellFitAddon;
       delete (window as any).__shellInsertText;
     },
