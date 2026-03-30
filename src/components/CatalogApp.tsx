@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { fetchCatalog, getServiceUrl, type CatalogData } from "@/lib/service";
 import { type Selection } from "@/lib/tree";
 import { getAuthToken } from "@/lib/auth";
@@ -24,6 +24,48 @@ export function CatalogApp() {
   const [shellMaximized, setShellMaximized] = useState(false);
   const shellInsertRef = useRef<((text: string) => void) | null>(null);
   const serviceUrl = useMemo(() => getServiceUrl(), []);
+
+  // Sidebar resize
+  const SIDEBAR_MIN = 200;
+  const SIDEBAR_MAX = 600;
+  const SIDEBAR_DEFAULT = 288; // w-72
+  const SIDEBAR_STORAGE_KEY = "vgi-sidebar-width";
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+      if (stored) {
+        const n = parseInt(stored, 10);
+        if (n >= SIDEBAR_MIN && n <= SIDEBAR_MAX) return n;
+      }
+    } catch {}
+    return SIDEBAR_DEFAULT;
+  });
+  const resizing = useRef(false);
+
+  const onResizeStart = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    resizing.current = true;
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+
+    const onMove = (ev: globalThis.PointerEvent) => {
+      const newWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startWidth + ev.clientX - startX));
+      setSidebarWidth(newWidth);
+    };
+    const onUp = () => {
+      resizing.current = false;
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      setSidebarWidth((w) => {
+        localStorage.setItem(SIDEBAR_STORAGE_KEY, String(w));
+        return w;
+      });
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  }, [sidebarWidth]);
 
   // Navigate: update selection, URL hash, and page title
   const navigate = useCallback(
@@ -124,12 +166,20 @@ export function CatalogApp() {
       <Header
         catalogName={data.catalogName}
         serviceUrl={serviceUrl}
-        onRefresh={() => loadCatalog(true)}
-        refreshing={refreshing}
       />
       <div className="flex flex-1 overflow-hidden">
         {!shellMaximized && (
-          <Sidebar catalog={data} selection={selection} onSelect={(sel) => { if (shellOpen) { setShellOpen(false); setShellMaximized(false); } navigate(sel); }} onOpenShell={() => setShellOpen(true)} treeOnly={shellOpen} onShellInsert={shellOpen ? (text) => shellInsertRef.current?.(text) : undefined} />
+          <>
+            <div style={{ width: sidebarWidth, minWidth: sidebarWidth }}>
+              <Sidebar catalog={data} selection={selection} onSelect={(sel) => { if (shellOpen) { setShellOpen(false); setShellMaximized(false); } navigate(sel); }} onOpenShell={() => setShellOpen(true)} treeOnly={shellOpen} onShellInsert={shellOpen ? (text) => shellInsertRef.current?.(text) : undefined} onRefresh={() => loadCatalog(true)} refreshing={refreshing} />
+            </div>
+            <div
+              onPointerDown={onResizeStart}
+              className="w-2 -ml-1 -mr-1 z-10 cursor-col-resize group flex-shrink-0 flex items-stretch justify-center"
+            >
+              <div className="w-0.5 bg-border group-hover:bg-accent/60 group-active:bg-accent transition-colors" />
+            </div>
+          </>
         )}
         <div className="flex-1 flex flex-col overflow-hidden">
           {shellOpen ? (

@@ -1,0 +1,133 @@
+[     548ms] [ERROR] In HTML, %s cannot be a descendant of <%s>.
+This will cause a hydration error.%s <button> button 
+
+  ...
+    <Primitive.div data-state="open" data-disabled={undefined} data-orientation="vertical" ref={null}>
+      <div data-state="open" data-disabled={undefined} data-orientation="vertical" ref={null}>
+        <_c8 className="group roun..." onClick={function onClick} draggable={false} onDragStart={function onDragStart} ...>
+          <AccordionHeader asChild={true}>
+            <Primitive.h3 data-orientation="vertical" data-state="open" data-disabled={undefined} asChild={true} ...>
+              <Primitive.h3.Slot data-orientation="vertical" data-state="open" data-disabled={undefined} ref={null}>
+                <Primitive.h3.SlotClone data-orientation="vertical" data-state="open" data-disabled={undefined} ...>
+                  <div data-orientation="vertical" data-state="open" data-disabled={undefined} ref={null}>
+                    <AccordionTrigger ref={null} className={"flex fle..."} onClick={function onClick} draggable={false} ...>
+                      <AccordionCollectionItemSlot scope={undefined}>
+                        <AccordionCollectionItemSlot.Slot data-radix-collection-item="" ref={function}>
+                          <AccordionCollectionItemSlot.SlotClone data-radix-collection-item="" ref={function}>
+                            <CollapsibleTrigger aria-disabled={undefined} data-orientation="vertical" id="radix-_r1r_1_" ...>
+                              <Primitive.button type="button" aria-controls="radix-_r1r_2_" aria-expanded={true} ...>
+>                               <button
+>                                 type="button"
+>                                 aria-controls="radix-_r1r_2_"
+>                                 aria-expanded={true}
+>                                 data-state="open"
+>                                 data-disabled={undefined}
+>                                 disabled={undefined}
+>                                 aria-disabled={undefined}
+>                                 data-orientation="vertical"
+>                                 id="radix-_r1r_1_"
+>                                 className={"flex flex-1 w-full items-center py-2 first:[&[data-state=open]>svg]:fir..."}
+>                                 onClick={function handleEvent}
+>                                 draggable={false}
+>                                 onDragStart={function onDragStart}
+>                                 onDragOver={function onDragOver}
+>                                 onDragLeave={function onDragLeave}
+>                                 onDrop={function onDrop}
+>                                 data-radix-collection-item=""
+>                                 ref={function}
+>                               >
+                                  <ChevronRight>
+                                  <TreeIcon>
+                                  <span>
+                                  <TreeActions isSelected={true}>
+                                    <div className="ml-auto sh...">
+>                                     <button
+>                                       className="p-0.5 text-muted-foreground hover:text-primary transition-colors cu..."
+>                                       title="Refresh catalog"
+>                                       disabled={false}
+>                                       onClick={function onClick}
+>                                     >
+        ...
+ @ http://localhost:4321/node_modules/.vite/deps/chunk-UTQ67KV7.js?v=829b712e:2155
+[     548ms] [ERROR] <%s> cannot contain a nested %s.
+See this log for the ancestor stack trace. button <button> @ http://localhost:4321/node_modules/.vite/deps/chunk-UTQ67KV7.js?v=829b712e:2162
+[   20059ms] [ERROR] React does not recognize the `%s` prop on a DOM element. If you intentionally want it to appear in the DOM as a custom attribute, spell it as lowercase `%s` instead. If you accidentally passed it from a parent component, remove it from the DOM element. asChild aschild @ http://localhost:4321/node_modules/.vite/deps/chunk-UTQ67KV7.js?v=829b712e:2402
+[   30871ms] [ERROR] Failed to load resource: the server responded with a status of 504 (Outdated Optimize Dep) @ http://localhost:4321/node_modules/.vite/deps/leaflet.js?v=829b712e:0
+[   30875ms] Failed to fetch dynamically imported module: http://localhost:4321/node_modules/.vite/deps/leaflet.js?v=829b712e
+[   73800ms] [ERROR] Failed to load resource: net::ERR_SOCKET_NOT_CONNECTED @ http://localhost:4321/src/styles/global.css:0
+[   73800ms] [ERROR] Failed to load resource: net::ERR_SOCKET_NOT_CONNECTED @ http://localhost:4321/node_modules/@astrojs/react/dist/client.js:0
+[   73801ms] [ERROR] [astro-island] Error hydrating /src/components/CatalogApp.tsx TypeError: Failed to fetch dynamically imported module: http://localhost:4321/node_modules/@astrojs/react/dist/client.js @ http://localhost:4321/?service=http://localhost:9003:3091
+[   73801ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4321/src/components/CatalogApp.tsx:0
+[   73815ms] [ERROR] [vite] Error: send was called before connect
+    at Object.send (http://localhost:4321/@vite/client:395:15)
+    at HMRClient.send (http://localhost:4321/@vite/client:157:18)
+    at HMRContext.send (http://localhost:4321/@vite/client:119:18)
+    at AstroDevToolbar.setAppStatus (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:440:22)
+    at http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:302:18
+    at Array.forEach (<anonymous>)
+    at AstroDevToolbar.connectedCallback (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:301:15)
+    at HTMLDocument.<anonymous> (http://localhost:4321/@id/astro/runtime/client/dev-toolbar/entrypoint.js:236:17) @ http://localhost:4321/@vite/client:1540
+[   73815ms] [ERROR] [vite] Error: send was called before connect
+    at Object.send (http://localhost:4321/@vite/client:395:15)
+    at HMRClient.send (http://localhost:4321/@vite/client:157:18)
+    at HMRContext.send (http://localhost:4321/@vite/client:119:18)
+    at AstroDevToolbar.setAppStatus (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:440:22)
+    at http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:302:18
+    at Array.forEach (<anonymous>)
+    at AstroDevToolbar.connectedCallback (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:301:15)
+    at HTMLDocument.<anonymous> (http://localhost:4321/@id/astro/runtime/client/dev-toolbar/entrypoint.js:236:17) @ http://localhost:4321/@vite/client:1540
+[   73815ms] [ERROR] [vite] Error: send was called before connect
+    at Object.send (http://localhost:4321/@vite/client:395:15)
+    at HMRClient.send (http://localhost:4321/@vite/client:157:18)
+    at HMRContext.send (http://localhost:4321/@vite/client:119:18)
+    at AstroDevToolbar.setAppStatus (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:440:22)
+    at http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:302:18
+    at Array.forEach (<anonymous>)
+    at AstroDevToolbar.connectedCallback (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:301:15)
+    at HTMLDocument.<anonymous> (http://localhost:4321/@id/astro/runtime/client/dev-toolbar/entrypoint.js:236:17) @ http://localhost:4321/@vite/client:1540
+[   73815ms] [ERROR] [vite] Error: send was called before connect
+    at Object.send (http://localhost:4321/@vite/client:395:15)
+    at HMRClient.send (http://localhost:4321/@vite/client:157:18)
+    at HMRContext.send (http://localhost:4321/@vite/client:119:18)
+    at AstroDevToolbar.setAppStatus (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:440:22)
+    at http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:302:18
+    at Array.forEach (<anonymous>)
+    at AstroDevToolbar.connectedCallback (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:301:15)
+    at HTMLDocument.<anonymous> (http://localhost:4321/@id/astro/runtime/client/dev-toolbar/entrypoint.js:236:17) @ http://localhost:4321/@vite/client:1540
+[   73815ms] [ERROR] [vite] Error: send was called before connect
+    at Object.send (http://localhost:4321/@vite/client:395:15)
+    at HMRClient.send (http://localhost:4321/@vite/client:157:18)
+    at HMRContext.send (http://localhost:4321/@vite/client:119:18)
+    at AstroDevToolbar.setAppStatus (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:440:22)
+    at http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:302:18
+    at Array.forEach (<anonymous>)
+    at AstroDevToolbar.connectedCallback (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:301:15)
+    at HTMLDocument.<anonymous> (http://localhost:4321/@id/astro/runtime/client/dev-toolbar/entrypoint.js:236:17) @ http://localhost:4321/@vite/client:1540
+[   73816ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:4321/favicon.svg:0
+[   73820ms] [ERROR] [vite] Error: send was called before connect
+    at Object.send (http://localhost:4321/@vite/client:395:15)
+    at HMRClient.send (http://localhost:4321/@vite/client:157:18)
+    at HMRContext.send (http://localhost:4321/@vite/client:119:18)
+    at AstroDevToolbar.initApp (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:355:25) @ http://localhost:4321/@vite/client:1540
+[   73820ms] [ERROR] [vite] Error: send was called before connect
+    at Object.send (http://localhost:4321/@vite/client:395:15)
+    at HMRClient.send (http://localhost:4321/@vite/client:157:18)
+    at HMRContext.send (http://localhost:4321/@vite/client:119:18)
+    at AstroDevToolbar.initApp (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:355:25) @ http://localhost:4321/@vite/client:1540
+[   73820ms] [ERROR] [vite] Error: send was called before connect
+    at Object.send (http://localhost:4321/@vite/client:395:15)
+    at HMRClient.send (http://localhost:4321/@vite/client:157:18)
+    at HMRContext.send (http://localhost:4321/@vite/client:119:18)
+    at AstroDevToolbar.initApp (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:355:25) @ http://localhost:4321/@vite/client:1540
+[   73820ms] [ERROR] [vite] Error: send was called before connect
+    at Object.send (http://localhost:4321/@vite/client:395:15)
+    at HMRClient.send (http://localhost:4321/@vite/client:157:18)
+    at HMRContext.send (http://localhost:4321/@vite/client:119:18)
+    at AstroDevToolbar.initApp (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:355:25) @ http://localhost:4321/@vite/client:1540
+[   73821ms] [ERROR] [vite] Error: send was called before connect
+    at Object.send (http://localhost:4321/@vite/client:395:15)
+    at HMRClient.send (http://localhost:4321/@vite/client:157:18)
+    at HMRContext.send (http://localhost:4321/@vite/client:119:18)
+    at AstroDevToolbar.initApp (http://localhost:4321/node_modules/.vite/deps/toolbar-QZJV3CKG.js?v=829b712e:355:25) @ http://localhost:4321/@vite/client:1540
+[   74904ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:4321/?service=http://localhost:9003#/schema/property/table/parcels:0
+[   74928ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:4321/favicon.ico:0

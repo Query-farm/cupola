@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { Database, Folder, FolderOpen, Table2, Eye, FunctionSquare, Columns3, TerminalSquare } from "lucide-react";
+import { Database, Folder, FolderOpen, Table2, Eye, FunctionSquare, Columns3, TerminalSquare, RefreshCw, Loader2 } from "lucide-react";
 import type { CatalogData, ResolvedSchema, ColumnInfo } from "./service";
 import { getColumns } from "./service";
 
@@ -64,11 +64,14 @@ export interface BuildTreeOptions {
   hideTableBackingFunctions?: boolean;
   /** When provided, adds a paste action button to table nodes. */
   onTableAction?: (schema: string, table: string) => void;
+  /** When provided, adds a refresh button to the catalog root node. */
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
 /** Build the full tree from catalog data. Root node is the catalog. */
 export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = {}): TreeDataItem[] {
-  const { showDuckDBTypes = true, hideTableBackingFunctions = true, onTableAction } = options;
+  const { showDuckDBTypes = true, hideTableBackingFunctions = true, onTableAction, onRefresh, refreshing } = options;
   const sortedSchemas = [...catalog.schemas].sort((a, b) =>
     a.info.name.localeCompare(b.info.name)
   );
@@ -81,6 +84,16 @@ export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = 
     children: sortedSchemas.map((s) =>
       buildSchemaNode(catalog.catalogName, s, showDuckDBTypes, hideTableBackingFunctions, s.info.name === catalog.defaultSchema, onTableAction)
     ),
+    actions: onRefresh
+      ? React.createElement("button", {
+          className: "p-0.5 text-muted-foreground hover:text-primary transition-colors cursor-pointer",
+          title: "Refresh catalog",
+          disabled: refreshing,
+          onClick: (e: React.MouseEvent) => { e.stopPropagation(); onRefresh(); },
+        }, React.createElement(refreshing ? Loader2 : RefreshCw, {
+          className: `h-3.5 w-3.5${refreshing ? " animate-spin" : ""}`,
+        }))
+      : undefined,
   };
   return [root];
 }
@@ -98,6 +111,7 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
       id: `${schemaId}::c:${table.name}/${col.name}`,
       name: col.name,
       icon: Columns3,
+      draggable: !!onTableAction,
       actions: React.createElement("span", {
         className: "text-xs text-muted-foreground/70 font-mono ml-1 truncate",
       }, showDuckDBTypes ? col.duckdbType : col.arrowType),
@@ -108,6 +122,7 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
       name: table.name,
       icon: Table2,
       selectedIcon: Table2,
+      draggable: !!onTableAction,
       children: columnChildren.length > 0 ? columnChildren : undefined,
       actions: onTableAction
         ? React.createElement("button", {

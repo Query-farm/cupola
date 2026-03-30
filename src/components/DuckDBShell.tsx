@@ -151,7 +151,24 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
           {error}
         </div>
       )}
-      <div ref={containerRef} className={`flex-1 min-h-0 overflow-hidden ${loading ? "hidden" : ""}`} style={{ padding: "8px 12px 4px" }} />
+      <div
+        ref={containerRef}
+        className={`flex-1 min-h-0 overflow-hidden ${loading ? "hidden" : ""}`}
+        style={{ padding: "8px 12px 4px" }}
+        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
+        onDrop={(e) => {
+          e.preventDefault();
+          const data = e.dataTransfer.getData("text/plain");
+          if (data && cleanupRef.current) {
+            // Parse tree item ID → useful text
+            const text = treeIdToShellText(data);
+            if (text) {
+              // Use the insertText from the shell
+              (window as any).__shellInsertText?.(text);
+            }
+          }
+        }}
+      />
     </div>
   );
 }
@@ -187,7 +204,7 @@ function initShell(
   term.open(container);
   try { term.loadAddon(new WGA.WebglAddon()); } catch { /* canvas fallback */ }
 
-  // Store for resize handling
+  // Store for resize handling and drag-drop
   (window as any).__shellFitAddon = fitAddon;
 
   const resizeObserver = new ResizeObserver(() => fitAddon.fit());
@@ -366,13 +383,38 @@ function initShell(
     term.focus();
   }
 
+  // Expose for drag-drop from tree
+  (window as any).__shellInsertText = insertText;
+
   return {
     cleanup: () => {
       resizeObserver.disconnect();
       worker.terminate();
       term.dispose();
       delete (window as any).__shellFitAddon;
+      delete (window as any).__shellInsertText;
     },
     insertText,
   };
+}
+
+/**
+ * Convert a tree item ID to text suitable for pasting into the shell.
+ * IDs: "catalog::schema::t:table" → "schema.table"
+ *      "catalog::schema::c:table/column" → "column"
+ */
+function treeIdToShellText(id: string): string | null {
+  const parts = id.split("::");
+  if (parts.length === 3) {
+    const schema = parts[1];
+    const rest = parts[2];
+    if (rest.startsWith("t:")) return `${schema}.${rest.slice(2)}`;
+    if (rest.startsWith("c:")) {
+      const colParts = rest.slice(2).split("/");
+      return colParts[1] || colParts[0];
+    }
+    if (rest.startsWith("v:")) return `${schema}.${rest.slice(2)}`;
+    if (rest.startsWith("f:")) return rest.slice(2);
+  }
+  return null;
 }

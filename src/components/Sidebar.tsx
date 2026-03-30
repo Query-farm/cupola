@@ -16,16 +16,20 @@ interface Props {
   treeOnly?: boolean;
   /** Insert text into the DuckDB shell (only when shell is open). */
   onShellInsert?: (text: string) => void;
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
-export function Sidebar({ catalog, selection, onSelect, onOpenShell, treeOnly, onShellInsert }: Props) {
+export function Sidebar({ catalog, selection, onSelect, onOpenShell, treeOnly, onShellInsert, onRefresh, refreshing }: Props) {
   const [search, setSearch] = useState("");
   const { settings } = useSettings();
   const treeData = useMemo(() => buildTreeData(catalog, {
     showDuckDBTypes: settings.showDuckDBTypes,
     hideTableBackingFunctions: settings.hideTableBackingFunctions,
     onTableAction: onShellInsert ? (schema, table) => onShellInsert(`${schema}.${table}`) : undefined,
-  }), [catalog, settings.showDuckDBTypes, settings.hideTableBackingFunctions, onShellInsert]);
+    onRefresh,
+    refreshing,
+  }), [catalog, settings.showDuckDBTypes, settings.hideTableBackingFunctions, onShellInsert, onRefresh, refreshing]);
   const filteredData = useMemo(() => filterTree(treeData, search), [treeData, search]);
 
   const selectedTreeId = useMemo(
@@ -45,7 +49,7 @@ export function Sidebar({ catalog, selection, onSelect, onOpenShell, treeOnly, o
   }
 
   return (
-    <div className="w-72 border-r border-border bg-card flex flex-col h-full">
+    <div className="bg-card flex flex-col h-full">
       {/* Search */}
       <div className="p-3 border-b border-border">
         <div className="relative">

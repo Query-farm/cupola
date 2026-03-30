@@ -33,6 +33,9 @@ export default defineConfig({
         allow: ['..'],
       },
     },
+    optimizeDeps: {
+      include: ['leaflet'],
+    },
     resolve: {
       alias: {
         // Use the client-only connect module directly to avoid bundling
