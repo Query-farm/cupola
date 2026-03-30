@@ -225,10 +225,10 @@ function initShell(
   // Progress bar
   let progressLine = false;
   function renderProgressBar(pct: number) {
-    const width = Math.max(20, term.cols - 10);
-    const filled = Math.round((pct / 100) * width);
-    const bar = "\x1b[32m" + "█".repeat(filled) + "\x1b[2m" + "░".repeat(width - filled) + "\x1b[0m";
-    const label = ` ${Math.round(pct)}%`;
+    const label = ` ${String(Math.round(pct)).padStart(3)}%`;
+    const barWidth = Math.max(10, term.cols - label.length - 2);
+    const filled = Math.round((pct / 100) * barWidth);
+    const bar = " \x1b[32m" + "█".repeat(filled) + "\x1b[2m" + "░".repeat(barWidth - filled) + "\x1b[0m";
     term.write(`\r${bar}${label}\x1b[K`);
     progressLine = true;
   }
