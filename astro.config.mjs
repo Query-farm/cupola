@@ -41,6 +41,8 @@ export default defineConfig({
         // Use the client-only connect module directly to avoid bundling
         // Node.js server-side code (node:crypto, node:zlib, etc.)
         '@query-farm/vgi-rpc/connect': resolve('../vgi-rpc-typescript/src/client/connect.ts'),
+        // Use local kepler.gl duckdb source (modified schema-panel with duckdb_tables())
+        '@kepler.gl/duckdb/components': resolve('../kepler.gl/src/duckdb/src/components/index.tsx'),
         // Stub Node.js built-ins for browser — Apache Arrow imports these
         // but only uses them in Node.js code paths, never in the browser.
         'node:stream': resolve('src/lib/node-stubs.ts'),

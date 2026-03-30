@@ -4,12 +4,11 @@
  * (SQL panel, schema browser, data pipeline) can query all VGI tables.
  */
 import { useEffect, useRef, useState } from "react";
-import { Provider, useSelector, useDispatch } from "react-redux";
+import { Provider, useSelector } from "react-redux";
 import { createStore, combineReducers, applyMiddleware, compose } from "redux";
 import keplerGlReducer, { enhanceReduxMiddleware, uiStateUpdaters } from "@kepler.gl/reducers";
-import { addDataToMap } from "@kepler.gl/actions";
 import { initApplicationConfig } from "@kepler.gl/utils";
-import { VgiDuckDBAdapter, VgiDuckDBConnection } from "@/lib/vgi-duckdb-adapter";
+import { VgiDuckDBAdapter } from "@/lib/vgi-duckdb-adapter";
 
 let KeplerGl: any = null;
 let SqlPanel: any = null;
@@ -44,88 +43,13 @@ function getStore() {
   return keplerStore;
 }
 
-let tablesLoaded = false;
-
-/** Auto-register VGI tables as kepler.gl datasets so layers can be added immediately. */
-async function loadVgiTables(dispatch: any) {
-  if (tablesLoaded) return;
-  tablesLoaded = true;
-
-  try {
-    const conn = new VgiDuckDBConnection();
-    const { tableFromIPC } = await import("apache-arrow");
-    const { processArrowBatches } = await import("@kepler.gl/processors");
-
-    // Get all tables with geometry columns from the VGI catalog
-    const tablesResult = await conn.query(
-      `SELECT table_schema, table_name FROM information_schema.tables
-       WHERE table_catalog = current_catalog() AND table_type = 'BASE TABLE'
-       ORDER BY table_schema, table_name`
-    );
-
-    const schemas = new Map<string, string[]>();
-    for (let i = 0; i < tablesResult.numRows; i++) {
-      const schema = String(tablesResult.getChildAt(0)?.get(i));
-      const table = String(tablesResult.getChildAt(1)?.get(i));
-      if (!schemas.has(schema)) schemas.set(schema, []);
-      schemas.get(schema)!.push(table);
-    }
-
-    // Load each table that has a geometry column (limit rows for performance)
-    for (const [schema, tables] of schemas) {
-      for (const table of tables) {
-        try {
-          // Check if table has geometry column
-          const colResult = await conn.query(
-            `SELECT column_name FROM information_schema.columns
-             WHERE table_schema = '${schema}' AND table_name = '${table}'
-             AND data_type = 'GEOMETRY' LIMIT 1`
-          );
-          if (colResult.numRows === 0) continue;
-
-          // Load a sample
-          const dataResult = await conn.query(
-            `SELECT * FROM "${schema}"."${table}" LIMIT 2000`
-          );
-          const arrowTable = tableFromIPC(
-            (await (window as any).__duckdbQuery(
-              `SELECT * FROM "${schema}"."${table}" LIMIT 2000`
-            )).arrowBuffers[0]
-          );
-          const data = processArrowBatches(arrowTable.batches);
-
-          dispatch(
-            addDataToMap({
-              datasets: {
-                info: { label: `${schema}.${table}`, id: `${schema}_${table}` },
-                data,
-              },
-              option: { centerMap: false, readOnly: false },
-            })
-          );
-        } catch (e) {
-          console.warn(`[KeplerMap] Skipping ${schema}.${table}:`, (e as Error).message);
-        }
-      }
-    }
-  } catch (e) {
-    console.error("[KeplerMap] Failed to load VGI tables:", e);
-  }
-}
-
 function KeplerMapInner() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const dispatch = useDispatch();
   const [dims, setDims] = useState({ width: 800, height: 600 });
 
   const isSqlPanelOpen = useSelector((state: any) =>
     state?.keplerGl?.map?.uiState?.mapControls?.sqlPanel?.active
   );
-
-  // Auto-load VGI tables with geometry as datasets
-  useEffect(() => {
-    loadVgiTables(dispatch);
-  }, [dispatch]);
 
   useEffect(() => {
     if (!containerRef.current) return;
