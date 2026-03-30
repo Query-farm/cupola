@@ -147,7 +147,7 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#2a2a1e] bg-[#1a1a0e] shrink-0">
         <div className="flex items-center gap-1">
           <button className={tabClass("shell")} onClick={() => setActiveTab("shell")}>
-            Shell
+            SQL Shell
           </button>
           <button className={tabClass("perspective")} onClick={() => setActiveTab("perspective")}>
             Perspective
