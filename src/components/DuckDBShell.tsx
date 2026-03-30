@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Maximize2, Minimize2, X } from "lucide-react";
 import { getAuthToken } from "@/lib/auth";
+import { useSettings } from "@/lib/settings";
 
 interface Props {
   serviceUrl: string;
@@ -67,6 +68,7 @@ function loadScripts(): Promise<void> {
 
 export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onToggleMaximize, onShellReady }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const { settings } = useSettings();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -90,7 +92,7 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
 
         const { cleanup, insertText } = initShell(
           containerRef.current,
-          { serviceUrl, catalogName, token: getAuthToken() },
+          { serviceUrl, catalogName, token: getAuthToken(), fontSize: settings.shellFontSize },
           { tableFromIPC, Readline }
         );
         cleanupRef.current = cleanup;
@@ -160,7 +162,7 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
 
 function initShell(
   container: HTMLElement,
-  config: { serviceUrl: string; catalogName: string; token: string | null },
+  config: { serviceUrl: string; catalogName: string; token: string | null; fontSize?: number },
   modules: { tableFromIPC: any; Readline: any }
 ): { cleanup: () => void; insertText: (text: string) => void } {
   const { tableFromIPC, Readline } = modules;
@@ -171,7 +173,7 @@ function initShell(
 
   const term = new T({
     cursorBlink: true,
-    fontSize: 13,
+    fontSize: config.fontSize || 13,
     fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
     theme: { background: "#1a1a0e", foreground: "#f5f0e0", cursor: "#6ba034", selectionBackground: "#3a3a28" },
     allowProposedApi: true,

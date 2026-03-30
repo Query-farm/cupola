@@ -9,7 +9,14 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Settings, Database, FunctionSquare } from "lucide-react";
+import { Settings, Database, FunctionSquare, TerminalSquare } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useSettings } from "@/lib/settings";
 
 export function SettingsModal() {
@@ -80,6 +87,45 @@ export function SettingsModal() {
                   updateSettings({ hideTableBackingFunctions: checked })
                 }
               />
+            </div>
+          </div>
+
+          {/* Shell */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <TerminalSquare className="h-4 w-4 text-muted-foreground" />
+              SQL Shell
+            </h3>
+            <div className="rounded-lg border border-border p-4 space-y-3">
+              <div className="flex items-center justify-between gap-4">
+                <Label className="flex flex-col gap-1.5">
+                  <span className="font-medium">Font size</span>
+                  <span className="text-xs text-muted-foreground font-normal">
+                    Terminal font size in the DuckDB shell.
+                  </span>
+                </Label>
+                <Select
+                  value={String(settings.shellFontSize)}
+                  onValueChange={(val) => updateSettings({ shellFontSize: Number(val) })}
+                >
+                  <SelectTrigger className="w-[80px] h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[10, 11, 12, 13, 14, 15, 16, 18, 20].map((size) => (
+                      <SelectItem key={size} value={String(size)} className="text-sm">
+                        {size}px
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div
+                className="rounded bg-[#1a1a0e] px-3 py-2 text-[#f5f0e0] overflow-hidden"
+                style={{ fontFamily: "'JetBrains Mono', 'SF Mono', monospace", fontSize: `${settings.shellFontSize}px`, lineHeight: 1.4 }}
+              >
+                <span style={{ color: "#6ba034" }}>D</span> &gt; SELECT * FROM parcels LIMIT 5;
+              </div>
             </div>
           </div>
         </div>

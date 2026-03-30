@@ -3,11 +3,13 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 export interface Settings {
   showDuckDBTypes: boolean;
   hideTableBackingFunctions: boolean;
+  shellFontSize: number;
 }
 
 const defaultSettings: Settings = {
   showDuckDBTypes: true,
   hideTableBackingFunctions: true,
+  shellFontSize: 13,
 };
 
 const STORAGE_KEY = "vgi-frontend-settings";
