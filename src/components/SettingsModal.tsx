@@ -8,8 +8,9 @@ import {
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Settings, Database, FunctionSquare, TerminalSquare } from "lucide-react";
+import { Settings, Database, FunctionSquare, TerminalSquare, Bot } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -125,6 +126,75 @@ export function SettingsModal() {
                 style={{ fontFamily: "'JetBrains Mono', 'SF Mono', monospace", fontSize: `${settings.shellFontSize}px`, lineHeight: 1.4 }}
               >
                 <span style={{ color: "#6ba034" }}>D</span> &gt; SELECT * FROM parcels LIMIT 5;
+              </div>
+            </div>
+          </div>
+
+          {/* AI Assistant */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <Bot className="h-4 w-4 text-muted-foreground" />
+              AI Assistant
+            </h3>
+            <div className="rounded-lg border border-border p-4 space-y-3">
+              <div className="space-y-2">
+                <Label className="flex flex-col gap-1.5">
+                  <span className="font-medium">Anthropic API Key</span>
+                  <span className="text-xs text-muted-foreground font-normal">
+                    Your key is stored locally only. Use a key with spend limits.
+                  </span>
+                </Label>
+                <Input
+                  type="password"
+                  placeholder="sk-ant-..."
+                  value={settings.anthropicApiKey}
+                  onChange={(e) => updateSettings({ anthropicApiKey: e.target.value })}
+                  className="font-mono text-sm"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <Label className="flex flex-col gap-1.5">
+                  <span className="font-medium">Model</span>
+                  <span className="text-xs text-muted-foreground font-normal">
+                    Choose between speed, cost, and quality.
+                  </span>
+                </Label>
+                <Select
+                  value={settings.aiModel}
+                  onValueChange={(val) => updateSettings({ aiModel: val })}
+                >
+                  <SelectTrigger className="w-[160px] h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="claude-haiku-4-5-20251001" className="text-sm">Haiku (fast)</SelectItem>
+                    <SelectItem value="claude-sonnet-4-20250514" className="text-sm">Sonnet (default)</SelectItem>
+                    <SelectItem value="claude-opus-4-20250514" className="text-sm">Opus (best)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <Label className="flex flex-col gap-1.5">
+                  <span className="font-medium">Max tool rounds</span>
+                  <span className="text-xs text-muted-foreground font-normal">
+                    How many SQL queries the AI can run per question.
+                  </span>
+                </Label>
+                <Select
+                  value={String(settings.aiMaxToolRounds)}
+                  onValueChange={(val) => updateSettings({ aiMaxToolRounds: Number(val) })}
+                >
+                  <SelectTrigger className="w-[80px] h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[5, 10, 20, 30, 50].map((n) => (
+                      <SelectItem key={n} value={String(n)} className="text-sm">
+                        {n}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
           </div>

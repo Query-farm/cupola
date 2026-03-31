@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Table2, Copy, Check, Key, Link2, ShieldCheck, TerminalSquare } from "lucide-react";
+import { Table2, Copy, Check, Key, Link2, ShieldCheck, Play, TerminalSquare } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -59,16 +59,15 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
         <Table2 className="h-6 w-6 text-primary" />
         <h1 className="text-2xl font-bold font-mono text-primary">{table.name}</h1>
         <Badge variant="secondary" className="text-xs bg-blue-50 text-blue-700">table</Badge>
-        {onOpenShell && (
+        {onOpenShell && !shellOpen && (
           <Button
-            variant={shellOpen ? "default" : "outline"}
+            variant="outline"
             size="sm"
             onClick={onOpenShell}
             className="ml-auto h-7 text-xs gap-1.5"
-            disabled={shellOpen}
           >
             <TerminalSquare className="h-3.5 w-3.5" />
-            Query
+            Open Shell
           </Button>
         )}
       </div>
@@ -76,102 +75,124 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
         <p className="text-muted-foreground mb-3">{table.comment}</p>
       )}
 
-      {/* FK/constraint chips */}
+      {/* Columns */}
+      <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mt-4 mb-2">
+        Columns
+        <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0 normal-case">{columns.length}</Badge>
+      </h2>
+      <ColumnsTable
+        columns={columns}
+        pkColumns={pkColumns}
+        notNullSet={notNullSet}
+        fkByColumn={fkByColumn}
+        onNavigate={onNavigate}
+      />
+
+      {/* References */}
       {hasConstraints && (
-        <div className="flex flex-wrap gap-2 mb-4">
-          {foreignKeys.map((fk, i) => (
-            <button
-              key={`fk-${i}`}
-              className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-card hover:border-primary/30 hover:bg-accent/5 transition-colors cursor-pointer"
-              onClick={() => onNavigate?.({
-                type: "table",
-                name: fk.referencedTable,
-                schema: fk.referencedSchema,
-              })}
-            >
-              <Link2 className="h-3 w-3 text-primary/60" />
-              <span className="font-mono font-medium">{fk.columns.join(", ")}</span>
-              <span className="text-muted-foreground">&rarr;</span>
-              <span className="font-mono text-primary">{fk.referencedSchema}.{fk.referencedTable}</span>
-            </button>
-          ))}
-          {table.primaryKeyConstraints.map((pk, i) => (
-            <span
-              key={`pk-${i}`}
-              className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-card"
-            >
-              <Key className="h-3 w-3 text-amber-500" />
-              <span className="font-medium">PK</span>
-              <span className="font-mono text-muted-foreground">({pk.map((idx) => columns[idx]?.name ?? idx).join(", ")})</span>
-            </span>
-          ))}
-          {table.uniqueConstraints.map((uq, i) => (
-            <span
-              key={`uq-${i}`}
-              className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-card"
-            >
-              <ShieldCheck className="h-3 w-3 text-blue-500" />
-              <span className="font-medium">UNIQUE</span>
-              <span className="font-mono text-muted-foreground">({uq.map((idx) => columns[idx]?.name ?? idx).join(", ")})</span>
-            </span>
-          ))}
-          {table.checkConstraints.map((chk, i) => (
-            <span
-              key={`chk-${i}`}
-              className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-card"
-            >
-              <ShieldCheck className="h-3 w-3 text-green-500" />
-              <span className="font-medium">CHECK</span>
-              <code className="text-muted-foreground">{chk}</code>
-            </span>
-          ))}
-        </div>
+        <>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mt-6 mb-2">References</h2>
+          <div className="flex flex-wrap gap-2 mb-4">
+            {foreignKeys.map((fk, i) => (
+              <button
+                key={`fk-${i}`}
+                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-card hover:border-primary/30 hover:bg-accent/5 transition-colors cursor-pointer"
+                onClick={() => onNavigate?.({
+                  type: "table",
+                  name: fk.referencedTable,
+                  schema: fk.referencedSchema,
+                })}
+              >
+                <Link2 className="h-3 w-3 text-primary/60" />
+                <span className="font-mono font-medium">{fk.columns.join(", ")}</span>
+                <span className="text-muted-foreground">&rarr;</span>
+                <span className="font-mono text-primary">{fk.referencedSchema}.{fk.referencedTable}</span>
+              </button>
+            ))}
+            {table.primaryKeyConstraints.map((pk, i) => (
+              <span
+                key={`pk-${i}`}
+                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-card"
+              >
+                <Key className="h-3 w-3 text-amber-500" />
+                <span className="font-medium">PK</span>
+                <span className="font-mono text-muted-foreground">({pk.map((idx) => columns[idx]?.name ?? idx).join(", ")})</span>
+              </span>
+            ))}
+            {table.uniqueConstraints.map((uq, i) => (
+              <span
+                key={`uq-${i}`}
+                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-card"
+              >
+                <ShieldCheck className="h-3 w-3 text-blue-500" />
+                <span className="font-medium">UNIQUE</span>
+                <span className="font-mono text-muted-foreground">({uq.map((idx) => columns[idx]?.name ?? idx).join(", ")})</span>
+              </span>
+            ))}
+            {table.checkConstraints.map((chk, i) => (
+              <span
+                key={`chk-${i}`}
+                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-card"
+              >
+                <ShieldCheck className="h-3 w-3 text-green-500" />
+                <span className="font-medium">CHECK</span>
+                <code className="text-muted-foreground">{chk}</code>
+              </span>
+            ))}
+          </div>
+        </>
       )}
 
-      {/* Tabs: Schema | Data */}
+      {/* Example Query */}
+      <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mt-6 mb-2">Example Query</h2>
+      <div className="flex items-center gap-2 bg-muted/60 rounded-md px-3 py-2 mb-6">
+        <code className="flex-1 text-xs font-mono text-muted-foreground truncate">{sampleSql}</code>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleCopy}
+          className="h-6 px-2 text-xs shrink-0"
+        >
+          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          <span className="ml-1">{copied ? "Copied" : "Copy"}</span>
+        </Button>
+        {onOpenShell && (
+          <Button
+            variant="default"
+            size="sm"
+            onClick={() => {
+              onOpenShell();
+              const tryRun = () => {
+                if ((window as any).__shellRunQuery) {
+                  (window as any).__shellRunQuery(sampleSql);
+                } else {
+                  requestAnimationFrame(tryRun);
+                }
+              };
+              tryRun();
+            }}
+            className="h-6 px-2 text-xs shrink-0 gap-1"
+          >
+            <Play className="h-3 w-3" />
+            Run
+          </Button>
+        )}
+      </div>
+
+      {/* Data Preview */}
       <Tabs
-        defaultValue="schema"
+        defaultValue="preview"
         onValueChange={(val) => {
-          if (val === "data" && !dataLoaded) setDataLoaded(true);
+          if (val === "preview" && !dataLoaded) setDataLoaded(true);
         }}
       >
         <TabsList className="border border-border bg-card shadow-sm h-9 p-1 gap-1">
-          <TabsTrigger value="schema" className="data-active:bg-primary data-active:text-primary-foreground rounded-md px-3">
-            Schema
-            <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{columns.length}</Badge>
-          </TabsTrigger>
-          <TabsTrigger value="data" className="data-active:bg-primary data-active:text-primary-foreground rounded-md px-3">
-            Data
+          <TabsTrigger value="preview" className="data-active:bg-primary data-active:text-primary-foreground rounded-md px-3">
+            Data Preview
           </TabsTrigger>
         </TabsList>
 
-        {/* Schema Tab */}
-        <TabsContent value="schema" className="mt-4">
-          {/* Sample SQL bar */}
-          <div className="flex items-center gap-2 bg-muted/60 rounded-md px-3 py-2 mb-4">
-            <code className="flex-1 text-xs font-mono text-muted-foreground truncate">{sampleSql}</code>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleCopy}
-              className="h-6 px-2 text-xs shrink-0"
-            >
-              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-              <span className="ml-1">{copied ? "Copied" : "Copy"}</span>
-            </Button>
-          </div>
-
-          <ColumnsTable
-            columns={columns}
-            pkColumns={pkColumns}
-            notNullSet={notNullSet}
-            fkByColumn={fkByColumn}
-            onNavigate={onNavigate}
-          />
-        </TabsContent>
-
-        {/* Data Tab — lazy loaded */}
-        <TabsContent value="data" className="mt-4">
+        <TabsContent value="preview" className="mt-4">
           {dataLoaded && (
             <DataPreview
               catalogName={catalogName}

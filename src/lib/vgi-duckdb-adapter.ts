@@ -16,20 +16,15 @@ export class VgiDuckDBConnection {
   async query(statement: string): Promise<Table> {
     const queryFn = (window as any).__duckdbQuery;
     if (!queryFn) throw new Error("DuckDB shell not initialized — open the SQL Shell tab first");
-    console.log("[VgiDuckDB] query:", statement.slice(0, 120));
     const result = await queryFn(statement);
     if (!result.ok) {
-      console.error("[VgiDuckDB] error:", result.error);
       throw new Error(result.error || "Query failed");
     }
     if (!result.arrowBuffers?.length) {
-      console.log("[VgiDuckDB] OK (no result rows)");
       const { makeTable } = await import("apache-arrow");
       return makeTable({});
     }
-    const table = tableFromIPC(result.arrowBuffers[0]);
-    console.log("[VgiDuckDB] result:", table.numRows, "rows,", table.schema.fields.length, "cols");
-    return table;
+    return tableFromIPC(result.arrowBuffers[0]);
   }
 
   async insertArrowTable(_arrowTable: Table, _opts: { name: string }): Promise<void> {

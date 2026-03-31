@@ -143,35 +143,30 @@ async function init() {
     module = await DuckDB({
         locateFile: (path) => './wasm/' + path
     });
-    postMessage({ type: 'log', msg: 'Module instantiated', cls: 'ok' });
-
     const config = JSON.stringify({ allowUnsignedExtensions: true });
     const [openStatus, openData, openSize] = callSRet(module, 'duckdb_web_open', ['string'], [config]);
     if (openStatus !== 0) {
         postMessage({ type: 'log', msg: `Open failed: ${openSize > 0 ? readString(module, openData, openSize) : 'unknown'}`, cls: 'err' });
         return;
     }
-    postMessage({ type: 'log', msg: 'Database opened (allowUnsignedExtensions=true)', cls: 'ok' });
 
     connHdl = module.ccall('duckdb_web_connect', 'number', [], []);
-    postMessage({ type: 'log', msg: 'Connected', cls: 'ok' });
 
     runQuery("SET enable_progress_bar=true");
     runQuery("SET enable_progress_bar_print=false");
     runQuery("SET autoinstall_known_extensions=false");
     runQuery("SET autoload_known_extensions=true");
-    // Derive base URL from worker location (e.g., /shell/worker.js → /shell)
     const workerBase = self.location.href.replace(/\/[^/]*$/, '');
     runQuery(`SET custom_extension_repository='${workerBase}/extensions'`);
-    postMessage({ type: 'log', msg: `Extension repo: ${workerBase}/extensions`, cls: 'ok' });
 
-    postMessage({ type: 'log', msg: '', cls: '' });
-
-    const exts = ['json', 'icu', 'autocomplete', 'vgi'];
+    const exts = ['json', 'icu', 'autocomplete', 'spatial', 'vgi'];
+    const failed = [];
     for (const ext of exts) {
-        postMessage({ type: 'log', msg: `Loading ${ext}...`, cls: 'info' });
         const r = runQuery(`LOAD '${workerBase}/extensions/v1.5.1/wasm_eh/${ext}.duckdb_extension.wasm'`);
-        postMessage({ type: 'log', msg: `LOAD ${ext}  ` + (r.ok ? 'OK' : r.error), cls: r.ok ? 'ok' : 'err' });
+        if (!r.ok) failed.push(ext);
+    }
+    if (failed.length > 0) {
+        postMessage({ type: 'log', msg: `Failed to load extensions: ${failed.join(', ')}`, cls: 'err' });
     }
 
     postMessage({ type: 'ready' });

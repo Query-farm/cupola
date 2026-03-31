@@ -4,12 +4,18 @@ export interface Settings {
   showDuckDBTypes: boolean;
   hideTableBackingFunctions: boolean;
   shellFontSize: number;
+  anthropicApiKey: string;
+  aiModel: string;
+  aiMaxToolRounds: number;
 }
 
 const defaultSettings: Settings = {
   showDuckDBTypes: true,
   hideTableBackingFunctions: true,
   shellFontSize: 13,
+  anthropicApiKey: "",
+  aiModel: "claude-sonnet-4-20250514",
+  aiMaxToolRounds: 20,
 };
 
 const STORAGE_KEY = "vgi-frontend-settings";

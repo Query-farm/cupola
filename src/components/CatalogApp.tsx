@@ -23,6 +23,7 @@ export function CatalogApp() {
   const [shellOpen, setShellOpen] = useState(false);
   const [shellMaximized, setShellMaximized] = useState(false);
   const shellInsertRef = useRef<((text: string) => void) | null>(null);
+
   const [tableShellOpen, setTableShellOpen] = useState(false);
   const tableShellInsertRef = useRef<((text: string) => void) | null>(null);
 
@@ -52,7 +53,6 @@ export function CatalogApp() {
     target.setPointerCapture(e.pointerId);
 
     const onMove = (ev: globalThis.PointerEvent) => {
-      // Dragging up increases height
       const newHeight = Math.min(TABLE_SHELL_MAX, Math.max(TABLE_SHELL_MIN, startHeight - (ev.clientY - startY)));
       setTableShellHeight(newHeight);
     };
@@ -64,7 +64,6 @@ export function CatalogApp() {
         localStorage.setItem(TABLE_SHELL_STORAGE_KEY, String(h));
         return h;
       });
-      // Refit terminal after resize
       if ((window as any).__shellFitAddon) {
         setTimeout(() => (window as any).__shellFitAddon.fit(), 50);
       }
@@ -72,6 +71,7 @@ export function CatalogApp() {
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
   }, [tableShellHeight]);
+
   const serviceUrl = useMemo(() => getServiceUrl(), []);
 
   // Sidebar resize
@@ -122,7 +122,6 @@ export function CatalogApp() {
       setSelection(sel);
       pushSelectionToUrl(sel);
       if (data) updatePageTitle(sel, data.catalogName);
-      // Close table shell when navigating away from a table
       if (sel?.type !== "table") {
         setTableShellOpen(false);
         tableShellInsertRef.current = null;
@@ -245,6 +244,7 @@ export function CatalogApp() {
                 maximized={shellMaximized}
                 onToggleMaximize={() => setShellMaximized(!shellMaximized)}
                 onShellReady={(insert) => { shellInsertRef.current = insert; }}
+                catalogData={data}
               />
             </Suspense>
           ) : (
@@ -254,7 +254,6 @@ export function CatalogApp() {
               </main>
               {tableShellOpen && selection?.type === "table" && (
                 <Suspense fallback={<div style={{ height: tableShellHeight }} className="flex items-center justify-center bg-[#1a1a0e] text-[#6ba034] shrink-0 border-t border-border">Loading...</div>}>
-                  {/* Resize handle */}
                   <div
                     onPointerDown={onShellResizeStart}
                     className="h-2 -mb-1 -mt-1 z-10 cursor-row-resize group flex-shrink-0 flex items-center justify-center"
@@ -270,6 +269,7 @@ export function CatalogApp() {
                       onToggleMaximize={() => {}}
                       onShellReady={(insert) => { tableShellInsertRef.current = insert; }}
                       shellOnly
+                      catalogData={data}
                     />
                   </div>
                 </Suspense>

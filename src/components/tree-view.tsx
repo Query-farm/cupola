@@ -267,11 +267,14 @@ const TreeNode = ({
     const [value, setValue] = React.useState(
         expandedItemIds.includes(item.id) ? [item.id] : []
     )
-    // Expand this node when it appears in expandedItemIds (e.g. external navigation)
+    // Expand this node when it newly appears in expandedItemIds (e.g. external navigation)
+    const wasExpanded = React.useRef(expandedItemIds.includes(item.id))
     React.useEffect(() => {
-        if (expandedItemIds.includes(item.id) && !value.includes(item.id)) {
+        const shouldExpand = expandedItemIds.includes(item.id)
+        if (shouldExpand && !wasExpanded.current) {
             setValue([item.id])
         }
+        wasExpanded.current = shouldExpand
     }, [expandedItemIds, item.id])
     const [isDragOver, setIsDragOver] = React.useState(false)
     const hasChildren = !!item.children?.length

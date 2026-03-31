@@ -7,8 +7,20 @@ import { useEffect, useRef, useState, lazy, Suspense } from "react";
 import { Maximize2, Minimize2, X } from "lucide-react";
 import { getAuthToken } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
+import {
+  runAgentTurn,
+  buildSystemPrompt,
+  executeListTables,
+  executeDescribeTable,
+  executeReadQueryResults,
+  formatArrowTableAsJson,
+  type MessageParam,
+} from "@/lib/ai-agent";
+import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 
 const KeplerMap = lazy(() => import("./KeplerMap").then((m) => ({ default: m.KeplerMap })));
+
+import type { CatalogData } from "@/lib/service";
 
 interface Props {
   serviceUrl: string;
@@ -20,6 +32,8 @@ interface Props {
   onShellReady?: (insertText: (text: string) => void) => void;
   /** Hide Perspective/Map tabs, show only the shell. Default false. */
   shellOnly?: boolean;
+  /** Catalog metadata for AI agent tools. */
+  catalogData?: CatalogData;
 }
 
 // CDN script URLs (matching public/shell/index.html versions)
@@ -70,7 +84,7 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onToggleMaximize, onShellReady, shellOnly }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onToggleMaximize, onShellReady, shellOnly, catalogData }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const perspectiveRef = useRef<HTMLDivElement>(null);
   const { settings } = useSettings();
@@ -121,7 +135,7 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
 
         const { cleanup, insertText } = initShell(
           containerRef.current,
-          { serviceUrl, catalogName, token: getAuthToken(), fontSize: settings.shellFontSize },
+          { serviceUrl, catalogName, token: getAuthToken(), fontSize: settings.shellFontSize, catalogData, aiApiKey: settings.anthropicApiKey, aiModel: settings.aiModel },
           { tableFromIPC, Readline }
         );
         cleanupRef.current = cleanup;
@@ -204,12 +218,12 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
       <div
         ref={containerRef}
         className={`flex-1 min-h-0 overflow-hidden ${loading || activeTab !== "shell" ? "hidden" : ""}`}
-        style={{ padding: "8px 12px 8px" }}
+        style={{ padding: "8px 12px 28px" }}
         onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
         onDrop={(e) => {
           e.preventDefault();
           const data = e.dataTransfer.getData("text/plain");
-          if (data && cleanupRef.current) {
+          if (data) {
             const text = treeIdToShellText(data);
             if (text) {
               (window as any).__shellInsertText?.(text);
@@ -248,8 +262,6 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
         </div>
       )}
 
-      {/* Bottom spacer — prevents last terminal row from being clipped at viewport edge */}
-      <div className="h-6 shrink-0 bg-[#1a1a0e]" />
     </div>
   );
 }
@@ -260,7 +272,7 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
 
 function initShell(
   container: HTMLElement,
-  config: { serviceUrl: string; catalogName: string; token: string | null; fontSize?: number },
+  config: { serviceUrl: string; catalogName: string; token: string | null; fontSize?: number; catalogData?: CatalogData; aiApiKey?: string; aiModel?: string },
   modules: { tableFromIPC: any; Readline: any }
 ): { cleanup: () => void; insertText: (text: string) => void } {
   const { tableFromIPC, Readline } = modules;
@@ -269,32 +281,57 @@ function initShell(
   const WLA = (window as any).WebLinksAddon;
   const WGA = (window as any).WebglAddon;
 
-  const term = new T({
-    cursorBlink: true,
-    fontSize: config.fontSize || 13,
-    fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
-    theme: { background: "#1a1a0e", foreground: "#f5f0e0", cursor: "#6ba034", selectionBackground: "#3a3a28" },
-    allowProposedApi: true,
-  });
+  // Singleton terminal — reuse across shell instances
+  const isNewTerminal = !(window as any).__shellTerm;
+  let term: any, fitAddon: any, rl: any;
 
-  const fitAddon = new FA.FitAddon();
-  const rl = new Readline();
-  term.loadAddon(fitAddon);
-  term.loadAddon(new WLA.WebLinksAddon());
-  term.loadAddon(rl);
-  term.open(container);
-  try { term.loadAddon(new WGA.WebglAddon()); } catch { /* canvas fallback */ }
+  if (isNewTerminal) {
+    term = new T({
+      cursorBlink: true,
+      fontSize: config.fontSize || 13,
+      fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+      theme: { background: "#1a1a0e", foreground: "#f5f0e0", cursor: "#6ba034", selectionBackground: "#3a3a28" },
+      allowProposedApi: true,
+    });
+    fitAddon = new FA.FitAddon();
+    rl = new Readline();
+    term.loadAddon(fitAddon);
+    term.loadAddon(new WLA.WebLinksAddon());
+    term.loadAddon(rl);
+    term.open(container);
+    try { term.loadAddon(new WGA.WebglAddon()); } catch { /* canvas fallback */ }
 
-  // Store for resize handling and drag-drop
-  (window as any).__shellFitAddon = fitAddon;
+    // Ctrl+K clears the terminal
+    term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if (e.key === "k" && (e.ctrlKey || e.metaKey) && e.type === "keydown") {
+        term.clear();
+        return false;
+      }
+      return true;
+    });
 
-  const resizeObserver = new ResizeObserver(() => fitAddon.fit());
+    (window as any).__shellTerm = term;
+    (window as any).__shellFitAddon = fitAddon;
+    (window as any).__shellReadline = rl;
+  } else {
+    term = (window as any).__shellTerm;
+    fitAddon = (window as any).__shellFitAddon;
+    rl = (window as any).__shellReadline;
+    // Reparent the terminal DOM element to the new container
+    const termEl = term.element?.parentElement;
+    if (termEl && termEl !== container) {
+      container.appendChild(termEl);
+    }
+  }
+
+  const safeFit = () => { try { fitAddon?.fit(); } catch {} };
+  const resizeObserver = new ResizeObserver(safeFit);
   resizeObserver.observe(container);
 
-  // Delayed fit — container may not have final dimensions on first render
-  fitAddon.fit();
-  requestAnimationFrame(() => fitAddon.fit());
-  setTimeout(() => fitAddon.fit(), 100);
+  // Fit after reparenting
+  safeFit();
+  requestAnimationFrame(safeFit);
+  setTimeout(safeFit, 100);
 
   // Write helpers
   function writeln(msg: string, color?: string) {
@@ -320,16 +357,19 @@ function initShell(
     }
   }
 
-  // Worker
-  const worker = new Worker("/shell/worker.js");
+  // Singleton worker — shared across all DuckDBShell instances
+  const isNewWorker = !(window as any).__duckdbWorker;
+  const worker = (window as any).__duckdbWorker || new Worker("/shell/worker.js");
+  (window as any).__duckdbWorker = worker;
 
-  // OAuth SAB
-  const oauthSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(8192) : null;
-  if (oauthSAB) worker.postMessage({ type: "init-oauth-sab", sab: oauthSAB });
+  // Only set up SABs and init for new workers
+  if (isNewWorker) {
+    const oauthSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(8192) : null;
+    if (oauthSAB) worker.postMessage({ type: "init-oauth-sab", sab: oauthSAB });
 
-  // Cancel SAB
-  const cancelSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;
-  if (cancelSAB) worker.postMessage({ type: "init-cancel-sab", sab: cancelSAB });
+    const cancelSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;
+    if (cancelSAB) worker.postMessage({ type: "init-cancel-sab", sab: cancelSAB });
+  }
 
   let queryRunning = false;
   let outputMode: "box" | "line" = "box";
@@ -378,6 +418,8 @@ function initShell(
           writeln("Type SQL queries below.", "33");
           writeln("");
         }
+        // Shell is fully ready — expose runQuery for external callers
+        (window as any).__shellRunQuery = runQuery;
         readLoop();
       })();
       return;
@@ -385,6 +427,9 @@ function initShell(
 
     if (d.type === "progress") {
       if (queryRunning) renderProgressBar(d.percentage);
+      // Also notify external listeners (e.g., KeplerMap loading overlay)
+      const progressCb = (window as any).__duckdbProgress;
+      if (progressCb) progressCb(d.percentage);
       return;
     }
   };
@@ -406,9 +451,28 @@ function initShell(
   }
 
   // Read loop
+  let prefillText = "";
+  let prefillCursorPos = -1;
   async function readLoop() {
     while (true) {
-      const sql = await rl.read("\x1b[32mD\x1b[0m > ");
+      const readPromise = rl.read("\x1b[32mD\x1b[0m > ");
+      if (prefillText) {
+        const text = prefillText;
+        const cursorPos = prefillCursorPos;
+        prefillText = "";
+        prefillCursorPos = -1;
+        setTimeout(() => {
+          term.paste(text);
+          // Move cursor to error position if specified
+          if (cursorPos >= 0 && cursorPos < text.length) {
+            const movesLeft = text.length - cursorPos;
+            for (let i = 0; i < movesLeft; i++) {
+              term.paste("\x1b[D"); // left arrow
+            }
+          }
+        }, 10);
+      }
+      const sql = await readPromise;
       const trimmed = sql.trim();
       if (!trimmed) {
         // Remove blank entry that readline already pushed to history
@@ -421,6 +485,7 @@ function initShell(
       }
       if (trimmed === ".help" || trimmed === "\\?") {
         writeln(".help              Show this help");
+        writeln(".ai                Enter AI assistant mode");
         writeln(".mode box          Table output with box drawing (default)");
         writeln(".mode line         One field per line, vertical display");
         writeln(".download csv      Download last result as CSV");
@@ -467,6 +532,275 @@ function initShell(
         continue;
       }
 
+      // -----------------------------------------------------------------------
+      // AI mode
+      // -----------------------------------------------------------------------
+      if (trimmed === ".ai") {
+        // Read API key fresh from localStorage (user may have set it after shell opened)
+        let aiApiKey = config.aiApiKey || "";
+        let aiModel = config.aiModel || "claude-sonnet-4-20250514";
+        let aiMaxToolRounds = 20;
+        try {
+          const stored = localStorage.getItem("vgi-frontend-settings");
+          if (stored) {
+            const s = JSON.parse(stored);
+            if (s.anthropicApiKey) aiApiKey = s.anthropicApiKey;
+            if (s.aiModel) aiModel = s.aiModel;
+            if (s.aiMaxToolRounds) aiMaxToolRounds = s.aiMaxToolRounds;
+          }
+        } catch {}
+
+        if (!aiApiKey) {
+          writeln("No API key configured. Set your Anthropic API key in Settings.", "31");
+          continue;
+        }
+        if (!config.catalogData) {
+          writeln("Catalog data not available. Try again after the catalog loads.", "31");
+          continue;
+        }
+
+        writeln("Entering AI mode. Type .exit to return to SQL.", "35");
+        writeln("");
+
+        const aiMessages: MessageParam[] = [];
+        const systemPrompt = buildSystemPrompt(config.catalogData, config.serviceUrl);
+        let aiAbort: AbortController | null = null;
+
+        // Braille spinner
+        const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let spinnerInterval: ReturnType<typeof setInterval> | null = null;
+        let spinnerFrame = 0;
+
+        function startSpinner(label: string) {
+          spinnerFrame = 0;
+          spinnerInterval = setInterval(() => {
+            const frame = spinnerFrames[spinnerFrame % spinnerFrames.length];
+            term.write(`\r\x1b[2m${frame} ${label}\x1b[0m\x1b[K`);
+            spinnerFrame++;
+          }, 100);
+        }
+
+        function stopSpinner() {
+          if (spinnerInterval) {
+            clearInterval(spinnerInterval);
+            spinnerInterval = null;
+            term.write("\r\x1b[K"); // Clear the spinner line
+          }
+        }
+
+        // Ctrl+D exits AI mode
+        let ctrlDExit = false;
+        const ctrlDDisposable = term.onData((data: string) => {
+          if (data === "\x04") { // Ctrl+D
+            ctrlDExit = true;
+            // Submit empty line to unblock rl.read()
+            term.paste("\r");
+          }
+        });
+
+        // AI read loop
+        aiLoop: while (true) {
+          const userInput = await rl.read("\x1b[35mAI\x1b[0m > ");
+
+          if (ctrlDExit) {
+            ctrlDExit = false;
+            ctrlDDisposable.dispose();
+            writeln("Exiting AI mode.", "35");
+            writeln("");
+            break;
+          }
+
+          const aiTrimmed = userInput.trim();
+
+          if (!aiTrimmed) {
+            if (rl.history?.length) rl.history.pop();
+            continue;
+          }
+
+          if (aiTrimmed === ".exit" || aiTrimmed === "/exit") {
+            ctrlDDisposable.dispose();
+            writeln("Exiting AI mode.", "35");
+            writeln("");
+            break;
+          }
+
+          if (aiTrimmed === ".help") {
+            writeln(".exit              Return to SQL mode");
+            writeln(".clear             Clear conversation history");
+            writeln(".help              Show this help");
+            continue;
+          }
+
+          if (aiTrimmed === ".clear") {
+            aiMessages.length = 0;
+            writeln("Conversation cleared.", "33");
+            continue;
+          }
+
+          aiMessages.push({ role: "user", content: aiTrimmed });
+          aiAbort = new AbortController();
+          let firstText = true;
+          const md = createMarkdownRenderer(term.cols);
+
+          // Ctrl+C / Escape handler — abort the in-flight request
+          const cancelDisposable = term.onData((data: string) => {
+            if ((data === "\x03" || data === "\x1b") && aiAbort) { // Ctrl+C or Escape
+              aiAbort.abort();
+            }
+          });
+
+          startSpinner("Thinking...");
+
+          try {
+            // Tool executor
+            const executeTool = async (name: string, input: any): Promise<string> => {
+              if (name === "run_sql") {
+                stopSpinner();
+                queryRunning = true;
+                const result = await runQueryAsync(input.sql);
+                clearProgressBar();
+                queryRunning = false;
+                if (!result.ok) {
+                  const errMsg = result.error || "Query failed";
+                  rl.println(`\x1b[31m  Error: ${errMsg}\x1b[0m`);
+                  throw new Error(errMsg);
+                }
+                if (!result.arrowBuffers?.length) {
+                  rl.println(`\x1b[2m  OK (no results)\x1b[0m`);
+                  return JSON.stringify({ ok: true, message: "Query executed successfully (no results)" });
+                }
+                const table = tableFromIPC(result.arrowBuffers[0]);
+                await printTable(table);
+                const { json } = formatArrowTableAsJson(table);
+                return json;
+              }
+              if (name === "read_query_results") {
+                return executeReadQueryResults(input.result_id, input.offset, input.limit);
+              }
+              if (name === "list_tables") {
+                return executeListTables(config.catalogData!);
+              }
+              if (name === "describe_table") {
+                return executeDescribeTable(config.catalogData!, input.schema, input.table);
+              }
+              if (name === "ask_user") {
+                stopSpinner();
+                // Display question and options
+                rl.println("");
+                rl.println(`\x1b[1m${input.question}\x1b[0m`);
+                const options: string[] = input.options || [];
+                for (let i = 0; i < options.length; i++) {
+                  rl.println(`  \x1b[33m${i + 1}.\x1b[0m ${options[i]}`);
+                }
+                rl.println("");
+                const choice = await rl.read("Select: ");
+                const idx = parseInt(choice.trim(), 10) - 1;
+                if (idx >= 0 && idx < options.length) {
+                  return `User selected: ${options[idx]}`;
+                }
+                return `User responded: ${choice.trim()}`;
+              }
+              return JSON.stringify({ error: `Unknown tool: ${name}` });
+            };
+
+            await runAgentTurn(
+              aiApiKey,
+              aiModel,
+              aiMessages,
+              systemPrompt,
+              executeTool,
+              {
+                onText: (chunk) => {
+                  if (firstText) {
+                    stopSpinner();
+                    rl.println(""); // blank line before agent response
+                    firstText = false;
+                  }
+                  const formatted = md.push(chunk);
+                  if (formatted) term.write(formatted);
+                },
+                onToolCall: (name, input) => {
+                  stopSpinner();
+                  // Flush markdown and separate from preceding text
+                  const remaining = md.end();
+                  if (remaining) term.write(remaining);
+                  if (!firstText) term.write("\r\n");
+                  rl.println("");
+                  if (name === "run_sql") {
+                    const sqlLabel = "── SQL ";
+                    const lineWidth = Math.max(0, term.cols - sqlLabel.length - 1);
+                    rl.println(`\x1b[2m${sqlLabel}${"─".repeat(lineWidth)}\x1b[0m`);
+                    rl.println(`\x1b[33m${input.sql}\x1b[0m`);
+                    rl.println("");
+                  } else if (name === "describe_table") {
+                    rl.println(`\x1b[2m  📋 Describing ${input.schema}.${input.table}\x1b[0m`);
+                  } else if (name === "list_tables") {
+                    rl.println(`\x1b[2m  📋 Listing tables\x1b[0m`);
+                  } else if (name === "ask_user") {
+                    // Handled in executeTool
+                  } else {
+                    rl.println(`\x1b[2m  [${name}]\x1b[0m`);
+                  }
+                },
+                onToolResult: () => {
+                  rl.println("");
+                  startSpinner("Thinking...");
+                  firstText = true;
+                },
+                onDone: (usage) => {
+                  stopSpinner();
+                  // Flush any remaining buffered markdown
+                  const remaining = md.end();
+                  if (remaining) term.write(remaining);
+                  rl.println("");
+                  if (usage) {
+                    // Estimate cost per million tokens (as of 2025)
+                    const pricing: Record<string, [number, number]> = {
+                      "claude-haiku-4-5-20251001": [1, 5],
+                      "claude-sonnet-4-20250514": [3, 15],
+                      "claude-opus-4-20250514": [15, 75],
+                    };
+                    const [inRate, outRate] = pricing[aiModel] || [3, 15];
+                    const cost = (usage.inputTokens * inRate + usage.outputTokens * outRate) / 1_000_000;
+                    const costStr = cost < 0.01 ? `<$0.01` : `~$${cost.toFixed(2)}`;
+                    rl.println(`\x1b[2m  tokens: ${usage.inputTokens.toLocaleString()} in, ${usage.outputTokens.toLocaleString()} out (${costStr})\x1b[0m`);
+                  }
+                  rl.println("");
+                  rl.println("");
+                },
+                onError: (error) => {
+                  stopSpinner();
+                  rl.println("");
+                  writeln(`Error: ${error}`, "31");
+                  rl.println("");
+                },
+              },
+              aiAbort.signal,
+              aiMaxToolRounds
+            );
+          } catch (err: any) {
+            stopSpinner();
+            if (err.name === "AbortError" || err.message === "Cancelled.") {
+              rl.println("");
+              writeln("Cancelled.", "33");
+              rl.println("");
+              // Remove the partial assistant message from history
+              if (aiMessages.length && aiMessages[aiMessages.length - 1].role === "user") {
+                // User message was added but no response — keep it for retry
+              }
+            } else {
+              rl.println("");
+              writeln(`Error: ${err.message || err}`, "31");
+              rl.println("");
+            }
+          } finally {
+            cancelDisposable.dispose();
+          }
+        }
+
+        continue; // Back to SQL readLoop
+      }
+
       queryRunning = true;
       const t0 = performance.now();
       const result = await runQueryAsync(trimmed);
@@ -475,7 +809,30 @@ function initShell(
       queryRunning = false;
 
       if (!result.ok) {
-        writeln(`Error: ${result.error || "unknown"}`, "31");
+        const errStr = result.error || "unknown";
+        // Try to parse structured DuckDB error JSON
+        let errMsg = errStr;
+        let errPos = -1;
+        try {
+          const parsed = JSON.parse(errStr);
+          if (parsed.exception_message) {
+            errMsg = parsed.exception_message;
+            if (parsed.position) errPos = parseInt(parsed.position, 10);
+          }
+        } catch {
+          // Not JSON — check for plain position hint like "... at position 15"
+        }
+
+        writeln(`Error: ${errMsg}`, "31");
+
+        // Show position indicator under the query
+        if (errPos >= 0) {
+          rl.println(`\x1b[2m${trimmed}\x1b[0m`);
+          rl.println(`\x1b[31m${" ".repeat(Math.max(0, errPos - 1))}^\x1b[0m`);
+          // Pre-fill next prompt with the query, cursor at error position
+          prefillText = trimmed;
+          prefillCursorPos = errPos - 1; // position is 1-based
+        }
       } else if (result.arrowBuffers && result.arrowBuffers.length > 0) {
         try {
           lastArrowBuffer = result.arrowBuffers[0];
@@ -824,10 +1181,16 @@ function initShell(
     writeln(`Downloaded result.${ext} (${numRows} row${numRows !== 1 ? "s" : ""}, ${totalCols} column${totalCols !== 1 ? "s" : ""})`, "32");
   }
 
-  worker.postMessage({ type: "init" });
-
-  // Expose query function for kepler.gl's DuckDB adapter
+  // Expose query function and catalog name for kepler.gl's DuckDB adapter
   (window as any).__duckdbQuery = (sql: string) => runQueryAsync(sql);
+  (window as any).__duckdbCatalogName = config.catalogName;
+
+  if (isNewWorker) {
+    // First shell: init worker, wait for ready, ATTACH, then start readLoop
+    worker.postMessage({ type: "init" });
+  }
+  // If terminal already existed, everything (readLoop, handlers) is still running
+  // — no need to reinitialize
 
   // Insert text into the terminal's current input line.
   // If the input is empty and the text looks like a table name, wrap it in SELECT * FROM.
@@ -841,17 +1204,28 @@ function initShell(
     term.focus();
   }
 
-  // Expose for drag-drop from tree
+  // Run a query: paste SQL then send Enter separately so readline processes it
+  function runQuery(sql: string) {
+    term.paste(sql);
+    requestAnimationFrame(() => {
+      term.paste("\r");
+      term.focus();
+    });
+  }
+
+  // Expose insertText immediately (for drag-drop from tree)
   (window as any).__shellInsertText = insertText;
+  // __shellRunQuery is set later, after ATTACH completes and readLoop starts
 
   return {
     cleanup: () => {
       resizeObserver.disconnect();
-      worker.terminate();
-      try { term.dispose(); } catch {} // WebGL addon dispose can throw after DOM removal
+      // Don't terminate shared worker or dispose shared terminal
       delete (window as any).__shellFitAddon;
       delete (window as any).__shellInsertText;
+      delete (window as any).__shellRunQuery;
       delete (window as any).__duckdbQuery;
+      delete (window as any).__duckdbCatalogName;
     },
     insertText,
   };
