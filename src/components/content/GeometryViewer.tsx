@@ -92,6 +92,12 @@ function LeafletMap({ wkb }: { wkb: Uint8Array }) {
       if (bounds.isValid()) {
         map.fitBounds(bounds, { padding: [40, 40], maxZoom: 17 });
       }
+
+      // Dialog may not have final dimensions yet — invalidate after it settles
+      requestAnimationFrame(() => {
+        map.invalidateSize();
+        if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 17 });
+      });
     })();
 
     return () => {

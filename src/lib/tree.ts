@@ -85,11 +85,14 @@ export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = 
       buildSchemaNode(catalog.catalogName, s, showDuckDBTypes, hideTableBackingFunctions, s.info.name === catalog.defaultSchema, onTableAction)
     ),
     actions: onRefresh
-      ? React.createElement("button", {
+      ? React.createElement("div", {
+          role: "button",
+          tabIndex: 0,
           className: "p-0.5 text-muted-foreground hover:text-primary transition-colors cursor-pointer",
           title: "Refresh catalog",
-          disabled: refreshing,
-          onClick: (e: React.MouseEvent) => { e.stopPropagation(); onRefresh(); },
+          "aria-disabled": refreshing || undefined,
+          onClick: (e: React.MouseEvent) => { e.stopPropagation(); if (!refreshing) onRefresh(); },
+          onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); e.preventDefault(); if (!refreshing) onRefresh(); } },
         }, React.createElement(refreshing ? Loader2 : RefreshCw, {
           className: `h-3.5 w-3.5${refreshing ? " animate-spin" : ""}`,
         }))
@@ -125,10 +128,13 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
       draggable: !!onTableAction,
       children: columnChildren.length > 0 ? columnChildren : undefined,
       actions: onTableAction
-        ? React.createElement("button", {
-            className: "opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-primary transition-all",
+        ? React.createElement("div", {
+            role: "button",
+            tabIndex: 0,
+            className: "opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-primary transition-all cursor-pointer",
             title: `Paste ${schema.info.name}.${table.name} into shell`,
             onClick: (e: React.MouseEvent) => { e.stopPropagation(); onTableAction(schema.info.name, table.name); },
+            onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); e.preventDefault(); onTableAction(schema.info.name, table.name); } },
           }, React.createElement(TerminalSquare, { className: "h-3 w-3" }))
         : undefined,
     });

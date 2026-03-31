@@ -3,6 +3,9 @@
  * Implements the DatabaseAdapter / DatabaseConnection interfaces from
  * @kepler.gl/duckdb so kepler.gl's SQL panel and data pipeline can
  * query our VGI-attached DuckDB instance.
+ *
+ * Queries are correlated via queryId so multiple concurrent queries
+ * get the correct results back.
  */
 
 import { tableFromIPC } from "apache-arrow";
@@ -21,7 +24,6 @@ export class VgiDuckDBConnection {
     }
     if (!result.arrowBuffers?.length) {
       console.log("[VgiDuckDB] OK (no result rows)");
-      // Return empty table — use Arrow's empty schema
       const { makeTable } = await import("apache-arrow");
       return makeTable({});
     }

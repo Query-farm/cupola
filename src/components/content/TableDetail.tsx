@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Table2, Copy, Check, Key, Link2, ShieldCheck } from "lucide-react";
+import { Table2, Copy, Check, Key, Link2, ShieldCheck, TerminalSquare } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -13,9 +13,11 @@ interface Props {
   table: TableInfo;
   catalogName: string;
   onNavigate?: (selection: Selection) => void;
+  onOpenShell?: () => void;
+  shellOpen?: boolean;
 }
 
-export function TableDetail({ table, catalogName, onNavigate }: Props) {
+export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shellOpen }: Props) {
   const columns = getColumns(table);
   const foreignKeys = getForeignKeys(table);
   const sampleSql = `SELECT * FROM ${catalogName}.${table.schemaName}.${table.name} LIMIT 10;`;
@@ -57,6 +59,18 @@ export function TableDetail({ table, catalogName, onNavigate }: Props) {
         <Table2 className="h-6 w-6 text-primary" />
         <h1 className="text-2xl font-bold font-mono text-primary">{table.name}</h1>
         <Badge variant="secondary" className="text-xs bg-blue-50 text-blue-700">table</Badge>
+        {onOpenShell && (
+          <Button
+            variant={shellOpen ? "default" : "outline"}
+            size="sm"
+            onClick={onOpenShell}
+            className="ml-auto h-7 text-xs gap-1.5"
+            disabled={shellOpen}
+          >
+            <TerminalSquare className="h-3.5 w-3.5" />
+            Query
+          </Button>
+        )}
       </div>
       {table.comment && (
         <p className="text-muted-foreground mb-3">{table.comment}</p>

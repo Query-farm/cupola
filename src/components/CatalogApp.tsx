@@ -23,6 +23,55 @@ export function CatalogApp() {
   const [shellOpen, setShellOpen] = useState(false);
   const [shellMaximized, setShellMaximized] = useState(false);
   const shellInsertRef = useRef<((text: string) => void) | null>(null);
+  const [tableShellOpen, setTableShellOpen] = useState(false);
+  const tableShellInsertRef = useRef<((text: string) => void) | null>(null);
+
+  // Table shell vertical resize
+  const TABLE_SHELL_MIN = 150;
+  const TABLE_SHELL_MAX = 600;
+  const TABLE_SHELL_DEFAULT = 300;
+  const TABLE_SHELL_STORAGE_KEY = "vgi-table-shell-height";
+  const [tableShellHeight, setTableShellHeight] = useState(() => {
+    try {
+      const stored = localStorage.getItem(TABLE_SHELL_STORAGE_KEY);
+      if (stored) {
+        const n = parseInt(stored, 10);
+        if (n >= TABLE_SHELL_MIN && n <= TABLE_SHELL_MAX) return n;
+      }
+    } catch {}
+    return TABLE_SHELL_DEFAULT;
+  });
+  const shellResizing = useRef(false);
+
+  const onShellResizeStart = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    shellResizing.current = true;
+    const startY = e.clientY;
+    const startHeight = tableShellHeight;
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+
+    const onMove = (ev: globalThis.PointerEvent) => {
+      // Dragging up increases height
+      const newHeight = Math.min(TABLE_SHELL_MAX, Math.max(TABLE_SHELL_MIN, startHeight - (ev.clientY - startY)));
+      setTableShellHeight(newHeight);
+    };
+    const onUp = () => {
+      shellResizing.current = false;
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      setTableShellHeight((h) => {
+        localStorage.setItem(TABLE_SHELL_STORAGE_KEY, String(h));
+        return h;
+      });
+      // Refit terminal after resize
+      if ((window as any).__shellFitAddon) {
+        setTimeout(() => (window as any).__shellFitAddon.fit(), 50);
+      }
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  }, [tableShellHeight]);
   const serviceUrl = useMemo(() => getServiceUrl(), []);
 
   // Sidebar resize
@@ -73,6 +122,11 @@ export function CatalogApp() {
       setSelection(sel);
       pushSelectionToUrl(sel);
       if (data) updatePageTitle(sel, data.catalogName);
+      // Close table shell when navigating away from a table
+      if (sel?.type !== "table") {
+        setTableShellOpen(false);
+        tableShellInsertRef.current = null;
+      }
     },
     [data]
   );
@@ -194,9 +248,33 @@ export function CatalogApp() {
               />
             </Suspense>
           ) : (
-            <main className="flex-1 overflow-y-auto p-6">
-              <ContentPanel data={data} selection={selection} serviceUrl={serviceUrl} onNavigate={navigate} />
-            </main>
+            <>
+              <main className="flex-1 overflow-y-auto p-6 min-h-0">
+                <ContentPanel data={data} selection={selection} serviceUrl={serviceUrl} onNavigate={navigate} onOpenTableShell={() => setTableShellOpen(true)} tableShellOpen={tableShellOpen} />
+              </main>
+              {tableShellOpen && selection?.type === "table" && (
+                <Suspense fallback={<div style={{ height: tableShellHeight }} className="flex items-center justify-center bg-[#1a1a0e] text-[#6ba034] shrink-0 border-t border-border">Loading...</div>}>
+                  {/* Resize handle */}
+                  <div
+                    onPointerDown={onShellResizeStart}
+                    className="h-2 -mb-1 -mt-1 z-10 cursor-row-resize group flex-shrink-0 flex items-center justify-center"
+                  >
+                    <div className="h-0.5 w-12 rounded bg-border group-hover:bg-accent/60 group-active:bg-accent transition-colors" />
+                  </div>
+                  <div style={{ height: `calc(${tableShellHeight}px - 24px)` }} className="shrink-0 border-t border-border">
+                    <DuckDBShell
+                      serviceUrl={serviceUrl}
+                      catalogName={data.catalogName}
+                      onClose={() => { setTableShellOpen(false); tableShellInsertRef.current = null; }}
+                      maximized={false}
+                      onToggleMaximize={() => {}}
+                      onShellReady={(insert) => { tableShellInsertRef.current = insert; }}
+                      shellOnly
+                    />
+                  </div>
+                </Suspense>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -210,11 +288,15 @@ function ContentPanel({
   selection,
   serviceUrl,
   onNavigate,
+  onOpenTableShell,
+  tableShellOpen,
 }: {
   data: CatalogData;
   selection: Selection | null;
   serviceUrl: string;
   onNavigate: (selection: Selection) => void;
+  onOpenTableShell?: () => void;
+  tableShellOpen?: boolean;
 }) {
   if (!selection || selection.type === "catalog") {
     return <CatalogOverview catalog={data} serviceUrl={serviceUrl} onNavigate={onNavigate} />;
@@ -229,7 +311,7 @@ function ContentPanel({
 
   if (selection.type === "table") {
     const table = schema.tables.find((t) => t.name === selection.name);
-    if (table) return <TableDetail table={table} catalogName={data.catalogName} onNavigate={onNavigate} />;
+    if (table) return <TableDetail table={table} catalogName={data.catalogName} onNavigate={onNavigate} onOpenShell={onOpenTableShell} shellOpen={tableShellOpen} />;
   }
 
   if (selection.type === "view") {

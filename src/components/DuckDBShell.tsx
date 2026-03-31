@@ -18,6 +18,8 @@ interface Props {
   onToggleMaximize: () => void;
   /** Called when the shell is ready, with a function to insert text into the terminal. */
   onShellReady?: (insertText: (text: string) => void) => void;
+  /** Hide Perspective/Map tabs, show only the shell. Default false. */
+  shellOnly?: boolean;
 }
 
 // CDN script URLs (matching public/shell/index.html versions)
@@ -68,7 +70,7 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onToggleMaximize, onShellReady }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onToggleMaximize, onShellReady, shellOnly }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const perspectiveRef = useRef<HTMLDivElement>(null);
   const { settings } = useSettings();
@@ -159,12 +161,16 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
           <button className={tabCls("shell")} onClick={() => setActiveTab("shell")}>
             SQL Shell
           </button>
-          <button className={tabCls("perspective")} onClick={() => setActiveTab("perspective")}>
-            Perspective
-          </button>
-          <button className={tabCls("map")} onClick={() => setActiveTab("map")}>
-            Map
-          </button>
+          {!shellOnly && (
+            <>
+              <button className={tabCls("perspective")} onClick={() => setActiveTab("perspective")}>
+                Perspective
+              </button>
+              <button className={tabCls("map")} onClick={() => setActiveTab("map")}>
+                Map
+              </button>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-1 pb-1">
           <button
@@ -198,7 +204,7 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
       <div
         ref={containerRef}
         className={`flex-1 min-h-0 overflow-hidden ${loading || activeTab !== "shell" ? "hidden" : ""}`}
-        style={{ padding: "8px 12px 4px" }}
+        style={{ padding: "8px 12px 8px" }}
         onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
         onDrop={(e) => {
           e.preventDefault();
@@ -241,6 +247,9 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
           </Suspense>
         </div>
       )}
+
+      {/* Bottom spacer — prevents last terminal row from being clipped at viewport edge */}
+      <div className="h-6 shrink-0 bg-[#1a1a0e]" />
     </div>
   );
 }
@@ -381,16 +390,18 @@ function initShell(
   };
 
   // Query execution
+  let nextQueryId = 1;
   function runQueryAsync(sql: string): Promise<any> {
+    const queryId = nextQueryId++;
     return new Promise((resolve) => {
       const handler = (e: MessageEvent) => {
-        if (e.data.type === "result") {
+        if (e.data.type === "result" && e.data.queryId === queryId) {
           worker.removeEventListener("message", handler);
           resolve(e.data);
         }
       };
       worker.addEventListener("message", handler);
-      worker.postMessage({ type: "query", sql });
+      worker.postMessage({ type: "query", sql, queryId });
     });
   }
 

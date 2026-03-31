@@ -201,11 +201,12 @@ onmessage = function(e) {
     }
     if (data.type === 'query') {
         const sql = data.sql;
+        const qid = data.queryId;
         const r = runQueryPolling(sql);
         if (r.arrowBuffers) {
-            postMessage({ type: 'result', ok: true, arrowBuffers: r.arrowBuffers }, r.arrowBuffers);
+            postMessage({ type: 'result', ok: true, arrowBuffers: r.arrowBuffers, queryId: qid }, r.arrowBuffers);
         } else {
-            postMessage({ type: 'result', ok: r.ok, error: r.error });
+            postMessage({ type: 'result', ok: r.ok, error: r.error, queryId: qid });
         }
         return;
     }
