@@ -15,7 +15,7 @@
     "@astrojs/react": "^5.0.2",
     "@base-ui/react": "^1.3.0",
     "@kepler.gl/actions": "^3.2.6",
-    "@kepler.gl/components": "^3.2.6",
+    "@kepler.gl/components": "file:../kepler.gl/src/components/kepler.gl-components-3.2.6.tgz",
     "@kepler.gl/deckgl-arrow-layers": "file:../kepler.gl/src/deckgl-arrow-layers/kepler.gl-deckgl-arrow-layers-3.2.6.tgz",
     "@kepler.gl/duckdb": "file:../kepler.gl/src/duckdb/kepler.gl-duckdb-3.2.6.tgz",
     "@kepler.gl/layers": "file:../kepler.gl/src/layers/kepler.gl-layers-3.2.6.tgz",
@@ -24,6 +24,11 @@
     "@kepler.gl/schemas": "file:../kepler.gl/src/schemas/kepler.gl-schemas-3.2.6.tgz",
     "@kepler.gl/table": "file:../kepler.gl/src/table/kepler.gl-table-3.2.6.tgz",
     "@kepler.gl/utils": "file:../kepler.gl/src/utils/kepler.gl-utils-3.2.6.tgz",
+    "@perspective-dev/client": "^4.3.0",
+    "@perspective-dev/viewer": "^4.3.0",
+    "@perspective-dev/viewer-d3fc": "^4.3.0",
+    "@perspective-dev/viewer-datagrid": "^4.3.0",
+    "@perspective-dev/viewer-openlayers": "^4.3.0",
     "@query-farm/vgi-rpc": "../vgi-rpc-typescript",
     "@radix-ui/react-accordion": "^1.2.12",
     "@tailwindcss/vite": "^4.2.2",
@@ -44,11 +49,13 @@
     "react-redux": "^9.2.0",
     "redux": "^5.0.1",
     "shadcn": "^4.1.1",
+    "sql-formatter": "^15.7.3",
     "styled-components": "^6.3.12",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.2",
     "tw-animate-css": "^1.4.0",
-    "vgi": "../vgi-typescript"
+    "vgi": "../vgi-typescript",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/leaflet": "^1.9.21"

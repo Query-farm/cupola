@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { typeColorClass } from "@/lib/tree";
 import {
   flexRender,
   getCoreRowModel,
@@ -27,10 +28,11 @@ interface Props {
   pkColumns: Set<number>;
   notNullSet: Set<number>;
   fkByColumn: Map<string, ForeignKeyInfo>;
+  checkConstraints?: string[];
   onNavigate?: (selection: Selection) => void;
 }
 
-export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, onNavigate }: Props) {
+export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, checkConstraints, onNavigate }: Props) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const { settings } = useSettings();
@@ -85,26 +87,23 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, onNav
           <SortIcon sorted={column.getIsSorted()} />
         </button>
       ),
-      cell: ({ getValue }) => (
-        <span className="font-mono text-muted-foreground">{getValue() as string}</span>
-      ),
+      cell: ({ getValue }) => {
+        const type = getValue() as string;
+        return (
+          <span className={`font-mono text-[11px] px-1.5 py-0.5 rounded ${typeColorClass(type)}`}>{type}</span>
+        );
+      },
     },
     {
       id: "nullable",
       accessorFn: (row) => notNullSet.has(row.idx) ? "NOT NULL" : row.nullable ? "yes" : "no",
-      header: "Nullable",
+      header: () => <span className="block text-center">Not Null</span>,
       cell: ({ row }) => {
         const col = row.original;
-        if (notNullSet.has(col.idx)) {
-          return (
-            <span className="flex items-center gap-1" title="NOT NULL constraint">
-              <ShieldCheck className="h-3.5 w-3.5 text-amber-600" />
-            </span>
-          );
-        }
-        return col.nullable
-          ? <Circle className="h-3.5 w-3.5 text-muted-foreground/30" title="Nullable" />
-          : <CircleDot className="h-3.5 w-3.5 text-foreground/70" title="Not nullable" />;
+        const isNotNull = pkColumns.has(col.idx) || notNullSet.has(col.idx) || !col.nullable;
+        return isNotNull
+          ? <span className="block text-center text-[10px] font-medium text-primary/60">✓</span>
+          : null;
       },
       enableSorting: false,
     },
@@ -121,15 +120,31 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, onNav
       ),
       cell: ({ row }) => {
         const col = row.original;
+        // Find check constraints that reference this column (word-boundary match)
+        const colNamePattern = new RegExp(`\\b${col.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+        const colChecks = (checkConstraints ?? []).filter(chk =>
+          colNamePattern.test(chk)
+        );
+        const hasConstraints = col.defaultValue || colChecks.length > 0;
         return (
-          <span>
-            {col.comment && <span className="text-foreground/70 text-xs">{col.comment}</span>}
-            {col.defaultValue && (
-              <span className="ml-2 text-xs text-muted-foreground">
-                default: <code className="bg-muted px-1 rounded">{col.defaultValue}</code>
-              </span>
+          <div>
+            {col.comment && <div className="text-foreground/70 text-xs">{col.comment}</div>}
+            {hasConstraints && (
+              <div className={`flex flex-col gap-0.5 ${col.comment ? "mt-1" : ""}`}>
+                {col.defaultValue && (
+                  <div className="text-xs text-muted-foreground">
+                    default: <code className="bg-muted px-1 rounded">{col.defaultValue}</code>
+                  </div>
+                )}
+                {colChecks.map((chk, i) => (
+                  <div key={i} className="inline-flex items-center gap-1 text-xs text-green-700">
+                    <ShieldCheck className="h-3 w-3 shrink-0" />
+                    <code className="bg-green-50 px-1 rounded">{chk}</code>
+                  </div>
+                ))}
+              </div>
             )}
-          </span>
+          </div>
         );
       },
       filterFn: (row, _id, filterValue) => {

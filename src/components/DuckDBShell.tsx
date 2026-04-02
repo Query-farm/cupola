@@ -3,8 +3,11 @@
  * Loads xterm.js + addons from CDN to avoid SSR/bundling issues.
  * Shell logic adapted from public/shell/index.html.
  */
-import { useEffect, useRef, useState, lazy, Suspense } from "react";
-import { Maximize2, Minimize2, X } from "lucide-react";
+import { useEffect, useRef, useState, useCallback, lazy, Suspense } from "react";
+import { Maximize2, Minimize2, ChevronDown, ChevronUp, BarChart3, Map as MapIcon, History, Table2 } from "lucide-react";
+import { DataPreview } from "./content/DataPreview";
+import { getColumns } from "@/lib/service";
+import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
 import { getAuthToken } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
 import {
@@ -22,18 +25,34 @@ const KeplerMap = lazy(() => import("./KeplerMap").then((m) => ({ default: m.Kep
 
 import type { CatalogData } from "@/lib/service";
 
+export interface QueryHistoryEntry {
+  id: number;
+  timestamp: number;
+  sql: string;
+  executionTimeMs: number;
+  success: boolean;
+  error?: string;
+  rowCount?: number;
+  userQuestion?: string;
+  /** Groups queries from the same AI conversation session. */
+  conversationId?: string;
+  /** Display name for the AI conversation. */
+  conversationName?: string;
+}
+
+export type ShellMode = "minimized" | "panel" | "maximized";
+
 interface Props {
   serviceUrl: string;
   catalogName: string;
-  onClose: () => void;
-  maximized: boolean;
-  onToggleMaximize: () => void;
+  mode: ShellMode;
+  onModeChange: (mode: ShellMode) => void;
   /** Called when the shell is ready, with a function to insert text into the terminal. */
   onShellReady?: (insertText: (text: string) => void) => void;
-  /** Hide Perspective/Map tabs, show only the shell. Default false. */
-  shellOnly?: boolean;
   /** Catalog metadata for AI agent tools. */
   catalogData?: CatalogData;
+  /** Current selection — used for Data Preview tab when a table is selected. */
+  selection?: import("@/lib/tree").Selection | null;
 }
 
 // CDN script URLs (matching public/shell/index.html versions)
@@ -84,21 +103,42 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onToggleMaximize, onShellReady, shellOnly, catalogData }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShellReady, catalogData, selection }: Props) {
+  const rootRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const perspectiveRef = useRef<HTMLDivElement>(null);
   const { settings } = useSettings();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
-  const [activeTab, setActiveTab] = useState<"shell" | "perspective" | "map">("shell");
+  const [activeTab, setActiveTab] = useState<"shell" | "preview" | "perspective" | "map" | "queries">("shell");
+  const [termSize, setTermSize] = useState<{ rows: number; cols: number } | null>(null);
+  const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
+
+  // Expose query history setter for the initShell closure
+  (window as any).__addQueryHistoryEntry = (entry: QueryHistoryEntry) => {
+    setQueryHistory(prev => [...prev, entry]);
+  };
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
+  const [perspectiveHasData, setPerspectiveHasData] = useState(false);
+
+  // Resolve selected table for Data Preview and Perspective tabs
+  const selectedTable = selection?.type === "table" && catalogData
+    ? catalogData.schemas.find(s => s.info.name === selection.schema)?.tables.find(t => t.name === selection.name)
+    : null;
+
+  // Expose a function to switch to the shell tab and ensure it's visible
+  (window as any).__shellActivate = () => {
+    setActiveTab("shell");
+    if (mode === "minimized") onModeChange("panel");
+  };
 
   // Expose a callback for the shell to trigger Perspective view
   useEffect(() => {
     (window as any).__showPerspective = async (arrowBuffer: Uint8Array) => {
       setActiveTab("perspective");
       setPerspectiveLoading(true);
+      setPerspectiveHasData(true);
       try {
         await loadPerspective(perspectiveRef.current!, arrowBuffer);
       } catch (e: any) {
@@ -151,74 +191,270 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
     };
   }, [serviceUrl, catalogName]);
 
-  // Refit terminal when maximized/minimized or switching back to shell tab
+  // Track terminal dimensions
+  const updateTermSize = useCallback(() => {
+    const term = (window as any).__shellTerm;
+    if (term) setTermSize({ rows: term.rows, cols: term.cols });
+  }, []);
+
+  // Refit terminal when mode changes or switching back to shell tab
   useEffect(() => {
-    if (activeTab === "shell" && (window as any).__shellFitAddon) {
-      setTimeout(() => (window as any).__shellFitAddon.fit(), 50);
+    if (mode !== "minimized" && activeTab === "shell" && (window as any).__shellFitAddon) {
+      const fit = () => {
+        (window as any).__shellFitAddon?.fit();
+        updateTermSize();
+      };
+      const fitAndRefresh = () => {
+        fit();
+        // Force xterm to redraw all visible rows so the prompt isn't truncated
+        const term = (window as any).__shellTerm;
+        if (term) {
+          term.refresh(0, term.rows - 1);
+        }
+      };
+      requestAnimationFrame(fit);
+      const t1 = setTimeout(fitAndRefresh, 50);
+      const t2 = setTimeout(fitAndRefresh, 150);
+      const t3 = setTimeout(fitAndRefresh, 300);
+      return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
     }
-  }, [maximized, activeTab]);
+  }, [mode, activeTab, updateTermSize]);
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (mode !== "minimized" && activeTab === "shell" && (window as any).__shellFitAddon) {
+        (window as any).__shellFitAddon.fit();
+        updateTermSize();
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [mode, activeTab, updateTermSize]);
+
+  // Auto-load Perspective virtual server when tab is active and a table is selected
+  const perspectiveTableRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (mode === "minimized" || activeTab !== "perspective" || !selectedTable) return;
+    const tableId = `${catalogName}.${selectedTable.schemaName}.${selectedTable.name}`;
+    // Don't reload if already showing this table
+    if (perspectiveTableRef.current === tableId) return;
+
+    let cancelled = false;
+    setPerspectiveLoading(true);
+
+    (async () => {
+      try {
+        // Ensure Perspective CDN scripts are loaded
+        if (!perspectiveLoaded) {
+          const perspective = await import(/* @vite-ignore */ getPerspectiveCDN()[0]);
+          await Promise.all(getPerspectiveCDN().slice(1).map(url => import(/* @vite-ignore */ url)));
+          perspectiveMod = perspective.default;
+          perspectiveWorker = await perspectiveMod.worker();
+          perspectiveLoaded = true;
+        }
+
+        if (cancelled) return;
+
+        // Wait for DuckDB to be fully ready (ATTACH complete, readLoop started)
+        if (!(window as any).__shellRunQuery) {
+          await new Promise<void>((resolve) => {
+            const onReady = () => { resolve(); window.removeEventListener("duckdb-ready", onReady); };
+            window.addEventListener("duckdb-ready", onReady);
+            // Check again in case it became ready between the check and the listener
+            if ((window as any).__shellRunQuery) onReady();
+          });
+        }
+        if (cancelled) return;
+
+        // Load Perspective CSS (themes + pro theme)
+        for (const css of ["/perspective/themes.css", "/perspective/pro.css"]) {
+          if (!document.querySelector(`link[href="${css}"]`)) {
+            const link = document.createElement("link");
+            link.rel = "stylesheet";
+            link.href = css;
+            document.head.appendChild(link);
+          }
+        }
+
+        const container = perspectiveRef.current;
+        if (!container || cancelled) return;
+
+        // Ensure WASM is initialized by creating a throwaway worker first
+        // (perspectiveMod.worker() triggers WASM init internally)
+        if (!perspectiveWorker) {
+          perspectiveWorker = await perspectiveMod.worker();
+        }
+
+        // Create handler and message port
+        const handler = new VgiDuckDBHandler(perspectiveMod);
+        const messagePort = await perspectiveMod.createMessageHandler(handler);
+
+        // Create client connected to our DuckDB virtual server
+        const client = await perspectiveMod.worker(messagePort);
+
+        if (cancelled) return;
+
+        // Remove any stale viewer and create fresh for this virtual server connection
+        const oldViewer = container.querySelector("perspective-viewer");
+        if (oldViewer) oldViewer.remove();
+
+        const viewer = document.createElement("perspective-viewer") as any;
+        viewer.setAttribute("theme", "Pro Light");
+        viewer.style.width = "100%";
+        viewer.style.height = "100%";
+        container.appendChild(viewer);
+
+        await viewer.load(client);
+
+        // Build initial config
+        const restoreConfig: any = { table: tableId, title: tableId };
+        if (selectedTable) {
+          const cols = getColumns(selectedTable);
+          const pkIndices = new Set(selectedTable.primaryKeyConstraints.flatMap((pk: number[]) => pk));
+          if (pkIndices.size > 0) {
+            // Set PK columns to "any_value" aggregate so they don't get summed when grouping
+            const aggregates: Record<string, string> = {};
+            // Default to showing only PK columns (user can add more from the config panel)
+            const pkColumns: string[] = [];
+            for (const idx of pkIndices) {
+              if (cols[idx]) {
+                const pspName = cols[idx].name.replace(/_/g, "-");
+                aggregates[pspName] = "any_value";
+                pkColumns.push(pspName);
+              }
+            }
+            restoreConfig.aggregates = aggregates;
+            restoreConfig.columns = pkColumns;
+          }
+        }
+
+        await viewer.restore(restoreConfig);
+        await viewer.toggleConfig(true);
+        perspectiveTableRef.current = tableId;
+      } catch (e: any) {
+        console.error("Perspective virtual server error:", e);
+      } finally {
+        if (!cancelled) setPerspectiveLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [mode, activeTab, selectedTable, catalogName]);
 
   const tabCls = (tab: string) => {
     const active = activeTab === tab;
-    return `px-4 py-1.5 text-sm font-semibold font-mono cursor-pointer transition-colors rounded-t-md ${
+    return `inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium cursor-pointer transition-colors rounded-t-md ${
       active
-        ? "bg-[#1a1a0e] text-[#6ba034] border border-[#3a3a28] border-b-0 relative z-10"
-        : "bg-[#24241a] text-[#f5f0e0]/40 hover:text-[#f5f0e0]/70 border border-transparent hover:bg-[#2a2a1e]"
+        ? "bg-card text-primary border border-border border-b-0 relative z-10"
+        : "text-muted-foreground hover:text-foreground border border-transparent hover:bg-secondary"
     }`;
   };
 
+  const handleTabClick = (tab: typeof activeTab) => {
+    if (tab === activeTab && mode !== "minimized") {
+      onModeChange("minimized");
+    } else {
+      setActiveTab(tab);
+      if (mode === "minimized") onModeChange("panel");
+    }
+  };
+
   return (
-    <div className="flex flex-col h-full bg-[#1a1a0e]">
-      {/* Tab bar */}
-      <div className="flex items-center justify-between px-2 pt-1 bg-[#2a2a1e] shrink-0 border-b border-[#3a3a28]">
+    <div ref={rootRef} className="flex flex-col h-full bg-[#1a1a0e]">
+      {/* Header bar — always visible, acts as minimized view */}
+      <div
+        className="flex items-center justify-between px-2 pt-1 bg-secondary shrink-0 border-b border-border"
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+          if (mode === "minimized") onModeChange("panel");
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          const data = e.dataTransfer.getData("text/plain");
+          if (data) {
+            const text = treeIdToShellText(data);
+            if (text) (window as any).__shellInsertText?.(text);
+          }
+        }}
+      >
         <div className="flex items-end gap-0.5 -mb-px">
-          <button className={tabCls("shell")} onClick={() => setActiveTab("shell")}>
+          <button className={tabCls("shell")} onClick={() => handleTabClick("shell")}>
+            <img src="/duckdb-icon-light.svg" alt="" className="h-4 w-4" />
             SQL Shell
           </button>
-          {!shellOnly && (
-            <>
-              <button className={tabCls("perspective")} onClick={() => setActiveTab("perspective")}>
-                Perspective
-              </button>
-              <button className={tabCls("map")} onClick={() => setActiveTab("map")}>
-                Map
-              </button>
-            </>
+          {selectedTable && (
+            <button className={tabCls("preview")} onClick={() => handleTabClick("preview")}>
+              <Table2 className="h-3.5 w-3.5" />
+              Preview
+            </button>
           )}
+          {queryHistory.length > 0 && (
+            <button className={tabCls("queries")} onClick={() => handleTabClick("queries")}>
+              <History className="h-3.5 w-3.5" />
+              Queries ({queryHistory.length})
+            </button>
+          )}
+          <button
+            className={`${tabCls("perspective")} ${!selectedTable && !perspectiveHasData ? "opacity-30 cursor-not-allowed" : ""}`}
+            onClick={() => { if (selectedTable || perspectiveHasData) handleTabClick("perspective"); }}
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            Perspective
+          </button>
+          <button className={tabCls("map")} onClick={() => handleTabClick("map")}>
+            <MapIcon className="h-3.5 w-3.5" />
+            Map
+          </button>
         </div>
         <div className="flex items-center gap-1 pb-1">
+          {mode === "minimized" && (
+            <button
+              onClick={() => onModeChange("panel")}
+              className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+              title="Expand"
+            >
+              <ChevronUp className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {mode !== "minimized" && (
+            <button
+              onClick={() => onModeChange("minimized")}
+              className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+              title="Minimize"
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button
-            onClick={onToggleMaximize}
-            className="p-1 text-[#f5f0e0]/40 hover:text-[#f5f0e0] transition-colors"
-            title={maximized ? "Restore" : "Maximize"}
+            onClick={() => onModeChange(mode === "maximized" ? "panel" : "maximized")}
+            className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+            title={mode === "maximized" ? "Restore" : "Maximize"}
           >
-            {maximized ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-          </button>
-          <button
-            onClick={onClose}
-            className="p-1 text-[#f5f0e0]/40 hover:text-[#f5f0e0] transition-colors"
-            title="Close shell"
-          >
-            <X className="h-3.5 w-3.5" />
+            {mode === "maximized" ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </button>
         </div>
       </div>
 
       {/* Terminal container */}
-      {loading && !error && activeTab === "shell" && (
+      {mode !== "minimized" && loading && !error && activeTab === "shell" && (
         <div className="flex-1 flex items-center justify-center text-[#6ba034] text-sm">
           Loading DuckDB-WASM...
         </div>
       )}
-      {error && activeTab === "shell" && (
+      {mode !== "minimized" && error && activeTab === "shell" && (
         <div className="flex-1 flex items-center justify-center text-red-400 text-sm">
           {error}
         </div>
       )}
       <div
-        ref={containerRef}
-        className={`flex-1 min-h-0 overflow-hidden ${loading || activeTab !== "shell" ? "hidden" : ""}`}
-        style={{ padding: "8px 12px 28px" }}
+        className={`flex-1 min-h-0 overflow-hidden relative ${mode === "minimized" || loading ? "hidden" : ""}`}
+        style={{
+          padding: "8px 12px 0 12px",
+          ...(activeTab !== "shell" ? { visibility: "hidden" as const, position: "absolute" as const, inset: 0, zIndex: -1 } : {}),
+        }}
         onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
         onDrop={(e) => {
           e.preventDefault();
@@ -230,12 +466,30 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
             }
           }
         }}
-      />
+      >
+        <div ref={containerRef} className="h-full w-full overflow-hidden" />
+        {termSize && (
+          <div className="absolute bottom-1 right-4 text-[10px] font-mono text-[#f5f0e0]/20 pointer-events-none">
+            {termSize.cols}&times;{termSize.rows}
+          </div>
+        )}
+      </div>
+
+      {/* Data Preview */}
+      {mode !== "minimized" && activeTab === "preview" && selectedTable && (
+        <div className="flex-1 min-h-0 overflow-auto bg-card p-4">
+          <DataPreview
+            catalogName={catalogName}
+            functionName={selectedTable.name}
+            columnInfo={getColumns(selectedTable)}
+          />
+        </div>
+      )}
 
       {/* Perspective viewer */}
       <div
         ref={perspectiveRef}
-        className={`flex-1 min-h-0 overflow-hidden ${activeTab !== "perspective" ? "hidden" : ""}`}
+        className={`flex-1 min-h-0 overflow-hidden bg-white ${mode === "minimized" || activeTab !== "perspective" ? "hidden" : ""}`}
       >
         {perspectiveLoading && (
           <div className="flex items-center justify-center h-full text-[#6ba034] text-sm">
@@ -244,13 +498,15 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
         )}
         {!perspectiveLoading && activeTab === "perspective" && !perspectiveRef.current?.querySelector("perspective-viewer") && (
           <div className="flex items-center justify-center h-full text-[#f5f0e0]/40 text-sm font-mono">
-            Run a query then type .perspective to view results here
+            {selectedTable
+              ? "Loading table into Perspective..."
+              : "Run a query then type .perspective to view results here"}
           </div>
         )}
       </div>
 
       {/* Kepler.gl map */}
-      {activeTab === "map" && (
+      {mode !== "minimized" && activeTab === "map" && (
         <div className="flex-1 min-h-0 overflow-hidden">
           <Suspense fallback={
             <div className="flex items-center justify-center h-full text-gray-500 text-sm bg-white">
@@ -262,6 +518,169 @@ export function DuckDBShell({ serviceUrl, catalogName, onClose, maximized, onTog
         </div>
       )}
 
+      {/* Query History panel */}
+      {mode !== "minimized" && activeTab === "queries" && (() => {
+        const handleRerun = (sql: string) => {
+          setActiveTab("shell");
+          const run = () => {
+            const tryRun = () => {
+              if ((window as any).__shellRunQuery) {
+                (window as any).__shellRunQuery(sql);
+              } else {
+                requestAnimationFrame(tryRun);
+              }
+            };
+            tryRun();
+          };
+          // If in AI mode, exit it first by simulating Ctrl+D
+          if ((window as any).__shellInAiMode) {
+            const term = (window as any).__shellTerm;
+            if (term) {
+              term.paste("\x04"); // Ctrl+D to exit AI mode
+              // Wait for AI mode to exit, then run the query
+              const waitForSql = () => {
+                if (!(window as any).__shellInAiMode) {
+                  setTimeout(run, 100);
+                } else {
+                  requestAnimationFrame(waitForSql);
+                }
+              };
+              requestAnimationFrame(waitForSql);
+            }
+          } else {
+            run();
+          }
+        };
+        return (
+        <div className="flex-1 min-h-0 overflow-y-auto bg-[#1a1a0e] p-3">
+          {queryHistory.length === 0 ? (
+            <div className="flex items-center justify-center h-full text-[#f5f0e0]/40 text-sm font-mono">
+              No queries yet. Use .ai mode to generate queries.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {(() => {
+                // Group queries by conversationId, preserving order (newest conversation first)
+                const groups: { conversationId: string | null; question: string | undefined; name: string | undefined; entries: QueryHistoryEntry[] }[] = [];
+                const convMap = new Map<string, typeof groups[number]>();
+                for (const entry of queryHistory) {
+                  const cid = entry.conversationId ?? null;
+                  if (cid && convMap.has(cid)) {
+                    const g = convMap.get(cid)!;
+                    g.entries.push(entry);
+                    // Update name if a later entry has one (e.g., user named it mid-session)
+                    if (entry.conversationName) g.name = entry.conversationName;
+                  } else {
+                    const group = { conversationId: cid, question: entry.userQuestion, name: entry.conversationName, entries: [entry] };
+                    groups.push(group);
+                    if (cid) convMap.set(cid, group);
+                  }
+                }
+                return [...groups].reverse().map((group, gi) => {
+                  if (!group.conversationId || group.entries.length === 1) {
+                    // Standalone query — render flat
+                    const entry = group.entries[0];
+                    return <QueryCard key={entry.id} entry={entry} onRerun={handleRerun} />;
+                  }
+                  // Threaded conversation
+                  return (
+                    <div key={group.conversationId} className="border border-[#3a3a28] rounded-md bg-[#1e1e14] overflow-hidden">
+                      {/* Conversation header */}
+                      <div className="px-3 py-2 bg-[#24241a] border-b border-[#3a3a28] flex items-center gap-2">
+                        <span className="text-[#6ba034] text-xs font-mono font-semibold shrink-0">AI</span>
+                        <span className="text-[#f5f0e0]/60 text-xs truncate">
+                          {group.name || group.question || "Unnamed conversation"}
+                        </span>
+                        <span className="text-[#f5f0e0]/20 text-xs font-mono ml-auto shrink-0">{group.entries.length} queries</span>
+                      </div>
+                      {/* Threaded queries */}
+                      <div className="flex flex-col">
+                        {group.entries.map((entry, i) => (
+                          <div key={entry.id} className="flex">
+                            {/* Thread line */}
+                            <div className="w-6 shrink-0 flex flex-col items-center">
+                              <div className={`w-px flex-1 ${i === 0 ? "bg-transparent" : "bg-[#3a3a28]"}`} />
+                              <div className="w-2 h-2 rounded-full bg-[#3a3a28] shrink-0" />
+                              <div className={`w-px flex-1 ${i === group.entries.length - 1 ? "bg-transparent" : "bg-[#3a3a28]"}`} />
+                            </div>
+                            <div className="flex-1 min-w-0 py-2 pr-3">
+                              <QueryCard entry={entry} compact onRerun={handleRerun} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          )}
+        </div>
+        );
+      })()}
+
+    </div>
+  );
+}
+
+function QueryCard({ entry, compact, onRerun }: { entry: QueryHistoryEntry; compact?: boolean; onRerun?: (sql: string) => void }) {
+  const isAI = !!entry.conversationId;
+  return (
+    <div className={compact ? "" : `border rounded-md p-3 ${isAI ? "border-[#3a3a28] bg-[#24241a]" : "border-[#2a3a28] bg-[#1e241a]"}`}>
+      <div className="flex items-start justify-between gap-2 mb-1">
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          {!compact && (
+            <span className={`text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded ${isAI ? "bg-[#35304a] text-purple-300" : "bg-[#2a3a2a] text-green-300"}`}>
+              {isAI ? "AI" : "SQL"}
+            </span>
+          )}
+          {!compact && entry.userQuestion && (
+            <span className="text-[#f5f0e0]/50 text-xs italic truncate">
+              &ldquo;{entry.userQuestion}&rdquo;
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="text-[#f5f0e0]/30 text-xs font-mono">
+            {new Date(entry.timestamp).toLocaleTimeString()}
+          </span>
+          <button
+            className="p-1 text-[#f5f0e0]/30 hover:text-[#6ba034] transition-colors cursor-pointer"
+            title="Copy SQL"
+            onClick={() => navigator.clipboard.writeText(entry.sql)}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+          </button>
+          {onRerun && (
+            <button
+              className="p-1 text-[#f5f0e0]/30 hover:text-[#6ba034] transition-colors cursor-pointer"
+              title="Re-run query"
+              onClick={() => onRerun(entry.sql)}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            </button>
+          )}
+        </div>
+      </div>
+      <pre className={`text-xs font-mono whitespace-pre-wrap break-all leading-relaxed ${isAI ? "text-purple-300" : "text-[#6ba034]"}`}>
+        {entry.sql}
+      </pre>
+      <div className="mt-1 text-xs font-mono">
+        {entry.success ? (
+          <span className="text-[#6ba034]">
+            {entry.rowCount != null ? `${entry.rowCount.toLocaleString()} row${entry.rowCount !== 1 ? "s" : ""}` : "OK"}
+          </span>
+        ) : (
+          <span className="text-red-400">
+            {entry.error || "Failed"}
+          </span>
+        )}
+        <span className="text-[#f5f0e0]/30 ml-2">
+          {entry.executionTimeMs >= 1000
+            ? `${(entry.executionTimeMs / 1000).toFixed(1)}s`
+            : `${Math.round(entry.executionTimeMs)}ms`}
+        </span>
+      </div>
     </div>
   );
 }
@@ -324,7 +743,14 @@ function initShell(
     }
   }
 
-  const safeFit = () => { try { fitAddon?.fit(); } catch {} };
+  const safeFit = () => {
+    try {
+      // Don't fit when container is hidden — fitting to 0 cols corrupts the readline buffer
+      if (container.offsetWidth > 0 && container.offsetHeight > 0) {
+        fitAddon?.fit();
+      }
+    } catch {}
+  };
   const resizeObserver = new ResizeObserver(safeFit);
   resizeObserver.observe(container);
 
@@ -420,6 +846,7 @@ function initShell(
         }
         // Shell is fully ready — expose runQuery for external callers
         (window as any).__shellRunQuery = runQuery;
+        window.dispatchEvent(new Event("duckdb-ready"));
         readLoop();
       })();
       return;
@@ -450,12 +877,64 @@ function initShell(
     });
   }
 
+  // Synchronous query — uses duckdb_web_query_run (single Arrow IPC buffer, no streaming chunks)
+  // Required by Perspective's dataSlice.fromArrowIpc() which expects the non-streaming format
+  function runQuerySync(sql: string): Promise<any> {
+    const queryId = nextQueryId++;
+    return new Promise((resolve) => {
+      const handler = (e: MessageEvent) => {
+        if (e.data.type === "result" && e.data.queryId === queryId) {
+          worker.removeEventListener("message", handler);
+          resolve(e.data);
+        }
+      };
+      worker.addEventListener("message", handler);
+      worker.postMessage({ type: "query-sync", sql, queryId });
+    });
+  }
+
+  // Current catalog/schema for prompt
+  let currentCatalog = "";
+  let currentSchema = "";
+  async function refreshCatalog() {
+    try {
+      const r = await runQueryAsync("SELECT current_catalog(), current_schema()");
+      if (r.ok && r.arrowBuffers?.length) {
+        const t = tableFromIPC(r.arrowBuffers[0]);
+        if (t.numRows > 0) {
+          currentCatalog = String(t.getChildAt(0)?.get(0) ?? "");
+          currentSchema = String(t.getChildAt(1)?.get(0) ?? "");
+        }
+      }
+    } catch {}
+  }
+
+  // Persistent AI conversation state (survives across .ai mode entries)
+  let aiMessages: MessageParam[] = [];
+  let aiConversationId = `ai-${Date.now()}`;
+  let aiConversationName = "";
+
   // Read loop
   let prefillText = "";
   let prefillCursorPos = -1;
+  let promptInputEmpty = true;
+  // Track whether user has typed anything at the current prompt
+  const inputTracker = term.onData((data: string) => {
+    // Printable characters (not control sequences) mean the user typed something
+    if (data.length === 1 && data.charCodeAt(0) >= 32) {
+      promptInputEmpty = false;
+    }
+  });
+
   async function readLoop() {
+    await refreshCatalog();
     while (true) {
-      const readPromise = rl.read("\x1b[32mD\x1b[0m > ");
+      promptInputEmpty = true;
+      const ctx = currentCatalog
+        ? `\x1b[2m${currentCatalog}.${currentSchema}\x1b[0m`
+        : "";
+      const prompt = ctx ? `\x1b[32mD\x1b[0m ${ctx} > ` : `\x1b[32mD\x1b[0m > `;
+      const readPromise = rl.read(prompt);
       if (prefillText) {
         const text = prefillText;
         const cursorPos = prefillCursorPos;
@@ -485,11 +964,15 @@ function initShell(
       }
       if (trimmed === ".help" || trimmed === "\\?") {
         writeln(".help              Show this help");
-        writeln(".ai                Enter AI assistant mode");
+        writeln(".ai                Enter AI mode (resumes last conversation)");
+        writeln(".ai new            Start a new AI conversation");
+        writeln(".ai name <text>    Name the AI conversation");
+        writeln(".save              Download DuckDB snapshot");
+        writeln(".load              Restore DuckDB from snapshot file");
         writeln(".mode box          Table output with box drawing (default)");
         writeln(".mode line         One field per line, vertical display");
         writeln(".download csv      Download last result as CSV");
-        writeln(".download excel    Download last result as Excel");
+        writeln(".download excel    Download last result as Excel (.xlsx)");
         writeln(".perspective       Open last result in Perspective viewer");
         writeln(".kepler            Switch to Map tab");
         continue;
@@ -532,10 +1015,122 @@ function initShell(
         continue;
       }
 
+      // .save — snapshot WASM memory and download as file
+      if (trimmed === ".save") {
+        writeln("Saving snapshot...", "33");
+        try {
+          const snap = await new Promise<{ memory: ArrayBuffer; size: number; connHdl: number }>((resolve, reject) => {
+            const handler = (e: MessageEvent) => {
+              if (e.data.type === "snapshot") {
+                worker.removeEventListener("message", handler);
+                resolve(e.data);
+              }
+            };
+            worker.addEventListener("message", handler);
+            worker.postMessage({ type: "snapshot" });
+            setTimeout(() => { worker.removeEventListener("message", handler); reject(new Error("Snapshot timed out")); }, 30000);
+          });
+
+          // Build file: header + raw memory
+          const MAGIC = new Uint8Array([0x44, 0x4B, 0x53, 0x4E]); // "DKSN"
+          const header = new ArrayBuffer(20);
+          const hView = new DataView(header);
+          // bytes 0-3: magic
+          new Uint8Array(header).set(MAGIC);
+          // bytes 4-7: version
+          hView.setUint32(4, 1, true);
+          // bytes 8-15: memory size (as two uint32s for >4GB support)
+          hView.setUint32(8, snap.size & 0xFFFFFFFF, true);
+          hView.setUint32(12, Math.floor(snap.size / 0x100000000), true);
+          // bytes 16-19: connHdl
+          hView.setUint32(16, snap.connHdl, true);
+
+          const blob = new Blob([header, snap.memory]);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+          a.download = `duckdb-snapshot-${ts}.bin`;
+          a.click();
+          URL.revokeObjectURL(url);
+
+          const sizeMB = (blob.size / (1024 * 1024)).toFixed(1);
+          writeln(`Saved snapshot (${sizeMB} MB)`, "32");
+        } catch (err: any) {
+          writeln(`Save failed: ${err.message}`, "31");
+        }
+        continue;
+      }
+
+      // .load — restore WASM memory from uploaded file
+      if (trimmed === ".load") {
+        try {
+          const file = await new Promise<File>((resolve, reject) => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = ".bin";
+            input.onchange = () => {
+              if (input.files?.[0]) resolve(input.files[0]);
+              else reject(new Error("No file selected"));
+            };
+            input.oncancel = () => reject(new Error("Cancelled"));
+            input.click();
+          });
+
+          writeln(`Loading ${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`, "33");
+
+          const buf = await file.arrayBuffer();
+          if (buf.byteLength < 20) throw new Error("File too small");
+
+          // Parse header
+          const magic = new Uint8Array(buf, 0, 4);
+          if (String.fromCharCode(...magic) !== "DKSN") throw new Error("Not a DuckDB snapshot file");
+          const hView = new DataView(buf);
+          const version = hView.getUint32(4, true);
+          if (version !== 1) throw new Error(`Unsupported snapshot version: ${version}`);
+          const sizeLo = hView.getUint32(8, true);
+          const sizeHi = hView.getUint32(12, true);
+          const memSize = sizeLo + sizeHi * 0x100000000;
+          const snapConnHdl = hView.getUint32(16, true);
+
+          const memory = buf.slice(20);
+          if (memory.byteLength < memSize) throw new Error(`Snapshot file truncated (expected ${memSize} bytes, got ${memory.byteLength})`);
+
+          await new Promise<void>((resolve, reject) => {
+            const handler = (e: MessageEvent) => {
+              if (e.data.type === "restored") {
+                worker.removeEventListener("message", handler);
+                resolve();
+              } else if (e.data.type === "log" && e.data.cls === "err") {
+                worker.removeEventListener("message", handler);
+                reject(new Error(e.data.msg));
+              }
+            };
+            worker.addEventListener("message", handler);
+            worker.postMessage({ type: "restore", memory, size: memSize, connHdl: snapConnHdl }, [memory]);
+            setTimeout(() => { worker.removeEventListener("message", handler); reject(new Error("Restore timed out")); }, 30000);
+          });
+
+          writeln("Restored snapshot.", "32");
+        } catch (err: any) {
+          if (err.message !== "Cancelled") {
+            writeln(`Load failed: ${err.message}`, "31");
+          }
+        }
+        continue;
+      }
+
       // -----------------------------------------------------------------------
       // AI mode
       // -----------------------------------------------------------------------
-      if (trimmed === ".ai") {
+      if (trimmed === ".ai" || trimmed === ".ai new" || trimmed.startsWith(".ai name ")) {
+        // Handle .ai name <text> — set conversation name without entering AI mode
+        if (trimmed.startsWith(".ai name ")) {
+          aiConversationName = trimmed.slice(9).trim();
+          writeln(`Conversation named: ${aiConversationName}`, "33");
+          continue;
+        }
+
         // Read API key fresh from localStorage (user may have set it after shell opened)
         let aiApiKey = config.aiApiKey || "";
         let aiModel = config.aiModel || "claude-sonnet-4-20250514";
@@ -559,10 +1154,23 @@ function initShell(
           continue;
         }
 
-        writeln("Entering AI mode. Type .exit to return to SQL.", "35");
+        // .ai new → start fresh conversation
+        if (trimmed === ".ai new") {
+          aiMessages = [];
+          aiConversationId = `ai-${Date.now()}`;
+          aiConversationName = "";
+          writeln("Starting new AI conversation. Type .exit to return to SQL.", "35");
+        } else if (aiMessages.length > 0) {
+          // Resume existing conversation
+          const msgCount = aiMessages.length;
+          const nameHint = aiConversationName ? ` (${aiConversationName})` : "";
+          writeln(`Resuming AI conversation${nameHint} — ${msgCount} messages. Type .ai new for a fresh start.`, "35");
+        } else {
+          writeln("Entering AI mode. Type .exit to return to SQL.", "35");
+        }
         writeln("");
+        (window as any).__shellInAiMode = true;
 
-        const aiMessages: MessageParam[] = [];
         const systemPrompt = buildSystemPrompt(config.catalogData, config.serviceUrl);
         let aiAbort: AbortController | null = null;
 
@@ -570,12 +1178,17 @@ function initShell(
         const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let spinnerInterval: ReturnType<typeof setInterval> | null = null;
         let spinnerFrame = 0;
+        let spinnerLabel = "";
 
         function startSpinner(label: string) {
+          spinnerLabel = label;
           spinnerFrame = 0;
+          if (spinnerInterval) return; // already running, just update label
           spinnerInterval = setInterval(() => {
+            // Don't write spinner when terminal is hidden — \r won't work on zero-width terminal
+            if (term.cols < 2) return;
             const frame = spinnerFrames[spinnerFrame % spinnerFrames.length];
-            term.write(`\r\x1b[2m${frame} ${label}\x1b[0m\x1b[K`);
+            term.write(`\r\x1b[1;35m${frame} ${spinnerLabel}\x1b[0m\x1b[K`);
             spinnerFrame++;
           }, 100);
         }
@@ -588,10 +1201,10 @@ function initShell(
           }
         }
 
-        // Ctrl+D exits AI mode
+        // Ctrl+D or Escape exits AI mode
         let ctrlDExit = false;
         const ctrlDDisposable = term.onData((data: string) => {
-          if (data === "\x04") { // Ctrl+D
+          if (data === "\x04" || data === "\x1b") { // Ctrl+D or Escape
             ctrlDExit = true;
             // Submit empty line to unblock rl.read()
             term.paste("\r");
@@ -600,7 +1213,7 @@ function initShell(
 
         // AI read loop
         aiLoop: while (true) {
-          const userInput = await rl.read("\x1b[35mAI\x1b[0m > ");
+          const userInput = await rl.read("\x1b[1;36mAI\x1b[0m > ");
 
           if (ctrlDExit) {
             ctrlDExit = false;
@@ -617,6 +1230,37 @@ function initShell(
             continue;
           }
 
+          if (aiTrimmed === ".help" || aiTrimmed === "/help") {
+            writeln("/new               Start a new conversation");
+            writeln("/name <text>       Name this conversation");
+            writeln("/clear             Clear conversation history");
+            writeln("/exit              Return to SQL mode");
+            writeln("/help              Show this help");
+            continue;
+          }
+
+          if (aiTrimmed === "/new") {
+            aiMessages = [];
+            aiConversationId = `ai-${Date.now()}`;
+            aiConversationName = "";
+            writeln("Started new conversation.", "33");
+            continue;
+          }
+
+          if (aiTrimmed === ".clear" || aiTrimmed === "/clear") {
+            aiMessages = [];
+            aiConversationId = `ai-${Date.now()}`;
+            aiConversationName = "";
+            writeln("Conversation cleared.", "33");
+            continue;
+          }
+
+          if (aiTrimmed.startsWith(".name ") || aiTrimmed.startsWith("/name ")) {
+            aiConversationName = aiTrimmed.slice(6).trim();
+            writeln(`Conversation named: ${aiConversationName}`, "33");
+            continue;
+          }
+
           if (aiTrimmed === ".exit" || aiTrimmed === "/exit") {
             ctrlDDisposable.dispose();
             writeln("Exiting AI mode.", "35");
@@ -624,23 +1268,13 @@ function initShell(
             break;
           }
 
-          if (aiTrimmed === ".help") {
-            writeln(".exit              Return to SQL mode");
-            writeln(".clear             Clear conversation history");
-            writeln(".help              Show this help");
-            continue;
-          }
-
-          if (aiTrimmed === ".clear") {
-            aiMessages.length = 0;
-            writeln("Conversation cleared.", "33");
-            continue;
-          }
-
           aiMessages.push({ role: "user", content: aiTrimmed });
+          // Auto-name conversation from first user question if not explicitly named
+          if (!aiConversationName) {
+            aiConversationName = aiTrimmed.length > 50 ? aiTrimmed.slice(0, 50) + "…" : aiTrimmed;
+          }
           aiAbort = new AbortController();
-          let firstText = true;
-          const md = createMarkdownRenderer(term.cols);
+          let textBuffer = "";
 
           // Ctrl+C / Escape handler — abort the in-flight request
           const cancelDisposable = term.onData((data: string) => {
@@ -657,21 +1291,75 @@ function initShell(
               if (name === "run_sql") {
                 stopSpinner();
                 queryRunning = true;
+                const t0 = performance.now();
                 const result = await runQueryAsync(input.sql);
+                const elapsed = performance.now() - t0;
                 clearProgressBar();
                 queryRunning = false;
+
+                // Find user question for context
+                const lastUserMsg = aiMessages.filter(m => m.role === 'user').pop();
+                const userQuestion = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : undefined;
+
                 if (!result.ok) {
                   const errMsg = result.error || "Query failed";
                   rl.println(`\x1b[31m  Error: ${errMsg}\x1b[0m`);
+
+                  // Track failed query in history
+                  (window as any).__addQueryHistoryEntry?.({
+                    id: Date.now(),
+                    timestamp: Date.now(),
+                    sql: input.sql,
+                    executionTimeMs: elapsed,
+                    success: false,
+                    error: errMsg,
+                    userQuestion,
+                    conversationId: aiConversationId,
+                    conversationName: aiConversationName,
+                  });
+
+                  // HTTP errors mean the VGI server connection is broken — abort the agent loop
+                  if (errMsg.includes("HTTP Error") || errMsg.includes("HTTP 5")) {
+                    // TODO: Report this error to the developer for exception tracking
+                    const fatal = new Error(`VGI connection error: ${errMsg}`);
+                    (fatal as any).fatal = true;
+                    throw fatal;
+                  }
+
                   throw new Error(errMsg);
                 }
                 if (!result.arrowBuffers?.length) {
                   rl.println(`\x1b[2m  OK (no results)\x1b[0m`);
+                  (window as any).__addQueryHistoryEntry?.({
+                    id: Date.now(),
+                    timestamp: Date.now(),
+                    sql: input.sql,
+                    executionTimeMs: elapsed,
+                    success: true,
+                    rowCount: 0,
+                    userQuestion,
+                    conversationId: aiConversationId,
+                    conversationName: aiConversationName,
+                  });
                   return JSON.stringify({ ok: true, message: "Query executed successfully (no results)" });
                 }
                 const table = tableFromIPC(result.arrowBuffers[0]);
                 await printTable(table);
                 const { json } = formatArrowTableAsJson(table);
+
+                // Track successful query in history
+                (window as any).__addQueryHistoryEntry?.({
+                  id: Date.now(),
+                  timestamp: Date.now(),
+                  sql: input.sql,
+                  executionTimeMs: elapsed,
+                  success: true,
+                  rowCount: table.numRows,
+                  userQuestion,
+                  conversationId: aiConversationId,
+                  conversationName: aiConversationName,
+                });
+
                 return json;
               }
               if (name === "read_query_results") {
@@ -711,20 +1399,18 @@ function initShell(
               executeTool,
               {
                 onText: (chunk) => {
-                  if (firstText) {
-                    stopSpinner();
-                    rl.println(""); // blank line before agent response
-                    firstText = false;
-                  }
-                  const formatted = md.push(chunk);
-                  if (formatted) term.write(formatted);
+                  textBuffer += chunk;
                 },
                 onToolCall: (name, input) => {
                   stopSpinner();
-                  // Flush markdown and separate from preceding text
-                  const remaining = md.end();
-                  if (remaining) term.write(remaining);
-                  if (!firstText) term.write("\r\n");
+                  // Render any buffered text before showing tool call
+                  if (textBuffer) {
+                    rl.println("");
+                    const md = createMarkdownRenderer(term.cols);
+                    term.write(md.push(textBuffer + "\n"));
+                    term.write(md.end());
+                    textBuffer = "";
+                  }
                   rl.println("");
                   if (name === "run_sql") {
                     const sqlLabel = "── SQL ";
@@ -745,13 +1431,17 @@ function initShell(
                 onToolResult: () => {
                   rl.println("");
                   startSpinner("Thinking...");
-                  firstText = true;
                 },
                 onDone: (usage) => {
                   stopSpinner();
-                  // Flush any remaining buffered markdown
-                  const remaining = md.end();
-                  if (remaining) term.write(remaining);
+                  // Render the complete response with markdown formatting
+                  if (textBuffer) {
+                    rl.println("");
+                    const md = createMarkdownRenderer(term.cols);
+                    term.write(md.push(textBuffer + "\n"));
+                    term.write(md.end());
+                    textBuffer = "";
+                  }
                   rl.println("");
                   if (usage) {
                     // Estimate cost per million tokens (as of 2025)
@@ -773,6 +1463,13 @@ function initShell(
                   rl.println("");
                   writeln(`Error: ${error}`, "31");
                   rl.println("");
+                },
+                onRetry: (message) => {
+                  if (message) {
+                    startSpinner(message);
+                  } else {
+                    startSpinner("Thinking...");
+                  }
                 },
               },
               aiAbort.signal,
@@ -798,6 +1495,7 @@ function initShell(
           }
         }
 
+        (window as any).__shellInAiMode = false;
         continue; // Back to SQL readLoop
       }
 
@@ -838,16 +1536,63 @@ function initShell(
           lastArrowBuffer = result.arrowBuffers[0];
           const table = tableFromIPC(lastArrowBuffer);
           lastTable = table;
-          if (outputMode === "line") {
+          const fields = table.schema.fields;
+          const fieldNames = fields.map((f: any) => f.name);
+
+          // DDL statements (CREATE, DROP, ALTER) return a single "Count" column — just show OK
+          if (fields.length === 1 && fieldNames[0] === "Count" && table.numRows <= 1) {
+            const elapsedStr = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(1)}s` : `${Math.round(elapsed)}ms`;
+            writeln(`OK (${elapsedStr})`, "32");
+
+          // EXPLAIN returns explain_key + explain_value — render as plain text
+          } else if (fieldNames.includes("explain_key") && fieldNames.includes("explain_value")) {
+            const keyIdx = fieldNames.indexOf("explain_key");
+            const valIdx = fieldNames.indexOf("explain_value");
+            for (let r = 0; r < table.numRows; r++) {
+              const key = String(table.getChildAt(keyIdx)?.get(r) ?? "");
+              const val = String(table.getChildAt(valIdx)?.get(r) ?? "");
+              if (key) rl.println(`\x1b[1m${key}\x1b[0m`);
+              // Print each line of the explain output
+              for (const line of val.split("\n")) {
+                rl.println(`\x1b[2m${line}\x1b[0m`);
+              }
+            }
+            const elapsedStr = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(1)}s` : `${Math.round(elapsed)}ms`;
+            rl.println(`\x1b[2m(${elapsedStr})\x1b[0m`);
+
+          } else if (outputMode === "line") {
             printLine(table, elapsed);
           } else {
             await printTable(table, elapsed);
           }
+
+          (window as any).__addQueryHistoryEntry?.({
+            id: Date.now(),
+            timestamp: Date.now(),
+            sql: trimmed,
+            executionTimeMs: elapsed,
+            success: true,
+            rowCount: table.numRows,
+          });
         } catch (err: any) {
           writeln(`Failed to render: ${err.message}`, "31");
         }
       } else {
         writeln("OK", "32");
+        (window as any).__addQueryHistoryEntry?.({
+          id: Date.now(),
+          timestamp: Date.now(),
+          sql: trimmed,
+          executionTimeMs: elapsed,
+          success: true,
+          rowCount: 0,
+        });
+      }
+
+      // Refresh prompt catalog if the query might have changed it
+      const upper = trimmed.toUpperCase();
+      if (upper.startsWith("USE ") || upper.startsWith("ATTACH ") || upper.startsWith("SET SCHEMA") || upper.startsWith("SET SEARCH_PATH")) {
+        await refreshCatalog();
       }
     }
   }
@@ -965,6 +1710,40 @@ function initShell(
     const shownCount = visibleIndices.length;
     const hiddenCount = totalCols - shownCount;
 
+    // Distribute leftover terminal width to columns that were capped at MAX_COL_WIDTH
+    {
+      const ellipsisCost = ellipsisPos != null ? 4 : 0;
+      const usedWidth = 1 + ellipsisCost + visibleIndices.reduce((s, ci) => s + idealWidths[ci] + 3, 0);
+      let slack = termW - usedWidth;
+      if (slack > 0) {
+        // Find natural (uncapped) widths for visible columns
+        const naturalWidths = visibleIndices.map(ci => {
+          let w = Math.max(names[ci].length, types[ci].length);
+          for (let r = 0; r < displayRows; r++) w = Math.max(w, grid[r][ci].length);
+          return w;
+        });
+        // Columns that were capped and could use more space
+        const expandable = visibleIndices.map((ci, vi) => naturalWidths[vi] > idealWidths[ci] ? vi : -1).filter(i => i >= 0);
+        while (slack > 0 && expandable.length > 0) {
+          const share = Math.max(1, Math.floor(slack / expandable.length));
+          let expanded = false;
+          for (let i = expandable.length - 1; i >= 0; i--) {
+            const vi = expandable[i];
+            const ci = visibleIndices[vi];
+            const need = naturalWidths[vi] - idealWidths[ci];
+            if (need <= 0) { expandable.splice(i, 1); continue; }
+            const give = Math.min(need, share, slack);
+            idealWidths[ci] += give;
+            slack -= give;
+            expanded = true;
+            if (idealWidths[ci] >= naturalWidths[vi]) expandable.splice(i, 1);
+            if (slack <= 0) break;
+          }
+          if (!expanded) break;
+        }
+      }
+    }
+
     try {
       const Table = (await import(/* @vite-ignore */ "cli-table3")).default;
 
@@ -985,7 +1764,7 @@ function initShell(
         colWidths.push(idealWidths[ci] + 2); // +2 for padding
         colAligns.push(isNumeric[ci] ? "right" : "left");
         headerRow.push({ content: `\x1b[1m${truncStr(names[ci], idealWidths[ci])}\x1b[0m`, hAlign: "center" as const });
-        typeRow.push({ content: `\x1b[2m${truncStr(types[ci], idealWidths[ci])}\x1b[0m`, hAlign: "center" as const });
+        typeRow.push({ content: `\x1b[90m${truncStr(types[ci], idealWidths[ci])}\x1b[0m`, hAlign: "center" as const });
       }
       // Ellipsis at end
       if (ellipsisPos === shownCount) {
@@ -1002,10 +1781,13 @@ function initShell(
         style: { head: [], border: [], "padding-left": 1, "padding-right": 1, compact: true },
       };
 
-      // Header table — bottom border uses ├┼┤ (separator style, not └┴┘)
+      // Header table — bottom border uses ├┼┤ when data follows, └┴┘ when empty
+      const hdrBottomChars = displayRows === 0
+        ? { "bottom": "─", "bottom-mid": "┴", "bottom-left": "└", "bottom-right": "┘" }
+        : { "bottom": "─", "bottom-mid": "┼", "bottom-left": "├", "bottom-right": "┤" };
       const hdrTbl = new Table({
         ...tableOpts,
-        chars: { ...tableOpts.chars, "bottom": "─", "bottom-mid": "┼", "bottom-left": "├", "bottom-right": "┤" },
+        chars: { ...tableOpts.chars, ...hdrBottomChars },
       });
       hdrTbl.push(headerRow);
       hdrTbl.push(typeRow);
@@ -1138,51 +1920,64 @@ function initShell(
   }
 
   /** Download the last result as CSV or Excel. */
-  function downloadFile(table: any, format: "csv" | "excel") {
+  async function downloadFile(table: any, format: "csv" | "excel") {
     const fields = table.schema.fields;
     const numRows = table.numRows;
     const totalCols = fields.length;
 
-    // Build CSV content
-    const csvEscape = (s: string) => {
-      if (s.includes(",") || s.includes('"') || s.includes("\n")) {
-        return '"' + s.replace(/"/g, '""') + '"';
-      }
-      return s;
-    };
-
-    const header = fields.map((f: any) => csvEscape(f.name)).join(",");
-    const rows: string[] = [header];
+    // Build row data
+    const headers = fields.map((f: any) => f.name);
+    const data: any[][] = [];
     for (let r = 0; r < numRows; r++) {
-      const cells: string[] = [];
+      const row: any[] = [];
       for (let c = 0; c < totalCols; c++) {
-        cells.push(csvEscape(formatVal(table.getChildAt(c)?.get(r), fields[c])));
+        const val = table.getChildAt(c)?.get(r);
+        row.push(val instanceof Uint8Array ? "[binary]" : formatVal(val, fields[c]));
       }
-      rows.push(cells.join(","));
+      data.push(row);
     }
 
-    const bom = format === "excel" ? "\uFEFF" : "";
-    const content = bom + rows.join("\n") + "\n";
-    const ext = format === "excel" ? "xlsx" : "csv";
-    const mime = format === "excel"
-      ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-      : "text/csv;charset=utf-8";
-
-    const blob = new Blob([content], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `result.${ext}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    writeln(`Downloaded result.${ext} (${numRows} row${numRows !== 1 ? "s" : ""}, ${totalCols} column${totalCols !== 1 ? "s" : ""})`, "32");
+    if (format === "excel") {
+      // Real .xlsx via SheetJS
+      const XLSX = await import("xlsx");
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Result");
+      const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "result.xlsx";
+      a.click();
+      URL.revokeObjectURL(url);
+      writeln(`Downloaded result.xlsx (${numRows} row${numRows !== 1 ? "s" : ""}, ${totalCols} column${totalCols !== 1 ? "s" : ""})`, "32");
+    } else {
+      // CSV
+      const csvEscape = (s: string) => {
+        if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+          return '"' + s.replace(/"/g, '""') + '"';
+        }
+        return s;
+      };
+      const csvRows = [headers.map(csvEscape).join(",")];
+      for (const row of data) {
+        csvRows.push(row.map((v: any) => csvEscape(String(v))).join(","));
+      }
+      const blob = new Blob([csvRows.join("\n") + "\n"], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "result.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+      writeln(`Downloaded result.csv (${numRows} row${numRows !== 1 ? "s" : ""}, ${totalCols} column${totalCols !== 1 ? "s" : ""})`, "32");
+    }
   }
 
   // Expose query function and catalog name for kepler.gl's DuckDB adapter
   (window as any).__duckdbQuery = (sql: string) => runQueryAsync(sql);
+  (window as any).__duckdbQuerySync = (sql: string) => runQuerySync(sql);
   (window as any).__duckdbCatalogName = config.catalogName;
 
   if (isNewWorker) {
@@ -1196,7 +1991,7 @@ function initShell(
   // If the input is empty and the text looks like a table name, wrap it in SELECT * FROM.
   function insertText(text: string) {
     const isTable = text.includes(".") && !text.includes(" ") && !text.includes("(");
-    if (isTable && isInputEmpty(term)) {
+    if (isTable && promptInputEmpty) {
       term.paste(`SELECT * FROM ${text} LIMIT 100;`);
     } else {
       term.paste(text);
@@ -1232,52 +2027,44 @@ function initShell(
 }
 
 /** Check if the terminal's current input line is empty (just the prompt). */
-function isInputEmpty(term: any): boolean {
-  try {
-    const buf = term.buffer?.active;
-    if (!buf) return true;
-    const line = buf.getLine(buf.cursorY)?.translateToString(true) || "";
-    // The prompt is "D > " (4 visible chars). If the line is just the prompt, input is empty.
-    const trimmed = line.trimEnd();
-    return trimmed === "D >" || trimmed === "" || buf.cursorX <= 4;
-  } catch {
-    return false;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Perspective viewer — loads CDN scripts and renders inline
 // ---------------------------------------------------------------------------
 
-const PERSPECTIVE_CDN = [
-  "https://cdn.jsdelivr.net/npm/@perspective-dev/client/dist/cdn/perspective.js",
-  "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer/dist/cdn/perspective-viewer.js",
-  "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer-datagrid/dist/cdn/perspective-viewer-datagrid.js",
-  "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer-d3fc/dist/cdn/perspective-viewer-d3fc.js",
-  "https://cdn.jsdelivr.net/npm/@perspective-dev/viewer-openlayers/dist/cdn/perspective-viewer-openlayers.js",
-];
-const PERSPECTIVE_CSS = "https://cdn.jsdelivr.net/npm/@finos/perspective-viewer@3.8.0/dist/css/pro.css";
+function getPerspectiveCDN() {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  return [
+    `${origin}/perspective/perspective.js`,              // Built from source — includes fromArrowIpc
+    `${origin}/perspective/perspective-viewer.js`,       // Built from source — matching WASM protocol
+    `${origin}/perspective/perspective-viewer-datagrid.js`,
+    `${origin}/perspective/perspective-viewer-d3fc.js`,
+  ];
+}
+const PERSPECTIVE_CSS = "/perspective/themes.css";
 
 let perspectiveLoaded = false;
-let perspectiveWorker: any = null;
+let perspectiveMod: any = null;  // The perspective module (for createMessageHandler, GenericSQLVirtualServerModel)
+let perspectiveWorker: any = null;  // A perspective worker instance (for direct Arrow loading)
 
 async function loadPerspective(container: HTMLElement, arrowBuffer: Uint8Array) {
-  // Load base theme CSS + VGI overrides once
-  if (!document.querySelector(`link[href="${PERSPECTIVE_CSS}"]`)) {
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = PERSPECTIVE_CSS;
-    link.crossOrigin = "anonymous";
-    document.head.appendChild(link);
-
+  // Load Perspective CSS (themes + pro theme)
+  for (const css of ["/perspective/themes.css", "/perspective/pro.css"]) {
+    if (!document.querySelector(`link[href="${css}"]`)) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = css;
+      document.head.appendChild(link);
+    }
   }
 
   // Load scripts via dynamic import (ES modules)
   if (!perspectiveLoaded) {
-    const perspective = await import(/* @vite-ignore */ PERSPECTIVE_CDN[0]);
+    const perspective = await import(/* @vite-ignore */ getPerspectiveCDN()[0]);
     // Import viewer + plugins (register custom elements)
-    await Promise.all(PERSPECTIVE_CDN.slice(1).map(url => import(/* @vite-ignore */ url)));
-    perspectiveWorker = await perspective.default.worker();
+    await Promise.all(getPerspectiveCDN().slice(1).map(url => import(/* @vite-ignore */ url)));
+    perspectiveMod = perspective.default;
+    perspectiveWorker = await perspectiveMod.worker();
     perspectiveLoaded = true;
   }
 
@@ -1305,14 +2092,15 @@ async function loadPerspective(container: HTMLElement, arrowBuffer: Uint8Array) 
 function treeIdToShellText(id: string): string | null {
   const parts = id.split("::");
   if (parts.length === 3) {
+    const catalog = parts[0];
     const schema = parts[1];
     const rest = parts[2];
-    if (rest.startsWith("t:")) return `${schema}.${rest.slice(2)}`;
+    if (rest.startsWith("t:")) return `${catalog}.${schema}.${rest.slice(2)}`;
     if (rest.startsWith("c:")) {
       const colParts = rest.slice(2).split("/");
       return colParts[1] || colParts[0];
     }
-    if (rest.startsWith("v:")) return `${schema}.${rest.slice(2)}`;
+    if (rest.startsWith("v:")) return `${catalog}.${schema}.${rest.slice(2)}`;
     if (rest.startsWith("f:")) return rest.slice(2);
   }
   return null;

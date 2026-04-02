@@ -29,3 +29,6 @@ public/duckdb/*.js
 public/duckdb/extensions/
 public/shell/wasm/
 public/shell/extensions/
+
+# Playwright MCP test artifacts
+.playwright-mcp/

@@ -170,10 +170,24 @@ async function init() {
     }
 
     postMessage({ type: 'ready' });
+    processPendingMessages();
+}
+
+// Queue messages that arrive before the module is ready
+var pendingMessages = [];
+var moduleReady = false;
+
+function processPendingMessages() {
+    moduleReady = true;
+    for (var i = 0; i < pendingMessages.length; i++) {
+        handleMessage(pendingMessages[i]);
+    }
+    pendingMessages = [];
 }
 
 onmessage = function(e) {
     const data = e.data;
+    // These can be processed before init
     if (data.type === 'init-cancel-sab') {
         cancelFlag = new Int32Array(data.sab);
         return;
@@ -184,6 +198,15 @@ onmessage = function(e) {
         oauthBytes = new Uint8Array(oauthSAB);
         return;
     }
+    // Queue everything else until module is ready
+    if (!moduleReady) {
+        pendingMessages.push(data);
+        return;
+    }
+    handleMessage(data);
+};
+
+function handleMessage(data) {
     if (data.type === 'complete') {
         const text = data.text;
         const r = runQueryWithResults("CALL sql_auto_complete('" + text.replace(/'/g, "''") + "')");
@@ -198,6 +221,18 @@ onmessage = function(e) {
         const sql = data.sql;
         const qid = data.queryId;
         const r = runQueryPolling(sql);
+        if (r.arrowBuffers) {
+            postMessage({ type: 'result', ok: true, arrowBuffers: r.arrowBuffers, queryId: qid }, r.arrowBuffers);
+        } else {
+            postMessage({ type: 'result', ok: r.ok, error: r.error, queryId: qid });
+        }
+        return;
+    }
+    if (data.type === 'query-sync') {
+        // Synchronous query — returns single Arrow IPC buffer (not streaming chunks)
+        const sql = data.sql;
+        const qid = data.queryId;
+        const r = runQueryWithResults(sql);
         if (r.arrowBuffers) {
             postMessage({ type: 'result', ok: true, arrowBuffers: r.arrowBuffers, queryId: qid }, r.arrowBuffers);
         } else {

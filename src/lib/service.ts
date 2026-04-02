@@ -59,8 +59,13 @@ export function getServiceUrl(): string {
   return params.get("service") || window.location.origin;
 }
 
-/** Extract column info from a TableInfo's serialized Arrow schema bytes. */
+/** Extract column info from a TableInfo's serialized Arrow schema bytes.
+ *  Also supports a pre-built _columnInfo override (used for in-memory tables). */
 export function getColumns(table: TableInfo): ColumnInfo[] {
+  // Check for pre-built column info (e.g., from DuckDB memory tables)
+  const override = (table as any)._columnInfo;
+  if (Array.isArray(override)) return override;
+
   try {
     const schema = deserializeSchema(table.columns);
     return schema.fields.map((f) => ({

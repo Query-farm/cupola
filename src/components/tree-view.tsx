@@ -322,7 +322,13 @@ const TreeNode = ({
                         item.className
                     )}
                     onClick={() => {
+                        const wasAlreadySelected = selectedItemId === item.id
                         handleSelectChange(item)
+                        // When newly selecting a node, keep it expanded so
+                        // navigating to a schema doesn't collapse its children.
+                        if (!wasAlreadySelected) {
+                            setValue([item.id])
+                        }
                         item.onClick?.()
                     }}
                     draggable={!!item.draggable}

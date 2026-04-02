@@ -34,7 +34,7 @@ export default defineConfig({
       },
     },
     optimizeDeps: {
-      include: ['leaflet'],
+      include: ['leaflet', 'cli-table3'],
     },
     resolve: {
       alias: {

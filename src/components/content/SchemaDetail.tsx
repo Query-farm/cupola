@@ -1,15 +1,22 @@
 import { useMemo } from "react";
-import { Folder, Table2, Eye, FunctionSquare, ChevronRight } from "lucide-react";
+import { Folder, Table2, Eye, FunctionSquare } from "lucide-react";
+import { CatalogListItem } from "./CatalogListItem";
 import type { ResolvedSchema } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
 import { useSettings } from "@/lib/settings";
+import { Breadcrumb } from "./Breadcrumb";
+import { TagsTable } from "./TagsTable";
+import { ExampleQueries, filterExampleQueriesTag } from "./ExampleQueries";
 
 interface Props {
   schema: ResolvedSchema;
   onNavigate: (selection: Selection) => void;
+  /** Catalog name to include in navigation selections. */
+  catalogName?: string;
+  onOpenShell?: () => void;
 }
 
-export function SchemaDetail({ schema, onNavigate }: Props) {
+export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: Props) {
   const schemaName = schema.info.name;
   const { settings } = useSettings();
   const visibleFunctions = useMemo(() => {
@@ -20,10 +27,13 @@ export function SchemaDetail({ schema, onNavigate }: Props) {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-2">
+      <div className="flex items-center gap-3 mb-1">
         <Folder className="h-6 w-6 text-primary" />
         <h1 className="text-2xl font-bold text-primary">{schemaName}</h1>
       </div>
+
+      <Breadcrumb catalogName={catalogName ?? ""} schemaName={schemaName} onNavigate={onNavigate} />
+
       {schema.info.comment && (
         <p className="text-muted-foreground mb-6">{schema.info.comment}</p>
       )}
@@ -47,22 +57,15 @@ export function SchemaDetail({ schema, onNavigate }: Props) {
       {schema.tables.length > 0 && (
         <div className="mb-6">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Tables</h2>
-          <div className="grid gap-1">
+          <div className="grid gap-2">
             {schema.tables.map((t) => (
-              <button
+              <CatalogListItem
                 key={t.name}
-                onClick={() => onNavigate({ type: "table", name: t.name, schema: schemaName })}
-                className="flex items-start gap-3 px-4 py-2.5 rounded-md text-sm text-left hover:bg-accent/5 hover:border-primary/20 border border-transparent transition-colors group cursor-pointer"
-              >
-                <Table2 className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0 mt-0.5 transition-colors" />
-                <div className="flex-1 min-w-0">
-                  <div className="font-mono font-medium group-hover:text-primary transition-colors">{t.name}</div>
-                  {t.comment && (
-                    <div className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{t.comment}</div>
-                  )}
-                </div>
-                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30 group-hover:text-primary shrink-0 mt-1 transition-colors" />
-              </button>
+                icon={Table2}
+                title={t.name}
+                description={t.comment || undefined}
+                onClick={() => onNavigate({ type: "table", name: t.name, schema: schemaName, catalog: catalogName })}
+              />
             ))}
           </div>
         </div>
@@ -71,22 +74,15 @@ export function SchemaDetail({ schema, onNavigate }: Props) {
       {schema.views.length > 0 && (
         <div className="mb-6">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Views</h2>
-          <div className="grid gap-1">
+          <div className="grid gap-2">
             {schema.views.map((v) => (
-              <button
+              <CatalogListItem
                 key={v.name}
-                onClick={() => onNavigate({ type: "view", name: v.name, schema: schemaName })}
-                className="flex items-start gap-3 px-4 py-2.5 rounded-md text-sm text-left hover:bg-accent/5 hover:border-primary/20 border border-transparent transition-colors group cursor-pointer"
-              >
-                <Eye className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0 mt-0.5 transition-colors" />
-                <div className="flex-1 min-w-0">
-                  <div className="font-mono font-medium group-hover:text-primary transition-colors">{v.name}</div>
-                  {v.comment && (
-                    <div className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{v.comment}</div>
-                  )}
-                </div>
-                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30 group-hover:text-primary shrink-0 mt-1 transition-colors" />
-              </button>
+                icon={Eye}
+                title={v.name}
+                description={v.comment || undefined}
+                onClick={() => onNavigate({ type: "view", name: v.name, schema: schemaName, catalog: catalogName })}
+              />
             ))}
           </div>
         </div>
@@ -95,26 +91,26 @@ export function SchemaDetail({ schema, onNavigate }: Props) {
       {visibleFunctions.length > 0 && (
         <div className="mb-6">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Functions</h2>
-          <div className="grid gap-1">
+          <div className="grid gap-2">
             {visibleFunctions.map((f) => (
-              <button
+              <CatalogListItem
                 key={f.name}
-                onClick={() => onNavigate({ type: "function", name: f.name, schema: schemaName })}
-                className="flex items-start gap-3 px-4 py-2.5 rounded-md text-sm text-left hover:bg-accent/5 hover:border-primary/20 border border-transparent transition-colors group cursor-pointer"
-              >
-                <FunctionSquare className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0 mt-0.5 transition-colors" />
-                <div className="flex-1 min-w-0">
-                  <div className="font-mono font-medium group-hover:text-primary transition-colors">{f.name}</div>
-                  {f.description && (
-                    <div className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{f.description}</div>
-                  )}
-                </div>
-                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30 group-hover:text-primary shrink-0 mt-1 transition-colors" />
-              </button>
+                icon={FunctionSquare}
+                title={f.name}
+                description={f.description || undefined}
+                onClick={() => onNavigate({ type: "function", name: f.name, schema: schemaName, catalog: catalogName })}
+              />
             ))}
           </div>
         </div>
       )}
+
+      {(() => {
+        const filtered = filterExampleQueriesTag(schema.info.tags);
+        return filtered ? <div className="mt-8"><TagsTable tags={filtered} /></div> : null;
+      })()}
+
+      <ExampleQueries exampleQueriesJson={schema.info.tags?.example_queries} onOpenShell={onOpenShell} />
     </div>
   );
 }

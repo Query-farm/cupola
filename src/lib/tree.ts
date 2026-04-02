@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { Database, Folder, FolderOpen, Table2, Eye, FunctionSquare, Columns3, TerminalSquare, RefreshCw, Loader2 } from "lucide-react";
+import { Database, Folder, FolderOpen, Table2, Eye, FunctionSquare, Columns3, Key, TerminalSquare, RefreshCw, Loader2 } from "lucide-react";
 import type { CatalogData, ResolvedSchema, ColumnInfo } from "./service";
 import { getColumns } from "./service";
 
@@ -28,31 +28,36 @@ export interface Selection {
   type: "catalog" | "schema" | "table" | "view" | "function";
   name: string;
   schema?: string;
+  /** Catalog name this selection belongs to (e.g. "memory" for in-memory tables). */
+  catalog?: string;
 }
 
 /** Convert a Selection back to a tree item ID. */
 export function selectionToTreeId(selection: Selection, catalogName: string): string {
-  if (selection.type === "catalog") return catalogName;
+  const cat = selection.catalog ?? catalogName;
+  if (selection.type === "catalog") return cat;
   const schema = selection.schema ?? selection.name;
-  if (selection.type === "schema") return `${catalogName}::${schema}`;
+  if (selection.type === "schema") return `${cat}::${schema}`;
   const prefix = selection.type === "table" ? "t" : selection.type === "view" ? "v" : "f";
-  return `${catalogName}::${schema}::${prefix}:${selection.name}`;
+  return `${cat}::${schema}::${prefix}:${selection.name}`;
 }
 
 /** Parse a tree item ID back into a Selection. */
 export function parseSelection(id: string): Selection | null {
   const parts = id.split("::");
-  if (parts.length === 1) return { type: "catalog", name: parts[0] };
-  if (parts.length === 2) return { type: "schema", name: parts[1], schema: parts[1] };
+  if (parts.length === 1) return { type: "catalog", name: parts[0], catalog: parts[0] };
+  if (parts.length === 2) return { type: "schema", name: parts[1], schema: parts[1], catalog: parts[0] };
   if (parts.length === 3) {
-    const [, schema, rest] = parts;
-    if (rest.startsWith("t:")) return { type: "table", name: rest.slice(2), schema };
-    if (rest.startsWith("v:")) return { type: "view", name: rest.slice(2), schema };
-    if (rest.startsWith("f:")) return { type: "function", name: rest.slice(2), schema };
+    const catalog = parts[0];
+    const schema = parts[1];
+    const rest = parts[2];
+    if (rest.startsWith("t:")) return { type: "table", name: rest.slice(2), schema, catalog };
+    if (rest.startsWith("v:")) return { type: "view", name: rest.slice(2), schema, catalog };
+    if (rest.startsWith("f:")) return { type: "function", name: rest.slice(2), schema, catalog };
     // Column — select the parent table
     if (rest.startsWith("c:")) {
       const colParts = rest.slice(2).split("/");
-      return { type: "table", name: colParts[0], schema };
+      return { type: "table", name: colParts[0], schema, catalog };
     }
   }
   return null;
@@ -67,20 +72,23 @@ export interface BuildTreeOptions {
   /** When provided, adds a refresh button to the catalog root node. */
   onRefresh?: () => void;
   refreshing?: boolean;
+  /** Override the root node icon (default: Database). */
+  rootIcon?: React.ComponentType<{ className?: string }>;
 }
 
 /** Build the full tree from catalog data. Root node is the catalog. */
 export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = {}): TreeDataItem[] {
-  const { showDuckDBTypes = true, hideTableBackingFunctions = true, onTableAction, onRefresh, refreshing } = options;
+  const { showDuckDBTypes = true, hideTableBackingFunctions = true, onTableAction, onRefresh, refreshing, rootIcon } = options;
   const sortedSchemas = [...catalog.schemas].sort((a, b) =>
     a.info.name.localeCompare(b.info.name)
   );
   const root: TreeDataItem = {
     id: catalog.catalogName,
     name: catalog.catalogName,
-    icon: Database,
-    selectedIcon: Database,
-    openIcon: Database,
+    icon: rootIcon || Database,
+    selectedIcon: rootIcon || Database,
+    openIcon: rootIcon || Database,
+    className: "text-primary font-bold",
     children: sortedSchemas.map((s) =>
       buildSchemaNode(catalog.catalogName, s, showDuckDBTypes, hideTableBackingFunctions, s.info.name === catalog.defaultSchema, onTableAction)
     ),
@@ -110,21 +118,32 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
   for (const table of sortedTables) {
     const tableId = `${schemaId}::t:${table.name}`;
     const columns = getColumns(table);
-    const columnChildren: TreeDataItem[] = columns.map((col) => ({
-      id: `${schemaId}::c:${table.name}/${col.name}`,
-      name: col.name,
-      icon: Columns3,
-      draggable: !!onTableAction,
-      actions: React.createElement("span", {
-        className: "text-xs text-muted-foreground/70 font-mono ml-1 truncate",
-      }, showDuckDBTypes ? col.duckdbType : col.arrowType),
-    }));
+    const pkColumns = new Set(
+      table.primaryKeyConstraints?.flatMap((pk: number[]) =>
+        pk.map((idx: number) => columns[idx]?.name).filter(Boolean)
+      ) ?? []
+    );
+    const columnChildren: TreeDataItem[] = columns.map((col) => {
+      const typeLabel = showDuckDBTypes ? col.duckdbType : col.arrowType;
+      const isPK = pkColumns.has(col.name);
+      return {
+        id: `${schemaId}::c:${table.name}/${col.name}`,
+        name: col.name,
+        icon: isPK ? Key : Columns3,
+        className: "text-muted-foreground text-xs",
+        draggable: !!onTableAction,
+        actions: React.createElement("span", {
+          className: `text-[10px] font-mono ml-1 truncate px-1 py-0.5 rounded ${typeColorClass(typeLabel)}`,
+        }, typeLabel),
+      };
+    });
 
     children.push({
       id: tableId,
       name: table.name,
       icon: Table2,
       selectedIcon: Table2,
+      className: "text-primary/90 font-medium",
       draggable: !!onTableAction,
       children: columnChildren.length > 0 ? columnChildren : undefined,
       actions: onTableAction
@@ -148,6 +167,7 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
       name: view.name,
       icon: Eye,
       selectedIcon: Eye,
+      className: "text-accent/80",
     });
   }
 
@@ -161,6 +181,7 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
       name: func.name,
       icon: FunctionSquare,
       selectedIcon: FunctionSquare,
+      className: "text-muted-foreground",
     });
   }
 
@@ -199,4 +220,37 @@ function filterNode(node: TreeDataItem, query: string): TreeDataItem | null {
   }
 
   return null;
+}
+
+/** Map a DuckDB/Arrow type name to a background + text color class for type badges. */
+export function typeColorClass(type: string): string {
+  const t = type.toUpperCase();
+  // Numeric types
+  if (t === "INTEGER" || t === "INT" || t === "BIGINT" || t === "SMALLINT" || t === "TINYINT" ||
+      t === "HUGEINT" || t === "UBIGINT" || t === "UINTEGER" || t === "USMALLINT" || t === "UTINYINT" ||
+      t === "INT8" || t === "INT16" || t === "INT32" || t === "INT64" || t === "UINT8" || t === "UINT16" || t === "UINT32" || t === "UINT64")
+    return "bg-blue-100 text-blue-700";
+  if (t === "FLOAT" || t === "DOUBLE" || t === "REAL" || t === "DECIMAL" || t.startsWith("DECIMAL("))
+    return "bg-sky-100 text-sky-700";
+  // String types
+  if (t === "VARCHAR" || t === "TEXT" || t === "STRING" || t === "UTF8" || t === "CHAR" || t.startsWith("VARCHAR("))
+    return "bg-green-100 text-green-700";
+  // Boolean
+  if (t === "BOOLEAN" || t === "BOOL")
+    return "bg-amber-100 text-amber-700";
+  // Date/time types
+  if (t === "DATE" || t === "DATE32" || t === "DATE64")
+    return "bg-purple-100 text-purple-700";
+  if (t === "TIMESTAMP" || t.startsWith("TIMESTAMP") || t === "DATETIME")
+    return "bg-violet-100 text-violet-700";
+  if (t === "TIME" || t.startsWith("TIME(") || t === "TIME32" || t === "TIME64" || t === "INTERVAL")
+    return "bg-fuchsia-100 text-fuchsia-700";
+  // Geometry / spatial
+  if (t === "GEOMETRY" || t === "WKB" || t === "BLOB" || t.startsWith("GEOARROW"))
+    return "bg-orange-100 text-orange-700";
+  // Struct / list / map
+  if (t.startsWith("STRUCT") || t.startsWith("LIST") || t.startsWith("MAP") || t.includes("[]"))
+    return "bg-rose-100 text-rose-700";
+  // Default
+  return "bg-gray-100 text-gray-600";
 }

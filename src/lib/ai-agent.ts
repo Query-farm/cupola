@@ -43,6 +43,8 @@ export interface AgentCallbacks {
   onToolResult: (name: string, summary: string) => void;
   onDone: (usage?: { inputTokens: number; outputTokens: number }) => void;
   onError: (error: string) => void;
+  /** Called during retry countdowns with the status message, or null when countdown ends. */
+  onRetry?: (message: string | null) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +103,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "list_tables",
-    description: "List all available tables and views in the database with their schema, type (table/view), description, and column count.",
+    description: "List all schemas, tables, and views in the database. Returns catalog name, schema names with comments and tags, and each table/view with comment, column count, and tags.",
     input_schema: {
       type: "object",
       properties: {},
@@ -109,7 +111,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "describe_table",
-    description: "Get detailed column information for a table or view: column name, DuckDB type, whether it's nullable, and the column's description/comment.",
+    description: "Get detailed information for a table or view: columns (name, type, nullable, comment, default, FK references), primary key, foreign keys, unique constraints, check constraints, and tags.",
     input_schema: {
       type: "object",
       properties: {
@@ -158,7 +160,9 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string): str
 
   for (const schema of catalog.schemas) {
     const schemaComment = schema.info.comment ? ` — ${schema.info.comment}` : "";
-    lines.push(`  Schema: ${schema.info.name}${schemaComment}`);
+    const schemaTags = schema.info.tags && Object.keys(schema.info.tags).length > 0
+      ? ` [tags: ${Object.entries(schema.info.tags).map(([k, v]) => `${k}=${v}`).join(", ")}]` : "";
+    lines.push(`  Schema: ${schema.info.name}${schemaComment}${schemaTags}`);
 
     for (const table of schema.tables) {
       const cols = getColumns(table);
@@ -194,6 +198,36 @@ function truncate(val: any, maxLen = 200): string {
   return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
 }
 
+/** Format an Arrow field value, converting Date/Timestamp/Time epochs and BigInt. */
+function formatFieldVal(val: any, field: any): any {
+  if (val === null || val === undefined) return null;
+  if (val instanceof Uint8Array) return "[binary]";
+  const typeStr: string = field.type?.toString() || "";
+  const num = typeof val === "bigint" ? Number(val) : val;
+  if (typeof num === "number" && !isNaN(num)) {
+    if (typeStr.startsWith("Date")) {
+      const d = new Date(num);
+      if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
+    }
+    if (typeStr.startsWith("Timestamp")) {
+      const d = new Date(num);
+      if (!isNaN(d.getTime())) {
+        const s = d.toISOString().replace("T", " ").replace("Z", "");
+        return s.endsWith(".000") ? s.slice(0, -4) : s;
+      }
+    }
+    if (typeStr.startsWith("Time")) {
+      const totalSec = Math.floor(num / 1000);
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = totalSec % 60;
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    }
+  }
+  if (typeof val === "bigint") return val.toString();
+  return truncate(val);
+}
+
 export function formatArrowTableAsJson(
   table: any,
   maxRows = 20
@@ -208,8 +242,7 @@ export function formatArrowTableAsJson(
   for (let r = 0; r < limit; r++) {
     const row: Record<string, any> = {};
     for (let c = 0; c < fields.length; c++) {
-      const val = table.getChildAt(c)?.get(r);
-      row[columns[c]] = val instanceof Uint8Array ? "[binary]" : truncate(val);
+      row[columns[c]] = formatFieldVal(table.getChildAt(c)?.get(r), fields[c]);
     }
     rows.push(row);
   }
@@ -219,8 +252,7 @@ export function formatArrowTableAsJson(
   for (let r = 0; r < numRows; r++) {
     const row: Record<string, any> = {};
     for (let c = 0; c < fields.length; c++) {
-      const val = table.getChildAt(c)?.get(r);
-      row[columns[c]] = val instanceof Uint8Array ? "[binary]" : truncate(val);
+      row[columns[c]] = formatFieldVal(table.getChildAt(c)?.get(r), fields[c]);
     }
     allRows.push(row);
   }
@@ -239,28 +271,45 @@ export function formatArrowTableAsJson(
 }
 
 export function executeListTables(catalog: CatalogData): string {
-  const items: any[] = [];
-  for (const schema of catalog.schemas) {
-    for (const table of schema.tables) {
-      const cols = getColumns(table);
-      items.push({
-        schema: schema.info.name,
-        name: table.name,
-        type: "table",
-        comment: table.comment || null,
-        columns: cols.length,
+  const result: any = {
+    catalog: catalog.catalogName,
+    default_schema: catalog.defaultSchema,
+    schemas: catalog.schemas.map((schema) => {
+      const schemaInfo: any = {
+        name: schema.info.name,
+        comment: schema.info.comment || null,
+      };
+      if (schema.info.tags && Object.keys(schema.info.tags).length > 0) {
+        schemaInfo.tags = schema.info.tags;
+      }
+      schemaInfo.tables = schema.tables.map((table) => {
+        const cols = getColumns(table);
+        const entry: any = {
+          name: table.name,
+          type: "table",
+          comment: table.comment || null,
+          columns: cols.length,
+        };
+        if (table.tags && Object.keys(table.tags).length > 0) {
+          entry.tags = table.tags;
+        }
+        return entry;
       });
-    }
-    for (const view of schema.views) {
-      items.push({
-        schema: schema.info.name,
-        name: view.name,
-        type: "view",
-        comment: view.comment || null,
+      schemaInfo.views = schema.views.map((view) => {
+        const entry: any = {
+          name: view.name,
+          type: "view",
+          comment: view.comment || null,
+        };
+        if (view.tags && Object.keys(view.tags).length > 0) {
+          entry.tags = view.tags;
+        }
+        return entry;
       });
-    }
-  }
-  return JSON.stringify(items);
+      return schemaInfo;
+    }),
+  };
+  return JSON.stringify(result);
 }
 
 export function executeDescribeTable(catalog: CatalogData, schemaName: string, tableName: string): string {
@@ -301,12 +350,20 @@ export function executeDescribeTable(catalog: CatalogData, schemaName: string, t
     // Not-null set
     const notNullSet = new Set(table.notNullConstraints);
 
+    // FK summary at table level
+    const foreignKeys = fks.map((fk) => ({
+      columns: fk.columns,
+      references: `${fk.referencedSchema}.${fk.referencedTable}(${fk.referencedColumns.join(", ")})`,
+    }));
+
     return JSON.stringify({
       schema: schemaName,
       name: tableName,
       type: "table",
       comment: table.comment || null,
+      tags: table.tags && Object.keys(table.tags).length > 0 ? table.tags : undefined,
       primary_key: pkColumns.length > 0 ? pkColumns : null,
+      foreign_keys: foreignKeys.length > 0 ? foreignKeys : null,
       unique_constraints: uniqueConstraints.length > 0 ? uniqueConstraints : null,
       check_constraints: table.checkConstraints.length > 0 ? table.checkConstraints : null,
       columns: cols.map((c, i) => {
@@ -332,6 +389,7 @@ export function executeDescribeTable(catalog: CatalogData, schemaName: string, t
     name: tableName,
     type: "view",
     comment: view!.comment || null,
+    tags: view!.tags && Object.keys(view!.tags).length > 0 ? view!.tags : undefined,
   });
 }
 
@@ -403,12 +461,14 @@ async function fetchWithRetry(
       if (init.signal?.aborted) throw new Error("Cancelled.");
       if (attempt < maxRetries) {
         const waitSec = Math.min(2 ** attempt * 2, 10);
+        let interrupted = false;
         for (let remaining = waitSec; remaining > 0; remaining--) {
-          if (init.signal?.aborted) throw new Error("Cancelled.");
-          callbacks.onText(`\r\x1b[2m(Network error, retrying in ${remaining}s...)\x1b[0m\x1b[K`);
+          if (init.signal?.aborted) { interrupted = true; break; }
+          callbacks.onRetry?.(`Network error, retrying in ${remaining}s...`);
           await new Promise((r) => setTimeout(r, 1000));
         }
-        callbacks.onText(`\r\x1b[K`);
+        callbacks.onRetry?.(null);
+        if (interrupted) continue; // abort during wait → skip to next attempt (will abort on fetch)
         continue;
       }
       throw new Error("Network error. Check your connection.");
@@ -425,19 +485,22 @@ async function fetchWithRetry(
       errorMsg = response.statusText;
     }
 
-    // Don't retry auth errors
+    // Don't retry auth or not-found errors
     if (status === 401 || status === 403) throw new Error("Invalid API key. Check Settings.");
+    if (status === 404) throw new Error(`API endpoint not found (404). Check your API configuration.`);
 
     // Retry on rate limit (429) and overloaded (529)
     if ((status === 429 || status === 529) && attempt < maxRetries) {
       const retryAfter = response.headers.get("retry-after");
       const waitSec = retryAfter ? Math.min(parseInt(retryAfter, 10) || 5, 30) : Math.min(2 ** attempt * 2, 15);
+      let interrupted = false;
       for (let remaining = waitSec; remaining > 0; remaining--) {
-        if (init.signal?.aborted) throw new Error("Cancelled.");
-        callbacks.onText(`\r\x1b[2m(Rate limited, retrying in ${remaining}s...)\x1b[0m\x1b[K`);
+        if (init.signal?.aborted) { interrupted = true; break; }
+        callbacks.onRetry?.(`Rate limited, retrying in ${remaining}s...`);
         await new Promise((r) => setTimeout(r, 1000));
       }
-      callbacks.onText(`\r\x1b[K`); // Clear countdown line
+      callbacks.onRetry?.(null);
+      if (interrupted) continue; // abort during wait → skip retry, re-enter loop (will abort on next fetch)
       continue;
     }
 
@@ -552,9 +615,33 @@ export async function runAgentTurn(
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (signal?.aborted) return;
 
-    const { content, stopReason, inputTokens, outputTokens } = await streamOneRequest(
-      apiKey, model, messages, systemPrompt, callbacks, signal
-    );
+    // Retry streamOneRequest on network errors (stream disconnect, fetch failure)
+    let result: { content: ContentBlock[]; stopReason: string; inputTokens: number; outputTokens: number } | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        result = await streamOneRequest(
+          apiKey, model, messages, systemPrompt, callbacks, signal
+        );
+        break;
+      } catch (err: any) {
+        const msg = err?.message?.toLowerCase() || "";
+        const isNetworkError = msg.includes("network") || msg.includes("failed to fetch") || msg.includes("load failed") || msg.includes("aborted");
+        if (isNetworkError && !signal?.aborted && attempt < 2) {
+          const waitSec = Math.min(2 ** attempt * 2, 10);
+          for (let remaining = waitSec; remaining > 0; remaining--) {
+            if (signal?.aborted) throw err;
+            callbacks.onText(`\r\x1b[2m(Network error, retrying in ${remaining}s...)\x1b[0m\x1b[K`);
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+          callbacks.onText(`\r\x1b[K`);
+          continue;
+        }
+        throw err;
+      }
+    }
+    if (!result) throw new Error("Network error. Check your connection.");
+
+    const { content, stopReason, inputTokens, outputTokens } = result;
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
 
@@ -582,6 +669,14 @@ export async function runAgentTurn(
         } catch (err: any) {
           const errMsg = err instanceof Error ? err.message : String(err);
           callbacks.onToolResult(block.name, `Error: ${errMsg}`);
+
+          // Fatal errors (e.g., VGI server crash) — abort the agent loop entirely
+          if ((err as any).fatal) {
+            callbacks.onError(`Connection error — agent stopped. ${errMsg}`);
+            callbacks.onDone({ inputTokens: totalInputTokens, outputTokens: totalOutputTokens });
+            return;
+          }
+
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,

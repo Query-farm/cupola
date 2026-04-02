@@ -1,13 +1,14 @@
-import { useMemo, useState } from "react";
-import { Table2, Copy, Check, Key, Link2, ShieldCheck, Play, TerminalSquare } from "lucide-react";
+import { useMemo } from "react";
+import { Table2, Key, Link2, ShieldCheck, TerminalSquare } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button"
 import type { TableInfo } from "vgi/client";
 import { getColumns, getForeignKeys, type ForeignKeyInfo } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
+import { Breadcrumb } from "./Breadcrumb";
 import { ColumnsTable } from "./ColumnsTable";
-import { DataPreview } from "./DataPreview";
+import { TagsTable } from "./TagsTable";
+import { ExampleQueries, filterExampleQueriesTag } from "./ExampleQueries";
 
 interface Props {
   table: TableInfo;
@@ -20,9 +21,8 @@ interface Props {
 export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shellOpen }: Props) {
   const columns = getColumns(table);
   const foreignKeys = getForeignKeys(table);
-  const sampleSql = `SELECT * FROM ${catalogName}.${table.schemaName}.${table.name} LIMIT 10;`;
-  const [copied, setCopied] = useState(false);
-  const [dataLoaded, setDataLoaded] = useState(false);
+  const defaultSql = `SELECT * FROM ${catalogName}.${table.schemaName}.${table.name} LIMIT 10;`;
+  const displayTags = useMemo(() => filterExampleQueriesTag(table.tags), [table.tags]);
 
   // Build constraint lookup sets
   const notNullSet = new Set(table.notNullConstraints);
@@ -71,6 +71,9 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
           </Button>
         )}
       </div>
+
+      <Breadcrumb catalogName={catalogName} schemaName={table.schemaName} itemName={table.name} itemType="table" onNavigate={onNavigate} />
+
       {table.comment && (
         <p className="text-muted-foreground mb-3">{table.comment}</p>
       )}
@@ -85,6 +88,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
         pkColumns={pkColumns}
         notNullSet={notNullSet}
         fkByColumn={fkByColumn}
+        checkConstraints={table.checkConstraints}
         onNavigate={onNavigate}
       />
 
@@ -115,7 +119,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
                 className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-card"
               >
                 <Key className="h-3 w-3 text-amber-500" />
-                <span className="font-medium">PK</span>
+                <span className="font-medium">Primary Key</span>
                 <span className="font-mono text-muted-foreground">({pk.map((idx) => columns[idx]?.name ?? idx).join(", ")})</span>
               </span>
             ))}
@@ -129,7 +133,13 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
                 <span className="font-mono text-muted-foreground">({uq.map((idx) => columns[idx]?.name ?? idx).join(", ")})</span>
               </span>
             ))}
-            {table.checkConstraints.map((chk, i) => (
+            {table.checkConstraints
+              .filter((chk) => {
+                // Only show in References if the check references multiple columns or none
+                const matchingCols = columns.filter((c) => chk.includes(c.name));
+                return matchingCols.length !== 1;
+              })
+              .map((chk, i) => (
               <span
                 key={`chk-${i}`}
                 className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-card"
@@ -143,65 +153,16 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
         </>
       )}
 
-      {/* Example Query */}
-      <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mt-6 mb-2">Example Query</h2>
-      <div className="flex items-center gap-2 bg-muted/60 rounded-md px-3 py-2 mb-6">
-        <code className="flex-1 text-xs font-mono text-muted-foreground truncate">{sampleSql}</code>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleCopy}
-          className="h-6 px-2 text-xs shrink-0"
-        >
-          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-          <span className="ml-1">{copied ? "Copied" : "Copy"}</span>
-        </Button>
-        {onOpenShell && (
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => {
-              onOpenShell();
-              const tryRun = () => {
-                if ((window as any).__shellRunQuery) {
-                  (window as any).__shellRunQuery(sampleSql);
-                } else {
-                  requestAnimationFrame(tryRun);
-                }
-              };
-              tryRun();
-            }}
-            className="h-6 px-2 text-xs shrink-0 gap-1"
-          >
-            <Play className="h-3 w-3" />
-            Run
-          </Button>
-        )}
-      </div>
+      {displayTags && (
+        <TagsTable tags={displayTags} />
+      )}
 
-      {/* Data Preview */}
-      <Tabs
-        defaultValue="preview"
-        onValueChange={(val) => {
-          if (val === "preview" && !dataLoaded) setDataLoaded(true);
-        }}
-      >
-        <TabsList className="border border-border bg-card shadow-sm h-9 p-1 gap-1">
-          <TabsTrigger value="preview" className="data-active:bg-primary data-active:text-primary-foreground rounded-md px-3">
-            Data Preview
-          </TabsTrigger>
-        </TabsList>
+      <ExampleQueries
+        exampleQueriesJson={table.tags?.example_queries}
+        defaultSql={defaultSql}
+        onOpenShell={onOpenShell}
+      />
 
-        <TabsContent value="preview" className="mt-4">
-          {dataLoaded && (
-            <DataPreview
-              catalogName={catalogName}
-              functionName={table.name}
-              columnInfo={columns}
-            />
-          )}
-        </TabsContent>
-      </Tabs>
     </div>
   );
 }

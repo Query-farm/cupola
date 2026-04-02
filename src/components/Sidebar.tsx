@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Search, TerminalSquare } from "lucide-react";
+import { Search, TerminalSquare, HardDrive } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { TreeView } from "@/components/tree-view";
 import { SettingsModal } from "@/components/SettingsModal";
@@ -9,28 +9,44 @@ import { buildTreeData, filterTree, parseSelection, selectionToTreeId, type Sele
 
 interface Props {
   catalog: CatalogData;
+  memoryCatalog?: CatalogData | null;
   selection: Selection | null;
   onSelect: (selection: Selection | null) => void;
   onOpenShell?: () => void;
-  /** When true, tree clicks only expand/collapse — don't navigate to content. */
-  treeOnly?: boolean;
-  /** Insert text into the DuckDB shell (only when shell is open). */
+  /** Insert text into the DuckDB shell. */
   onShellInsert?: (text: string) => void;
   onRefresh?: () => void;
   refreshing?: boolean;
 }
 
-export function Sidebar({ catalog, selection, onSelect, onOpenShell, treeOnly, onShellInsert, onRefresh, refreshing }: Props) {
+export function Sidebar({ catalog, memoryCatalog, selection, onSelect, onOpenShell, onShellInsert, onRefresh, refreshing }: Props) {
   const [search, setSearch] = useState("");
   const { settings } = useSettings();
   const treeData = useMemo(() => buildTreeData(catalog, {
     showDuckDBTypes: settings.showDuckDBTypes,
     hideTableBackingFunctions: settings.hideTableBackingFunctions,
-    onTableAction: onShellInsert ? (schema, table) => onShellInsert(`${schema}.${table}`) : undefined,
+    onTableAction: onShellInsert ? (schema, table) => onShellInsert(`${catalog.catalogName}.${schema}.${table}`) : undefined,
     onRefresh,
     refreshing,
   }), [catalog, settings.showDuckDBTypes, settings.hideTableBackingFunctions, onShellInsert, onRefresh, refreshing]);
   const filteredData = useMemo(() => filterTree(treeData, search), [treeData, search]);
+
+  // Memory catalog tree (only when shell is running and has tables)
+  const memoryTreeData = useMemo(() => {
+    if (!memoryCatalog || memoryCatalog.schemas.length === 0) return null;
+    // Check if there are any actual tables
+    const hasTables = memoryCatalog.schemas.some(s => s.tables.length > 0);
+    if (!hasTables) return null;
+    return buildTreeData(memoryCatalog, {
+      showDuckDBTypes: settings.showDuckDBTypes,
+      rootIcon: HardDrive,
+      onTableAction: onShellInsert ? (schema, table) => onShellInsert(`memory.${schema}.${table}`) : undefined,
+    });
+  }, [memoryCatalog, settings.showDuckDBTypes]);
+  const filteredMemoryData = useMemo(
+    () => memoryTreeData ? filterTree(memoryTreeData, search) : null,
+    [memoryTreeData, search]
+  );
 
   const selectedTreeId = useMemo(
     () => selection ? selectionToTreeId(selection, catalog.catalogName) : catalog.catalogName,
@@ -38,8 +54,6 @@ export function Sidebar({ catalog, selection, onSelect, onOpenShell, treeOnly, o
   );
 
   function handleSelectChange(item: { id: string } | undefined) {
-    // In treeOnly mode, just let the tree expand/collapse — don't navigate
-    if (treeOnly) return;
     if (!item) {
       onSelect(null);
       return;
@@ -72,21 +86,30 @@ export function Sidebar({ catalog, selection, onSelect, onOpenShell, treeOnly, o
           onSelectChange={handleSelectChange}
           initialSelectedItemId={selectedTreeId}
         />
+        {filteredMemoryData && (
+          <div className="mt-2 pt-2 border-t border-border">
+            <TreeView
+              data={filteredMemoryData}
+              expandAll={!!search}
+              onSelectChange={handleSelectChange}
+            />
+          </div>
+        )}
       </div>
 
       {/* Shell + Settings + Copyright */}
-      <div className="border-t border-border">
+      <div className="border-t border-border p-2">
         {onOpenShell && (
           <button
             onClick={onOpenShell}
-            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer rounded-md hover:bg-secondary"
           >
             <TerminalSquare className="h-4 w-4" />
             SQL Shell
           </button>
         )}
         <SettingsModal />
-        <div className="px-3 pb-3 text-xs text-muted-foreground/60">
+        <div className="px-2 pb-1 text-xs text-muted-foreground/60">
           &copy; 2026 &#x1F69C; <a href="https://query.farm" className="hover:text-primary transition-colors">Query.Farm LLC</a>
         </div>
       </div>
