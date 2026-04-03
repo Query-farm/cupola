@@ -129,12 +129,5 @@ export function ExampleQueries({ exampleQueriesJson, defaultSql, onOpenShell }: 
   );
 }
 
-/** Filter example_queries out of a tags record for display in TagsTable. */
-export function filterExampleQueriesTag(tags?: Record<string, string> | null): Record<string, string> | null {
-  if (!tags) return null;
-  const filtered: Record<string, string> = {};
-  for (const [k, v] of Object.entries(tags)) {
-    if (k !== "example_queries") filtered[k] = v;
-  }
-  return Object.keys(filtered).length > 0 ? filtered : null;
-}
+// Re-export for backward compatibility — consumers should migrate to filterDisplayTags
+export { filterDisplayTags as filterExampleQueriesTag } from "@/lib/tags";

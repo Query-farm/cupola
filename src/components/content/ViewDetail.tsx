@@ -9,7 +9,9 @@ import { CatalogIcon, getBadgeColorForType } from "./CatalogIcons";
 import { Breadcrumb } from "./Breadcrumb";
 import { SqlCodeBlock } from "./SqlCodeBlock";
 import { TagsTable } from "./TagsTable";
-import { ExampleQueries, filterExampleQueriesTag } from "./ExampleQueries";
+import { ExampleQueries } from "./ExampleQueries";
+import { filterDisplayTags } from "@/lib/tags";
+import { DescriptionSection } from "./DescriptionSection";
 
 interface ViewColumn {
   name: string;
@@ -26,7 +28,7 @@ interface Props {
 export function ViewDetail({ view, catalogName, schemaName, onNavigate }: Props) {
   const [columns, setColumns] = useState<ViewColumn[] | null>(null);
   const [copied, setCopied] = useState(false);
-  const displayTags = useMemo(() => filterExampleQueriesTag(view.tags), [view.tags]);
+  const displayTags = useMemo(() => filterDisplayTags(view.tags), [view.tags]);
 
   // Fetch columns from DuckDB if shell is available
   useEffect(() => {
@@ -75,6 +77,10 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate }: Props)
 
       {view.comment && (
         <p className="text-muted-foreground mb-4">{view.comment}</p>
+      )}
+
+      {view.tags?.description_md && (
+        <DescriptionSection markdown={view.tags.description_md} />
       )}
 
       {/* Columns */}

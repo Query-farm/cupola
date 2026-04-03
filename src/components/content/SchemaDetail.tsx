@@ -7,7 +7,9 @@ import type { Selection } from "@/lib/tree";
 import { useSettings } from "@/lib/settings";
 import { Breadcrumb } from "./Breadcrumb";
 import { TagsTable } from "./TagsTable";
-import { ExampleQueries, filterExampleQueriesTag } from "./ExampleQueries";
+import { ExampleQueries } from "./ExampleQueries";
+import { filterDisplayTags } from "@/lib/tags";
+import { DescriptionSection } from "./DescriptionSection";
 
 interface Props {
   schema: ResolvedSchema;
@@ -37,6 +39,10 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
 
       {schema.info.comment && (
         <p className="text-muted-foreground mb-6">{schema.info.comment}</p>
+      )}
+
+      {schema.info.tags?.description_md && (
+        <DescriptionSection markdown={schema.info.tags.description_md} />
       )}
 
       <div className="flex gap-6 text-sm text-muted-foreground mb-6">
@@ -128,7 +134,7 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
       )}
 
       {(() => {
-        const filtered = filterExampleQueriesTag(schema.info.tags);
+        const filtered = filterDisplayTags(schema.info.tags);
         return filtered ? <div className="mt-8"><TagsTable tags={filtered} /></div> : null;
       })()}
 

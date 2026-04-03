@@ -6,6 +6,8 @@ import type { CatalogData } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
 import { CatalogListItem } from "./CatalogListItem";
 import { TagsTable } from "./TagsTable";
+import { filterDisplayTags } from "@/lib/tags";
+import { DescriptionSection } from "./DescriptionSection";
 
 interface Props {
   catalog: CatalogData;
@@ -43,6 +45,10 @@ export function CatalogOverview({ catalog, serviceUrl, onNavigate }: Props) {
         <p className="text-muted-foreground mb-6">{catalog.catalogComment}</p>
       )}
 
+      {catalog.catalogTags?.description_md && (
+        <DescriptionSection markdown={catalog.catalogTags.description_md} defaultOpen />
+      )}
+
       <ConnectBox catalogName={catalog.catalogName} serviceUrl={serviceUrl} />
 
       <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3 mt-8">
@@ -69,9 +75,10 @@ export function CatalogOverview({ catalog, serviceUrl, onNavigate }: Props) {
         })}
       </div>
 
-      {Object.keys(catalog.catalogTags).length > 0 && (
-        <TagsTable tags={catalog.catalogTags} />
-      )}
+      {(() => {
+        const filtered = filterDisplayTags(catalog.catalogTags);
+        return filtered ? <TagsTable tags={filtered} /> : null;
+      })()}
     </div>
   );
 }

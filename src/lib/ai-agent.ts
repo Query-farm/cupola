@@ -6,6 +6,7 @@
 
 import type { CatalogData } from "./service";
 import { getColumns, getForeignKeys } from "./service";
+import { filterTagsForAI } from "./tags";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -239,11 +240,18 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `Loaded extensions: json, icu, spatial`,
   ];
 
+  // Catalog-level description for AI context
+  if (catalog.catalogTags?.description_llm) {
+    lines.push(`## Catalog Description`);
+    lines.push(catalog.catalogTags.description_llm);
+    lines.push(``);
+  }
+
   // Dynamic catalog content
   for (const schema of catalog.schemas) {
     const schemaComment = schema.info.comment ? ` — ${schema.info.comment}` : "";
     const filteredTags = schema.info.tags
-      ? Object.entries(schema.info.tags).filter(([k]) => k !== "example_queries")
+      ? Object.entries(schema.info.tags).filter(([k]) => !["example_queries", "description_md"].includes(k))
       : [];
     const schemaTags = filteredTags.length > 0
       ? ` [${filteredTags.map(([k, v]) => `${k}: ${v}`).join(", ")}]` : "";
@@ -398,9 +406,8 @@ export function executeListTables(catalog: CatalogData): string {
         name: schema.info.name,
         comment: schema.info.comment || null,
       };
-      if (schema.info.tags && Object.keys(schema.info.tags).length > 0) {
-        schemaInfo.tags = schema.info.tags;
-      }
+      const schemaTags = filterTagsForAI(schema.info.tags);
+      if (schemaTags) schemaInfo.tags = schemaTags;
       schemaInfo.tables = schema.tables.map((table) => {
         const cols = getColumns(table);
         const entry: any = {
@@ -409,9 +416,8 @@ export function executeListTables(catalog: CatalogData): string {
           comment: table.comment || null,
           columns: cols.length,
         };
-        if (table.tags && Object.keys(table.tags).length > 0) {
-          entry.tags = table.tags;
-        }
+        const tTags = filterTagsForAI(table.tags);
+        if (tTags) entry.tags = tTags;
         return entry;
       });
       schemaInfo.views = schema.views.map((view) => {
@@ -420,9 +426,8 @@ export function executeListTables(catalog: CatalogData): string {
           type: "view",
           comment: view.comment || null,
         };
-        if (view.tags && Object.keys(view.tags).length > 0) {
-          entry.tags = view.tags;
-        }
+        const vTags = filterTagsForAI(view.tags);
+        if (vTags) entry.tags = vTags;
         return entry;
       });
       if (schema.macros?.length > 0) {
@@ -488,7 +493,7 @@ export function executeDescribeTable(catalog: CatalogData, schemaName: string, t
       name: tableName,
       type: "table",
       comment: table.comment || null,
-      tags: table.tags && Object.keys(table.tags).length > 0 ? table.tags : undefined,
+      tags: filterTagsForAI(table.tags),
       primary_key: pkColumns.length > 0 ? pkColumns : null,
       foreign_keys: foreignKeys.length > 0 ? foreignKeys : null,
       unique_constraints: uniqueConstraints.length > 0 ? uniqueConstraints : null,
@@ -516,7 +521,7 @@ export function executeDescribeTable(catalog: CatalogData, schemaName: string, t
     name: tableName,
     type: "view",
     comment: view!.comment || null,
-    tags: view!.tags && Object.keys(view!.tags).length > 0 ? view!.tags : undefined,
+    tags: filterTagsForAI(view!.tags),
   });
 }
 

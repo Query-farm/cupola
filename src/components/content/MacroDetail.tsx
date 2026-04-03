@@ -5,7 +5,7 @@ import { Breadcrumb } from "./Breadcrumb";
 import { CatalogIcon, getBadgeColorForType } from "./CatalogIcons";
 import { SqlCodeBlock } from "./SqlCodeBlock";
 import { TagsTable } from "./TagsTable";
-import { filterExampleQueriesTag } from "./ExampleQueries";
+import { filterDisplayTags } from "@/lib/tags";
 import { useMemo } from "react";
 
 interface Props {
@@ -16,7 +16,7 @@ interface Props {
 }
 
 export function MacroDetail({ macro, catalogName, schemaName, onNavigate }: Props) {
-  const displayTags = useMemo(() => filterExampleQueriesTag(macro.tags), [macro.tags]);
+  const displayTags = useMemo(() => filterDisplayTags(macro.tags), [macro.tags]);
 
   return (
     <div>

@@ -9,7 +9,9 @@ import type { Selection } from "@/lib/tree";
 import { Breadcrumb } from "./Breadcrumb";
 import { ColumnsTable } from "./ColumnsTable";
 import { TagsTable } from "./TagsTable";
-import { ExampleQueries, filterExampleQueriesTag } from "./ExampleQueries";
+import { ExampleQueries } from "./ExampleQueries";
+import { filterDisplayTags } from "@/lib/tags";
+import { DescriptionSection } from "./DescriptionSection";
 
 interface Props {
   table: TableInfo;
@@ -23,7 +25,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
   const columns = getColumns(table);
   const foreignKeys = getForeignKeys(table);
   const defaultSql = `SELECT * FROM ${catalogName}.${table.schemaName}.${table.name} LIMIT 10;`;
-  const displayTags = useMemo(() => filterExampleQueriesTag(table.tags), [table.tags]);
+  const displayTags = useMemo(() => filterDisplayTags(table.tags), [table.tags]);
 
   // Build constraint lookup sets
   const notNullSet = new Set(table.notNullConstraints);
@@ -77,6 +79,10 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
 
       {table.comment && (
         <p className="text-muted-foreground mb-3">{table.comment}</p>
+      )}
+
+      {table.tags?.description_md && (
+        <DescriptionSection markdown={table.tags.description_md} />
       )}
 
       {/* Columns */}
