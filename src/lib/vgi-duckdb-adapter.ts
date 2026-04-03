@@ -10,11 +10,12 @@
 
 import { tableFromIPC } from "apache-arrow";
 import type { Table } from "apache-arrow";
+import { bridge } from "@/lib/shell-bridge";
 
 /** Matches @kepler.gl/duckdb DatabaseConnection interface. */
 export class VgiDuckDBConnection {
   async query(statement: string): Promise<Table> {
-    const queryFn = (window as any).__duckdbQuery;
+    const queryFn = bridge.query;
     if (!queryFn) throw new Error("DuckDB shell not initialized — open the SQL Shell tab first");
     const result = await queryFn(statement);
     if (!result.ok) {

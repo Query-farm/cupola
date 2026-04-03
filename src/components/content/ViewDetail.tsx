@@ -12,6 +12,7 @@ import { TagsTable } from "./TagsTable";
 import { ExampleQueries } from "./ExampleQueries";
 import { filterDisplayTags } from "@/lib/tags";
 import { DescriptionSection } from "./DescriptionSection";
+import { bridge } from "@/lib/shell-bridge";
 
 interface ViewColumn {
   name: string;
@@ -32,7 +33,7 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate }: Props)
 
   // Fetch columns from DuckDB if shell is available
   useEffect(() => {
-    const queryFn = (window as any).__duckdbQuery;
+    const queryFn = bridge.query;
     if (!queryFn || !catalogName || !schemaName) return;
 
     (async () => {

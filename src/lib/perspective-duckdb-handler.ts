@@ -8,6 +8,7 @@
  */
 
 import { tableFromIPC } from "apache-arrow";
+import { bridge } from "@/lib/shell-bridge";
 
 // ---------------------------------------------------------------------------
 // Traversal — tracks visible rows for collapse/expand in grouped views
@@ -173,7 +174,7 @@ function duckdbTypeToPsp(name: string): ColumnType {
 
 /** Execute a SQL query via the shared DuckDB WASM worker. */
 async function runQuery(sql: string): Promise<{ arrowBuffers?: ArrayBuffer[]; ok: boolean; error?: string }> {
-  const queryFn = (window as any).__duckdbQuery;
+  const queryFn = bridge.query;
   if (!queryFn) throw new Error("DuckDB shell not initialized");
   return queryFn(sql);
 }

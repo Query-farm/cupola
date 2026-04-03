@@ -31,10 +31,10 @@ export interface AskUserState {
 }
 
 export type ContentBlock =
-  | { type: "text"; content: string }
-  | { type: "tool_call"; toolCall: ToolCallEntry }
-  | { type: "thinking"; label: string }
-  | { type: "ask_user"; askUser: AskUserState };
+  | { type: "text"; id: string; content: string }
+  | { type: "tool_call"; id: string; toolCall: ToolCallEntry }
+  | { type: "thinking"; id: string; label: string }
+  | { type: "ask_user"; id: string; askUser: AskUserState };
 
 interface Props {
   blocks: ContentBlock[];
@@ -54,14 +54,14 @@ export function ChatMessageAssistant({
       </div>
       <div className="flex-1 min-w-0 space-y-3">
         {/* Render blocks in stream order */}
-        {blocks.map((block, i) => {
+        {blocks.map((block) => {
           if (block.type === "text") {
-            return block.content ? <ChatMarkdown key={i} content={block.content} /> : null;
+            return block.content ? <ChatMarkdown key={block.id} content={block.content} /> : null;
           }
           if (block.type === "tool_call") {
             const tc = block.toolCall;
             if (tc.name === "run_sql") {
-              return <SqlToolCallBlock key={i} toolCall={tc} />;
+              return <SqlToolCallBlock key={block.id} toolCall={tc} />;
             }
             if (tc.name === "list_tables" || tc.name === "describe_table" || tc.name === "read_query_results") {
               const label = tc.name === "describe_table"
@@ -70,7 +70,7 @@ export function ChatMessageAssistant({
                 ? "Looking up tables"
                 : "Reading more results";
               return (
-                <div key={i} className="text-xs text-muted-foreground/60 flex items-center gap-1.5 py-0.5">
+                <div key={block.id} className="text-xs text-muted-foreground/60 flex items-center gap-1.5 py-0.5">
                   <span className={`w-1.5 h-1.5 rounded-full ${tc.isExecuting ? "bg-primary/40 animate-pulse" : "bg-muted-foreground/30"}`} />
                   {tc.isExecuting ? `${label}...` : label}
                 </div>
@@ -79,12 +79,12 @@ export function ChatMessageAssistant({
             return null;
           }
           if (block.type === "thinking") {
-            return <ThinkingIndicator key={i} label={block.label} />;
+            return <ThinkingIndicator key={block.id} label={block.label} />;
           }
           if (block.type === "ask_user") {
             return (
               <AskUserBlock
-                key={i}
+                key={block.id}
                 question={block.askUser.question}
                 options={block.askUser.options}
                 selectedIndex={block.askUser.selectedIndex}

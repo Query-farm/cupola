@@ -51,6 +51,7 @@ export function ChatInput({ onSend, onStop, isLoading, disabled, placeholder = "
           ref={ref}
           className="flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground/50 min-h-[36px] max-h-[120px] py-1.5"
           placeholder={placeholder}
+          aria-label="Chat message input"
           rows={1}
           disabled={disabled}
           onKeyDown={handleKeyDown}
@@ -61,6 +62,7 @@ export function ChatInput({ onSend, onStop, isLoading, disabled, placeholder = "
           onClick={onStop}
           className="shrink-0 p-2 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors"
           title="Stop (Escape)"
+          aria-label="Stop generation"
         >
           <Square className="h-4 w-4" />
         </button>
@@ -70,6 +72,7 @@ export function ChatInput({ onSend, onStop, isLoading, disabled, placeholder = "
           disabled={disabled}
           className="shrink-0 p-2 rounded-md bg-primary text-primary-foreground hover:bg-accent transition-colors disabled:opacity-30"
           title="Send (Enter)"
+          aria-label="Send message"
         >
           <SendHorizontal className="h-4 w-4" />
         </button>

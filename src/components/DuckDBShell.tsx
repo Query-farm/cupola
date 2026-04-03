@@ -22,6 +22,8 @@ import {
 } from "@/lib/ai-agent";
 import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 import { estimateCost, formatCost } from "@/lib/pricing";
+import { formatCellValue } from "@/lib/format";
+import { bridge } from "@/lib/shell-bridge";
 
 const KeplerMap = lazy(() => import("./KeplerMap").then((m) => ({ default: m.KeplerMap })));
 
@@ -118,7 +120,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
 
   // Expose query history setter for the initShell closure
-  (window as any).__addQueryHistoryEntry = (entry: QueryHistoryEntry) => {
+  bridge.addQueryHistoryEntry = (entry: QueryHistoryEntry) => {
     setQueryHistory(prev => [...prev, entry]);
   };
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
@@ -141,14 +143,14 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   const hasSelectedTableOrView = !!(selectedTable || selectedView || (selection && (selection.type === "table" || selection.type === "view")));
 
   // Expose a function to switch to the shell tab and ensure it's visible
-  (window as any).__shellActivate = () => {
+  bridge.activateShell = () => {
     setActiveTab("shell");
     if (mode === "minimized") onModeChange("panel");
   };
 
   // Expose a callback for the shell to trigger Perspective view
   useEffect(() => {
-    (window as any).__showPerspective = async (arrowBuffer: Uint8Array) => {
+    bridge.showPerspective = async (arrowBuffer: Uint8Array) => {
       setActiveTab("perspective");
       setPerspectiveLoading(true);
       setPerspectiveHasData(true);
@@ -160,12 +162,12 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         setPerspectiveLoading(false);
       }
     };
-    (window as any).__showKepler = () => {
+    bridge.showKepler = () => {
       setActiveTab("map");
     };
     return () => {
-      delete (window as any).__showPerspective;
-      delete (window as any).__showKepler;
+      bridge.showPerspective = null;
+      bridge.showKepler = null;
     };
   }, []);
 
@@ -206,21 +208,21 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
 
   // Track terminal dimensions
   const updateTermSize = useCallback(() => {
-    const term = (window as any).__shellTerm;
+    const term = bridge.shellTerm;
     if (term) setTermSize({ rows: term.rows, cols: term.cols });
   }, []);
 
   // Refit terminal when mode changes or switching back to shell tab
   useEffect(() => {
-    if (mode !== "minimized" && activeTab === "shell" && (window as any).__shellFitAddon) {
+    if (mode !== "minimized" && activeTab === "shell" && bridge.shellFitAddon) {
       const fit = () => {
-        (window as any).__shellFitAddon?.fit();
+        bridge.shellFitAddon?.fit();
         updateTermSize();
       };
       const fitAndRefresh = () => {
         fit();
         // Force xterm to redraw all visible rows so the prompt isn't truncated
-        const term = (window as any).__shellTerm;
+        const term = bridge.shellTerm;
         if (term) {
           term.refresh(0, term.rows - 1);
         }
@@ -237,8 +239,8 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
     const el = rootRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      if (mode !== "minimized" && activeTab === "shell" && (window as any).__shellFitAddon) {
-        (window as any).__shellFitAddon.fit();
+      if (mode !== "minimized" && activeTab === "shell" && bridge.shellFitAddon) {
+        bridge.shellFitAddon.fit();
         updateTermSize();
       }
     });
@@ -271,12 +273,12 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         if (cancelled) return;
 
         // Wait for DuckDB to be fully ready (ATTACH complete, readLoop started)
-        if (!(window as any).__shellRunQuery) {
+        if (!bridge.runQuery) {
           await new Promise<void>((resolve) => {
             const onReady = () => { resolve(); window.removeEventListener("duckdb-ready", onReady); };
             window.addEventListener("duckdb-ready", onReady);
             // Check again in case it became ready between the check and the listener
-            if ((window as any).__shellRunQuery) onReady();
+            if (bridge.runQuery) onReady();
           });
         }
         if (cancelled) return;
@@ -389,39 +391,40 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
           const data = e.dataTransfer.getData("text/plain");
           if (data) {
             const text = treeIdToShellText(data);
-            if (text) (window as any).__shellInsertText?.(text);
+            if (text) bridge.insertText?.(text);
           }
         }}
       >
         <div className="flex items-end gap-0.5 -mb-px">
-          <button className={tabCls("shell")} onClick={() => handleTabClick("shell")}>
+          <button role="tab" aria-selected={activeTab === "shell"} className={tabCls("shell")} onClick={() => handleTabClick("shell")}>
             <img src="/duckdb-icon-light.svg" alt="" className="h-4 w-4" />
             SQL Shell
           </button>
-          <button className={tabCls("askai")} onClick={() => handleTabClick("askai")}>
+          <button role="tab" aria-selected={activeTab === "askai"} className={tabCls("askai")} onClick={() => handleTabClick("askai")}>
             <Sparkles className="h-3.5 w-3.5" />
             Ask AI
           </button>
           {hasSelectedTableOrView && (
-            <button className={tabCls("preview")} onClick={() => handleTabClick("preview")}>
+            <button role="tab" aria-selected={activeTab === "preview"} className={tabCls("preview")} onClick={() => handleTabClick("preview")}>
               <Table2 className="h-3.5 w-3.5" />
               Preview
             </button>
           )}
           {queryHistory.length > 0 && (
-            <button className={tabCls("queries")} onClick={() => handleTabClick("queries")}>
+            <button role="tab" aria-selected={activeTab === "queries"} className={tabCls("queries")} onClick={() => handleTabClick("queries")}>
               <History className="h-3.5 w-3.5" />
               Queries ({queryHistory.length})
             </button>
           )}
           <button
+            role="tab" aria-selected={activeTab === "perspective"}
             className={`${tabCls("perspective")} ${!hasSelectedTableOrView && !perspectiveHasData ? "opacity-30 cursor-not-allowed" : ""}`}
             onClick={() => { if (hasSelectedTableOrView || perspectiveHasData) handleTabClick("perspective"); }}
           >
             <BarChart3 className="h-3.5 w-3.5" />
             Perspective
           </button>
-          <button className={tabCls("map")} onClick={() => handleTabClick("map")}>
+          <button role="tab" aria-selected={activeTab === "map"} className={tabCls("map")} onClick={() => handleTabClick("map")}>
             <MapIcon className="h-3.5 w-3.5" />
             Map
           </button>
@@ -432,6 +435,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
               onClick={() => onModeChange("panel")}
               className="p-1 text-muted-foreground hover:text-foreground transition-colors"
               title="Expand"
+              aria-label="Expand shell panel"
             >
               <ChevronUp className="h-3.5 w-3.5" />
             </button>
@@ -441,6 +445,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
               onClick={() => onModeChange("minimized")}
               className="p-1 text-muted-foreground hover:text-foreground transition-colors"
               title="Minimize"
+              aria-label="Minimize shell panel"
             >
               <ChevronDown className="h-3.5 w-3.5" />
             </button>
@@ -449,6 +454,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
             onClick={() => onModeChange(mode === "fullscreen" ? "panel" : "fullscreen")}
             className="p-1 text-muted-foreground hover:text-foreground transition-colors"
             title={mode === "fullscreen" ? "Restore" : "Full Screen"}
+            aria-label={mode === "fullscreen" ? "Exit full screen" : "Enter full screen"}
           >
             {mode === "fullscreen" ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </button>
@@ -479,7 +485,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
           if (data) {
             const text = treeIdToShellText(data);
             if (text) {
-              (window as any).__shellInsertText?.(text);
+              bridge.insertText?.(text);
             }
           }
         }}
@@ -560,8 +566,8 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
           setActiveTab("shell");
           const run = () => {
             const tryRun = () => {
-              if ((window as any).__shellRunQuery) {
-                (window as any).__shellRunQuery(sql);
+              if (bridge.runQuery) {
+                bridge.runQuery(sql);
               } else {
                 requestAnimationFrame(tryRun);
               }
@@ -569,13 +575,13 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
             tryRun();
           };
           // If in AI mode, exit it first by simulating Ctrl+D
-          if ((window as any).__shellInAiMode) {
-            const term = (window as any).__shellTerm;
+          if (bridge.inAiMode) {
+            const term = bridge.shellTerm;
             if (term) {
               term.paste("\x04"); // Ctrl+D to exit AI mode
               // Wait for AI mode to exit, then run the query
               const waitForSql = () => {
-                if (!(window as any).__shellInAiMode) {
+                if (!bridge.inAiMode) {
                   setTimeout(run, 100);
                 } else {
                   requestAnimationFrame(waitForSql);
@@ -737,7 +743,7 @@ function initShell(
   const WGA = (window as any).WebglAddon;
 
   // Singleton terminal — reuse across shell instances
-  const isNewTerminal = !(window as any).__shellTerm;
+  const isNewTerminal = !bridge.shellTerm;
   let term: any, fitAddon: any, rl: any;
 
   if (isNewTerminal) {
@@ -765,13 +771,13 @@ function initShell(
       return true;
     });
 
-    (window as any).__shellTerm = term;
-    (window as any).__shellFitAddon = fitAddon;
-    (window as any).__shellReadline = rl;
+    bridge.shellTerm = term;
+    bridge.shellFitAddon = fitAddon;
+    bridge.shellReadline = rl;
   } else {
-    term = (window as any).__shellTerm;
-    fitAddon = (window as any).__shellFitAddon;
-    rl = (window as any).__shellReadline;
+    term = bridge.shellTerm;
+    fitAddon = bridge.shellFitAddon;
+    rl = bridge.shellReadline;
     // Reparent the terminal DOM element to the new container
     const termEl = term.element?.parentElement;
     if (termEl && termEl !== container) {
@@ -820,9 +826,9 @@ function initShell(
   }
 
   // Singleton worker — shared across all DuckDBShell instances
-  const isNewWorker = !(window as any).__duckdbWorker;
-  const worker = (window as any).__duckdbWorker || new Worker("/shell/worker.js");
-  (window as any).__duckdbWorker = worker;
+  const isNewWorker = !bridge.worker;
+  const worker = bridge.worker || new Worker("/shell/worker.js");
+  bridge.worker = worker;
 
   // Only set up SABs and init for new workers
   if (isNewWorker) {
@@ -833,7 +839,7 @@ function initShell(
     if (cancelSAB) worker.postMessage({ type: "init-cancel-sab", sab: cancelSAB });
 
     // Expose cancel function for external callers (Ask AI chat)
-    (window as any).__duckdbCancelQuery = () => {
+    bridge.cancelQuery = () => {
       if (cancelSAB) {
         const int32 = new Int32Array(cancelSAB);
         Atomics.store(int32, 0, 1);
@@ -891,7 +897,7 @@ function initShell(
           writeln("");
         }
         // Shell is fully ready — expose runQuery for external callers
-        (window as any).__shellRunQuery = runQuery;
+        bridge.runQuery = runQuery;
         window.dispatchEvent(new Event("duckdb-ready"));
         readLoop();
       })();
@@ -901,7 +907,7 @@ function initShell(
     if (d.type === "progress") {
       if (queryRunning) renderProgressBar(d.percentage);
       // Also notify external listeners (e.g., KeplerMap loading overlay)
-      const progressCb = (window as any).__duckdbProgress;
+      const progressCb = bridge.progress;
       if (progressCb) progressCb(d.percentage);
       return;
     }
@@ -1050,13 +1056,13 @@ function initShell(
         if (!lastArrowBuffer) {
           writeln("No result to view. Run a query first.", "31");
         } else {
-          (window as any).__showPerspective?.(lastArrowBuffer);
+          bridge.showPerspective?.(lastArrowBuffer);
           writeln("Switched to Perspective viewer", "32");
         }
         continue;
       }
       if (trimmed === ".kepler") {
-        (window as any).__showKepler?.();
+        bridge.showKepler?.();
         writeln("Switched to Map tab", "32");
         continue;
       }
@@ -1215,9 +1221,9 @@ function initShell(
           writeln("Entering AI mode. Type .exit to return to SQL.", "35");
         }
         writeln("");
-        (window as any).__shellInAiMode = true;
+        bridge.inAiMode = true;
 
-        const systemPrompt = buildSystemPrompt(config.catalogData, config.serviceUrl, (window as any).__memoryCatalog);
+        const systemPrompt = buildSystemPrompt(config.catalogData, config.serviceUrl, bridge.memoryCatalog);
         let aiAbort: AbortController | null = null;
 
         // Braille spinner
@@ -1352,7 +1358,7 @@ function initShell(
                   rl.println(`\x1b[31m  Error: ${errMsg}\x1b[0m`);
 
                   // Track failed query in history
-                  (window as any).__addQueryHistoryEntry?.({
+                  bridge.addQueryHistoryEntry?.({
                     id: Date.now(),
                     timestamp: Date.now(),
                     sql: input.sql,
@@ -1376,7 +1382,7 @@ function initShell(
                 }
                 if (!result.arrowBuffers?.length) {
                   rl.println(`\x1b[2m  OK (no results)\x1b[0m`);
-                  (window as any).__addQueryHistoryEntry?.({
+                  bridge.addQueryHistoryEntry?.({
                     id: Date.now(),
                     timestamp: Date.now(),
                     sql: input.sql,
@@ -1394,7 +1400,7 @@ function initShell(
                 const { json } = formatArrowTableAsJson(table);
 
                 // Track successful query in history
-                (window as any).__addQueryHistoryEntry?.({
+                bridge.addQueryHistoryEntry?.({
                   id: Date.now(),
                   timestamp: Date.now(),
                   sql: input.sql,
@@ -1534,7 +1540,7 @@ function initShell(
           }
         }
 
-        (window as any).__shellInAiMode = false;
+        bridge.inAiMode = false;
         continue; // Back to SQL readLoop
       }
 
@@ -1583,21 +1589,21 @@ function initShell(
             const elapsedStr = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(1)}s` : `${Math.round(elapsed)}ms`;
             writeln(`OK (${elapsedStr})`, "32");
             // DDL — refresh sidebar and handle navigation
-            (window as any).__refreshMemoryTables?.().then?.(() => {
+            bridge.refreshMemoryTables?.().then?.(() => {
               const createMatch = trimmed.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
               if (createMatch) {
                 const schema = createMatch[1] || "main";
                 const name = createMatch[2];
-                (window as any).__navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
+                bridge.navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
               }
               const dropMatch = trimmed.match(/DROP\s+(?:TABLE|VIEW|SCHEMA)\s+(?:IF\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
               if (dropMatch) {
                 const isSchemaLevel = /DROP\s+SCHEMA/i.test(trimmed);
                 if (isSchemaLevel) {
-                  (window as any).__navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
+                  bridge.navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
                 } else {
                   const schema = dropMatch[1] || "main";
-                  (window as any).__navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
+                  bridge.navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
                 }
               }
             });
@@ -1624,7 +1630,7 @@ function initShell(
             await printTable(table, elapsed);
           }
 
-          (window as any).__addQueryHistoryEntry?.({
+          bridge.addQueryHistoryEntry?.({
             id: Date.now(),
             timestamp: Date.now(),
             sql: trimmed,
@@ -1637,7 +1643,7 @@ function initShell(
         }
       } else {
         writeln("OK", "32");
-        (window as any).__addQueryHistoryEntry?.({
+        bridge.addQueryHistoryEntry?.({
           id: Date.now(),
           timestamp: Date.now(),
           sql: trimmed,
@@ -1655,35 +1661,10 @@ function initShell(
     }
   }
 
-  // Format a value based on Arrow field type.
-  // Arrow JS get() already converts Date/Timestamp to epoch milliseconds.
+  // Format a value for terminal display, using formatCellValue with Arrow field precision.
   function formatVal(val: any, field: any): string {
     if (val === null || val === undefined) return "NULL";
-    if (val instanceof Uint8Array) return "[binary]";
-    const typeStr: string = field.type?.toString() || "";
-    const num = typeof val === "bigint" ? Number(val) : val;
-    if (typeof num === "number" && !isNaN(num)) {
-      if (typeStr.startsWith("Date")) {
-        const d = new Date(num);
-        if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
-      }
-      if (typeStr.startsWith("Timestamp")) {
-        const d = new Date(num);
-        if (!isNaN(d.getTime())) {
-          const s = d.toISOString().replace("T", " ").replace("Z", "");
-          return s.endsWith(".000") ? s.slice(0, -4) : s;
-        }
-      }
-      if (typeStr.startsWith("Time")) {
-        const totalSec = Math.floor(num / 1000);
-        const h = Math.floor(totalSec / 3600);
-        const m = Math.floor((totalSec % 3600) / 60);
-        const s = totalSec % 60;
-        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-      }
-    }
-    if (typeof val === "bigint") return val.toString();
-    return String(val);
+    return formatCellValue(val, field?.name, field);
   }
 
   // Duckbox-style table rendering using cli-table3
@@ -2034,9 +2015,9 @@ function initShell(
   }
 
   // Expose query function and catalog name for kepler.gl's DuckDB adapter
-  (window as any).__duckdbQuery = (sql: string) => runQueryAsync(sql);
-  (window as any).__duckdbQuerySync = (sql: string) => runQuerySync(sql);
-  (window as any).__duckdbCatalogName = config.catalogName;
+  bridge.query = (sql: string) => runQueryAsync(sql);
+  bridge.querySync = (sql: string) => runQuerySync(sql);
+  bridge.catalogName = config.catalogName;
 
   if (isNewWorker) {
     // First shell: init worker, wait for ready, ATTACH, then start readLoop
@@ -2067,18 +2048,18 @@ function initShell(
   }
 
   // Expose insertText immediately (for drag-drop from tree)
-  (window as any).__shellInsertText = insertText;
+  bridge.insertText = insertText;
   // __shellRunQuery is set later, after ATTACH completes and readLoop starts
 
   return {
     cleanup: () => {
       resizeObserver.disconnect();
       // Don't terminate shared worker or dispose shared terminal
-      delete (window as any).__shellFitAddon;
-      delete (window as any).__shellInsertText;
-      delete (window as any).__shellRunQuery;
-      delete (window as any).__duckdbQuery;
-      delete (window as any).__duckdbCatalogName;
+      bridge.shellFitAddon = null;
+      bridge.insertText = null;
+      bridge.runQuery = null;
+      bridge.query = null;
+      bridge.catalogName = null;
     },
     insertText,
   };

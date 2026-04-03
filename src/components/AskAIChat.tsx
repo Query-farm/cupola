@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Sparkles, RotateCcw, Settings, FileText, Copy } from "lucide-react";
 import { useSettings } from "@/lib/settings";
+import { bridge } from "@/lib/shell-bridge";
 import type { CatalogData } from "@/lib/service";
 import {
   runAgentTurn,
@@ -15,6 +16,7 @@ import {
 function quoteIdent(name: string): string {
   return '"' + name.replace(/"/g, '""') + '"';
 }
+const uid = () => crypto.randomUUID();
 
 import { ChatInput } from "./chat/ChatInput";
 import { ChatMessageUser } from "./chat/ChatMessageUser";
@@ -81,7 +83,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           askUserResolve.current = null;
         }
         abortRef.current.abort();
-        (window as any).__duckdbCancelQuery?.();
+        bridge.cancelQuery?.();
       }
     };
     document.addEventListener("keydown", handler);
@@ -101,7 +103,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
     if (!apiKey) {
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(), role: "assistant",
-        blocks: [{ type: "text", content: "To use Ask AI, please add your Anthropic API key in **Settings** (gear icon in the sidebar)." }],
+        blocks: [{ type: "text", id: uid(), content: "To use Ask AI, please add your Anthropic API key in **Settings** (gear icon in the sidebar)." }],
       }]);
       return;
     }
@@ -115,14 +117,14 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
     const assistantId = crypto.randomUUID();
     setMessages(prev => [...prev, {
       id: assistantId, role: "assistant",
-      blocks: [{ type: "thinking", label: "Thinking" }],
+      blocks: [{ type: "thinking", id: uid(), label: "Thinking" }],
       isStreaming: true,
     }]);
 
     setIsLoading(true);
     abortRef.current = new AbortController();
 
-    const systemPrompt = buildSystemPrompt(catalogData, serviceUrl, (window as any).__memoryCatalog);
+    const systemPrompt = buildSystemPrompt(catalogData, serviceUrl, bridge.memoryCatalog);
     const model = getSetting("aiModel") || "claude-sonnet-4-20250514";
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
 
@@ -144,7 +146,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
     const ensureTextBlock = (): number => {
       const last = blocks[blocks.length - 1];
       if (last?.type === "text") return blocks.length - 1;
-      blocks = [...blocks, { type: "text", content: "" }];
+      blocks = [...blocks, { type: "text", id: uid(), content: "" }];
       return blocks.length - 1;
     };
 
@@ -157,7 +159,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
     const executeTool = async (name: string, input: any): Promise<string> => {
       if (name === "run_sql") {
         // Subscribe to progress
-        const prevProgress = (window as any).__duckdbProgress;
+        const prevProgress = bridge.progress;
         const updateProgress = (pct: number) => {
           blocks = blocks.map(b =>
             b.type === "tool_call" && b.toolCall.isExecuting
@@ -166,22 +168,22 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           );
           updateBlocks(blocks);
         };
-        (window as any).__duckdbProgress = updateProgress;
+        bridge.progress = updateProgress;
 
-        const queryFn = (window as any).__duckdbQuery;
+        const queryFn = bridge.query;
         if (!queryFn) throw new Error("DuckDB shell not initialized — open SQL Shell first");
         const t0 = performance.now();
         const result = await queryFn(input.sql);
         const elapsed = performance.now() - t0;
 
-        (window as any).__duckdbProgress = prevProgress;
+        bridge.progress = prevProgress;
 
         const lastUserMsg = agentMessages.current.filter(m => m.role === "user").pop();
         const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
 
         if (!result.ok) {
           const errMsg = result.error || "Query failed";
-          (window as any).__addQueryHistoryEntry?.({
+          bridge.addQueryHistoryEntry?.({
             id: Date.now(), timestamp: Date.now(), sql: input.sql,
             executionTimeMs: elapsed, success: false, error: errMsg, userQuestion,
           });
@@ -195,13 +197,13 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
 
         const firstBuf = result.arrowBuffers?.[0];
         if (!firstBuf || (firstBuf instanceof ArrayBuffer ? firstBuf.byteLength === 0 : firstBuf.length === 0)) {
-          (window as any).__addQueryHistoryEntry?.({
+          bridge.addQueryHistoryEntry?.({
             id: Date.now(), timestamp: Date.now(), sql: input.sql,
             executionTimeMs: elapsed, success: true, rowCount: 0, userQuestion,
           });
           // COMMENT ON returns empty result — refresh so comments appear on detail pages
           if (/COMMENT\s+ON/i.test(input.sql)) {
-            await (window as any).__refreshMemoryTables?.();
+            await bridge.refreshMemoryTables?.();
           }
           pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
           return JSON.stringify({ ok: true, message: "Query executed successfully" });
@@ -212,27 +214,27 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         // DDL results (CREATE/DROP etc.) return single Count column
         const fields = table.schema.fields;
         if (fields.length === 1 && fields[0].name === "Count" && table.numRows <= 1) {
-          (window as any).__addQueryHistoryEntry?.({
+          bridge.addQueryHistoryEntry?.({
             id: Date.now(), timestamp: Date.now(), sql: input.sql,
             executionTimeMs: elapsed, success: true, rowCount: 0, userQuestion,
           });
           pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
           // DDL — refresh sidebar and handle navigation
-          await (window as any).__refreshMemoryTables?.();
+          await bridge.refreshMemoryTables?.();
           const createMatch = input.sql.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
           if (createMatch) {
             const schema = createMatch[1] || "main";
             const name = createMatch[2];
-            (window as any).__navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
+            bridge.navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
           }
           const dropMatch = input.sql.match(/DROP\s+(?:TABLE|VIEW|SCHEMA)\s+(?:IF\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
           if (dropMatch) {
             const isSchemaLevel = /DROP\s+SCHEMA/i.test(input.sql);
             if (isSchemaLevel) {
-              (window as any).__navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
+              bridge.navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
             } else {
               const schema = dropMatch[1] || "main";
-              (window as any).__navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
+              bridge.navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
             }
           }
           return JSON.stringify({ ok: true, message: "Query executed successfully" });
@@ -248,7 +250,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           showing: parsed.showing,
         };
 
-        (window as any).__addQueryHistoryEntry?.({
+        bridge.addQueryHistoryEntry?.({
           id: Date.now(), timestamp: Date.now(), sql: input.sql,
           executionTimeMs: elapsed, success: true, rowCount: table.numRows, userQuestion,
         });
@@ -263,7 +265,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
       if (name === "describe_table") {
         // If catalog specified and not the main catalog, use SQL to describe
         if (input.catalog && input.catalog !== catalogData!.catalogName) {
-          const queryFn = (window as any).__duckdbQuery;
+          const queryFn = bridge.query;
           if (queryFn) {
             // Get columns
             const r = await queryFn(`SELECT column_name, data_type, is_nullable, column_default, comment FROM duckdb_columns() WHERE database_name = ${quoteIdent(input.catalog)} AND schema_name = ${quoteIdent(input.schema)} AND table_name = ${quoteIdent(input.table)} ORDER BY column_index`);
@@ -323,7 +325,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           askUserResolve.current = resolve;
           // Remove thinking and add ask_user as an inline block
           removeThinking();
-          blocks.push({ type: "ask_user", askUser: { question: input.question, options: input.options || [], resolved: false } });
+          blocks.push({ type: "ask_user", id: uid(), askUser: { question: input.question, options: input.options || [], resolved: false } });
           updateBlocks(blocks);
         });
       }
@@ -344,7 +346,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           onToolCall: (name, input) => {
             removeThinking();
             const tc: ToolCallEntry = { name, input, isExecuting: true };
-            blocks = [...blocks, { type: "tool_call", toolCall: tc }];
+            blocks = [...blocks, { type: "tool_call", id: uid(), toolCall: tc }];
             updateBlocks(blocks);
           },
           onToolResult: (_name, _summary) => {
@@ -354,7 +356,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
               const block = blocks[actualIdx] as { type: "tool_call"; toolCall: ToolCallEntry };
               const isErr = _summary.startsWith("Error:");
               blocks = blocks.map((b, i) => i === actualIdx
-                ? { type: "tool_call", toolCall: {
+                ? { ...b, type: "tool_call" as const, toolCall: {
                     ...block.toolCall,
                     displayResult: pendingDisplayResult,
                     error: isErr ? _summary.slice(7) : undefined,
@@ -366,7 +368,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
               pendingDisplayResult = undefined;
             }
             // Add thinking indicator back
-            blocks = [...blocks, { type: "thinking", label: "Thinking" }];
+            blocks = [...blocks, { type: "thinking", id: uid(), label: "Thinking" }];
             updateBlocks(blocks);
           },
           onDone: (usage) => {
@@ -377,7 +379,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           onRetry: (message) => {
             removeThinking();
             if (message) {
-              blocks = [...blocks, { type: "thinking", label: message.replace("...", "") }];
+              blocks = [...blocks, { type: "thinking", id: uid(), label: message.replace("...", "") }];
             }
             updateBlocks(blocks);
           },
@@ -411,7 +413,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           : b
         );
       } else {
-        blocks = [...blocks, { type: "text", content: "*(Stopped)*" }];
+        blocks = [...blocks, { type: "text", id: uid(), content: "*(Stopped)*" }];
       }
       updateBlocks(blocks);
       updateAssistant({ isStreaming: false });
@@ -447,7 +449,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
   const handleStop = () => {
     abortRef.current?.abort();
     // Also cancel any running DuckDB query
-    (window as any).__duckdbCancelQuery?.();
+    bridge.cancelQuery?.();
   };
 
   // Starter questions
@@ -470,7 +472,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
   const hasMessages = messages.length > 0;
   const model = getSetting("aiModel") || "claude-sonnet-4-20250514";
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
-  const systemPrompt = useMemo(() => catalogData ? buildSystemPrompt(catalogData, serviceUrl, (window as any).__memoryCatalog) : null, [catalogData, serviceUrl]);
+  const systemPrompt = useMemo(() => catalogData ? buildSystemPrompt(catalogData, serviceUrl, bridge.memoryCatalog) : null, [catalogData, serviceUrl]);
 
   return (
     <div className="flex flex-col h-full bg-background">

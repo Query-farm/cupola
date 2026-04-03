@@ -11,6 +11,7 @@ import { addDataToMap } from "@kepler.gl/actions";
 import { removeDataset } from "@kepler.gl/actions";
 import { initApplicationConfig, getApplicationConfig } from "@kepler.gl/utils";
 import { VgiDuckDBAdapter } from "@/lib/vgi-duckdb-adapter";
+import { bridge } from "@/lib/shell-bridge";
 
 let KeplerGl: any = null;
 let keplerStore: any = null;
@@ -59,14 +60,14 @@ async function loadDeferredDataset(datasetId: string, sourceQuery: string, dispa
   loadingDatasets.add(datasetId);
 
   // Subscribe to worker progress
-  const prevProgress = (window as any).__duckdbProgress;
+  const prevProgress = bridge.progress;
   if (callbacks?.onProgress) {
-    (window as any).__duckdbProgress = callbacks.onProgress;
+    bridge.progress = callbacks.onProgress;
   }
 
   try {
     // Get raw Arrow IPC buffer from worker
-    const queryFn = (window as any).__duckdbQuery;
+    const queryFn = bridge.query;
     if (!queryFn) return;
     const result = await queryFn(`SELECT * FROM ${sourceQuery}`);
     if (!result.ok || !result.arrowBuffers?.length) {
@@ -108,7 +109,7 @@ async function loadDeferredDataset(datasetId: string, sourceQuery: string, dispa
     callbacks?.onError?.(msg);
     console.error(`[KeplerMap] Failed to load ${datasetId}:`, e);
   } finally {
-    (window as any).__duckdbProgress = prevProgress;
+    bridge.progress = prevProgress;
     loadingDatasets.delete(datasetId);
   }
 }
@@ -129,7 +130,7 @@ async function registerStubDatasets(dispatch: any) {
     const { arrowSchemaToFields } = await import("@kepler.gl/processors");
 
     // Get columns for VGI catalog + memory only
-    const catalogName = (window as any).__duckdbCatalogName || "memory";
+    const catalogName = bridge.catalogName || "memory";
     const colResult = await conn.query(
       `SELECT database_name, schema_name, table_name, column_name, data_type
        FROM duckdb_columns()

@@ -3,6 +3,7 @@ import { Copy, Play, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SqlCodeBlock } from "./SqlCodeBlock";
 import * as Accordion from "@radix-ui/react-accordion";
+import { bridge } from "@/lib/shell-bridge";
 
 interface ExampleQuery {
   name?: string | null;
@@ -47,9 +48,9 @@ function QueryBlock({ query, index, onOpenShell }: { query: ExampleQuery; index:
   };
 
   const handleRun = () => {
-    (window as any).__shellActivate?.();
+    bridge.activateShell?.();
     setTimeout(() => {
-      (window as any).__shellRunQuery?.(query.sql);
+      bridge.runQuery?.(query.sql);
     }, 150);
   };
 

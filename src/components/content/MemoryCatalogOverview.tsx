@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { CatalogData } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
+import { bridge } from "@/lib/shell-bridge";
 
 interface Props {
   catalog: CatalogData;
@@ -14,7 +15,7 @@ export function MemoryCatalogOverview({ catalog, onNavigate }: Props) {
 
   function handleSave() {
     // Trigger the shell's .save command via the worker
-    const worker = (window as any).__duckdbWorker;
+    const worker = bridge.worker;
     if (!worker) return;
 
     const handler = (e: MessageEvent) => {
@@ -45,7 +46,7 @@ export function MemoryCatalogOverview({ catalog, onNavigate }: Props) {
   }
 
   function handleLoad() {
-    const worker = (window as any).__duckdbWorker;
+    const worker = bridge.worker;
     if (!worker) return;
 
     const input = document.createElement("input");

@@ -4,6 +4,7 @@ import { tableFromIPC } from "apache-arrow";
 import { type Selection } from "@/lib/tree";
 import { getAuthToken } from "@/lib/auth";
 import { SettingsProvider } from "@/lib/settings";
+import { bridge } from "@/lib/shell-bridge";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
 import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -37,7 +38,7 @@ export function CatalogApp() {
 
   /** Fetch in-memory DuckDB tables via the shell worker. Returns null if shell isn't running. */
   const fetchMemoryTables = useCallback(async () => {
-    const queryFn = (window as any).__duckdbQuery;
+    const queryFn = bridge.query;
     if (!queryFn) { setMemoryCatalog(null); return; }
 
     try {
@@ -131,8 +132,8 @@ export function CatalogApp() {
 
   // Expose refresh globally (navigate is exposed after it's defined below)
   if (typeof window !== "undefined") {
-    (window as any).__refreshMemoryTables = fetchMemoryTables;
-    (window as any).__memoryCatalog = memoryCatalog;
+    bridge.refreshMemoryTables = fetchMemoryTables;
+    bridge.memoryCatalog = memoryCatalog;
   }
 
   // Persist shell mode to localStorage
@@ -189,7 +190,7 @@ export function CatalogApp() {
       setShellHeight(newHeight);
       cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
-        (window as any).__shellFitAddon?.fit();
+        bridge.shellFitAddon?.fit();
       });
     };
     const onUp = () => {
@@ -203,8 +204,8 @@ export function CatalogApp() {
       });
       // Double-fit: once after React render, once after layout settles
       requestAnimationFrame(() => {
-        (window as any).__shellFitAddon?.fit();
-        setTimeout(() => (window as any).__shellFitAddon?.fit(), 50);
+        bridge.shellFitAddon?.fit();
+        setTimeout(() => bridge.shellFitAddon?.fit(), 50);
       });
     };
     document.addEventListener("pointermove", onMove);
@@ -267,7 +268,7 @@ export function CatalogApp() {
 
   // Expose navigate globally so AI agent can select newly created objects
   if (typeof window !== "undefined") {
-    (window as any).__navigateToSelection = navigate;
+    bridge.navigateToSelection = navigate;
   }
 
   const loadCatalog = useCallback(
@@ -289,7 +290,7 @@ export function CatalogApp() {
           updatePageTitle(initialSel, catalog.catalogName);
         }
         // Also refresh memory tables if shell is running
-        if ((window as any).__duckdbQuery) {
+        if (bridge.query) {
           await fetchMemoryTables();
         }
       } catch (err: unknown) {

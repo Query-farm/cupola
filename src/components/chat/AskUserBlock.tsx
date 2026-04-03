@@ -20,6 +20,7 @@ export function AskUserBlock({ question, options, selectedIndex, resolved, onSel
               key={i}
               disabled={resolved}
               onClick={() => onSelect?.(opt, i)}
+              aria-pressed={isSelected}
               className={`text-left w-full px-3 py-2 rounded-lg border text-sm transition-colors ${
                 isSelected
                   ? "bg-primary/10 border-primary text-primary font-medium"

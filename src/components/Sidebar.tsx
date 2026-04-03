@@ -71,6 +71,7 @@ export function Sidebar({ catalog, memoryCatalog, selection, onSelect, onOpenShe
           <Input
             type="text"
             placeholder="Filter..."
+            aria-label="Filter catalog"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-8 h-9 text-sm"

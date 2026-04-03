@@ -11,6 +11,7 @@ import {
 import { DataGrid } from "./DataGrid";
 import type { ColumnInfo } from "@/lib/service";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
+import { bridge } from "@/lib/shell-bridge";
 
 const PAGE_SIZES = [25, 50, 100, 200];
 const DEFAULT_PAGE_SIZE = 50;
@@ -21,7 +22,7 @@ interface Props {
 }
 
 async function queryDuckDB(sql: string): Promise<{ table: any; error?: string }> {
-  const queryFn = (window as any).__duckdbQuery;
+  const queryFn = bridge.query;
   if (!queryFn) return { table: null, error: "DuckDB shell not initialized. Open the SQL Shell tab first." };
 
   const result = await queryFn(sql);
