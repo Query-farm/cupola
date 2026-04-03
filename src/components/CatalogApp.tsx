@@ -6,6 +6,7 @@ import { getAuthToken } from "@/lib/auth";
 import { SettingsProvider } from "@/lib/settings";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
 import { lazy, Suspense } from "react";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { Header } from "./Header";
 import { Sidebar } from "./Sidebar";
 const DuckDBShell = lazy(() => import("./DuckDBShell").then(m => ({ default: m.DuckDBShell })));
@@ -395,7 +396,9 @@ export function CatalogApp() {
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Content area — hidden when shell is maximized or fullscreen */}
           <main className={`overflow-y-auto p-6 min-h-0 ${shellMode === "maximized" || shellMode === "fullscreen" ? "h-0 overflow-hidden" : "flex-1"}`}>
-            <ContentPanel data={data} memoryCatalog={memoryCatalog} selection={selection} serviceUrl={serviceUrl} onNavigate={navigate} onOpenShell={() => setShellMode((m) => m === "minimized" ? "panel" : m)} shellMode={shellMode} />
+            <ErrorBoundary>
+              <ContentPanel data={data} memoryCatalog={memoryCatalog} selection={selection} serviceUrl={serviceUrl} onNavigate={navigate} onOpenShell={() => setShellMode((m) => m === "minimized" ? "panel" : m)} shellMode={shellMode} />
+            </ErrorBoundary>
           </main>
 
           {/* Resize handle — only in panel mode */}
@@ -413,33 +416,35 @@ export function CatalogApp() {
           )}
 
           {/* Shell panel — always rendered */}
-          <Suspense fallback={
-            <div style={{ height: shellMode === "minimized" ? 36 : shellMode === "panel" ? shellHeight : undefined }}
-                 className={`flex items-center justify-center bg-[#1a1a0e] text-[#6ba034] shrink-0 border-t border-border ${shellMode === "maximized" || shellMode === "fullscreen" ? "flex-1" : ""}`}>
-              {shellMode !== "minimized" && "Loading..."}
-            </div>
-          }>
-            <div
-              className={`shrink-0 border-t border-border overflow-hidden ${shellMode === "maximized" || shellMode === "fullscreen" ? "flex-1" : ""}`}
-              style={
-                shellMode === "panel"
-                  ? { height: shellHeight }
-                  : shellMode === "minimized"
-                  ? { height: 36 }
-                  : undefined
-              }
-            >
-              <DuckDBShell
-                serviceUrl={serviceUrl}
-                catalogName={data.catalogName}
-                mode={shellMode}
-                onModeChange={setShellMode}
-                onShellReady={(insert) => { shellInsertRef.current = insert; fetchMemoryTables(); }}
-                catalogData={data}
-                selection={selection}
-              />
-            </div>
-          </Suspense>
+          <ErrorBoundary>
+            <Suspense fallback={
+              <div style={{ height: shellMode === "minimized" ? 36 : shellMode === "panel" ? shellHeight : undefined }}
+                   className={`flex items-center justify-center bg-[#1a1a0e] text-[#6ba034] shrink-0 border-t border-border ${shellMode === "maximized" || shellMode === "fullscreen" ? "flex-1" : ""}`}>
+                {shellMode !== "minimized" && "Loading..."}
+              </div>
+            }>
+              <div
+                className={`shrink-0 border-t border-border overflow-hidden ${shellMode === "maximized" || shellMode === "fullscreen" ? "flex-1" : ""}`}
+                style={
+                  shellMode === "panel"
+                    ? { height: shellHeight }
+                    : shellMode === "minimized"
+                    ? { height: 36 }
+                    : undefined
+                }
+              >
+                <DuckDBShell
+                  serviceUrl={serviceUrl}
+                  catalogName={data.catalogName}
+                  mode={shellMode}
+                  onModeChange={setShellMode}
+                  onShellReady={(insert) => { shellInsertRef.current = insert; fetchMemoryTables(); }}
+                  catalogData={data}
+                  selection={selection}
+                />
+              </div>
+            </Suspense>
+          </ErrorBoundary>
         </div>
       </div>
     </div>

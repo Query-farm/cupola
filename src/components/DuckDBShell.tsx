@@ -21,6 +21,7 @@ import {
   type MessageParam,
 } from "@/lib/ai-agent";
 import { createMarkdownRenderer } from "@/lib/markdown-ansi";
+import { estimateCost, formatCost } from "@/lib/pricing";
 
 const KeplerMap = lazy(() => import("./KeplerMap").then((m) => ({ default: m.KeplerMap })));
 
@@ -1489,15 +1490,8 @@ function initShell(
                   }
                   rl.println("");
                   if (usage) {
-                    // Estimate cost per million tokens (as of 2025)
-                    const pricing: Record<string, [number, number]> = {
-                      "claude-haiku-4-5-20251001": [1, 5],
-                      "claude-sonnet-4-20250514": [3, 15],
-                      "claude-opus-4-20250514": [15, 75],
-                    };
-                    const [inRate, outRate] = pricing[aiModel] || [3, 15];
-                    const cost = (usage.inputTokens * inRate + usage.outputTokens * outRate) / 1_000_000;
-                    const costStr = cost < 0.01 ? `<$0.01` : `~$${cost.toFixed(2)}`;
+                    const cost = estimateCost(aiModel, usage.inputTokens, usage.outputTokens);
+                    const costStr = formatCost(cost);
                     rl.println(`\x1b[2m  tokens: ${usage.inputTokens.toLocaleString()} in, ${usage.outputTokens.toLocaleString()} out (${costStr})\x1b[0m`);
                   }
                   rl.println("");

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Loader2, AlertCircle, ChevronLeft, ChevronRight, ChevronsLeft, Database } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -66,8 +66,10 @@ export function DataPreview({ tablePath }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const requestIdRef = useRef(0);
 
   const fetchPage = useCallback(async (pageNum: number, size: number) => {
+    const thisRequest = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -75,6 +77,7 @@ export function DataPreview({ tablePath }: Props) {
       const { table, error: queryError } = await queryDuckDB(
         `SELECT * FROM ${tablePath} LIMIT ${size} OFFSET ${offset}`
       );
+      if (thisRequest !== requestIdRef.current) return; // stale response
       if (queryError) {
         setError(queryError);
         return;
@@ -92,9 +95,10 @@ export function DataPreview({ tablePath }: Props) {
       setColumnInfo(info);
       setRows(data);
     } catch (err: any) {
+      if (thisRequest !== requestIdRef.current) return;
       setError(err.message || "Failed to load data");
     } finally {
-      setLoading(false);
+      if (thisRequest === requestIdRef.current) setLoading(false);
     }
   }, [tablePath]);
 

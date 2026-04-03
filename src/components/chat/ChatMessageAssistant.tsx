@@ -3,6 +3,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { SqlToolCallBlock } from "./SqlToolCallBlock";
 import { AskUserBlock } from "./AskUserBlock";
 import { ThinkingIndicator } from "./ThinkingIndicator";
+import { estimateCost, formatCost } from "@/lib/pricing";
 
 export interface ToolCallDisplayResult {
   columns: string[];
@@ -99,16 +100,7 @@ export function ChatMessageAssistant({
         {usage && !isStreaming && (
           <div className="text-[10px] text-muted-foreground/40 font-mono pt-1">
             {usage.inputTokens.toLocaleString()} in, {usage.outputTokens.toLocaleString()} out
-            {model && (() => {
-              const pricing: Record<string, [number, number]> = {
-                "claude-haiku-4-5-20251001": [1, 5],
-                "claude-sonnet-4-20250514": [3, 15],
-                "claude-opus-4-20250514": [15, 75],
-              };
-              const [inR, outR] = pricing[model] || [3, 15];
-              const cost = (usage.inputTokens * inR + usage.outputTokens * outR) / 1_000_000;
-              return ` · ${cost < 0.01 ? "<$0.01" : `~$${cost.toFixed(2)}`}`;
-            })()}
+            {model && ` · ${formatCost(estimateCost(model, usage.inputTokens, usage.outputTokens))}`}
           </div>
         )}
       </div>

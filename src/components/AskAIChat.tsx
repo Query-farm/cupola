@@ -11,6 +11,11 @@ import {
   formatArrowTableAsJson,
   type MessageParam,
 } from "@/lib/ai-agent";
+/** Safely quote a SQL identifier to prevent injection. */
+function quoteIdent(name: string): string {
+  return '"' + name.replace(/"/g, '""') + '"';
+}
+
 import { ChatInput } from "./chat/ChatInput";
 import { ChatMessageUser } from "./chat/ChatMessageUser";
 import {
@@ -70,6 +75,11 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape" && abortRef.current) {
+        // Resolve any pending ask_user promise to prevent leak
+        if (askUserResolve.current) {
+          askUserResolve.current("__cancelled__");
+          askUserResolve.current = null;
+        }
         abortRef.current.abort();
         (window as any).__duckdbCancelQuery?.();
       }
@@ -256,7 +266,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           const queryFn = (window as any).__duckdbQuery;
           if (queryFn) {
             // Get columns
-            const r = await queryFn(`SELECT column_name, data_type, is_nullable, column_default, comment FROM duckdb_columns() WHERE database_name = '${input.catalog}' AND schema_name = '${input.schema}' AND table_name = '${input.table}' ORDER BY column_index`);
+            const r = await queryFn(`SELECT column_name, data_type, is_nullable, column_default, comment FROM duckdb_columns() WHERE database_name = ${quoteIdent(input.catalog)} AND schema_name = ${quoteIdent(input.schema)} AND table_name = ${quoteIdent(input.table)} ORDER BY column_index`);
             if (r.ok && r.arrowBuffers?.length) {
               const t = tableFromIPC(r.arrowBuffers[0] instanceof ArrayBuffer ? new Uint8Array(r.arrowBuffers[0]) : r.arrowBuffers[0]);
               const cols: any[] = [];
@@ -273,14 +283,14 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
                 cols.push(col);
               }
               // Get table comment
-              const commentR = await queryFn(`SELECT comment FROM duckdb_tables() WHERE database_name = '${input.catalog}' AND schema_name = '${input.schema}' AND table_name = '${input.table}'`);
+              const commentR = await queryFn(`SELECT comment FROM duckdb_tables() WHERE database_name = ${quoteIdent(input.catalog)} AND schema_name = ${quoteIdent(input.schema)} AND table_name = ${quoteIdent(input.table)}`);
               let tableComment = null;
               if (commentR.ok && commentR.arrowBuffers?.length) {
                 const ct = tableFromIPC(commentR.arrowBuffers[0] instanceof ArrayBuffer ? new Uint8Array(commentR.arrowBuffers[0]) : commentR.arrowBuffers[0]);
                 if (ct.numRows > 0) tableComment = String(ct.getChildAt(0)?.get(0) ?? "") || null;
               }
               // Get constraints
-              const constraintR = await queryFn(`SELECT constraint_type, constraint_column_names FROM duckdb_constraints() WHERE database_name = '${input.catalog}' AND schema_name = '${input.schema}' AND table_name = '${input.table}'`);
+              const constraintR = await queryFn(`SELECT constraint_type, constraint_column_names FROM duckdb_constraints() WHERE database_name = ${quoteIdent(input.catalog)} AND schema_name = ${quoteIdent(input.schema)} AND table_name = ${quoteIdent(input.table)}`);
               let primaryKey: string[] | null = null;
               const checkConstraints: string[] = [];
               const uniqueConstraints: string[][] = [];

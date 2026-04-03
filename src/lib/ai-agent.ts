@@ -374,9 +374,11 @@ export function formatArrowTableAsJson(
     rows.push(row);
   }
 
-  // Cache full result
+  // Cache result (capped to prevent OOM on large tables)
+  const CACHE_LIMIT = 10_000;
+  const rowsToCache = Math.min(numRows, CACHE_LIMIT);
   const allRows: Record<string, any>[] = [];
-  for (let r = 0; r < numRows; r++) {
+  for (let r = 0; r < rowsToCache; r++) {
     const row: Record<string, any> = {};
     for (let c = 0; c < fields.length; c++) {
       row[columns[c]] = formatFieldVal(table.getChildAt(c)?.get(r), fields[c]);
@@ -568,7 +570,9 @@ async function* parseSSEStream(
         if (data === "[DONE]") return;
         try {
           yield JSON.parse(data);
-        } catch {}
+        } catch (e) {
+          console.warn("SSE parse error:", data.slice(0, 200), e);
+        }
       }
     }
   }
