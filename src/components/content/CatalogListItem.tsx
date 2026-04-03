@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react";
 
 interface Props {
   icon: ComponentType<{ className?: string }>;
+  iconClassName?: string;
   title: string;
   description?: string;
   badge?: string;
@@ -10,14 +11,14 @@ interface Props {
   onClick?: () => void;
 }
 
-export function CatalogListItem({ icon: Icon, title, description, badge, rightLabel, onClick }: Props) {
+export function CatalogListItem({ icon: Icon, iconClassName, title, description, badge, rightLabel, onClick }: Props) {
   return (
     <button
       className="flex items-center justify-between w-full px-4 py-3 rounded-lg border border-border bg-card hover:border-primary/30 hover:bg-accent/5 transition-colors text-left group cursor-pointer"
       onClick={onClick}
     >
       <div className="flex items-start gap-3 min-w-0">
-        <Icon className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
+        <Icon className={`h-5 w-5 shrink-0 mt-0.5 ${iconClassName ?? "text-muted-foreground"}`} />
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm">{title}</span>

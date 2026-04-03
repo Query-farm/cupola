@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { Folder, Table2, Eye, FunctionSquare } from "lucide-react";
+import { Folder } from "lucide-react";
+import { CatalogIcon, getIconForType, getColorForType } from "./CatalogIcons";
 import { CatalogListItem } from "./CatalogListItem";
 import type { ResolvedSchema } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
@@ -40,16 +41,16 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
 
       <div className="flex gap-6 text-sm text-muted-foreground mb-6">
         <span className="flex items-center gap-1.5">
-          <Table2 className="h-4 w-4" /> {schema.tables.length} tables
+          <CatalogIcon type="table" className="h-4 w-4" /> {schema.tables.length} tables
         </span>
         {schema.views.length > 0 && (
           <span className="flex items-center gap-1.5">
-            <Eye className="h-4 w-4" /> {schema.views.length} views
+            <CatalogIcon type="view" className="h-4 w-4" /> {schema.views.length} views
           </span>
         )}
         {visibleFunctions.length > 0 && (
           <span className="flex items-center gap-1.5">
-            <FunctionSquare className="h-4 w-4" /> {visibleFunctions.length} functions
+            <CatalogIcon type="function" className="h-4 w-4" /> {visibleFunctions.length} functions
           </span>
         )}
       </div>
@@ -61,7 +62,8 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
             {schema.tables.map((t) => (
               <CatalogListItem
                 key={t.name}
-                icon={Table2}
+                icon={getIconForType("table")}
+                iconClassName={getColorForType("table")}
                 title={t.name}
                 description={t.comment || undefined}
                 onClick={() => onNavigate({ type: "table", name: t.name, schema: schemaName, catalog: catalogName })}
@@ -78,7 +80,8 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
             {schema.views.map((v) => (
               <CatalogListItem
                 key={v.name}
-                icon={Eye}
+                icon={getIconForType("view")}
+                iconClassName={getColorForType("view")}
                 title={v.name}
                 description={v.comment || undefined}
                 onClick={() => onNavigate({ type: "view", name: v.name, schema: schemaName, catalog: catalogName })}
@@ -95,10 +98,29 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
             {visibleFunctions.map((f) => (
               <CatalogListItem
                 key={f.name}
-                icon={FunctionSquare}
+                icon={getIconForType("function")}
+                iconClassName={getColorForType("function")}
                 title={f.name}
                 description={f.description || undefined}
                 onClick={() => onNavigate({ type: "function", name: f.name, schema: schemaName, catalog: catalogName })}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {schema.macros?.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Macros</h2>
+          <div className="grid gap-2">
+            {schema.macros.map((m) => (
+              <CatalogListItem
+                key={m.name}
+                icon={getIconForType("macro")}
+                title={m.name}
+                description={m.comment || undefined}
+                badge={m.macroType === "table" ? "table" : "scalar"}
+                onClick={() => onNavigate({ type: "macro", name: m.name, schema: schemaName, catalog: catalogName })}
               />
             ))}
           </div>

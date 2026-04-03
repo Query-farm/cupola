@@ -31,9 +31,9 @@ export function hashToSelection(hash: string): Selection | null {
   // #/schema/{schema}/function/{name}
   if (parts[0] === "schema" && parts.length === 4) {
     const schema = parts[1];
-    const type = parts[2] as "table" | "view" | "function";
+    const type = parts[2] as "table" | "view" | "function" | "macro";
     const name = parts[3];
-    if (["table", "view", "function"].includes(type)) {
+    if (["table", "view", "function", "macro"].includes(type)) {
       return { type, name, schema };
     }
   }

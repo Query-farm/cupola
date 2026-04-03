@@ -1,5 +1,6 @@
 import { FunctionSquare } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { getBadgeColorForType } from "./CatalogIcons";
 import type { FunctionInfo } from "vgi/client";
 import type { Selection } from "@/lib/tree";
 import { Breadcrumb } from "./Breadcrumb";
@@ -17,7 +18,7 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate }: Pr
       <div className="flex items-center gap-3 mb-1">
         <FunctionSquare className="h-6 w-6 text-primary" />
         <h1 className="text-2xl font-bold font-mono text-primary">{func.name}</h1>
-        <Badge variant="secondary" className="text-xs bg-green-50 text-green-700">function</Badge>
+        <Badge variant="secondary" className={`text-xs ${getBadgeColorForType("function")}`}>function</Badge>
       </div>
 
       {catalogName && schemaName && (

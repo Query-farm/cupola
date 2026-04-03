@@ -12,6 +12,7 @@ import type {
   TableInfo,
   ViewInfo,
   FunctionInfo,
+  MacroInfo,
   CatalogAttachResult,
 } from "vgi/client";
 import { getAuthToken } from "./auth";
@@ -43,11 +44,14 @@ export interface ResolvedSchema {
   tables: TableInfo[];
   views: ViewInfo[];
   functions: FunctionInfo[];
+  macros: MacroInfo[];
 }
 
 /** Full catalog data ready for rendering. */
 export interface CatalogData {
   catalogName: string;
+  catalogComment: string | null;
+  catalogTags: Record<string, string>;
   defaultSchema: string | null;
   schemas: ResolvedSchema[];
 }
@@ -119,6 +123,8 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
     const attach = await client.catalogAttach(catalogName);
     const attachId = attach.attachId;
     const defaultSchema = attach.defaultSchema ?? null;
+    const catalogComment = attach.comment ?? null;
+    const catalogTags = attach.tags ?? {};
 
     // Fetch all schemas
     const schemaInfos = await client.schemas(attachId);
@@ -126,14 +132,17 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
     // Fetch contents for each schema in parallel
     const schemas = await Promise.all(
       schemaInfos.map(async (info) => {
-        const [tables, views, functions] = await Promise.all([
+        const [tables, views, functions, scalarMacros, tableMacros] = await Promise.all([
           client.schemaContentsTables(attachId, info.name).catch(() => []),
           client.schemaContentsViews(attachId, info.name).catch(() => []),
           client
             .schemaContentsFunctions(attachId, info.name, "TABLE_FUNCTION")
             .catch(() => []),
+          client.schemaContentsMacros(attachId, info.name, "scalar_macro").catch(() => []),
+          client.schemaContentsMacros(attachId, info.name, "table_macro").catch(() => []),
         ]);
-        return { info, tables, views, functions } as ResolvedSchema;
+        const macros = [...scalarMacros, ...tableMacros];
+        return { info, tables, views, functions, macros } as ResolvedSchema;
       })
     );
 
@@ -145,7 +154,7 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
     });
 
     await client.catalogDetach(attachId);
-    return { catalogName, defaultSchema, schemas };
+    return { catalogName, catalogComment, catalogTags, defaultSchema, schemas };
   } finally {
     client.close();
   }

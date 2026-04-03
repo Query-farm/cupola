@@ -115,7 +115,8 @@ const TOOLS: Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        schema: { type: "string", description: "Schema name (e.g., 'property')" },
+        catalog: { type: "string", description: "Catalog name (e.g., 'airports', 'memory'). Defaults to the current catalog if omitted." },
+        schema: { type: "string", description: "Schema name (e.g., 'airports', 'main')" },
         table: { type: "string", description: "Table or view name (e.g., 'parcels')" },
       },
       required: ["schema", "table"],
@@ -143,47 +144,165 @@ const TOOLS: Tool[] = [
 // System prompt builder
 // ---------------------------------------------------------------------------
 
-export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string): string {
+export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memoryCatalog?: CatalogData | null): string {
+  const cat = catalog.catalogName;
+  const firstSchema = catalog.schemas[0]?.info.name || "schema";
+  const firstTable = catalog.schemas[0]?.tables[0]?.name || "table";
+  const exFull = `${cat}.${firstSchema}.${firstTable}`;
+
   const lines: string[] = [
-    `You are a data analyst assistant connected to a DuckDB 1.5.1 database via VGI (Vector Gateway Interface).`,
-    `Catalog: ${catalog.catalogName}`,
-    `Connected via: ${serviceUrl}`,
+    `You are a data analyst assistant connected to a DuckDB 1.5.1 database.`,
     ``,
+    `## Tools`,
+    `* **describe_table** — Get column names, types, and descriptions for a table.`,
+    `* **run_sql** — Execute a DuckDB SQL query.`,
+    `* **ask_user** — Ask the user to choose between specific options.`,
+    ``,
+    `## Rules`,
+    ``,
+    `### Before writing any query`,
+    `You MUST call describe_table for every table you plan to reference. Do not guess or infer column names from the table description — they are not predictable.`,
+    ``,
+    `### Query planning`,
+    `For multi-step or ambiguous questions, outline your analysis plan first: which tables, what joins, what aggregations. Then execute step by step using CTEs, views, or temporary tables to break complex work into stages.`,
+    ``,
+    `### SQL style`,
+    `* Always use fully qualified three-part table references: \`catalog.schema.table\` (e.g., \`${exFull}\`). Never use bare table names or two-part names — even if a default catalog or schema is set.`,
+    `* Use short aliases to keep queries readable: \`FROM ${exFull} t\`.`,
+    `* Always JOIN tables in SQL rather than combining results from separate queries in prose.`,
+    `* All arithmetic, aggregation, and numeric comparison MUST happen in SQL via run_sql. Never do math in your head.`,
+    `* For final results, select only the columns relevant to the user's question — avoid \`SELECT *\`.`,
+    `* Prefer CTEs (\`WITH\` clauses) for intermediate steps within a single query. Use views for reusable filtered subsets. Use \`CREATE TABLE\` only when you need to materialize data.`,
+    ``,
+    `### Disambiguation`,
+    `Use ask_user when the user's question is ambiguous — e.g., which item, which metric, which time period. Don't assume.`,
+    ``,
+    `### Error recovery`,
+    `If a query fails, look up every function used: \`SELECT function_name, parameters, description FROM duckdb_functions() WHERE function_name = 'name'\`. If the same error occurs twice, explain the issue to the user and ask for guidance — do not retry indefinitely.`,
+    ``,
+    `### Output`,
+    `* For results ≤20 rows: show as a formatted table.`,
+    `* For results >20 rows: summarize key findings and show a representative sample.`,
+    `* For wide results (>6 columns): select only the relevant columns rather than dumping everything.`,
+    `* Always explain your findings in plain language after presenting data.`,
+    ``,
+    `### Never do this`,
+    `* Never use \`SELECT *\` in result queries.`,
+    `* Never perform arithmetic outside SQL.`,
+    `* Never combine results from separate queries in prose — use JOINs or CTEs.`,
+    `* Never use two-part or bare table names — always use \`catalog.schema.table\`.`,
+    `* Never use \`ST_Area()\`, \`ST_Distance()\`, or \`ST_Length()\` for real-world measurements (see Spatial section below).`,
+    `* Never attempt to LOAD or INSTALL extensions. Only the loaded extensions listed below are available.`,
+    ``,
+    `## Object naming: catalog → schema → table`,
+    ``,
+    `DuckDB uses a three-level namespace: \`catalog.schema.table\`.`,
+    ``,
+    `| Level | What it is | Example |`,
+    `|-------|-----------|---------|`,
+    `| Catalog | A database or attached data source | \`${cat}\`, \`memory\` |`,
+    `| Schema | A grouping of related tables within a catalog | \`${cat}.${firstSchema}\` |`,
+    `| Table | A single table or view | \`${exFull}\` |`,
+    ``,
+    `Always use fully qualified three-part names. This is non-negotiable — queries that omit the catalog or schema will break when multiple catalogs are attached.`,
+    ``,
+    `\`\`\`sql`,
+    `-- WRONG: bare or two-part names`,
+    `SELECT * FROM ${firstTable};`,
+    `SELECT * FROM ${firstSchema}.${firstTable};`,
+    ``,
+    `-- RIGHT: fully qualified three-part name`,
+    `SELECT * FROM ${exFull};`,
+    `\`\`\``,
+    ``,
+    `## The memory catalog`,
+    ``,
+    `All attached data catalogs are read-only. To persist derived results, write to the memory catalog:`,
+    ``,
+    `\`\`\`sql`,
+    `CREATE TABLE memory.main.my_table AS SELECT ...;`,
+    `COMMENT ON TABLE memory.main.my_table IS 'What this table contains';`,
+    `\`\`\``,
+    ``,
+    `For simple filters with no aggregation, prefer a view — it stays current and costs nothing:`,
+    ``,
+    `\`\`\`sql`,
+    `CREATE VIEW memory.main.my_view AS`,
+    `  SELECT * FROM ${exFull} WHERE ...;`,
+    `\`\`\``,
+    ``,
+    `Always use fully qualified three-part source names inside view definitions — views don't inherit any default catalog or schema context.`,
+    ``,
+    `## Attached catalogs`,
+    ``,
+    `### ${cat}`,
     `Loaded extensions: json, icu, spatial`,
-    `Geometry columns are WGS84 (EPSG:4326) in WKB format. Coordinates are longitude/latitude in degrees.`,
-    `IMPORTANT: ST_Area, ST_Distance, ST_Length operate in the geometry's CRS. Since geometries are WGS84, these return degrees, NOT meters.`,
-    `For real-world distances/areas use ST_Area_Spheroid(geom), ST_Distance_Spheroid(geom1, geom2), ST_Length_Spheroid(geom) which return meters.`,
-    `Alternatively, transform to a projected CRS first: ST_Transform(geom, 'EPSG:4326', 'EPSG:32617') for UTM zone 17N (Virginia area).`,
-    ``,
-    `Available tables and views:`,
   ];
 
+  // Dynamic catalog content
   for (const schema of catalog.schemas) {
     const schemaComment = schema.info.comment ? ` — ${schema.info.comment}` : "";
-    const schemaTags = schema.info.tags && Object.keys(schema.info.tags).length > 0
-      ? ` [tags: ${Object.entries(schema.info.tags).map(([k, v]) => `${k}=${v}`).join(", ")}]` : "";
-    lines.push(`  Schema: ${schema.info.name}${schemaComment}${schemaTags}`);
+    const filteredTags = schema.info.tags
+      ? Object.entries(schema.info.tags).filter(([k]) => k !== "example_queries")
+      : [];
+    const schemaTags = filteredTags.length > 0
+      ? ` [${filteredTags.map(([k, v]) => `${k}: ${v}`).join(", ")}]` : "";
+    lines.push(`**Schema: ${cat}.${schema.info.name}**${schemaComment}${schemaTags}`);
 
     for (const table of schema.tables) {
-      const cols = getColumns(table);
       const comment = table.comment ? ` — ${table.comment}` : "";
-      lines.push(`    ${schema.info.name}.${table.name} (table, ${cols.length} cols)${comment}`);
+      lines.push(`* \`${cat}.${schema.info.name}.${table.name}\`${comment}`);
     }
 
     for (const view of schema.views) {
       const comment = view.comment ? ` — ${view.comment}` : "";
-      lines.push(`    ${schema.info.name}.${view.name} (view)${comment}`);
+      lines.push(`* \`${cat}.${schema.info.name}.${view.name}\`${comment}`);
+    }
+
+    if (schema.macros?.length > 0) {
+      for (const macro of schema.macros) {
+        const comment = macro.comment ? ` — ${macro.comment}` : "";
+        const params = macro.parameters.length > 0 ? `(${macro.parameters.join(", ")})` : "()";
+        lines.push(`* \`${cat}.${schema.info.name}.${macro.name}${params}\` (${macro.macroType} macro)${comment}`);
+      }
+    }
+    lines.push(``);
+  }
+
+  // Memory catalog tables (if any exist)
+  if (memoryCatalog && memoryCatalog.schemas.some(s => s.tables.length > 0 || s.views.length > 0)) {
+    lines.push(`### memory (in-memory tables)`);
+    lines.push(`These are user-created tables and views in the writable memory catalog.`);
+    lines.push(``);
+    for (const schema of memoryCatalog.schemas) {
+      const hasTables = schema.tables.length > 0 || schema.views.length > 0;
+      if (!hasTables) continue;
+      lines.push(`**Schema: memory.${schema.info.name}**`);
+      for (const table of schema.tables) {
+        const comment = table.comment ? ` — ${table.comment}` : "";
+        lines.push(`* \`memory.${schema.info.name}.${table.name}\`${comment}`);
+      }
+      for (const view of schema.views) {
+        const comment = view.comment ? ` — ${view.comment}` : "";
+        lines.push(`* \`memory.${schema.info.name}.${view.name}\`${comment}`);
+      }
+      lines.push(``);
     }
   }
 
+  // Spatial section
+  lines.push(`## Spatial data (${cat} catalog)`);
   lines.push(``);
-  lines.push(`The current database is set to USE ${catalog.catalogName}, so you can query tables without the catalog prefix (e.g., schema.table).`);
-  lines.push(`The ${catalog.catalogName} catalog is read-only. To create new tables, use the memory.main catalog and schema (e.g., CREATE TABLE memory.main.my_table AS ...).`);
+  lines.push(`Geometry columns are WGS84 (EPSG:4326) in WKB format. Coordinates are longitude/latitude in degrees.`);
   lines.push(``);
-  lines.push(`Use describe_table to see column details before writing queries.`);
-  lines.push(`Use run_sql to execute DuckDB SQL queries.`);
-  lines.push(`Use ask_user when you need the user to choose between specific options.`);
-  lines.push(`Explain your findings in plain language.`);
+  lines.push(`| Need | Wrong (degrees) | Right (meters) |`);
+  lines.push(`|------|----------------|----------------|`);
+  lines.push(`| Distance | \`ST_Distance\` | \`ST_Distance_Spheroid\` |`);
+  lines.push(`| Area | \`ST_Area\` | \`ST_Area_Spheroid\` |`);
+  lines.push(`| Length | \`ST_Length\` | \`ST_Length_Spheroid\` |`);
+  lines.push(``);
+  lines.push(`Alternative: transform to a projected CRS first, then use the plain functions:`);
+  lines.push(`\`ST_Transform(geom, 'EPSG:4326', 'EPSG:32617')\` — UTM zone 17N`);
 
   return lines.join("\n");
 }
@@ -306,6 +425,14 @@ export function executeListTables(catalog: CatalogData): string {
         }
         return entry;
       });
+      if (schema.macros?.length > 0) {
+        schemaInfo.macros = schema.macros.map((macro) => ({
+          name: macro.name,
+          type: macro.macroType === "table" ? "table_macro" : "scalar_macro",
+          parameters: macro.parameters,
+          comment: macro.comment || null,
+        }));
+      }
       return schemaInfo;
     }),
   };
@@ -527,14 +654,19 @@ async function streamOneRequest(
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
+        "anthropic-beta": "prompt-caching-2024-07-31",
         "anthropic-dangerous-direct-browser-access": "true",
         "content-type": "application/json",
       },
       body: JSON.stringify({
         model,
         messages,
-        tools: TOOLS,
-        system: systemPrompt,
+        tools: TOOLS.map((t, i) =>
+          i === TOOLS.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t
+        ),
+        system: [
+          { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
+        ],
         max_tokens: 4096,
         stream: true,
       }),
@@ -630,10 +762,18 @@ export async function runAgentTurn(
           const waitSec = Math.min(2 ** attempt * 2, 10);
           for (let remaining = waitSec; remaining > 0; remaining--) {
             if (signal?.aborted) throw err;
-            callbacks.onText(`\r\x1b[2m(Network error, retrying in ${remaining}s...)\x1b[0m\x1b[K`);
+            if (callbacks.onRetry) {
+              callbacks.onRetry(`Network error, retrying in ${remaining}s...`);
+            } else {
+              callbacks.onText(`\r\x1b[2m(Network error, retrying in ${remaining}s...)\x1b[0m\x1b[K`);
+            }
             await new Promise((r) => setTimeout(r, 1000));
           }
-          callbacks.onText(`\r\x1b[K`);
+          if (callbacks.onRetry) {
+            callbacks.onRetry(null);
+          } else {
+            callbacks.onText(`\r\x1b[K`);
+          }
           continue;
         }
         throw err;

@@ -2,10 +2,11 @@ import { UserInfo } from "./UserInfo";
 
 interface Props {
   catalogName: string;
+  catalogComment?: string | null;
   serviceUrl: string;
 }
 
-export function Header({ catalogName, serviceUrl }: Props) {
+export function Header({ catalogName, catalogComment, serviceUrl }: Props) {
   const logoutUrl = `${serviceUrl}/_oauth/logout`;
 
   return (
@@ -16,7 +17,12 @@ export function Header({ catalogName, serviceUrl }: Props) {
           alt="VGI"
           className="w-7 h-7 rounded-full"
         />
-        <span className="font-semibold text-primary">{catalogName}</span>
+        <div className="flex items-baseline gap-2">
+          <span className="font-semibold text-primary">{catalogName}</span>
+          {catalogComment && (
+            <span className="text-xs text-muted-foreground hidden sm:inline">{catalogComment}</span>
+          )}
+        </div>
       </div>
 
       <UserInfo logoutUrl={logoutUrl} />

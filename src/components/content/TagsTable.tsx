@@ -9,7 +9,7 @@ export function TagsTable({ tags }: Props) {
   return (
     <>
       <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mt-6 mb-2">Tags</h2>
-      <div className="border rounded-md overflow-hidden mb-4">
+      <div className="border rounded-md overflow-hidden mb-4 bg-card shadow-sm">
         <table className="text-sm" style={{ tableLayout: "auto", width: "100%" }}>
           <thead className="bg-muted/50">
             <tr>

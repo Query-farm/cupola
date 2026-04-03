@@ -16,6 +16,7 @@ import { SchemaDetail } from "./content/SchemaDetail";
 import { TableDetail } from "./content/TableDetail";
 import { ViewDetail } from "./content/ViewDetail";
 import { FunctionDetail } from "./content/FunctionDetail";
+import { MacroDetail } from "./content/MacroDetail";
 
 export function CatalogApp() {
   const [data, setData] = useState<CatalogData | null>(null);
@@ -26,7 +27,7 @@ export function CatalogApp() {
   const [shellMode, setShellMode] = useState<ShellMode>(() => {
     try {
       const stored = localStorage.getItem("vgi-shell-mode");
-      if (stored === "minimized" || stored === "panel" || stored === "maximized") return stored;
+      if (stored === "minimized" || stored === "panel" || stored === "maximized" || stored === "fullscreen") return stored;
     } catch {}
     return "minimized";
   });
@@ -45,10 +46,27 @@ export function CatalogApp() {
          WHERE database_name = 'memory'
          ORDER BY schema_name, table_name, column_index`
       );
-      if (!result.ok || !result.arrowBuffers?.length) { setMemoryCatalog(null); return; }
+      const buf = result.arrowBuffers?.[0];
+      if (!result.ok || !buf) { setMemoryCatalog(null); return; }
 
-      const table = tableFromIPC(result.arrowBuffers[0]);
+      const table = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
       if (table.numRows === 0) { setMemoryCatalog(null); return; }
+
+      // Fetch table comments
+      const commentMap = new Map<string, string>(); // "schema.table" → comment
+      const commentResult = await queryFn(
+        `SELECT schema_name, table_name, comment FROM duckdb_tables() WHERE database_name = 'memory' AND comment IS NOT NULL AND comment != ''`
+      );
+      if (commentResult.ok && commentResult.arrowBuffers?.length) {
+        const cbuf = commentResult.arrowBuffers[0];
+        const ct = tableFromIPC(cbuf instanceof ArrayBuffer ? new Uint8Array(cbuf) : cbuf);
+        for (let r = 0; r < ct.numRows; r++) {
+          const s = String(ct.getChildAt(0)?.get(r) ?? "");
+          const t = String(ct.getChildAt(1)?.get(r) ?? "");
+          const c = String(ct.getChildAt(2)?.get(r) ?? "");
+          if (c) commentMap.set(`${s}.${t}`, c);
+        }
+      }
 
       // Group by schema → table → columns
       const schemaMap = new Map<string, Map<string, { name: string; type: string; nullable: boolean }[]>>();
@@ -73,7 +91,7 @@ export function CatalogApp() {
           tables.push({
             name: tableName,
             schemaName,
-            comment: "",
+            comment: commentMap.get(`${schemaName}.${tableName}`) || "",
             columns: new Uint8Array(0),
             primaryKeyConstraints: [],
             uniqueConstraints: [],
@@ -93,11 +111,14 @@ export function CatalogApp() {
           tables,
           views: [],
           functions: [],
+          macros: [],
         });
       }
 
       setMemoryCatalog({
         catalogName: "memory",
+        catalogComment: null,
+        catalogTags: {},
         defaultSchema: "main",
         schemas,
       });
@@ -107,9 +128,25 @@ export function CatalogApp() {
     }
   }, []);
 
+  // Expose refresh globally (navigate is exposed after it's defined below)
+  if (typeof window !== "undefined") {
+    (window as any).__refreshMemoryTables = fetchMemoryTables;
+    (window as any).__memoryCatalog = memoryCatalog;
+  }
+
   // Persist shell mode to localStorage
   useEffect(() => {
     try { localStorage.setItem("vgi-shell-mode", shellMode); } catch {}
+  }, [shellMode]);
+
+  // Escape key exits fullscreen
+  useEffect(() => {
+    if (shellMode !== "fullscreen") return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShellMode("panel");
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
   }, [shellMode]);
 
   // Shell panel vertical resize
@@ -227,6 +264,11 @@ export function CatalogApp() {
     [data]
   );
 
+  // Expose navigate globally so AI agent can select newly created objects
+  if (typeof window !== "undefined") {
+    (window as any).__navigateToSelection = navigate;
+  }
+
   const loadCatalog = useCallback(
     async (isRefresh = false) => {
       if (isRefresh) setRefreshing(true);
@@ -238,7 +280,10 @@ export function CatalogApp() {
         if (!isRefresh) {
           // Restore selection from URL hash, or default to catalog root
           const hashSel = hashToSelection(window.location.hash);
-          const initialSel = hashSel ?? { type: "catalog" as const, name: catalog.catalogName };
+          const defaultSchema = catalog.defaultSchema || catalog.schemas[0]?.info.name;
+          const initialSel = hashSel ?? (defaultSchema
+            ? { type: "schema" as const, name: defaultSchema, schema: defaultSchema }
+            : { type: "catalog" as const, name: catalog.catalogName });
           setSelection(initialSel);
           updatePageTitle(initialSel, catalog.catalogName);
         }
@@ -317,45 +362,52 @@ export function CatalogApp() {
   return (
     <SettingsProvider>
     <div className="flex flex-col h-screen">
-      <Header
-        catalogName={data.catalogName}
-        serviceUrl={serviceUrl}
-      />
+      {shellMode !== "fullscreen" && (
+        <Header
+          catalogName={data.catalogName}
+          catalogComment={data.catalogComment}
+          serviceUrl={serviceUrl}
+        />
+      )}
       <div className="flex flex-1 overflow-hidden">
-        <div style={{ width: sidebarWidth, minWidth: sidebarWidth }}>
-          <Sidebar
-            catalog={data}
-            memoryCatalog={memoryCatalog}
-            selection={selection}
-            onSelect={(sel) => navigate(sel)}
-            onOpenShell={() => setShellMode("maximized")}
-            onShellInsert={(text) => shellInsertRef.current?.(text)}
-            onRefresh={() => loadCatalog(true)}
-            refreshing={refreshing}
-          />
-        </div>
-        <div
-          onPointerDown={onResizeStart}
-          className="w-2 -ml-1 -mr-1 z-10 cursor-col-resize group flex-shrink-0 flex items-stretch justify-center"
-        >
-          <div className="w-0.5 bg-border group-hover:bg-accent/60 group-active:bg-accent transition-colors" />
-        </div>
+        {shellMode !== "fullscreen" && (
+          <>
+            <div style={{ width: sidebarWidth, minWidth: sidebarWidth }}>
+              <Sidebar
+                catalog={data}
+                memoryCatalog={memoryCatalog}
+                selection={selection}
+                onSelect={(sel) => navigate(sel)}
+                onOpenShell={() => setShellMode("maximized")}
+                onShellInsert={(text) => shellInsertRef.current?.(text)}
+                onRefresh={() => loadCatalog(true)}
+                refreshing={refreshing}
+              />
+            </div>
+            <div
+              onPointerDown={onResizeStart}
+              className="w-2 -ml-1 -mr-1 z-10 cursor-col-resize group flex-shrink-0 flex items-stretch justify-center"
+            >
+              <div className="w-0.5 bg-border group-hover:bg-accent/60 group-active:bg-accent transition-colors" />
+            </div>
+          </>
+        )}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Content area — hidden when shell is maximized */}
-          <main className={`overflow-y-auto p-6 min-h-0 ${shellMode === "maximized" ? "h-0 overflow-hidden" : "flex-1"}`}>
-            <ContentPanel data={data} memoryCatalog={memoryCatalog} selection={selection} serviceUrl={serviceUrl} onNavigate={navigate} onOpenShell={() => setShellMode((m) => m === "minimized" ? "panel" : m)} />
+          {/* Content area — hidden when shell is maximized or fullscreen */}
+          <main className={`overflow-y-auto p-6 min-h-0 ${shellMode === "maximized" || shellMode === "fullscreen" ? "h-0 overflow-hidden" : "flex-1"}`}>
+            <ContentPanel data={data} memoryCatalog={memoryCatalog} selection={selection} serviceUrl={serviceUrl} onNavigate={navigate} onOpenShell={() => setShellMode((m) => m === "minimized" ? "panel" : m)} shellMode={shellMode} />
           </main>
 
           {/* Resize handle — only in panel mode */}
           {shellMode === "panel" && (
             <div
               onPointerDown={onShellResizeStart}
-              className="h-3 z-10 cursor-row-resize group flex-shrink-0 flex items-center justify-center hover:bg-black/5 active:bg-black/10 transition-colors"
+              className="h-2 z-10 cursor-row-resize group flex-shrink-0 flex items-center justify-center bg-muted-foreground/20 hover:bg-muted-foreground/30 active:bg-muted-foreground/40 transition-colors"
             >
               <div className="flex gap-1 items-center">
-                <div className="h-1 w-8 rounded-full bg-gray-400/40 group-hover:bg-gray-500/60 group-active:bg-gray-600/80 transition-colors" />
-                <div className="h-1 w-2 rounded-full bg-gray-400/30 group-hover:bg-gray-500/50 transition-colors" />
-                <div className="h-1 w-2 rounded-full bg-gray-400/30 group-hover:bg-gray-500/50 transition-colors" />
+                <div className="h-0.5 w-8 rounded-full bg-muted-foreground/50 group-hover:bg-muted-foreground/70 transition-colors" />
+                <div className="h-0.5 w-2 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/60 transition-colors" />
+                <div className="h-0.5 w-2 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/60 transition-colors" />
               </div>
             </div>
           )}
@@ -363,12 +415,12 @@ export function CatalogApp() {
           {/* Shell panel — always rendered */}
           <Suspense fallback={
             <div style={{ height: shellMode === "minimized" ? 36 : shellMode === "panel" ? shellHeight : undefined }}
-                 className={`flex items-center justify-center bg-[#1a1a0e] text-[#6ba034] shrink-0 border-t border-border ${shellMode === "maximized" ? "flex-1" : ""}`}>
+                 className={`flex items-center justify-center bg-[#1a1a0e] text-[#6ba034] shrink-0 border-t border-border ${shellMode === "maximized" || shellMode === "fullscreen" ? "flex-1" : ""}`}>
               {shellMode !== "minimized" && "Loading..."}
             </div>
           }>
             <div
-              className={`shrink-0 border-t border-border overflow-hidden ${shellMode === "maximized" ? "flex-1" : ""}`}
+              className={`shrink-0 border-t border-border overflow-hidden ${shellMode === "maximized" || shellMode === "fullscreen" ? "flex-1" : ""}`}
               style={
                 shellMode === "panel"
                   ? { height: shellHeight }
@@ -402,6 +454,7 @@ function ContentPanel({
   serviceUrl,
   onNavigate,
   onOpenShell,
+  shellMode,
 }: {
   data: CatalogData;
   memoryCatalog?: CatalogData | null;
@@ -409,6 +462,7 @@ function ContentPanel({
   serviceUrl: string;
   onNavigate: (selection: Selection) => void;
   onOpenShell?: () => void;
+  shellMode?: string;
 }) {
   if (!selection || selection.type === "catalog") {
     if (selection?.catalog && memoryCatalog && selection.catalog === memoryCatalog.catalogName) {
@@ -431,7 +485,7 @@ function ContentPanel({
 
   if (selection.type === "table") {
     const table = schema.tables.find((t) => t.name === selection.name);
-    if (table) return <TableDetail table={table} catalogName={catalog.catalogName} onNavigate={onNavigate} onOpenShell={onOpenShell} />;
+    if (table) return <TableDetail table={table} catalogName={catalog.catalogName} onNavigate={onNavigate} onOpenShell={onOpenShell} shellMode={shellMode} />;
   }
 
   if (selection.type === "view") {
@@ -442,6 +496,11 @@ function ContentPanel({
   if (selection.type === "function") {
     const func = schema.functions.find((f) => f.name === selection.name);
     if (func) return <FunctionDetail func={func} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onNavigate} />;
+  }
+
+  if (selection.type === "macro") {
+    const macro = schema.macros?.find((m) => m.name === selection.name);
+    if (macro) return <MacroDetail macro={macro} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onNavigate} />;
   }
 
   return <CatalogOverview catalog={data} serviceUrl={serviceUrl} onNavigate={onNavigate} />;

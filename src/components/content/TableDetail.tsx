@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { Table2, Key, Link2, ShieldCheck, TerminalSquare } from "lucide-react";
+import { Key, Link2, ShieldCheck } from "lucide-react";
+import { CatalogIcon, getBadgeColorForType } from "./CatalogIcons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button"
 import type { TableInfo } from "vgi/client";
@@ -15,10 +16,10 @@ interface Props {
   catalogName: string;
   onNavigate?: (selection: Selection) => void;
   onOpenShell?: () => void;
-  shellOpen?: boolean;
+  shellMode?: string;
 }
 
-export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shellOpen }: Props) {
+export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shellMode }: Props) {
   const columns = getColumns(table);
   const foreignKeys = getForeignKeys(table);
   const defaultSql = `SELECT * FROM ${catalogName}.${table.schemaName}.${table.name} LIMIT 10;`;
@@ -56,18 +57,18 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
     <div>
       {/* Header */}
       <div className="flex items-center gap-3 mb-1">
-        <Table2 className="h-6 w-6 text-primary" />
+        <CatalogIcon type="table" className="h-6 w-6" />
         <h1 className="text-2xl font-bold font-mono text-primary">{table.name}</h1>
-        <Badge variant="secondary" className="text-xs bg-blue-50 text-blue-700">table</Badge>
-        {onOpenShell && !shellOpen && (
+        <Badge variant="secondary" className={`text-xs ${getBadgeColorForType("table")}`}>table</Badge>
+        {onOpenShell && (shellMode === "minimized" || !shellMode) && (
           <Button
             variant="outline"
             size="sm"
             onClick={onOpenShell}
             className="ml-auto h-7 text-xs gap-1.5"
           >
-            <TerminalSquare className="h-3.5 w-3.5" />
-            Open Shell
+            <img src="/duckdb-icon-light.svg" alt="" className="h-3.5 w-3.5" />
+            Open SQL Shell
           </Button>
         )}
       </div>

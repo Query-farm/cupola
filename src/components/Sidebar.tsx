@@ -92,6 +92,7 @@ export function Sidebar({ catalog, memoryCatalog, selection, onSelect, onOpenShe
               data={filteredMemoryData}
               expandAll={!!search}
               onSelectChange={handleSelectChange}
+              initialSelectedItemId={selectedTreeId}
             />
           </div>
         )}
@@ -109,6 +110,7 @@ export function Sidebar({ catalog, memoryCatalog, selection, onSelect, onOpenShe
           </button>
         )}
         <SettingsModal />
+        <div className="border-t border-border mt-3 pt-3 mx-2" />
         <div className="px-2 pb-1 text-xs text-muted-foreground/60">
           &copy; 2026 &#x1F69C; <a href="https://query.farm" className="hover:text-primary transition-colors">Query.Farm LLC</a>
         </div>

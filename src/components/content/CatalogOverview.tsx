@@ -1,9 +1,11 @@
 import { Database, Folder } from "lucide-react";
+import { getColorForType } from "./CatalogIcons";
 import { ConnectBox } from "@/components/ConnectBox";
 import { useSettings } from "@/lib/settings";
 import type { CatalogData } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
 import { CatalogListItem } from "./CatalogListItem";
+import { TagsTable } from "./TagsTable";
 
 interface Props {
   catalog: CatalogData;
@@ -37,6 +39,10 @@ export function CatalogOverview({ catalog, serviceUrl, onNavigate }: Props) {
         </div>
       </div>
 
+      {catalog.catalogComment && (
+        <p className="text-muted-foreground mb-6">{catalog.catalogComment}</p>
+      )}
+
       <ConnectBox catalogName={catalog.catalogName} serviceUrl={serviceUrl} />
 
       <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3 mt-8">
@@ -52,6 +58,7 @@ export function CatalogOverview({ catalog, serviceUrl, onNavigate }: Props) {
             <CatalogListItem
               key={s.info.name}
               icon={Folder}
+              iconClassName={getColorForType("schema")}
               title={s.info.name}
               description={s.info.comment || undefined}
               badge={s.info.name === catalog.defaultSchema ? "default" : undefined}
@@ -61,6 +68,10 @@ export function CatalogOverview({ catalog, serviceUrl, onNavigate }: Props) {
           );
         })}
       </div>
+
+      {Object.keys(catalog.catalogTags).length > 0 && (
+        <TagsTable tags={catalog.catalogTags} />
+      )}
     </div>
   );
 }

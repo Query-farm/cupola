@@ -322,13 +322,7 @@ const TreeNode = ({
                         item.className
                     )}
                     onClick={() => {
-                        const wasAlreadySelected = selectedItemId === item.id
                         handleSelectChange(item)
-                        // When newly selecting a node, keep it expanded so
-                        // navigating to a schema doesn't collapse its children.
-                        if (!wasAlreadySelected) {
-                            setValue([item.id])
-                        }
                         item.onClick?.()
                     }}
                     draggable={!!item.draggable}
@@ -447,7 +441,7 @@ const TreeLeaf = React.forwardRef<
                 role="treeitem"
                 tabIndex={0}
                 className={cn(
-                    'ml-5 flex text-left items-center py-2 cursor-pointer before:right-1',
+                    'ml-5 flex text-left items-center py-2 cursor-pointer before:right-1 overflow-hidden',
                     treeVariants(),
                     className,
                     isSelected && selectedTreeVariants(),
@@ -579,7 +573,7 @@ const TreeActions = ({
 }) => {
     if (!children) return null
     return (
-        <div className="ml-auto shrink-0">
+        <div className="ml-auto min-w-0 overflow-hidden">
             {children}
         </div>
     )

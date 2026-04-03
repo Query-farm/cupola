@@ -22,6 +22,8 @@ interface Props {
   columnInfo?: ColumnInfo[];
   rows: Record<string, any>[];
   startRow?: number;
+  /** Remove outer border and rounding for embedding in full-bleed containers. */
+  borderless?: boolean;
 }
 
 /** DuckDB types that should be right-aligned. */
@@ -38,7 +40,7 @@ function isNumericType(duckdbType: string): boolean {
   return NUMERIC_TYPES.has(base);
 }
 
-export function DataGrid({ columnNames, columnInfo, rows, startRow = 0 }: Props) {
+export function DataGrid({ columnNames, columnInfo, rows, startRow = 0, borderless }: Props) {
   // Build a map of column name → ColumnInfo for type lookups
   const infoByName = useMemo(() => {
     const map = new Map<string, ColumnInfo>();
@@ -84,14 +86,14 @@ export function DataGrid({ columnNames, columnInfo, rows, startRow = 0 }: Props)
   });
 
   return (
-    <div className="border rounded-md overflow-auto">
+    <div className={borderless ? "overflow-auto" : "border rounded-md overflow-auto"}>
       <Table>
-        <TableHeader className="sticky top-0 bg-muted/90 backdrop-blur-sm z-10">
+        <TableHeader className={`sticky top-0 z-10 ${borderless ? "bg-primary/10 border-b border-primary/20" : "bg-muted/90 backdrop-blur-sm"}`}>
           {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow key={headerGroup.id}>
-              <TableHead className="text-xs text-muted-foreground w-10 text-right pr-3 font-mono">#</TableHead>
+            <TableRow key={headerGroup.id} className={borderless ? "border-none" : ""}>
+              <TableHead className={`text-xs w-10 text-right pr-3 font-mono ${borderless ? "text-primary/60" : "text-muted-foreground"}`}>#</TableHead>
               {headerGroup.headers.map((header) => (
-                <TableHead key={header.id} className="text-xs font-mono whitespace-nowrap">
+                <TableHead key={header.id} className={`text-xs font-mono whitespace-nowrap ${borderless ? "text-primary/80 font-semibold" : ""}`}>
                   {flexRender(header.column.columnDef.header, header.getContext())}
                 </TableHead>
               ))}

@@ -1,13 +1,6 @@
-import { ChevronRight, Database, Folder, Table2, Eye, FunctionSquare } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import type { Selection } from "@/lib/tree";
-
-const icons = {
-  catalog: Database,
-  schema: Folder,
-  table: Table2,
-  view: Eye,
-  function: FunctionSquare,
-} as const;
+import { CatalogIcon, type CatalogObjectType } from "./CatalogIcons";
 
 interface Crumb {
   type: Selection["type"];
@@ -19,7 +12,7 @@ interface Props {
   catalogName: string;
   schemaName?: string;
   itemName?: string;
-  itemType?: "table" | "view" | "function";
+  itemType?: "table" | "view" | "function" | "macro";
   onNavigate?: (selection: Selection) => void;
 }
 
@@ -43,7 +36,6 @@ export function Breadcrumb({ catalogName, schemaName, itemName, itemType, onNavi
   return (
     <nav className="flex items-center gap-1.5 text-xs text-muted-foreground mb-4 px-3 py-1.5 bg-muted/40 rounded-md border border-border/50">
       {crumbs.map((crumb, i) => {
-        const Icon = icons[crumb.type];
         const isLast = i === crumbs.length - 1;
         return (
           <span key={i} className="inline-flex items-center gap-1.5">
@@ -54,12 +46,12 @@ export function Breadcrumb({ catalogName, schemaName, itemName, itemType, onNavi
                 className="inline-flex items-center gap-1 hover:text-primary hover:underline transition-colors"
                 onClick={(e) => { e.preventDefault(); onNavigate?.(crumb.selection!); }}
               >
-                <Icon className="h-3 w-3" />
+                <CatalogIcon type={crumb.type as CatalogObjectType} className="h-3 w-3" />
                 {crumb.label}
               </a>
             ) : (
               <span className="inline-flex items-center gap-1 text-foreground font-medium">
-                <Icon className="h-3 w-3" />
+                <CatalogIcon type={crumb.type as CatalogObjectType} className="h-3 w-3" />
                 {crumb.label}
               </span>
             )}

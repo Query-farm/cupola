@@ -4,7 +4,8 @@
  * Shell logic adapted from public/shell/index.html.
  */
 import { useEffect, useRef, useState, useCallback, lazy, Suspense } from "react";
-import { Maximize2, Minimize2, ChevronDown, ChevronUp, BarChart3, Map as MapIcon, History, Table2 } from "lucide-react";
+import { Maximize2, Minimize2, ChevronDown, ChevronUp, BarChart3, Map as MapIcon, History, Table2, Sparkles } from "lucide-react";
+const AskAIChat = lazy(() => import("./AskAIChat").then(m => ({ default: m.AskAIChat })));
 import { DataPreview } from "./content/DataPreview";
 import { getColumns } from "@/lib/service";
 import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
@@ -40,7 +41,7 @@ export interface QueryHistoryEntry {
   conversationName?: string;
 }
 
-export type ShellMode = "minimized" | "panel" | "maximized";
+export type ShellMode = "minimized" | "panel" | "maximized" | "fullscreen";
 
 interface Props {
   serviceUrl: string;
@@ -111,7 +112,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
-  const [activeTab, setActiveTab] = useState<"shell" | "preview" | "perspective" | "map" | "queries">("shell");
+  const [activeTab, setActiveTab] = useState<"shell" | "askai" | "preview" | "perspective" | "map" | "queries">("shell");
   const [termSize, setTermSize] = useState<{ rows: number; cols: number } | null>(null);
   const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
 
@@ -122,10 +123,21 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
   const [perspectiveHasData, setPerspectiveHasData] = useState(false);
 
-  // Resolve selected table for Data Preview and Perspective tabs
-  const selectedTable = selection?.type === "table" && catalogData
-    ? catalogData.schemas.find(s => s.info.name === selection.schema)?.tables.find(t => t.name === selection.name)
-    : null;
+  // Resolve selected table or view for Data Preview and Perspective tabs
+  // Search both VGI catalog and memory catalog
+  const allCatalogs = [catalogData, (window as any)?.__memoryCatalog].filter(Boolean);
+  const findInCatalogs = (type: "table" | "view", name?: string, schema?: string) => {
+    if (!name || !schema) return null;
+    for (const cat of allCatalogs) {
+      const s = cat.schemas.find((s: any) => s.info.name === schema);
+      if (type === "table") { const t = s?.tables.find((t: any) => t.name === name); if (t) return t; }
+      if (type === "view") { const v = s?.views.find((v: any) => v.name === name); if (v) return v; }
+    }
+    return null;
+  };
+  const selectedTable = selection?.type === "table" ? findInCatalogs("table", selection.name, selection.schema) : null;
+  const selectedView = selection?.type === "view" ? findInCatalogs("view", selection.name, selection.schema) : null;
+  const hasSelectedTableOrView = !!(selectedTable || selectedView || (selection && (selection.type === "table" || selection.type === "view")));
 
   // Expose a function to switch to the shell tab and ensure it's visible
   (window as any).__shellActivate = () => {
@@ -385,7 +397,11 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
             <img src="/duckdb-icon-light.svg" alt="" className="h-4 w-4" />
             SQL Shell
           </button>
-          {selectedTable && (
+          <button className={tabCls("askai")} onClick={() => handleTabClick("askai")}>
+            <Sparkles className="h-3.5 w-3.5" />
+            Ask AI
+          </button>
+          {hasSelectedTableOrView && (
             <button className={tabCls("preview")} onClick={() => handleTabClick("preview")}>
               <Table2 className="h-3.5 w-3.5" />
               Preview
@@ -398,8 +414,8 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
             </button>
           )}
           <button
-            className={`${tabCls("perspective")} ${!selectedTable && !perspectiveHasData ? "opacity-30 cursor-not-allowed" : ""}`}
-            onClick={() => { if (selectedTable || perspectiveHasData) handleTabClick("perspective"); }}
+            className={`${tabCls("perspective")} ${!hasSelectedTableOrView && !perspectiveHasData ? "opacity-30 cursor-not-allowed" : ""}`}
+            onClick={() => { if (hasSelectedTableOrView || perspectiveHasData) handleTabClick("perspective"); }}
           >
             <BarChart3 className="h-3.5 w-3.5" />
             Perspective
@@ -429,11 +445,11 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
             </button>
           )}
           <button
-            onClick={() => onModeChange(mode === "maximized" ? "panel" : "maximized")}
+            onClick={() => onModeChange(mode === "fullscreen" ? "panel" : "fullscreen")}
             className="p-1 text-muted-foreground hover:text-foreground transition-colors"
-            title={mode === "maximized" ? "Restore" : "Maximize"}
+            title={mode === "fullscreen" ? "Restore" : "Full Screen"}
           >
-            {mode === "maximized" ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            {mode === "fullscreen" ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </button>
         </div>
       </div>
@@ -476,12 +492,10 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
       </div>
 
       {/* Data Preview */}
-      {mode !== "minimized" && activeTab === "preview" && selectedTable && (
-        <div className="flex-1 min-h-0 overflow-auto bg-card p-4">
+      {mode !== "minimized" && activeTab === "preview" && (selectedTable || selectedView) && (
+        <div className="flex-1 min-h-0 overflow-hidden bg-card">
           <DataPreview
-            catalogName={catalogName}
-            functionName={selectedTable.name}
-            columnInfo={getColumns(selectedTable)}
+            tablePath={`${selection?.catalog || catalogName}.${selection?.schema || (selectedTable || selectedView)?.schemaName}.${(selectedTable || selectedView)!.name}`}
           />
         </div>
       )}
@@ -506,17 +520,38 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
       </div>
 
       {/* Kepler.gl map */}
-      {mode !== "minimized" && activeTab === "map" && (
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <Suspense fallback={
-            <div className="flex items-center justify-center h-full text-gray-500 text-sm bg-white">
-              Loading Kepler.gl...
-            </div>
-          }>
-            <KeplerMap />
-          </Suspense>
-        </div>
-      )}
+      {/* Ask AI chat panel — always mounted to preserve conversation state */}
+      <div
+        className={`flex-1 min-h-0 overflow-hidden ${mode === "minimized" ? "hidden" : ""}`}
+        style={activeTab !== "askai" ? { visibility: "hidden", position: "absolute", inset: 0, zIndex: -1 } : {}}
+      >
+        <Suspense fallback={
+          <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+            Loading...
+          </div>
+        }>
+          <AskAIChat
+            catalogData={catalogData}
+            serviceUrl={serviceUrl}
+            catalogName={catalogName}
+            isActive={activeTab === "askai"}
+          />
+        </Suspense>
+      </div>
+
+      {/* Kepler.gl map — always mounted to preserve state */}
+      <div
+        className={`flex-1 min-h-0 overflow-hidden ${mode === "minimized" ? "hidden" : ""}`}
+        style={activeTab !== "map" ? { visibility: "hidden", position: "absolute", inset: 0, zIndex: -1 } : {}}
+      >
+        <Suspense fallback={
+          <div className="flex items-center justify-center h-full text-gray-500 text-sm bg-white">
+            Loading Kepler.gl...
+          </div>
+        }>
+          <KeplerMap />
+        </Suspense>
+      </div>
 
       {/* Query History panel */}
       {mode !== "minimized" && activeTab === "queries" && (() => {
@@ -795,6 +830,16 @@ function initShell(
 
     const cancelSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;
     if (cancelSAB) worker.postMessage({ type: "init-cancel-sab", sab: cancelSAB });
+
+    // Expose cancel function for external callers (Ask AI chat)
+    (window as any).__duckdbCancelQuery = () => {
+      if (cancelSAB) {
+        const int32 = new Int32Array(cancelSAB);
+        Atomics.store(int32, 0, 1);
+        // Reset after a short delay so future queries aren't pre-cancelled
+        setTimeout(() => Atomics.store(int32, 0, 0), 500);
+      }
+    };
   }
 
   let queryRunning = false;
@@ -1171,7 +1216,7 @@ function initShell(
         writeln("");
         (window as any).__shellInAiMode = true;
 
-        const systemPrompt = buildSystemPrompt(config.catalogData, config.serviceUrl);
+        const systemPrompt = buildSystemPrompt(config.catalogData, config.serviceUrl, (window as any).__memoryCatalog);
         let aiAbort: AbortController | null = null;
 
         // Braille spinner
@@ -1543,6 +1588,25 @@ function initShell(
           if (fields.length === 1 && fieldNames[0] === "Count" && table.numRows <= 1) {
             const elapsedStr = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(1)}s` : `${Math.round(elapsed)}ms`;
             writeln(`OK (${elapsedStr})`, "32");
+            // DDL — refresh sidebar and handle navigation
+            (window as any).__refreshMemoryTables?.().then?.(() => {
+              const createMatch = trimmed.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
+              if (createMatch) {
+                const schema = createMatch[1] || "main";
+                const name = createMatch[2];
+                (window as any).__navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
+              }
+              const dropMatch = trimmed.match(/DROP\s+(?:TABLE|VIEW|SCHEMA)\s+(?:IF\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
+              if (dropMatch) {
+                const isSchemaLevel = /DROP\s+SCHEMA/i.test(trimmed);
+                if (isSchemaLevel) {
+                  (window as any).__navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
+                } else {
+                  const schema = dropMatch[1] || "main";
+                  (window as any).__navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
+                }
+              }
+            });
 
           // EXPLAIN returns explain_key + explain_value — render as plain text
           } else if (fieldNames.includes("explain_key") && fieldNames.includes("explain_value")) {

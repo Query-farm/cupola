@@ -182,25 +182,27 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, check
 
   return (
     <div>
-      <div className="border rounded-md">
-        {/* Search inside table border */}
-        <div className="relative border-b border-border px-3 py-2">
-          <Search className="absolute left-5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search columns..."
-            value={globalFilter}
-            onChange={(e) => setGlobalFilter(e.target.value)}
-            className="pl-8 pr-8 h-8 text-sm border-0 shadow-none focus-visible:ring-0 bg-transparent"
-          />
-          {globalFilter && (
-            <button
-              onClick={() => setGlobalFilter("")}
-              className="absolute right-5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
+      <div className="border rounded-md bg-card shadow-sm">
+        {/* Search — only for tables with many columns */}
+        {columns.length > 15 && (
+          <div className="relative border-b border-border px-3 py-1.5">
+            <Search className="absolute left-5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
+            <Input
+              placeholder={`Filter ${columns.length} columns...`}
+              value={globalFilter}
+              onChange={(e) => setGlobalFilter(e.target.value)}
+              className="pl-7 pr-7 h-7 text-xs border-0 shadow-none focus-visible:ring-0 bg-transparent"
+            />
+            {globalFilter && (
+              <button
+                onClick={() => setGlobalFilter("")}
+                className="absolute right-5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        )}
         <Table>
           <TableHeader className="sticky top-0 bg-muted/80 backdrop-blur-sm z-10">
             {table.getHeaderGroups().map((headerGroup) => (
@@ -237,10 +239,12 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, check
         </Table>
       </div>
 
-      {/* Count */}
-      <div className="text-xs text-muted-foreground mt-2">
-        {table.getFilteredRowModel().rows.length} of {columns.length} columns
-      </div>
+      {/* Count — only show when filtered */}
+      {globalFilter && (
+        <div className="text-xs text-muted-foreground mt-2">
+          {table.getFilteredRowModel().rows.length} of {columns.length} columns
+        </div>
+      )}
     </div>
   );
 }

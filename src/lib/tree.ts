@@ -4,7 +4,8 @@
  */
 
 import React from "react";
-import { Database, Folder, FolderOpen, Table2, Eye, FunctionSquare, Columns3, Key, TerminalSquare, RefreshCw, Loader2 } from "lucide-react";
+import { Database, Folder, FolderOpen, Table2, Eye, FunctionSquare, Braces, Columns3, Key, TerminalSquare, RefreshCw, Loader2 } from "lucide-react";
+import { getColorForType } from "@/components/content/CatalogIcons";
 import type { CatalogData, ResolvedSchema, ColumnInfo } from "./service";
 import { getColumns } from "./service";
 
@@ -25,7 +26,7 @@ export type { TreeDataItem };
 
 /** Selection state for the content panel. */
 export interface Selection {
-  type: "catalog" | "schema" | "table" | "view" | "function";
+  type: "catalog" | "schema" | "table" | "view" | "function" | "macro";
   name: string;
   schema?: string;
   /** Catalog name this selection belongs to (e.g. "memory" for in-memory tables). */
@@ -38,7 +39,7 @@ export function selectionToTreeId(selection: Selection, catalogName: string): st
   if (selection.type === "catalog") return cat;
   const schema = selection.schema ?? selection.name;
   if (selection.type === "schema") return `${cat}::${schema}`;
-  const prefix = selection.type === "table" ? "t" : selection.type === "view" ? "v" : "f";
+  const prefix = selection.type === "table" ? "t" : selection.type === "view" ? "v" : selection.type === "macro" ? "m" : "f";
   return `${cat}::${schema}::${prefix}:${selection.name}`;
 }
 
@@ -54,6 +55,7 @@ export function parseSelection(id: string): Selection | null {
     if (rest.startsWith("t:")) return { type: "table", name: rest.slice(2), schema, catalog };
     if (rest.startsWith("v:")) return { type: "view", name: rest.slice(2), schema, catalog };
     if (rest.startsWith("f:")) return { type: "function", name: rest.slice(2), schema, catalog };
+    if (rest.startsWith("m:")) return { type: "macro", name: rest.slice(2), schema, catalog };
     // Column — select the parent table
     if (rest.startsWith("c:")) {
       const colParts = rest.slice(2).split("/");
@@ -133,7 +135,7 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
         className: "text-muted-foreground text-xs",
         draggable: !!onTableAction,
         actions: React.createElement("span", {
-          className: `text-[10px] font-mono ml-1 truncate px-1 py-0.5 rounded ${typeColorClass(typeLabel)}`,
+          className: `tree-col-type text-[10px] font-mono ml-1 truncate px-1 py-0.5 rounded ${typeColorClass(typeLabel)}`,
         }, typeLabel),
       };
     });
@@ -143,7 +145,7 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
       name: table.name,
       icon: Table2,
       selectedIcon: Table2,
-      className: "text-primary/90 font-medium",
+      className: "font-medium",
       draggable: !!onTableAction,
       children: columnChildren.length > 0 ? columnChildren : undefined,
       actions: onTableAction
@@ -183,6 +185,20 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
       selectedIcon: FunctionSquare,
       className: "text-muted-foreground",
     });
+  }
+
+  // Macros (sorted alphabetically)
+  if (schema.macros?.length > 0) {
+    const sortedMacros = [...schema.macros].sort((a, b) => a.name.localeCompare(b.name));
+    for (const macro of sortedMacros) {
+      children.push({
+        id: `${schemaId}::m:${macro.name}`,
+        name: macro.name,
+        icon: Braces,
+        selectedIcon: Braces,
+        className: "text-muted-foreground",
+      });
+    }
   }
 
   return {

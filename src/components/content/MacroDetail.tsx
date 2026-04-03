@@ -1,0 +1,76 @@
+import { Badge } from "@/components/ui/badge";
+import type { MacroInfo } from "vgi/client";
+import type { Selection } from "@/lib/tree";
+import { Breadcrumb } from "./Breadcrumb";
+import { CatalogIcon, getBadgeColorForType } from "./CatalogIcons";
+import { SqlCodeBlock } from "./SqlCodeBlock";
+import { TagsTable } from "./TagsTable";
+import { filterExampleQueriesTag } from "./ExampleQueries";
+import { useMemo } from "react";
+
+interface Props {
+  macro: MacroInfo;
+  catalogName: string;
+  schemaName?: string;
+  onNavigate?: (selection: Selection) => void;
+}
+
+export function MacroDetail({ macro, catalogName, schemaName, onNavigate }: Props) {
+  const displayTags = useMemo(() => filterExampleQueriesTag(macro.tags), [macro.tags]);
+
+  return (
+    <div>
+      <Breadcrumb catalogName={catalogName} schemaName={schemaName || macro.schemaName} itemName={macro.name} itemType="macro" onNavigate={onNavigate} />
+
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-1">
+        <CatalogIcon type="macro" className="h-6 w-6" />
+        <h1 className="text-2xl font-bold font-mono text-primary">{macro.name}</h1>
+        <Badge variant="secondary" className={`text-xs ${getBadgeColorForType("macro")}`}>
+          {macro.macroType === "table" ? "table macro" : "scalar macro"}
+        </Badge>
+      </div>
+      {macro.comment && (
+        <p className="text-muted-foreground mb-4">{macro.comment}</p>
+      )}
+
+      {/* Parameters */}
+      {macro.parameters.length > 0 && (
+        <>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mt-4 mb-2">Parameters</h2>
+          <div className="border rounded-md overflow-hidden mb-4">
+            <table className="text-sm" style={{ tableLayout: "auto", width: "100%" }}>
+              <thead className="bg-muted/50">
+                <tr>
+                  <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground">Name</th>
+                </tr>
+              </thead>
+              <tbody>
+                {macro.parameters.map((param, i) => (
+                  <tr key={i} className="border-t border-border">
+                    <td className="px-3 py-1.5 font-mono font-medium text-foreground/80">{param}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {/* Definition */}
+      {macro.definition && (
+        <>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mt-4 mb-2">Definition</h2>
+          <div className="bg-muted/60 rounded-md px-4 py-3 mb-4">
+            <SqlCodeBlock query={macro.definition} />
+          </div>
+        </>
+      )}
+
+      {/* Tags */}
+      {displayTags && (
+        <TagsTable tags={displayTags} />
+      )}
+    </div>
+  );
+}
