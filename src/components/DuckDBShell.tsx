@@ -9,7 +9,7 @@ const AskAIChat = lazy(() => import("./AskAIChat").then(m => ({ default: m.AskAI
 import { DataPreview } from "./content/DataPreview";
 import { getColumns } from "@/lib/service";
 import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
-import { getAuthToken } from "@/lib/auth";
+import { getAuthToken, getOAuthMeta } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
 import {
   runAgentTurn,
@@ -188,9 +188,11 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
 
         setLoading(false);
 
+        const shellToken = getAuthToken();
+        console.log("[shell] Initializing DuckDB shell, token:", shellToken ? shellToken.substring(0, 20) + "..." : "NONE");
         const { cleanup, insertText } = initShell(
           containerRef.current,
-          { serviceUrl, catalogName, token: getAuthToken(), fontSize: settings.shellFontSize, catalogData, aiApiKey: settings.anthropicApiKey, aiModel: settings.aiModel },
+          { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, catalogData, aiApiKey: settings.anthropicApiKey, aiModel: settings.aiModel },
           { tableFromIPC, Readline }
         );
         cleanupRef.current = cleanup;
@@ -832,8 +834,8 @@ function initShell(
 
   // Only set up SABs and init for new workers
   if (isNewWorker) {
-    const oauthSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(8192) : null;
-    if (oauthSAB) worker.postMessage({ type: "init-oauth-sab", sab: oauthSAB });
+    (bridge as any)._oauthSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(8192) : null;
+    if ((bridge as any)._oauthSAB) worker.postMessage({ type: "init-oauth-sab", sab: (bridge as any)._oauthSAB });
 
     const cancelSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;
     if (cancelSAB) worker.postMessage({ type: "init-cancel-sab", sab: cancelSAB });
@@ -858,8 +860,11 @@ function initShell(
     const d = e.data;
 
     if (d.type === "open-auth-url") {
+      const oauthSAB = (bridge as any)._oauthSAB as SharedArrayBuffer | null;
+      console.log("[shell] DuckDB requesting auth, token available:", !!config.token, "SAB available:", !!oauthSAB);
       if (config.token && oauthSAB) {
         // Token interception — pass cached token directly
+        console.log("[shell] Passing token to DuckDB via SAB:", config.token.substring(0, 20) + "...");
         const int32 = new Int32Array(oauthSAB);
         const bytes = new Uint8Array(oauthSAB);
         const encoded = new TextEncoder().encode(config.token);
@@ -868,6 +873,7 @@ function initShell(
         Atomics.store(int32, 0, 1);
         Atomics.notify(int32, 0);
       } else {
+        console.log("[shell] No token — opening auth popup:", d.url?.substring(0, 80));
         window.open(d.url, "_blank", "popup,width=500,height=700");
       }
       return;
@@ -883,7 +889,16 @@ function initShell(
       (async () => {
         if (config.serviceUrl && config.catalogName) {
           writeln(`Connecting to ${config.catalogName}...`, "33");
-          const result = await runQueryAsync(`ATTACH '${config.catalogName}' AS ${config.catalogName} (TYPE vgi, LOCATION '${config.serviceUrl}')`);
+          // Build ATTACH SQL — include oauth_refresh_token if we have it from the frontend OAuth redirect
+          const oauthMeta = getOAuthMeta();
+          const esc = (s: string) => s.replace(/'/g, "''");
+          let attachSql = `ATTACH '${esc(config.catalogName)}' AS ${config.catalogName} (TYPE vgi, LOCATION '${esc(config.serviceUrl)}'`;
+          if (oauthMeta?.refreshToken) {
+            attachSql += `, oauth_refresh_token '${esc(oauthMeta.refreshToken)}'`;
+            console.log("[shell] Including oauth_refresh_token in ATTACH");
+          }
+          attachSql += `)`;
+          const result = await runQueryAsync(attachSql);
           if (result.ok) {
             await runQueryAsync(`USE ${config.catalogName}`);
             writeln(`Connected to ${config.catalogName}`, "32");

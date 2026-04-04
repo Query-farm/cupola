@@ -111,6 +111,7 @@ export function getForeignKeys(table: TableInfo): ForeignKeyInfo[] {
 /** Connect to a VGI service and fetch all catalog metadata. */
 export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
   const token = getAuthToken();
+  console.log("[service] fetchCatalog:", serviceUrl, token ? "with token" : "NO TOKEN");
   const rpc = httpConnect(serviceUrl, {
     authorization: token ? `Bearer ${token}` : undefined,
   });

@@ -70,6 +70,21 @@ export function CatalogApp() {
         }
       }
 
+      // Fetch view names to distinguish views from tables
+      const viewNames = new Set<string>();
+      const viewResult = await queryFn(
+        `SELECT schema_name, view_name FROM duckdb_views() WHERE database_name = 'memory'`
+      );
+      if (viewResult.ok && viewResult.arrowBuffers?.length) {
+        const vbuf = viewResult.arrowBuffers[0];
+        const vt = tableFromIPC(vbuf instanceof ArrayBuffer ? new Uint8Array(vbuf) : vbuf);
+        for (let r = 0; r < vt.numRows; r++) {
+          const s = String(vt.getChildAt(0)?.get(r) ?? "");
+          const v = String(vt.getChildAt(1)?.get(r) ?? "");
+          viewNames.add(`${s}.${v}`);
+        }
+      }
+
       // Group by schema → table → columns
       const schemaMap = new Map<string, Map<string, { name: string; type: string; nullable: boolean }[]>>();
       for (let r = 0; r < table.numRows; r++) {
@@ -85,12 +100,14 @@ export function CatalogApp() {
         tableMap.get(tbl)!.push({ name: col, type: dtype, nullable });
       }
 
-      // Build CatalogData structure
+      // Build CatalogData structure — separate tables from views
       const schemas: ResolvedSchema[] = [];
       for (const [schemaName, tableMap] of schemaMap) {
         const tables: any[] = [];
+        const views: any[] = [];
         for (const [tableName, columns] of tableMap) {
-          tables.push({
+          const isView = viewNames.has(`${schemaName}.${tableName}`);
+          const entry = {
             name: tableName,
             schemaName,
             comment: commentMap.get(`${schemaName}.${tableName}`) || "",
@@ -100,18 +117,24 @@ export function CatalogApp() {
             checkConstraints: [],
             notNullConstraints: [],
             foreignKeyConstraints: [],
+            ...(isView ? { definition: "" } : {}),
             _columnInfo: columns.map((c) => ({
               name: c.name,
               arrowType: c.type,
               duckdbType: c.type,
               nullable: c.nullable,
             })),
-          });
+          };
+          if (isView) {
+            views.push(entry);
+          } else {
+            tables.push(entry);
+          }
         }
         schemas.push({
           info: { name: schemaName, comment: "" } as any,
           tables,
-          views: [],
+          views,
           functions: [],
           macros: [],
         });
@@ -344,7 +367,8 @@ export function CatalogApp() {
           <p className="text-muted-foreground mb-6">{error}</p>
           {isAuthError ? (
             <a
-              href={serviceUrl}
+              href={`${serviceUrl}${serviceUrl.includes("?") ? "&" : "?"}` +
+                `_vgi_return_to=${encodeURIComponent(window.location.href)}`}
               className="inline-block px-6 py-2 rounded-md bg-primary text-primary-foreground font-semibold hover:bg-accent transition-colors"
             >
               Sign in

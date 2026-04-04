@@ -31,7 +31,7 @@ const NUMERIC_TYPES = new Set([
   "TINYINT", "SMALLINT", "INTEGER", "BIGINT",
   "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT",
   "FLOAT", "DOUBLE", "DECIMAL",
-  "HUGEINT", "UHUGEINT",
+  "HUGEINT", "UHUGEINT", "BIGNUM", "VARINT",
 ]);
 
 function isNumericType(duckdbType: string): boolean {

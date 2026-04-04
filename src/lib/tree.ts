@@ -241,31 +241,44 @@ function filterNode(node: TreeDataItem, query: string): TreeDataItem | null {
 /** Map a DuckDB/Arrow type name to a background + text color class for type badges. */
 export function typeColorClass(type: string): string {
   const t = type.toUpperCase();
-  // Numeric types
+  // Integer types
   if (t === "INTEGER" || t === "INT" || t === "BIGINT" || t === "SMALLINT" || t === "TINYINT" ||
-      t === "HUGEINT" || t === "UBIGINT" || t === "UINTEGER" || t === "USMALLINT" || t === "UTINYINT" ||
-      t === "INT8" || t === "INT16" || t === "INT32" || t === "INT64" || t === "UINT8" || t === "UINT16" || t === "UINT32" || t === "UINT64")
+      t === "HUGEINT" || t === "UHUGEINT" || t === "UBIGINT" || t === "UINTEGER" || t === "USMALLINT" || t === "UTINYINT" ||
+      t === "INT8" || t === "INT16" || t === "INT32" || t === "INT64" || t === "UINT8" || t === "UINT16" || t === "UINT32" || t === "UINT64" ||
+      t === "BIGNUM" || t === "VARINT")
     return "bg-blue-100 text-blue-700";
+  // Float / decimal types
   if (t === "FLOAT" || t === "DOUBLE" || t === "REAL" || t === "DECIMAL" || t.startsWith("DECIMAL("))
     return "bg-sky-100 text-sky-700";
   // String types
-  if (t === "VARCHAR" || t === "TEXT" || t === "STRING" || t === "UTF8" || t === "CHAR" || t.startsWith("VARCHAR("))
+  if (t === "VARCHAR" || t === "TEXT" || t === "STRING" || t === "UTF8" || t === "CHAR" || t.startsWith("VARCHAR(") || t === "JSON")
     return "bg-green-100 text-green-700";
   // Boolean
   if (t === "BOOLEAN" || t === "BOOL")
     return "bg-amber-100 text-amber-700";
-  // Date/time types
+  // Date
   if (t === "DATE" || t === "DATE32" || t === "DATE64")
     return "bg-purple-100 text-purple-700";
-  if (t === "TIMESTAMP" || t.startsWith("TIMESTAMP") || t === "DATETIME")
+  // Timestamp (TIMESTAMP, TIMESTAMP_S/MS/NS, TIMESTAMP WITH TIME ZONE, TIMESTAMPTZ, DATETIME)
+  if (t === "DATETIME" || t.startsWith("TIMESTAMP"))
     return "bg-violet-100 text-violet-700";
-  if (t === "TIME" || t.startsWith("TIME(") || t === "TIME32" || t === "TIME64" || t === "INTERVAL")
+  // Time (TIME, TIME_NS, TIME WITH TIME ZONE, TIMETZ, INTERVAL)
+  if (t === "INTERVAL" || t.startsWith("TIME"))
     return "bg-fuchsia-100 text-fuchsia-700";
-  // Geometry / spatial
+  // UUID
+  if (t === "UUID")
+    return "bg-teal-100 text-teal-700";
+  // Enum
+  if (t.startsWith("ENUM"))
+    return "bg-amber-100 text-amber-700";
+  // Bit
+  if (t === "BIT")
+    return "bg-gray-200 text-gray-700";
+  // Geometry / spatial / blob
   if (t === "GEOMETRY" || t === "WKB" || t === "BLOB" || t.startsWith("GEOARROW"))
     return "bg-orange-100 text-orange-700";
-  // Struct / list / map
-  if (t.startsWith("STRUCT") || t.startsWith("LIST") || t.startsWith("MAP") || t.includes("[]"))
+  // Struct / list / map / union / array types (includes fixed-size arrays like INTEGER[3])
+  if (t.startsWith("STRUCT") || t.startsWith("LIST") || t.startsWith("MAP") || t.startsWith("UNION") || t.includes("["))
     return "bg-rose-100 text-rose-700";
   // Default
   return "bg-gray-100 text-gray-600";

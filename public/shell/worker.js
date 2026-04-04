@@ -1,9 +1,11 @@
 // DuckDB-WASM Worker — runs DuckDB in a Web Worker where sync XHR and SAB work.
-importScripts('./wasm/duckdb-eh.js');
 
+// OAuth SAB state — initialized from main thread
 var oauthSAB = null;
 var oauthInt32 = null;
 var oauthBytes = null;
+
+importScripts('./wasm/duckdb-eh.js');
 
 // Cancel signal via SharedArrayBuffer — main thread sets [0]=1 to request cancel
 var cancelFlag = null;
@@ -140,8 +142,11 @@ function runStatement(sql) {
 async function init() {
     postMessage({ type: 'log', msg: 'Loading WASM module (MAIN_MODULE)...', cls: 'info' });
 
+    // WASM base URL: configurable via message from main thread, falls back to relative path.
+    // When deployed to Cloudflare Pages, large WASM files (>25MB) are served from R2.
+    const wasmBase = self.__wasmBaseUrl || './wasm/';
     module = await DuckDB({
-        locateFile: (path) => './wasm/' + path
+        locateFile: (path) => wasmBase + path
     });
     const config = JSON.stringify({ allowUnsignedExtensions: true });
     const [openStatus, openData, openSize] = callSRet(module, 'duckdb_web_open', ['string'], [config]);

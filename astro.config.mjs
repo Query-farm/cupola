@@ -49,21 +49,7 @@ export default defineConfig({
         'node:fs': resolve('src/lib/node-stubs.ts'),
       },
     },
-    build: {
-      rollupOptions: {
-        // Stub Node.js built-ins that Apache Arrow references but doesn't
-        // use in browser code paths. These modules are only imported by
-        // Arrow's node-specific I/O adapters which are never called in the browser.
-        external: ['node:stream', 'node:zlib', 'node:crypto', 'node:fs'],
-        output: {
-          globals: {
-            'node:stream': '{}',
-            'node:zlib': '{}',
-            'node:crypto': '{}',
-            'node:fs': '{}',
-          },
-        },
-      },
-    },
+    // Node.js built-ins are handled by resolve.alias above — they point to
+    // browser-safe stubs in src/lib/node-stubs.ts. No need to externalize.
   },
 });
