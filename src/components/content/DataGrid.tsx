@@ -71,7 +71,7 @@ export function DataGrid({ columnNames, columnInfo, rows, startRow = 0, borderle
               const rowIdx = startRow + row.index + 1;
               return <GeometryViewer wkb={val} label={`Row ${rowIdx}`} />;
             }
-            const display = formatCellValue(val, column.id);
+            const display = formatCellValue(val, column.id, undefined, info?.duckdbType);
             return <span className={`font-mono ${numeric ? "text-right block tabular-nums" : ""}`}>{display}</span>;
           },
         };

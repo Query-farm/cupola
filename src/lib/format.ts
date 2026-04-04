@@ -1,15 +1,22 @@
 /**
  * Value formatting for data grid and terminal display.
  * Handles DuckDB/Arrow types: dates, timestamps, time, geometry, binary, BigInt, etc.
+ *
+ * Formatting is ONLY based on explicit type information (Arrow field or DuckDB type string).
+ * No heuristic guessing from value ranges — integers stay as integers.
  */
+
+const DATE_TYPES = new Set(["DATE", "DATE32", "DATE64"]);
+const TIMESTAMP_TYPES = new Set(["TIMESTAMP", "TIMESTAMP_S", "TIMESTAMP_MS", "TIMESTAMP_US", "TIMESTAMP_NS", "TIMESTAMP WITH TIME ZONE", "TIMESTAMPTZ", "DATETIME"]);
+const TIME_TYPES = new Set(["TIME", "TIME WITH TIME ZONE", "TIMETZ"]);
 
 /**
  * Format a cell value for display.
  *
- * When an Arrow `field` is provided, uses precise type dispatch (Date, Timestamp, Time).
- * Otherwise falls back to column-name heuristics for type inference.
+ * Uses Arrow field type or DuckDB type string for formatting decisions.
+ * Never guesses type from value ranges.
  */
-export function formatCellValue(value: any, columnName?: string, field?: any): string {
+export function formatCellValue(value: any, columnName?: string, field?: any, duckdbType?: string): string {
   if (value === null || value === undefined) return "";
 
   // Binary / Uint8Array → geometry or binary indicator
@@ -17,7 +24,7 @@ export function formatCellValue(value: any, columnName?: string, field?: any): s
     return "[binary]";
   }
 
-  // When an Arrow field is available, use precise type-based dispatch
+  // Arrow field — precise type dispatch
   if (field) {
     const typeStr: string = field.type?.toString() || "";
     const num = typeof value === "bigint" ? Number(value) : value;
@@ -34,32 +41,51 @@ export function formatCellValue(value: any, columnName?: string, field?: any): s
         return formatTime(num);
       }
     }
-    if (typeof value === "bigint") return value.toString();
-    if (typeof value === "object" && value !== null) {
-      if (value.type || value.coordinates) return "[geometry]";
-      if (value instanceof Date) return value.toISOString().split("T")[0];
-      try { return JSON.stringify(value); } catch { return "[object]"; }
-    }
-    return String(value);
   }
 
-  // Heuristic path (no Arrow field) — infer type from value range and column name
+  // DuckDB type string — precise type dispatch
+  if (duckdbType) {
+    const baseType = duckdbType.split("(")[0].toUpperCase().trim();
+    const num = typeof value === "bigint" ? Number(value) : value;
+    if (typeof num === "number" && !isNaN(num)) {
+      if (DATE_TYPES.has(baseType)) {
+        // Date32: days since epoch → YYYY-MM-DD
+        const d = new Date(num * 86400000);
+        if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
+      }
+      if (TIMESTAMP_TYPES.has(baseType)) {
+        // Timestamps from DuckDB arrive as microseconds via BigInt, or millis via number
+        if (typeof value === "bigint") {
+          return formatTimestampMicros(Number(value));
+        }
+        const d = new Date(num);
+        if (!isNaN(d.getTime())) return formatTimestampMillis(num);
+      }
+      if (TIME_TYPES.has(baseType)) {
+        return formatTime(num);
+      }
+      if (baseType === "INTERVAL") {
+        return formatInterval(value);
+      }
+    }
+  }
+
+  // BigInt → plain integer string
   if (typeof value === "bigint") {
-    return formatBigInt(value, columnName);
+    const num = Number(value);
+    if (num >= Number.MIN_SAFE_INTEGER && num <= Number.MAX_SAFE_INTEGER) {
+      return num.toLocaleString();
+    }
+    return value.toString();
   }
 
+  // Number — format as number (no date guessing)
   if (typeof value === "number") {
-    if (value > 1e11 && value < 3e12) {
-      return formatTimestampMillis(value);
-    }
-    if (isDateColumnName(columnName) && value > 10000 && value < 100000) {
-      return formatDate32(value);
-    }
     if (Number.isInteger(value)) return value.toLocaleString();
     return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
   }
 
-  // Object — geometry, struct, etc.
+  // Object — geometry, struct, Date, etc.
   if (typeof value === "object" && value !== null) {
     if (value.type || value.coordinates) return "[geometry]";
     if (value instanceof Date) return value.toISOString().split("T")[0];
@@ -73,55 +99,13 @@ export function formatCellValue(value: any, columnName?: string, field?: any): s
   return String(value);
 }
 
-/** Check if a column name suggests a date type. */
-function isDateColumnName(name?: string): boolean {
-  if (!name) return false;
-  const lower = name.toLowerCase();
-  return lower === "date" || lower.endsWith("_date") || lower.startsWith("date_")
-    || lower === "created" || lower === "updated" || lower === "modified"
-    || lower === "created_at" || lower === "updated_at";
-}
-
-/** Format a BigInt that might be a date or timestamp. */
-function formatBigInt(value: bigint, columnName?: string): string {
-  const num = Number(value);
-
-  // Date32: days since epoch (typically 18000-25000 range for 2019-2038)
-  if (isDateColumnName(columnName) && num > 10000 && num < 100000) {
-    return formatDate32(num);
-  }
-
-  // Timestamp in microseconds (typical range: 1e15 to 2e15 for 2001-2033)
-  if (num > 1e14 && num < 3e15) {
-    return formatTimestampMicros(num);
-  }
-
-  // Timestamp in milliseconds (typical range: 1e12 to 2e12)
-  if (num > 1e11 && num < 3e12) {
-    return formatTimestampMillis(num);
-  }
-
-  // Regular integer
-  if (num >= Number.MIN_SAFE_INTEGER && num <= Number.MAX_SAFE_INTEGER) {
-    return num.toLocaleString();
-  }
-  return value.toString();
-}
-
-/** Format Date32 (days since epoch) to YYYY-MM-DD. */
-function formatDate32(days: number): string {
-  const ms = days * 86400000;
-  const d = new Date(ms);
-  return d.toISOString().split("T")[0];
-}
-
-/** Format timestamp in microseconds to ISO string. */
+/** Format timestamp in microseconds to ISO-like string. */
 function formatTimestampMicros(micros: number): string {
   const d = new Date(micros / 1000);
   return d.toISOString().replace("T", " ").replace("Z", "").replace(/\.000$/, "");
 }
 
-/** Format timestamp in milliseconds to ISO string. */
+/** Format timestamp in milliseconds to ISO-like string. */
 function formatTimestampMillis(millis: number): string {
   const d = new Date(millis);
   return d.toISOString().replace("T", " ").replace("Z", "").replace(/\.000$/, "");
@@ -134,6 +118,14 @@ function formatTime(ms: number): string {
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+/** Format an interval value. */
+function formatInterval(value: any): string {
+  if (typeof value === "object" && value !== null) {
+    try { return JSON.stringify(value); } catch {}
+  }
+  return String(value);
 }
 
 /** Check if a value is null/undefined. */
