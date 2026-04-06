@@ -30,5 +30,8 @@ public/duckdb/extensions/
 public/shell/wasm/
 public/shell/extensions/
 
+# Wrangler state
+.wrangler/
+
 # Playwright MCP test artifacts
 .playwright-mcp/

@@ -1,5 +1,7 @@
 // DuckDB-WASM Worker — runs DuckDB in a Web Worker where sync XHR and SAB work.
 
+var WASM_BUILD_VERSION = "duckdb-1.5.1-vgi-20260404";
+
 // OAuth SAB state — initialized from main thread
 var oauthSAB = null;
 var oauthInt32 = null;
@@ -251,7 +253,7 @@ function handleMessage(data) {
         const copy = new Uint8Array(memBuf.byteLength);
         copy.set(new Uint8Array(memBuf));
         postMessage(
-            { type: 'snapshot', memory: copy.buffer, size: memBuf.byteLength, connHdl: connHdl },
+            { type: 'snapshot', memory: copy.buffer, size: memBuf.byteLength, connHdl: connHdl, wasmVersion: WASM_BUILD_VERSION },
             [copy.buffer]
         );
         return;

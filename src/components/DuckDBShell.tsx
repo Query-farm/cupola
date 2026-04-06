@@ -24,6 +24,11 @@ import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 import { estimateCost, formatCost } from "@/lib/pricing";
 import { formatCellValue } from "@/lib/format";
 import { bridge } from "@/lib/shell-bridge";
+import {
+  saveSession, saveAutoSave, loadSession, getAutoSave,
+  listSessions, deleteSession, decompressMemory,
+  AUTOSAVE_NAME, type SavedSession,
+} from "@/lib/session-store";
 
 const KeplerMap = lazy(() => import("./KeplerMap").then((m) => ({ default: m.KeplerMap })));
 
@@ -855,6 +860,53 @@ function initShell(
   let outputMode: "box" | "line" = "box";
   let lastTable: any = null;
   let lastArrowBuffer: Uint8Array | null = null;
+  let lastAutoSave = 0; // timestamp of last auto-save
+
+  /** Take a snapshot from the worker. */
+  function takeSnapshot(): Promise<{ memory: ArrayBuffer; size: number; connHdl: number; wasmVersion: string }> {
+    return new Promise((resolve, reject) => {
+      const handler = (e: MessageEvent) => {
+        if (e.data.type === "snapshot") {
+          worker.removeEventListener("message", handler);
+          resolve(e.data);
+        }
+      };
+      worker.addEventListener("message", handler);
+      worker.postMessage({ type: "snapshot" });
+      setTimeout(() => { worker.removeEventListener("message", handler); reject(new Error("Snapshot timed out")); }, 30000);
+    });
+  }
+
+  /** Restore a snapshot to the worker. */
+  function restoreSnapshot(memory: ArrayBuffer, size: number, snapConnHdl: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const handler = (e: MessageEvent) => {
+        if (e.data.type === "restored") {
+          worker.removeEventListener("message", handler);
+          resolve();
+        } else if (e.data.type === "log" && e.data.cls === "err") {
+          worker.removeEventListener("message", handler);
+          reject(new Error(e.data.msg));
+        }
+      };
+      worker.addEventListener("message", handler);
+      worker.postMessage({ type: "restore", memory, size, connHdl: snapConnHdl }, [memory]);
+      setTimeout(() => { worker.removeEventListener("message", handler); reject(new Error("Restore timed out")); }, 30000);
+    });
+  }
+
+  /** Auto-save the current session to IndexedDB. */
+  async function autoSave() {
+    if (!config.serviceUrl) return;
+    try {
+      const snap = await takeSnapshot();
+      await saveAutoSave(config.serviceUrl, snap.wasmVersion, snap.memory, snap.connHdl);
+      lastAutoSave = Date.now();
+      console.log("[session] Auto-saved");
+    } catch (err) {
+      console.warn("[session] Auto-save failed:", err);
+    }
+  }
 
   worker.onmessage = (e: MessageEvent) => {
     const d = e.data;
@@ -887,7 +939,25 @@ function initShell(
 
     if (d.type === "ready") {
       (async () => {
-        if (config.serviceUrl && config.catalogName) {
+        // Try to restore previous session from IndexedDB
+        let restored = false;
+        if (config.serviceUrl) {
+          try {
+            const autoSaveSession = await getAutoSave(config.serviceUrl);
+            if (autoSaveSession) {
+              const memory = await decompressMemory(autoSaveSession);
+              await restoreSnapshot(memory, memory.byteLength, autoSaveSession.connHdl);
+              const when = new Date(autoSaveSession.timestamp).toLocaleString();
+              writeln(`Restored previous session (saved ${when})`, "32");
+              restored = true;
+            }
+          } catch (err: any) {
+            console.warn("[session] Auto-restore failed:", err);
+            writeln(`Previous session could not be restored: ${err.message}`, "33");
+          }
+        }
+
+        if (!restored && config.serviceUrl && config.catalogName) {
           writeln(`Connecting to ${config.catalogName}...`, "33");
           // Build ATTACH SQL — include oauth_refresh_token if we have it from the frontend OAuth redirect
           const oauthMeta = getOAuthMeta();
@@ -906,11 +976,24 @@ function initShell(
             writeln(`Attach failed: ${result.error}`, "31");
           }
           writeln("");
-        } else {
+        } else if (!restored) {
           writeln("");
           writeln("Type SQL queries below.", "33");
           writeln("");
+        } else {
+          writeln("");
         }
+
+        // Set up periodic auto-save (every 5 minutes)
+        setInterval(() => {
+          if (config.serviceUrl && Date.now() - lastAutoSave > 60_000) {
+            autoSave();
+          }
+        }, 300_000);
+
+        // Auto-save on page unload
+        window.addEventListener("beforeunload", () => { autoSave(); });
+
         // Shell is fully ready — expose runQuery for external callers
         bridge.runQuery = runQuery;
         window.dispatchEvent(new Event("duckdb-ready"));
@@ -1083,105 +1166,74 @@ function initShell(
       }
 
       // .save — snapshot WASM memory and download as file
-      if (trimmed === ".save") {
-        writeln("Saving snapshot...", "33");
+      // .save [name] — save session to IndexedDB
+      if (trimmed === ".save" || trimmed.startsWith(".save ")) {
+        const name = trimmed.slice(5).trim() || new Date().toLocaleString();
+        if (!config.serviceUrl) { writeln("No service URL — cannot save session.", "31"); continue; }
+        writeln(`Saving session "${name}"...`, "33");
         try {
-          const snap = await new Promise<{ memory: ArrayBuffer; size: number; connHdl: number }>((resolve, reject) => {
-            const handler = (e: MessageEvent) => {
-              if (e.data.type === "snapshot") {
-                worker.removeEventListener("message", handler);
-                resolve(e.data);
-              }
-            };
-            worker.addEventListener("message", handler);
-            worker.postMessage({ type: "snapshot" });
-            setTimeout(() => { worker.removeEventListener("message", handler); reject(new Error("Snapshot timed out")); }, 30000);
-          });
-
-          // Build file: header + raw memory
-          const MAGIC = new Uint8Array([0x44, 0x4B, 0x53, 0x4E]); // "DKSN"
-          const header = new ArrayBuffer(20);
-          const hView = new DataView(header);
-          // bytes 0-3: magic
-          new Uint8Array(header).set(MAGIC);
-          // bytes 4-7: version
-          hView.setUint32(4, 1, true);
-          // bytes 8-15: memory size (as two uint32s for >4GB support)
-          hView.setUint32(8, snap.size & 0xFFFFFFFF, true);
-          hView.setUint32(12, Math.floor(snap.size / 0x100000000), true);
-          // bytes 16-19: connHdl
-          hView.setUint32(16, snap.connHdl, true);
-
-          const blob = new Blob([header, snap.memory]);
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-          a.download = `duckdb-snapshot-${ts}.bin`;
-          a.click();
-          URL.revokeObjectURL(url);
-
-          const sizeMB = (blob.size / (1024 * 1024)).toFixed(1);
-          writeln(`Saved snapshot (${sizeMB} MB)`, "32");
+          const snap = await takeSnapshot();
+          await saveSession(config.serviceUrl, name, snap.wasmVersion, snap.memory, snap.connHdl);
+          writeln(`Session saved.`, "32");
         } catch (err: any) {
           writeln(`Save failed: ${err.message}`, "31");
         }
         continue;
       }
 
-      // .load — restore WASM memory from uploaded file
-      if (trimmed === ".load") {
+      // .load [name] — restore session from IndexedDB
+      if (trimmed === ".load" || trimmed.startsWith(".load ")) {
+        const name = trimmed.slice(5).trim();
+        if (!config.serviceUrl) { writeln("No service URL — cannot load session.", "31"); continue; }
         try {
-          const file = await new Promise<File>((resolve, reject) => {
-            const input = document.createElement("input");
-            input.type = "file";
-            input.accept = ".bin";
-            input.onchange = () => {
-              if (input.files?.[0]) resolve(input.files[0]);
-              else reject(new Error("No file selected"));
-            };
-            input.oncancel = () => reject(new Error("Cancelled"));
-            input.click();
-          });
-
-          writeln(`Loading ${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`, "33");
-
-          const buf = await file.arrayBuffer();
-          if (buf.byteLength < 20) throw new Error("File too small");
-
-          // Parse header
-          const magic = new Uint8Array(buf, 0, 4);
-          if (String.fromCharCode(...magic) !== "DKSN") throw new Error("Not a DuckDB snapshot file");
-          const hView = new DataView(buf);
-          const version = hView.getUint32(4, true);
-          if (version !== 1) throw new Error(`Unsupported snapshot version: ${version}`);
-          const sizeLo = hView.getUint32(8, true);
-          const sizeHi = hView.getUint32(12, true);
-          const memSize = sizeLo + sizeHi * 0x100000000;
-          const snapConnHdl = hView.getUint32(16, true);
-
-          const memory = buf.slice(20);
-          if (memory.byteLength < memSize) throw new Error(`Snapshot file truncated (expected ${memSize} bytes, got ${memory.byteLength})`);
-
-          await new Promise<void>((resolve, reject) => {
-            const handler = (e: MessageEvent) => {
-              if (e.data.type === "restored") {
-                worker.removeEventListener("message", handler);
-                resolve();
-              } else if (e.data.type === "log" && e.data.cls === "err") {
-                worker.removeEventListener("message", handler);
-                reject(new Error(e.data.msg));
-              }
-            };
-            worker.addEventListener("message", handler);
-            worker.postMessage({ type: "restore", memory, size: memSize, connHdl: snapConnHdl }, [memory]);
-            setTimeout(() => { worker.removeEventListener("message", handler); reject(new Error("Restore timed out")); }, 30000);
-          });
-
-          writeln("Restored snapshot.", "32");
+          if (!name) {
+            // List available sessions and let user pick
+            const sessions = await listSessions(config.serviceUrl);
+            const named = sessions.filter(s => s.name !== AUTOSAVE_NAME);
+            if (named.length === 0) { writeln("No saved sessions. Use .save <name> to create one.", "33"); continue; }
+            writeln("Saved sessions:", "33");
+            for (const s of named) {
+              const when = new Date(s.timestamp).toLocaleString();
+              const size = (s.sizeBytes / (1024 * 1024)).toFixed(1);
+              writeln(`  ${s.name}  (${when}, ${size} MB)`);
+            }
+            writeln("Use .load <name> to restore.", "33");
+          } else {
+            const id = `${config.serviceUrl}::${name}`;
+            const session = await loadSession(id);
+            if (!session) { writeln(`Session "${name}" not found.`, "31"); continue; }
+            writeln(`Loading "${name}" (${(session.sizeBytes / (1024 * 1024)).toFixed(1)} MB)...`, "33");
+            const memory = await decompressMemory(session);
+            await restoreSnapshot(memory, memory.byteLength, session.connHdl);
+            writeln(`Restored "${name}".`, "32");
+          }
         } catch (err: any) {
-          if (err.message !== "Cancelled") {
-            writeln(`Load failed: ${err.message}`, "31");
+          writeln(`Load failed: ${err.message}`, "31");
+        }
+        continue;
+      }
+
+      // .sessions — list saved sessions
+      if (trimmed === ".sessions" || trimmed.startsWith(".sessions ")) {
+        const sub = trimmed.slice(9).trim();
+        if (!config.serviceUrl) { writeln("No service URL.", "31"); continue; }
+        if (sub.startsWith("delete ")) {
+          const delName = sub.slice(7).trim();
+          try {
+            await deleteSession(`${config.serviceUrl}::${delName}`);
+            writeln(`Deleted "${delName}".`, "32");
+          } catch (err: any) {
+            writeln(`Delete failed: ${err.message}`, "31");
+          }
+        } else {
+          const sessions = await listSessions(config.serviceUrl);
+          if (sessions.length === 0) { writeln("No saved sessions.", "33"); continue; }
+          writeln("Sessions:", "33");
+          for (const s of sessions) {
+            const label = s.name === AUTOSAVE_NAME ? "(auto-save)" : s.name;
+            const when = new Date(s.timestamp).toLocaleString();
+            const size = (s.sizeBytes / (1024 * 1024)).toFixed(1);
+            writeln(`  ${label}  (${when}, ${size} MB)`);
           }
         }
         continue;
@@ -1603,7 +1655,8 @@ function initShell(
           if (fields.length === 1 && fieldNames[0] === "Count" && table.numRows <= 1) {
             const elapsedStr = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(1)}s` : `${Math.round(elapsed)}ms`;
             writeln(`OK (${elapsedStr})`, "32");
-            // DDL — refresh sidebar and handle navigation
+            // DDL — refresh sidebar, handle navigation, and auto-save
+            autoSave();
             bridge.refreshMemoryTables?.().then?.(() => {
               const createMatch = trimmed.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
               if (createMatch) {
