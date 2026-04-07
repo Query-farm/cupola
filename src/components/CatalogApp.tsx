@@ -1,11 +1,12 @@
 import { useEffect, useState, useMemo, useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
-import { fetchCatalog, getServiceUrl, type CatalogData, type ResolvedSchema } from "@/lib/service";
+import { fetchCatalog, getServiceUrl, hasExplicitService, type CatalogData, type ResolvedSchema } from "@/lib/service";
 import { tableFromIPC } from "apache-arrow";
 import { type Selection } from "@/lib/tree";
-import { getAuthToken } from "@/lib/auth";
+import { getAuthToken, hadAuthToken, redirectToAuth } from "@/lib/auth";
 import { SettingsProvider } from "@/lib/settings";
 import { bridge } from "@/lib/shell-bridge";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
+import { loadTheme, getLogoUrl, DEFAULT_LOGO, type ThemeConfig } from "@/lib/theme";
 import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Header } from "./Header";
@@ -19,6 +20,40 @@ import { TableDetail } from "./content/TableDetail";
 import { ViewDetail } from "./content/ViewDetail";
 import { FunctionDetail } from "./content/FunctionDetail";
 import { MacroDetail } from "./content/MacroDetail";
+
+/* ── Recent services (localStorage) ── */
+const RECENT_SERVICES_KEY = "vgi-recent-services";
+const MAX_RECENT = 10;
+
+interface RecentService {
+  url: string;
+  catalogName: string;
+  /** ISO timestamp of last successful connection. */
+  lastUsed: string;
+}
+
+function getRecentServices(): RecentService[] {
+  try {
+    const raw = localStorage.getItem(RECENT_SERVICES_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return [];
+}
+
+function saveRecentService(url: string, catalogName: string) {
+  try {
+    const list = getRecentServices().filter((s) => s.url !== url);
+    list.unshift({ url, catalogName, lastUsed: new Date().toISOString() });
+    localStorage.setItem(RECENT_SERVICES_KEY, JSON.stringify(list.slice(0, MAX_RECENT)));
+  } catch {}
+}
+
+function removeRecentService(url: string) {
+  try {
+    const list = getRecentServices().filter((s) => s.url !== url);
+    localStorage.setItem(RECENT_SERVICES_KEY, JSON.stringify(list));
+  } catch {}
+}
 
 export function CatalogApp() {
   const [data, setData] = useState<CatalogData | null>(null);
@@ -35,6 +70,7 @@ export function CatalogApp() {
   });
   const shellInsertRef = useRef<((text: string) => void) | null>(null);
   const [memoryCatalog, setMemoryCatalog] = useState<CatalogData | null>(null);
+  const [logoUrl, setLogoUrl] = useState(DEFAULT_LOGO);
 
   /** Fetch in-memory DuckDB tables via the shell worker. Returns null if shell isn't running. */
   const fetchMemoryTables = useCallback(async () => {
@@ -52,7 +88,10 @@ export function CatalogApp() {
       if (!result.ok || !buf) { setMemoryCatalog(null); return; }
 
       const table = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
-      if (table.numRows === 0) { setMemoryCatalog(null); return; }
+      if (table.numRows === 0) {
+        setMemoryCatalog({ catalogName: "memory", catalogComment: null, catalogTags: {}, defaultSchema: "main", schemas: [] });
+        return;
+      }
 
       // Fetch table comments
       const commentMap = new Map<string, string>(); // "schema.table" → comment
@@ -70,10 +109,10 @@ export function CatalogApp() {
         }
       }
 
-      // Fetch view names to distinguish views from tables
-      const viewNames = new Set<string>();
+      // Fetch view names and definitions to distinguish views from tables
+      const viewDefs = new Map<string, string>(); // "schema.view" → SQL definition
       const viewResult = await queryFn(
-        `SELECT schema_name, view_name FROM duckdb_views() WHERE database_name = 'memory'`
+        `SELECT schema_name, view_name, sql FROM duckdb_views() WHERE database_name = 'memory'`
       );
       if (viewResult.ok && viewResult.arrowBuffers?.length) {
         const vbuf = viewResult.arrowBuffers[0];
@@ -81,7 +120,8 @@ export function CatalogApp() {
         for (let r = 0; r < vt.numRows; r++) {
           const s = String(vt.getChildAt(0)?.get(r) ?? "");
           const v = String(vt.getChildAt(1)?.get(r) ?? "");
-          viewNames.add(`${s}.${v}`);
+          const sql = String(vt.getChildAt(2)?.get(r) ?? "");
+          viewDefs.set(`${s}.${v}`, sql);
         }
       }
 
@@ -106,7 +146,8 @@ export function CatalogApp() {
         const tables: any[] = [];
         const views: any[] = [];
         for (const [tableName, columns] of tableMap) {
-          const isView = viewNames.has(`${schemaName}.${tableName}`);
+          const viewKey = `${schemaName}.${tableName}`;
+          const isView = viewDefs.has(viewKey);
           const entry = {
             name: tableName,
             schemaName,
@@ -117,7 +158,7 @@ export function CatalogApp() {
             checkConstraints: [],
             notNullConstraints: [],
             foreignKeyConstraints: [],
-            ...(isView ? { definition: "" } : {}),
+            ...(isView ? { definition: viewDefs.get(viewKey) || "" } : {}),
             _columnInfo: columns.map((c) => ({
               name: c.name,
               arrowType: c.type,
@@ -237,6 +278,13 @@ export function CatalogApp() {
 
   const serviceUrl = useMemo(() => getServiceUrl(), []);
 
+  // Load theme from ?theme= URL parameter
+  useEffect(() => {
+    loadTheme().then((config) => {
+      if (config?.logo) setLogoUrl(config.logo);
+    });
+  }, []);
+
   // Sidebar resize
   const SIDEBAR_MIN = 200;
   const SIDEBAR_MAX = 600;
@@ -296,12 +344,20 @@ export function CatalogApp() {
 
   const loadCatalog = useCallback(
     async (isRefresh = false) => {
+      // If we previously had auth but the token is now expired, redirect to re-auth
+      if (!getAuthToken() && hadAuthToken()) {
+        redirectToAuth(serviceUrl);
+        return;
+      }
       if (isRefresh) setRefreshing(true);
       else setLoading(true);
       try {
         const catalog = await fetchCatalog(serviceUrl);
         setData(catalog);
         setError(null);
+        if (hasExplicitService()) {
+          saveRecentService(serviceUrl, catalog.catalogName);
+        }
         if (!isRefresh) {
           // Restore selection from URL hash, or default to catalog root
           const hashSel = hashToSelection(window.location.hash);
@@ -341,6 +397,15 @@ export function CatalogApp() {
     return () => window.removeEventListener("popstate", onPopState);
   }, [data]);
 
+  // Auth error — redirect to sign-in (unless server already gave us a bad token)
+  useEffect(() => {
+    if (!error) return;
+    const isAuthError = error.toLowerCase().includes("auth") || error.includes("401");
+    if (isAuthError) {
+      redirectToAuth(serviceUrl);
+    }
+  }, [error, serviceUrl]);
+
   // Loading state
   if (loading) {
     return (
@@ -353,31 +418,36 @@ export function CatalogApp() {
   // Error state
   if (error) {
     const isAuthError = error.toLowerCase().includes("auth") || error.includes("401");
+    const explicitService = hasExplicitService();
+
+    // Auth redirect is in progress
+    if (isAuthError) {
+      return (
+        <div className="flex items-center justify-center h-screen text-muted-foreground">
+          Redirecting to sign in...
+        </div>
+      );
+    }
+
+    // No ?service= param — show a welcome / connect page
+    if (!explicitService) {
+      return <WelcomePage logoUrl={logoUrl} />;
+    }
+
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="text-center max-w-md">
           <img
-            src="https://vgi-rpc-python.query.farm/assets/logo-hero.png"
+            src={logoUrl}
             alt="VGI logo"
             className="w-16 h-16 rounded-full shadow-lg mx-auto mb-6"
           />
-          <h1 className="text-2xl font-bold text-primary mb-4">
-            {isAuthError ? "Authentication Required" : "Connection Error"}
-          </h1>
+          <h1 className="text-2xl font-bold text-primary mb-4">Connection Error</h1>
           <p className="text-muted-foreground mb-6">{error}</p>
-          {isAuthError ? (
-            <a
-              href={`${serviceUrl}${serviceUrl.includes("?") ? "&" : "?"}` +
-                `_vgi_return_to=${encodeURIComponent(window.location.href)}`}
-              className="inline-block px-6 py-2 rounded-md bg-primary text-primary-foreground font-semibold hover:bg-accent transition-colors"
-            >
-              Sign in
-            </a>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Service URL: <code className="bg-muted px-2 py-0.5 rounded">{serviceUrl}</code>
-            </p>
-          )}
+          <p className="text-sm text-muted-foreground mb-4">
+            Service URL: <code className="bg-muted px-2 py-0.5 rounded">{serviceUrl}</code>
+          </p>
+          <ConnectForm />
         </div>
       </div>
     );
@@ -393,6 +463,7 @@ export function CatalogApp() {
           catalogName={data.catalogName}
           catalogComment={data.catalogComment}
           serviceUrl={serviceUrl}
+          logoUrl={logoUrl}
         />
       )}
       <div className="flex flex-1 overflow-hidden">
@@ -444,7 +515,7 @@ export function CatalogApp() {
           <ErrorBoundary>
             <Suspense fallback={
               <div style={{ height: shellMode === "minimized" ? 36 : shellMode === "panel" ? shellHeight : undefined }}
-                   className={`flex items-center justify-center bg-[#1a1a0e] text-[#6ba034] shrink-0 border-t border-border ${shellMode === "maximized" || shellMode === "fullscreen" ? "flex-1" : ""}`}>
+                   className={`flex items-center justify-center bg-terminal-bg text-terminal-accent shrink-0 border-t border-border ${shellMode === "maximized" || shellMode === "fullscreen" ? "flex-1" : ""}`}>
                 {shellMode !== "minimized" && "Loading..."}
               </div>
             }>
@@ -474,6 +545,121 @@ export function CatalogApp() {
       </div>
     </div>
     </SettingsProvider>
+  );
+}
+
+/** Small form to enter a service URL — used on both the welcome page and the explicit-service error page. */
+function ConnectForm() {
+  const [url, setUrl] = useState("");
+  const connect = () => {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    const dest = new URL(window.location.href);
+    dest.searchParams.set("service", trimmed);
+    window.location.href = dest.toString();
+  };
+  return (
+    <div className="flex gap-2 max-w-md mx-auto">
+      <input
+        type="url"
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && connect()}
+        placeholder="https://my-server.example.com"
+        className="flex-1 px-3 py-2 rounded-md border border-input bg-card text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+      />
+      <button
+        onClick={connect}
+        className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-accent transition-colors"
+      >
+        Connect
+      </button>
+    </div>
+  );
+}
+
+/** Welcome page shown when no ?service= parameter is provided. */
+function WelcomePage({ logoUrl }: { logoUrl: string }) {
+  const [recent, setRecent] = useState(() => getRecentServices());
+
+  const handleRemove = (url: string) => {
+    removeRecentService(url);
+    setRecent(getRecentServices());
+  };
+
+  const connectTo = (url: string) => {
+    const dest = new URL(window.location.href);
+    dest.searchParams.set("service", url);
+    window.location.href = dest.toString();
+  };
+
+  return (
+    <div className="flex items-center justify-center min-h-screen py-12">
+      <div className="max-w-xl w-full px-6">
+        <div className="flex items-center gap-8 mb-8">
+          <img
+            src={logoUrl}
+            alt="VGI logo"
+            className="w-40 h-40 rounded-full shadow-lg shrink-0"
+          />
+          <div>
+            <h1 className="text-3xl font-bold text-primary mb-2">
+              Cupola
+            </h1>
+            <p className="text-muted-foreground">
+              Connect to a VGI server to browse schemas, tables, views, and functions.
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-card rounded-lg border border-border p-6 mb-6">
+          <h2 className="text-sm font-semibold text-foreground mb-3">Connect to a VGI service</h2>
+          <ConnectForm />
+        </div>
+
+        {recent.length > 0 && (
+          <div className="bg-card rounded-lg border border-border p-6 mb-6">
+            <h2 className="text-sm font-semibold text-foreground mb-3">Recent servers</h2>
+            <ul className="space-y-2">
+              {recent.map((s) => (
+                <li key={s.url} className="flex items-center gap-2 group">
+                  <button
+                    onClick={() => connectTo(s.url)}
+                    className="flex-1 text-left px-3 py-2 rounded-md hover:bg-muted transition-colors min-w-0"
+                  >
+                    <span className="block text-sm font-medium text-primary truncate">{s.catalogName}</span>
+                    <span className="block text-xs text-muted-foreground truncate">{s.url}</span>
+                  </button>
+                  <button
+                    onClick={() => handleRemove(s.url)}
+                    className="opacity-0 group-hover:opacity-100 p-1 text-muted-foreground hover:text-destructive transition-all shrink-0"
+                    title="Remove"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="bg-card rounded-lg border border-border p-6">
+          <h2 className="text-sm font-semibold text-foreground mb-3">How it works</h2>
+          <p className="text-sm text-muted-foreground mb-3">
+            VGI servers redirect browsers here with a <code className="bg-muted px-1.5 py-0.5 rounded text-xs">?service=</code> URL
+            parameter. You can also enter a service URL above, or bookmark a direct link:
+          </p>
+          <code className="block text-xs bg-muted text-muted-foreground px-3 py-2 rounded overflow-x-auto">
+            {window.location.origin}/?service=https://your-server.example.com
+          </code>
+        </div>
+
+        <div className="text-center text-xs text-muted-foreground mt-8 space-y-1">
+          <p>&copy; 2026 &#x1F69C; <a href="https://query.farm" className="hover:text-primary transition-colors">Query.Farm LLC</a></p>
+          <p>v{__APP_VERSION__} ({__GIT_HASH__})</p>
+        </div>
+      </div>
+    </div>
   );
 }
 

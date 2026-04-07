@@ -18,9 +18,14 @@ export interface OAuthMeta {
   useIdToken?: boolean;
 }
 
+/** Grace period (seconds) — treat token as expired slightly early to avoid race conditions. */
+const EXPIRY_GRACE_SECONDS = 30;
+
 /** Cached token from URL fragment (persists in memory for the session). */
 let _cachedToken: string | null = null;
 let _cachedOAuthMeta: OAuthMeta | null = null;
+/** True once we've seen a valid token — means this service requires auth. */
+let _hadToken = false;
 
 /** Extract and cache the token + OAuth metadata from the URL fragment, then clean the URL. */
 function _extractFragmentToken(): string | null {
@@ -60,11 +65,35 @@ function _extractFragmentToken(): string | null {
   return null;
 }
 
-/** Get the raw JWT token — checks URL fragment first, then cookie. */
+/** Decode a JWT payload without verification. Returns null on failure. */
+function decodeJwtPayload(token: string): Record<string, any> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    return JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+  } catch {
+    return null;
+  }
+}
+
+/** Check whether a JWT token is expired (or will expire within the grace window). */
+function isTokenExpired(token: string): boolean {
+  const payload = decodeJwtPayload(token);
+  if (!payload || typeof payload.exp !== "number") return false; // no exp claim — assume valid
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  return nowSeconds >= payload.exp - EXPIRY_GRACE_SECONDS;
+}
+
+/** Get the raw JWT token — checks URL fragment first, then cookie. Returns null if expired. */
 export function getAuthToken(): string | null {
   const fragmentToken = _extractFragmentToken();
   if (fragmentToken) {
-    console.log("[auth] Using fragment token");
+    if (isTokenExpired(fragmentToken)) {
+      console.warn("[auth] Fragment token is expired, clearing");
+      clearAuth();
+      return null;
+    }
+    _hadToken = true;
     return fragmentToken;
   }
   if (typeof document === "undefined") return null;
@@ -72,11 +101,28 @@ export function getAuthToken(): string | null {
     new RegExp(`(^|;)\\s*${AUTH_COOKIE_NAME}=([^;]+)`)
   );
   if (match) {
-    console.log("[auth] Using cookie token:", match[2].substring(0, 20) + "...");
+    if (isTokenExpired(match[2])) {
+      console.warn("[auth] Cookie token is expired, clearing");
+      clearAuth();
+      return null;
+    }
+    _hadToken = true;
     return match[2];
   }
-  console.log("[auth] No token found (checked fragment and cookie)");
   return null;
+}
+
+/** Returns true if we previously had a valid auth token (i.e. this service requires auth). */
+export function hadAuthToken(): boolean {
+  return _hadToken;
+}
+
+/** Redirect to the VGI server to re-authenticate. */
+export function redirectToAuth(serviceUrl: string): void {
+  if (typeof window === "undefined") return;
+  window.location.href =
+    `${serviceUrl}${serviceUrl.includes("?") ? "&" : "?"}` +
+    `_vgi_return_to=${encodeURIComponent(window.location.href)}`;
 }
 
 /** Get OAuth metadata from the fragment redirect (for DuckDB secret creation). */
@@ -85,23 +131,25 @@ export function getOAuthMeta(): OAuthMeta | null {
   return _cachedOAuthMeta;
 }
 
+/** Clear all cached auth state (in-memory token and cookie). */
+export function clearAuth(): void {
+  _cachedToken = null;
+  _cachedOAuthMeta = null;
+  if (typeof document !== "undefined") {
+    document.cookie = `${AUTH_COOKIE_NAME}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  }
+}
+
 /** Decode JWT payload to extract user info (no signature verification). */
 export function getUserInfo(): UserInfo | null {
   const token = getAuthToken();
   if (!token) return null;
-  try {
-    const parts = token.split(".");
-    if (parts.length < 2) return null;
-    const payload = JSON.parse(
-      atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))
-    );
-    return {
-      email: payload.email,
-      name: payload.name,
-      picture: payload.picture,
-      sub: payload.sub,
-    };
-  } catch {
-    return null;
-  }
+  const payload = decodeJwtPayload(token);
+  if (!payload) return null;
+  return {
+    email: payload.email,
+    name: payload.name,
+    picture: payload.picture,
+    sub: payload.sub,
+  };
 }

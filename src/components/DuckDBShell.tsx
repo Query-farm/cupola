@@ -9,7 +9,7 @@ const AskAIChat = lazy(() => import("./AskAIChat").then(m => ({ default: m.AskAI
 import { DataPreview } from "./content/DataPreview";
 import { getColumns } from "@/lib/service";
 import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
-import { getAuthToken, getOAuthMeta } from "@/lib/auth";
+import { getAuthToken, getOAuthMeta, redirectToAuth } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
 import {
   runAgentTurn,
@@ -24,6 +24,7 @@ import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 import { estimateCost, formatCost } from "@/lib/pricing";
 import { formatCellValue } from "@/lib/format";
 import { bridge } from "@/lib/shell-bridge";
+import { getTerminalTheme } from "@/lib/theme";
 import {
   saveSession, saveAutoSave, loadSession, getAutoSave,
   listSessions, deleteSession, decompressMemory,
@@ -384,7 +385,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   };
 
   return (
-    <div ref={rootRef} className="flex flex-col h-full bg-[#1a1a0e]">
+    <div ref={rootRef} className="flex flex-col h-full bg-terminal-bg">
       {/* Header bar — always visible, acts as minimized view */}
       <div
         className="flex items-center justify-between px-2 pt-1 bg-secondary shrink-0 border-b border-border"
@@ -470,7 +471,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
 
       {/* Terminal container */}
       {mode !== "minimized" && loading && !error && activeTab === "shell" && (
-        <div className="flex-1 flex items-center justify-center text-[#6ba034] text-sm">
+        <div className="flex-1 flex items-center justify-center text-terminal-accent text-sm">
           Loading DuckDB-WASM...
         </div>
       )}
@@ -499,7 +500,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
       >
         <div ref={containerRef} className="h-full w-full overflow-hidden" />
         {termSize && (
-          <div className="absolute bottom-1 right-4 text-[10px] font-mono text-[#f5f0e0]/20 pointer-events-none">
+          <div className="absolute bottom-1 right-4 text-[10px] font-mono text-terminal-fg/20 pointer-events-none">
             {termSize.cols}&times;{termSize.rows}
           </div>
         )}
@@ -520,12 +521,12 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         className={`flex-1 min-h-0 overflow-hidden bg-white ${mode === "minimized" || activeTab !== "perspective" ? "hidden" : ""}`}
       >
         {perspectiveLoading && (
-          <div className="flex items-center justify-center h-full text-[#6ba034] text-sm">
+          <div className="flex items-center justify-center h-full text-terminal-accent text-sm">
             Loading Perspective...
           </div>
         )}
         {!perspectiveLoading && activeTab === "perspective" && !perspectiveRef.current?.querySelector("perspective-viewer") && (
-          <div className="flex items-center justify-center h-full text-[#f5f0e0]/40 text-sm font-mono">
+          <div className="flex items-center justify-center h-full text-terminal-fg/40 text-sm font-mono">
             {selectedTable
               ? "Loading table into Perspective..."
               : "Run a query then type .perspective to view results here"}
@@ -601,9 +602,9 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
           }
         };
         return (
-        <div className="flex-1 min-h-0 overflow-y-auto bg-[#1a1a0e] p-3">
+        <div className="flex-1 min-h-0 overflow-y-auto bg-terminal-bg p-3">
           {queryHistory.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-[#f5f0e0]/40 text-sm font-mono">
+            <div className="flex items-center justify-center h-full text-terminal-fg/40 text-sm font-mono">
               No queries yet. Use .ai mode to generate queries.
             </div>
           ) : (
@@ -636,11 +637,11 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
                     <div key={group.conversationId} className="border border-[#3a3a28] rounded-md bg-[#1e1e14] overflow-hidden">
                       {/* Conversation header */}
                       <div className="px-3 py-2 bg-[#24241a] border-b border-[#3a3a28] flex items-center gap-2">
-                        <span className="text-[#6ba034] text-xs font-mono font-semibold shrink-0">AI</span>
-                        <span className="text-[#f5f0e0]/60 text-xs truncate">
+                        <span className="text-terminal-accent text-xs font-mono font-semibold shrink-0">AI</span>
+                        <span className="text-terminal-fg/60 text-xs truncate">
                           {group.name || group.question || "Unnamed conversation"}
                         </span>
-                        <span className="text-[#f5f0e0]/20 text-xs font-mono ml-auto shrink-0">{group.entries.length} queries</span>
+                        <span className="text-terminal-fg/20 text-xs font-mono ml-auto shrink-0">{group.entries.length} queries</span>
                       </div>
                       {/* Threaded queries */}
                       <div className="flex flex-col">
@@ -684,17 +685,17 @@ function QueryCard({ entry, compact, onRerun }: { entry: QueryHistoryEntry; comp
             </span>
           )}
           {!compact && entry.userQuestion && (
-            <span className="text-[#f5f0e0]/50 text-xs italic truncate">
+            <span className="text-terminal-fg/50 text-xs italic truncate">
               &ldquo;{entry.userQuestion}&rdquo;
             </span>
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <span className="text-[#f5f0e0]/30 text-xs font-mono">
+          <span className="text-terminal-fg/30 text-xs font-mono">
             {new Date(entry.timestamp).toLocaleTimeString()}
           </span>
           <button
-            className="p-1 text-[#f5f0e0]/30 hover:text-[#6ba034] transition-colors cursor-pointer"
+            className="p-1 text-terminal-fg/30 hover:text-terminal-accent transition-colors cursor-pointer"
             title="Copy SQL"
             onClick={() => navigator.clipboard.writeText(entry.sql)}
           >
@@ -702,7 +703,7 @@ function QueryCard({ entry, compact, onRerun }: { entry: QueryHistoryEntry; comp
           </button>
           {onRerun && (
             <button
-              className="p-1 text-[#f5f0e0]/30 hover:text-[#6ba034] transition-colors cursor-pointer"
+              className="p-1 text-terminal-fg/30 hover:text-terminal-accent transition-colors cursor-pointer"
               title="Re-run query"
               onClick={() => onRerun(entry.sql)}
             >
@@ -711,12 +712,12 @@ function QueryCard({ entry, compact, onRerun }: { entry: QueryHistoryEntry; comp
           )}
         </div>
       </div>
-      <pre className={`text-xs font-mono whitespace-pre-wrap break-all leading-relaxed ${isAI ? "text-purple-300" : "text-[#6ba034]"}`}>
+      <pre className={`text-xs font-mono whitespace-pre-wrap break-all leading-relaxed ${isAI ? "text-purple-300" : "text-terminal-accent"}`}>
         {entry.sql}
       </pre>
       <div className="mt-1 text-xs font-mono">
         {entry.success ? (
-          <span className="text-[#6ba034]">
+          <span className="text-terminal-accent">
             {entry.rowCount != null ? `${entry.rowCount.toLocaleString()} row${entry.rowCount !== 1 ? "s" : ""}` : "OK"}
           </span>
         ) : (
@@ -724,7 +725,7 @@ function QueryCard({ entry, compact, onRerun }: { entry: QueryHistoryEntry; comp
             {entry.error || "Failed"}
           </span>
         )}
-        <span className="text-[#f5f0e0]/30 ml-2">
+        <span className="text-terminal-fg/30 ml-2">
           {entry.executionTimeMs >= 1000
             ? `${(entry.executionTimeMs / 1000).toFixed(1)}s`
             : `${Math.round(entry.executionTimeMs)}ms`}
@@ -758,7 +759,7 @@ function initShell(
       cursorBlink: true,
       fontSize: config.fontSize || 13,
       fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
-      theme: { background: "#1a1a0e", foreground: "#f5f0e0", cursor: "#6ba034", selectionBackground: "#3a3a28" },
+      theme: (() => { const t = getTerminalTheme(); return { background: t.background, foreground: t.foreground, cursor: t.cursor, selectionBackground: t.selection }; })(),
       allowProposedApi: true,
     });
     fitAddon = new FA.FitAddon();
@@ -950,10 +951,39 @@ function initShell(
               const when = new Date(autoSaveSession.timestamp).toLocaleString();
               writeln(`Restored previous session (saved ${when})`, "32");
               restored = true;
+
+              // Re-attach the catalog with a fresh token if auth is in use
+              if (config.catalogName && config.token) {
+                const oauthMeta = getOAuthMeta();
+                const esc = (s: string) => s.replace(/'/g, "''");
+                // Detach the stale catalog (may have expired token)
+                await runQueryAsync(`DETACH IF EXISTS ${config.catalogName}`);
+                let attachSql = `ATTACH '${esc(config.catalogName)}' AS ${config.catalogName} (TYPE vgi, LOCATION '${esc(config.serviceUrl!)}'`;
+                if (oauthMeta?.refreshToken) {
+                  attachSql += `, oauth_refresh_token '${esc(oauthMeta.refreshToken)}'`;
+                }
+                attachSql += `)`;
+                const reattach = await runQueryAsync(attachSql);
+                if (reattach.ok) {
+                  writeln(`Re-attached ${config.catalogName} with fresh credentials`, "32");
+                } else {
+                  const errStr = reattach.error ?? "";
+                  const isAuthError = /oauth|auth|401|403|invalid_grant|token.*expired|token.*failed/i.test(errStr);
+                  if (isAuthError) {
+                    redirectToAuth(config.serviceUrl!);
+                    return;
+                  }
+                  writeln(`Re-attach failed: ${errStr}`, "31");
+                }
+              }
             }
           } catch (err: any) {
             console.warn("[session] Auto-restore failed:", err);
             writeln(`Previous session could not be restored: ${err.message}`, "33");
+            // Delete the corrupted auto-save so it doesn't fail again on next load
+            try {
+              await deleteSession(`${config.serviceUrl}::${AUTOSAVE_NAME}`);
+            } catch { /* ignore cleanup errors */ }
           }
         }
 
@@ -973,7 +1003,13 @@ function initShell(
             await runQueryAsync(`USE ${config.catalogName}`);
             writeln(`Connected to ${config.catalogName}`, "32");
           } else {
-            writeln(`Attach failed: ${result.error}`, "31");
+            const errStr = result.error ?? "";
+            const isAuthError = /oauth|auth|401|403|invalid_grant|token.*expired|token.*failed/i.test(errStr);
+            if (isAuthError) {
+              redirectToAuth(config.serviceUrl);
+              return;
+            }
+            writeln(`Attach failed: ${errStr}`, "31");
           }
           writeln("");
         } else if (!restored) {
