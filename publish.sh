@@ -1,25 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Publish: commit, push, build, and deploy to Cloudflare Pages
-# Deploys both a versioned branch (pinnable) and production (latest).
+# Publish: commit, push, build, upload versioned assets to R2, deploy Pages.
+#
+# URL scheme (all served by the Pages Function from R2):
+#   /                → 302 → /latest/
+#   /latest/         → 302 → /v{current}/
+#   /v0.1.0/*        → versioned install from R2
 #
 # Usage:
 #   ./publish.sh                  # prompt for commit message
 #   ./publish.sh "fix: whatever"  # use provided message
 #   ./publish.sh --skip-commit    # deploy only, no git
-#
-# Versioned URLs (from package.json version):
-#   latest:  https://cupola.query-farm.services
-#   pinned:  https://v0-1-0.cupola.pages.dev
 
 PROJECT="cupola"
 R2_BUCKET="cupola-assets"
 VERSION=$(node -e "console.log(require('./package.json').version)")
-# Cloudflare branch names use hyphens, not dots
-BRANCH="v${VERSION//./-}"
 
-echo "==> Version: ${VERSION} (branch: ${BRANCH})"
+echo "==> Version: ${VERSION}"
 
 # ---- Git: commit and push ----
 if [ "${1:-}" != "--skip-commit" ]; then
@@ -55,45 +53,78 @@ fi
 echo "==> Building..."
 bun run build
 
-if [ ! -f dist/shell/wasm/duckdb-eh.wasm ]; then
-  echo "ERROR: dist/shell/wasm/duckdb-eh.wasm not found."
-  echo "Make sure public/shell/wasm/ symlinks point to actual WASM files."
-  exit 1
-fi
-
 echo "==> dist/ size: $(du -sh dist/ | cut -f1)"
 
-# ---- Offload oversized files (>25MB) to R2 ----
+# ---- Upload versioned files to R2 ----
+R2_PREFIX="v${VERSION}"
+echo "==> Uploading dist/ to R2 under ${R2_PREFIX}/..."
+
+content_type() {
+  local f="$1"
+  case "${f##*.}" in
+    html)  echo "text/html; charset=utf-8" ;;
+    css)   echo "text/css; charset=utf-8" ;;
+    js)    echo "application/javascript; charset=utf-8" ;;
+    mjs)   echo "application/javascript; charset=utf-8" ;;
+    json)  echo "application/json; charset=utf-8" ;;
+    svg)   echo "image/svg+xml" ;;
+    png)   echo "image/png" ;;
+    jpg|jpeg) echo "image/jpeg" ;;
+    gif)   echo "image/gif" ;;
+    ico)   echo "image/x-icon" ;;
+    wasm)  echo "application/wasm" ;;
+    woff)  echo "font/woff" ;;
+    woff2) echo "font/woff2" ;;
+    ttf)   echo "font/ttf" ;;
+    map)   echo "application/json" ;;
+    txt)   echo "text/plain; charset=utf-8" ;;
+    xml)   echo "application/xml" ;;
+    *)     echo "application/octet-stream" ;;
+  esac
+}
+
+# Upload oversized files (>25MB) to root-level R2 keys (shared across versions).
+# These are typically WASM files that rarely change between versions.
 OVERSIZED=$(find dist/ -type f -size +25M 2>/dev/null || true)
-
 if [ -n "$OVERSIZED" ]; then
-  npx wrangler r2 bucket create "$R2_BUCKET" 2>/dev/null || true
-
+  echo "==> Uploading shared large assets to R2 root..."
   for f in $OVERSIZED; do
     KEY="${f#dist/}"
+    CT=$(content_type "$f")
     SIZE_MB=$(echo "scale=1; $(wc -c < "$f" | tr -d ' ') / 1048576" | bc)
-    echo "  ${KEY} (${SIZE_MB}MB) -> R2"
-
-    CT="application/octet-stream"
-    [[ "$f" == *.wasm ]] && CT="application/wasm"
-    [[ "$f" == *.js ]] && CT="application/javascript"
-
-    npx wrangler r2 object put "${R2_BUCKET}/${KEY}" --file "$f" --content-type "$CT" --remote
-    rm "$f"
+    echo "    ${KEY} (${SIZE_MB}MB)"
+    npx wrangler r2 object put "${R2_BUCKET}/${KEY}" --file "$f" --content-type "$CT" --remote 2>/dev/null
   done
 fi
 
-echo "==> dist/ size for Pages: $(du -sh dist/ | cut -f1)"
+# Upload all normal-sized files to R2 under the version prefix
+echo "==> Uploading dist/ to R2 under ${R2_PREFIX}/..."
+find dist/ -type f -not -size +25M | while read -r f; do
+  KEY="${R2_PREFIX}/${f#dist/}"
+  CT=$(content_type "$f")
+  npx wrangler r2 object put "${R2_BUCKET}/${KEY}" --file "$f" --content-type "$CT" --remote 2>/dev/null
+done
+echo "==> Uploaded files to R2 prefix ${R2_PREFIX}/"
 
-# ---- Deploy versioned branch ----
-echo "==> Deploying versioned branch '${BRANCH}'..."
-npx wrangler pages deploy dist/ --project-name "$PROJECT" --branch "$BRANCH" --commit-dirty=true
+# Write _latest marker (temp file approach for portability)
+LATEST_TMP=$(mktemp)
+echo -n "${VERSION}" > "$LATEST_TMP"
+npx wrangler r2 object put "${R2_BUCKET}/_latest" --file "$LATEST_TMP" --content-type "text/plain" --remote 2>/dev/null
+rm -f "$LATEST_TMP"
+echo "==> Updated _latest marker to ${VERSION}"
 
-# ---- Deploy production (latest) ----
-echo "==> Deploying production (latest)..."
-npx wrangler pages deploy dist/ --project-name "$PROJECT" --commit-dirty=true
+# ---- Deploy Pages (function only — all content served from R2) ----
+# We deploy an almost-empty directory so the Pages Function handles all routes.
+# Static files in dist/ would bypass the function, which we don't want.
+PAGES_DIR=$(mktemp -d)
+# Keep an empty _headers just so the deployment isn't truly empty
+touch "${PAGES_DIR}/.nojekyll"
+
+echo "==> Deploying Pages (function + R2 binding)..."
+npx wrangler pages deploy "${PAGES_DIR}" --project-name "$PROJECT" --commit-dirty=true
+rm -rf "${PAGES_DIR}"
 
 echo ""
 echo "==> Published v${VERSION}"
-echo "    latest:  https://cupola.query-farm.services"
-echo "    pinned:  https://${BRANCH}.cupola.pages.dev"
+echo "    latest:  https://cupola.query-farm.services/latest/"
+echo "    pinned:  https://cupola.query-farm.services/v${VERSION}/"
