@@ -263,11 +263,19 @@ function handleMessage(data) {
             const snapshot = new Uint8Array(data.memory);
             const currentSize = module.HEAPU8.buffer.byteLength;
             if (data.size > currentSize) {
-                const needed = data.size - currentSize;
-                const ptr = module._malloc(needed);
-                if (ptr) module._free(ptr);
+                // Grow WASM memory directly (page size = 64KB)
+                const neededPages = Math.ceil((data.size - currentSize) / 65536);
+                try {
+                    module.wasmMemory.grow(neededPages);
+                } catch (growErr) {
+                    postMessage({ type: 'log', msg: 'Restore failed: could not grow memory by ' + neededPages + ' pages (' + Math.round(data.size / (1024*1024)) + ' MB needed)', cls: 'err' });
+                    return;
+                }
+                // After grow, Emscripten's HEAPU8 may be stale — update heap views
+                if (module.updateMemoryViews) module.updateMemoryViews();
+                else if (module._emscripten_notify_memory_growth) module._emscripten_notify_memory_growth(0);
                 if (module.HEAPU8.buffer.byteLength < data.size) {
-                    postMessage({ type: 'log', msg: 'Restore failed: could not grow memory', cls: 'err' });
+                    postMessage({ type: 'log', msg: 'Restore failed: memory grew but still too small (' + module.HEAPU8.buffer.byteLength + ' < ' + data.size + ')', cls: 'err' });
                     return;
                 }
             }

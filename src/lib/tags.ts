@@ -1,8 +1,13 @@
+/** Well-known VGI tag names — prefixed with `vgi.` to distinguish from user-defined tags. */
+export const TAG_EXAMPLE_QUERIES = "vgi.example_queries";
+export const TAG_DESCRIPTION_MD = "vgi.description_md";
+export const TAG_DESCRIPTION_LLM = "vgi.description_llm";
+
 /** Tags that have dedicated UI rendering and should not appear in the raw TagsTable. */
-const DISPLAY_HIDDEN_TAGS = ["example_queries", "description_md", "description_llm"];
+const DISPLAY_HIDDEN_TAGS = [TAG_EXAMPLE_QUERIES, TAG_DESCRIPTION_MD, TAG_DESCRIPTION_LLM];
 
 /** Tags that should be excluded from AI agent tool outputs (not useful for LLMs). */
-const AI_HIDDEN_TAGS = ["description_md", "example_queries"];
+const AI_HIDDEN_TAGS = [TAG_DESCRIPTION_MD, TAG_EXAMPLE_QUERIES];
 
 /** Filter out tags that have dedicated UI rendering (for TagsTable display). */
 export function filterDisplayTags(tags?: Record<string, string> | null): Record<string, string> | null {

@@ -1,8 +1,6 @@
-import { Badge } from "@/components/ui/badge";
 import type { MacroInfo } from "vgi/client";
 import type { Selection } from "@/lib/tree";
 import { Breadcrumb } from "./Breadcrumb";
-import { CatalogIcon, getBadgeColorForType } from "./CatalogIcons";
 import { SqlCodeBlock } from "./SqlCodeBlock";
 import { TagsTable } from "./TagsTable";
 import { filterDisplayTags } from "@/lib/tags";
@@ -21,15 +19,6 @@ export function MacroDetail({ macro, catalogName, schemaName, onNavigate }: Prop
   return (
     <div>
       <Breadcrumb catalogName={catalogName} schemaName={schemaName || macro.schemaName} itemName={macro.name} itemType="macro" onNavigate={onNavigate} />
-
-      {/* Header */}
-      <div className="flex items-center gap-3 mb-1">
-        <CatalogIcon type="macro" className="h-6 w-6" />
-        <h1 className="text-2xl font-bold font-mono text-primary">{macro.name}</h1>
-        <Badge variant="secondary" className={`text-xs ${getBadgeColorForType("macro")}`}>
-          {macro.macroType === "table" ? "table macro" : "scalar macro"}
-        </Badge>
-      </div>
       {macro.comment && (
         <p className="text-muted-foreground mb-4">{macro.comment}</p>
       )}

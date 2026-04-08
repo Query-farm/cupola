@@ -5,7 +5,7 @@ interface Props {
   title?: string;
 }
 
-const { title = "VGI Catalog" } = Astro.props;
+const { title = "Cupola" } = Astro.props;
 ---
 
 <!doctype html>
@@ -22,6 +22,28 @@ const { title = "VGI Catalog" } = Astro.props;
     />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <title>{title}</title>
+    <!-- Apply cached theme before first paint to prevent flash -->
+    <script is:inline>
+    (function() {
+      try {
+        var p = new URLSearchParams(window.location.search);
+        var url = p.get('theme');
+        if (!url) return;
+        var raw = localStorage.getItem('vgi-theme-cache');
+        if (!raw) return;
+        var entry = JSON.parse(raw);
+        if (entry.url !== url) return;
+        var colors = entry.config ? entry.config.colors : entry.data;
+        if (!colors) return;
+        var root = document.documentElement;
+        for (var k in colors) {
+          if (colors.hasOwnProperty(k) && typeof colors[k] === 'string') {
+            root.style.setProperty('--' + k, colors[k]);
+          }
+        }
+      } catch(e) {}
+    })();
+    </script>
   </head>
   <body class="bg-background text-foreground antialiased overflow-hidden">
     <slot />

@@ -956,9 +956,11 @@ function initShell(
               if (config.catalogName && config.token) {
                 const oauthMeta = getOAuthMeta();
                 const esc = (s: string) => s.replace(/'/g, "''");
-                // Detach the stale catalog (may have expired token)
-                await runQueryAsync(`DETACH IF EXISTS ${config.catalogName}`);
-                let attachSql = `ATTACH '${esc(config.catalogName)}' AS ${config.catalogName} (TYPE vgi, LOCATION '${esc(config.serviceUrl!)}'`;
+                const escId = (s: string) => `"${s.replace(/"/g, '""')}"`;
+                // Switch away from the catalog before detaching, then detach
+                await runQueryAsync(`USE memory`);
+                await runQueryAsync(`DETACH IF EXISTS ${escId(config.catalogName)}`);
+                let attachSql = `ATTACH '${esc(config.catalogName)}' AS ${escId(config.catalogName)} (TYPE vgi, LOCATION '${esc(config.serviceUrl!)}'`;
                 if (oauthMeta?.refreshToken) {
                   attachSql += `, oauth_refresh_token '${esc(oauthMeta.refreshToken)}'`;
                 }

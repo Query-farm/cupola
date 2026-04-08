@@ -5,12 +5,11 @@ import { Button } from "@/components/ui/button";
 import type { ViewInfo } from "vgi/client";
 import type { Selection } from "@/lib/tree";
 import { typeColorClass } from "@/lib/tree";
-import { CatalogIcon, getBadgeColorForType } from "./CatalogIcons";
 import { Breadcrumb } from "./Breadcrumb";
 import { SqlCodeBlock } from "./SqlCodeBlock";
 import { TagsTable } from "./TagsTable";
 import { ExampleQueries } from "./ExampleQueries";
-import { filterDisplayTags } from "@/lib/tags";
+import { filterDisplayTags, TAG_DESCRIPTION_MD, TAG_EXAMPLE_QUERIES } from "@/lib/tags";
 import { DescriptionSection } from "./DescriptionSection";
 import { bridge } from "@/lib/shell-bridge";
 
@@ -67,21 +66,14 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate }: Props)
 
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-center gap-3 mb-1">
-        <CatalogIcon type="view" className="h-6 w-6" />
-        <h1 className="text-2xl font-bold font-mono text-primary">{view.name}</h1>
-        <Badge variant="secondary" className={`text-xs ${getBadgeColorForType("view")}`}>view</Badge>
-      </div>
-
       <Breadcrumb catalogName={catalogName || ""} schemaName={schemaName || view.schemaName} itemName={view.name} itemType="view" onNavigate={onNavigate} />
 
       {view.comment && (
         <p className="text-muted-foreground mb-4">{view.comment}</p>
       )}
 
-      {view.tags?.description_md && (
-        <DescriptionSection markdown={view.tags.description_md} />
+      {view.tags?.[TAG_DESCRIPTION_MD] && (
+        <DescriptionSection markdown={view.tags[TAG_DESCRIPTION_MD]} />
       )}
 
       {/* Columns */}
@@ -142,7 +134,7 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate }: Props)
       )}
 
       {/* Example Queries */}
-      <ExampleQueries exampleQueriesJson={view.tags?.example_queries} />
+      <ExampleQueries exampleQueriesJson={view.tags?.[TAG_EXAMPLE_QUERIES]} />
     </div>
   );
 }

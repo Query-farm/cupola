@@ -6,7 +6,7 @@
 
 import type { CatalogData } from "./service";
 import { getColumns, getForeignKeys } from "./service";
-import { filterTagsForAI } from "./tags";
+import { filterTagsForAI, TAG_DESCRIPTION_LLM, TAG_DESCRIPTION_MD, TAG_EXAMPLE_QUERIES } from "./tags";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -241,9 +241,9 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
   ];
 
   // Catalog-level description for AI context
-  if (catalog.catalogTags?.description_llm) {
+  if (catalog.catalogTags?.[TAG_DESCRIPTION_LLM]) {
     lines.push(`## Catalog Description`);
-    lines.push(catalog.catalogTags.description_llm);
+    lines.push(catalog.catalogTags[TAG_DESCRIPTION_LLM]);
     lines.push(``);
   }
 
@@ -251,7 +251,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
   for (const schema of catalog.schemas) {
     const schemaComment = schema.info.comment ? ` — ${schema.info.comment}` : "";
     const filteredTags = schema.info.tags
-      ? Object.entries(schema.info.tags).filter(([k]) => !["example_queries", "description_md"].includes(k))
+      ? Object.entries(schema.info.tags).filter(([k]) => ![TAG_EXAMPLE_QUERIES, TAG_DESCRIPTION_MD].includes(k))
       : [];
     const schemaTags = filteredTags.length > 0
       ? ` [${filteredTags.map(([k, v]) => `${k}: ${v}`).join(", ")}]` : "";

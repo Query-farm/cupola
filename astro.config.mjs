@@ -1,16 +1,27 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import { resolve } from 'node:path';
+import { execSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 import react from '@astrojs/react';
 
 import tailwindcss from '@tailwindcss/vite';
+
+const require = createRequire(import.meta.url);
+const pkg = require('./package.json');
+const gitHash = execSync('git rev-parse --short HEAD').toString().trim();
 
 // https://astro.build/config
 export default defineConfig({
   integrations: [react()],
 
   vite: {
+    define: {
+      __APP_VERSION__: JSON.stringify(pkg.version),
+      __GIT_HASH__: JSON.stringify(gitHash),
+      __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+    },
     plugins: [
       tailwindcss(),
       // COOP/COEP headers required for SharedArrayBuffer (DuckDB-WASM shell)

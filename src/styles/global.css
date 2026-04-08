@@ -37,6 +37,10 @@
     --color-card-foreground: var(--card-foreground);
     --color-card: var(--card);
     --color-foreground: var(--foreground);
+    --color-terminal-bg: var(--terminal-bg);
+    --color-terminal-fg: var(--terminal-fg);
+    --color-terminal-accent: var(--terminal-accent);
+    --color-terminal-muted: var(--terminal-muted);
     --color-background: var(--background);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
@@ -80,6 +84,10 @@
     --sidebar-accent-foreground: #2c2c1e;
     --sidebar-border: #f0ece0;
     --sidebar-ring: #4a7c23;
+    --terminal-bg: #1a1a0e;
+    --terminal-fg: #f5f0e0;
+    --terminal-accent: #6ba034;
+    --terminal-muted: #4a4a38;
 }
 
 .dark {
@@ -133,14 +141,14 @@
   width: 10px;
 }
 .xterm-viewport::-webkit-scrollbar-track {
-  background: #1a1a0e;
+  background: var(--terminal-bg);
 }
 .xterm-viewport::-webkit-scrollbar-thumb {
-  background: #4a4a38;
+  background: var(--terminal-muted);
   border-radius: 5px;
 }
 .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background: #6ba034;
+  background: var(--terminal-accent);
 }
 
 /* Column type badges in the sidebar shrink and hide when space is tight */

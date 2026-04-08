@@ -170,6 +170,17 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
       icon: Eye,
       selectedIcon: Eye,
       className: "text-accent/80",
+      draggable: !!onTableAction,
+      actions: onTableAction
+        ? React.createElement("div", {
+            role: "button",
+            tabIndex: 0,
+            className: "opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-primary transition-all cursor-pointer",
+            title: `Paste ${schema.info.name}.${view.name} into shell`,
+            onClick: (e: React.MouseEvent) => { e.stopPropagation(); onTableAction(schema.info.name, view.name); },
+            onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); e.preventDefault(); onTableAction(schema.info.name, view.name); } },
+          }, React.createElement(TerminalSquare, { className: "h-3 w-3" }))
+        : undefined,
     });
   }
 

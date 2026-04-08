@@ -122,10 +122,10 @@ export function SettingsModal() {
                 </Select>
               </div>
               <div
-                className="rounded bg-[#1a1a0e] px-3 py-2 text-[#f5f0e0] overflow-hidden"
+                className="rounded bg-terminal-bg px-3 py-2 text-terminal-fg overflow-hidden"
                 style={{ fontFamily: "'JetBrains Mono', 'SF Mono', monospace", fontSize: `${settings.shellFontSize}px`, lineHeight: 1.4 }}
               >
-                <span style={{ color: "#6ba034" }}>D</span> &gt; SELECT * FROM parcels LIMIT 5;
+                <span className="text-terminal-accent">D</span> &gt; SELECT * FROM parcels LIMIT 5;
               </div>
             </div>
           </div>

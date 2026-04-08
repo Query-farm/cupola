@@ -1,16 +1,15 @@
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Key, Link2, ShieldCheck } from "lucide-react";
-import { CatalogIcon, getBadgeColorForType } from "./CatalogIcons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button"
 import type { TableInfo } from "vgi/client";
-import { getColumns, getForeignKeys, type ForeignKeyInfo } from "@/lib/service";
+import { getColumns, getForeignKeys, fetchColumnStats, type ForeignKeyInfo, type ColumnStats } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
 import { Breadcrumb } from "./Breadcrumb";
 import { ColumnsTable } from "./ColumnsTable";
 import { TagsTable } from "./TagsTable";
 import { ExampleQueries } from "./ExampleQueries";
-import { filterDisplayTags } from "@/lib/tags";
+import { filterDisplayTags, TAG_DESCRIPTION_MD, TAG_EXAMPLE_QUERIES } from "@/lib/tags";
 import { DescriptionSection } from "./DescriptionSection";
 
 interface Props {
@@ -26,6 +25,17 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
   const foreignKeys = getForeignKeys(table);
   const defaultSql = `SELECT * FROM ${catalogName}.${table.schemaName}.${table.name} LIMIT 10;`;
   const displayTags = useMemo(() => filterDisplayTags(table.tags), [table.tags]);
+
+  // Lazily fetch column statistics from DuckDB WASM shell
+  // undefined = loading, Map = loaded, null = unavailable
+  const [columnStats, setColumnStats] = useState<Map<string, ColumnStats> | undefined | null>(undefined);
+  useEffect(() => {
+    setColumnStats(undefined);
+    fetchColumnStats(catalogName, table.schemaName, table.name).then(
+      (stats) => setColumnStats(stats),
+      () => setColumnStats(null),
+    );
+  }, [catalogName, table.schemaName, table.name]);
 
   // Build constraint lookup sets
   const notNullSet = new Set(table.notNullConstraints);
@@ -57,32 +67,31 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
 
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-center gap-3 mb-1">
-        <CatalogIcon type="table" className="h-6 w-6" />
-        <h1 className="text-2xl font-bold font-mono text-primary">{table.name}</h1>
-        <Badge variant="secondary" className={`text-xs ${getBadgeColorForType("table")}`}>table</Badge>
-        {onOpenShell && (shellMode === "minimized" || !shellMode) && (
+      <Breadcrumb
+        catalogName={catalogName}
+        schemaName={table.schemaName}
+        itemName={table.name}
+        itemType="table"
+        onNavigate={onNavigate}
+        trailing={onOpenShell && (shellMode === "minimized" || !shellMode) ? (
           <Button
             variant="outline"
             size="sm"
             onClick={onOpenShell}
-            className="ml-auto h-7 text-xs gap-1.5"
+            className="h-7 text-xs gap-1.5"
           >
             <img src="/duckdb-icon-light.svg" alt="" className="h-3.5 w-3.5" />
             Open SQL Shell
           </Button>
-        )}
-      </div>
-
-      <Breadcrumb catalogName={catalogName} schemaName={table.schemaName} itemName={table.name} itemType="table" onNavigate={onNavigate} />
+        ) : undefined}
+      />
 
       {table.comment && (
         <p className="text-muted-foreground mb-3">{table.comment}</p>
       )}
 
-      {table.tags?.description_md && (
-        <DescriptionSection markdown={table.tags.description_md} />
+      {table.tags?.[TAG_DESCRIPTION_MD] && (
+        <DescriptionSection markdown={table.tags[TAG_DESCRIPTION_MD]} />
       )}
 
       {/* Columns */}
@@ -96,6 +105,10 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
         notNullSet={notNullSet}
         fkByColumn={fkByColumn}
         checkConstraints={table.checkConstraints}
+        columnStats={columnStats}
+        catalogName={catalogName}
+        schemaName={table.schemaName}
+        tableName={table.name}
         onNavigate={onNavigate}
       />
 
@@ -165,7 +178,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
       )}
 
       <ExampleQueries
-        exampleQueriesJson={table.tags?.example_queries}
+        exampleQueriesJson={table.tags?.[TAG_EXAMPLE_QUERIES]}
         defaultSql={defaultSql}
         onOpenShell={onOpenShell}
       />

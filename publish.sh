@@ -2,24 +2,53 @@
 set -euo pipefail
 
 # Publish: commit, push, build, and deploy to Cloudflare Pages
+# Deploys both a versioned branch (pinnable) and production (latest).
+#
+# Usage:
+#   ./publish.sh                  # prompt for commit message
+#   ./publish.sh "fix: whatever"  # use provided message
+#   ./publish.sh --skip-commit    # deploy only, no git
+#
+# Versioned URLs (from package.json version):
+#   latest:  https://cupola.query-farm.services
+#   pinned:  https://v0-1-0.cupola.pages.dev
+
 PROJECT="cupola"
 R2_BUCKET="cupola-assets"
+VERSION=$(node -e "console.log(require('./package.json').version)")
+# Cloudflare branch names use hyphens, not dots
+BRANCH="v${VERSION//./-}"
+
+echo "==> Version: ${VERSION} (branch: ${BRANCH})"
 
 # ---- Git: commit and push ----
-if [ -n "$(git status --porcelain)" ]; then
-  echo "==> Staging changes..."
-  git add -A
-  git status --short
+if [ "${1:-}" != "--skip-commit" ]; then
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "==> Staging changes..."
+    git add -A
+    git status --short
 
-  MSG="${1:-$(git log -1 --pretty=%B | head -1)}"
-  read -r -p "Commit message [${MSG}]: " INPUT
-  MSG="${INPUT:-$MSG}"
+    MSG="${1:-}"
+    if [ -z "$MSG" ]; then
+      DEFAULT=$(git log -1 --pretty=%B | head -1)
+      read -r -p "Commit message [${DEFAULT}]: " INPUT
+      MSG="${INPUT:-$DEFAULT}"
+    fi
 
-  git commit -m "$MSG"
-  echo "==> Pushing to origin..."
-  git push
-else
-  echo "==> Working tree clean, skipping commit."
+    git commit -m "$MSG"
+    echo "==> Pushing to origin..."
+    git push
+  else
+    echo "==> Working tree clean, skipping commit."
+  fi
+
+  # Tag this version if not already tagged
+  TAG="v${VERSION}"
+  if ! git tag -l "$TAG" | grep -q "$TAG"; then
+    echo "==> Tagging ${TAG}..."
+    git tag "$TAG"
+    git push origin "$TAG"
+  fi
 fi
 
 # ---- Build ----
@@ -56,9 +85,15 @@ fi
 
 echo "==> dist/ size for Pages: $(du -sh dist/ | cut -f1)"
 
-# ---- Deploy to Cloudflare Pages ----
-echo "==> Deploying to Cloudflare Pages..."
+# ---- Deploy versioned branch ----
+echo "==> Deploying versioned branch '${BRANCH}'..."
+npx wrangler pages deploy dist/ --project-name "$PROJECT" --branch "$BRANCH" --commit-dirty=true
+
+# ---- Deploy production (latest) ----
+echo "==> Deploying production (latest)..."
 npx wrangler pages deploy dist/ --project-name "$PROJECT" --commit-dirty=true
 
 echo ""
-echo "==> Published to https://cupola.query-farm.services"
+echo "==> Published v${VERSION}"
+echo "    latest:  https://cupola.query-farm.services"
+echo "    pinned:  https://${BRANCH}.cupola.pages.dev"

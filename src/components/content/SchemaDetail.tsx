@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { Folder } from "lucide-react";
 import { CatalogIcon, getIconForType, getColorForType } from "./CatalogIcons";
 import { CatalogListItem } from "./CatalogListItem";
 import type { ResolvedSchema } from "@/lib/service";
@@ -8,7 +7,7 @@ import { useSettings } from "@/lib/settings";
 import { Breadcrumb } from "./Breadcrumb";
 import { TagsTable } from "./TagsTable";
 import { ExampleQueries } from "./ExampleQueries";
-import { filterDisplayTags } from "@/lib/tags";
+import { filterDisplayTags, TAG_DESCRIPTION_MD, TAG_EXAMPLE_QUERIES } from "@/lib/tags";
 import { DescriptionSection } from "./DescriptionSection";
 
 interface Props {
@@ -30,19 +29,14 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-1">
-        <Folder className="h-6 w-6 text-primary" />
-        <h1 className="text-2xl font-bold text-primary">{schemaName}</h1>
-      </div>
-
-      <Breadcrumb catalogName={catalogName ?? ""} schemaName={schemaName} onNavigate={onNavigate} />
+      <Breadcrumb catalogName={catalogName ?? ""} itemName={schemaName} itemType="schema" onNavigate={onNavigate} />
 
       {schema.info.comment && (
         <p className="text-muted-foreground mb-6">{schema.info.comment}</p>
       )}
 
-      {schema.info.tags?.description_md && (
-        <DescriptionSection markdown={schema.info.tags.description_md} />
+      {schema.info.tags?.[TAG_DESCRIPTION_MD] && (
+        <DescriptionSection markdown={schema.info.tags[TAG_DESCRIPTION_MD]} />
       )}
 
       <div className="flex gap-6 text-sm text-muted-foreground mb-6">
@@ -138,7 +132,7 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
         return filtered ? <div className="mt-8"><TagsTable tags={filtered} /></div> : null;
       })()}
 
-      <ExampleQueries exampleQueriesJson={schema.info.tags?.example_queries} onOpenShell={onOpenShell} />
+      <ExampleQueries exampleQueriesJson={schema.info.tags?.[TAG_EXAMPLE_QUERIES]} onOpenShell={onOpenShell} />
     </div>
   );
 }

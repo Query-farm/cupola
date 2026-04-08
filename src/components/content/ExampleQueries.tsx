@@ -12,9 +12,9 @@ interface ExampleQuery {
 }
 
 interface Props {
-  /** Raw JSON string from the example_queries tag, or null for default query. */
+  /** Raw JSON string from the vgi.example_queries tag, or null for default query. */
   exampleQueriesJson?: string | null;
-  /** Fallback query when no example_queries tag exists. */
+  /** Fallback query when no vgi.example_queries tag exists. */
   defaultSql?: string;
   /** Whether the shell can be opened to run queries. */
   onOpenShell?: () => void;

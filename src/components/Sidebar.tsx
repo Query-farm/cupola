@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { Search, TerminalSquare, HardDrive } from "lucide-react";
+import React, { useState, useMemo } from "react";
+import { Search, TerminalSquare, Cpu, RefreshCw, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { TreeView } from "@/components/tree-view";
 import { SettingsModal } from "@/components/SettingsModal";
@@ -19,6 +19,20 @@ interface Props {
   refreshing?: boolean;
 }
 
+function buildRefreshAction(onRefresh: () => void, refreshing?: boolean): React.ReactNode {
+  return React.createElement("div", {
+    role: "button",
+    tabIndex: 0,
+    className: "p-0.5 text-muted-foreground hover:text-primary transition-colors cursor-pointer",
+    title: "Refresh catalog",
+    "aria-disabled": refreshing || undefined,
+    onClick: (e: React.MouseEvent) => { e.stopPropagation(); if (!refreshing) onRefresh(); },
+    onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); e.preventDefault(); if (!refreshing) onRefresh(); } },
+  }, React.createElement(refreshing ? Loader2 : RefreshCw, {
+    className: `h-3.5 w-3.5${refreshing ? " animate-spin" : ""}`,
+  }));
+}
+
 export function Sidebar({ catalog, memoryCatalog, selection, onSelect, onOpenShell, onShellInsert, onRefresh, refreshing }: Props) {
   const [search, setSearch] = useState("");
   const { settings } = useSettings();
@@ -26,27 +40,26 @@ export function Sidebar({ catalog, memoryCatalog, selection, onSelect, onOpenShe
     showDuckDBTypes: settings.showDuckDBTypes,
     hideTableBackingFunctions: settings.hideTableBackingFunctions,
     onTableAction: onShellInsert ? (schema, table) => onShellInsert(`${catalog.catalogName}.${schema}.${table}`) : undefined,
-    onRefresh,
-    refreshing,
-  }), [catalog, settings.showDuckDBTypes, settings.hideTableBackingFunctions, onShellInsert, onRefresh, refreshing]);
-  const filteredData = useMemo(() => filterTree(treeData, search), [treeData, search]);
-
-  // Memory catalog tree (only when shell is running and has tables)
+  }), [catalog, settings.showDuckDBTypes, settings.hideTableBackingFunctions, onShellInsert]);
+  // Memory catalog tree nodes (merged into main tree)
   const memoryTreeData = useMemo(() => {
-    if (!memoryCatalog || memoryCatalog.schemas.length === 0) return null;
-    // Check if there are any actual tables
-    const hasTables = memoryCatalog.schemas.some(s => s.tables.length > 0);
-    if (!hasTables) return null;
+    if (!memoryCatalog) return [];
     return buildTreeData(memoryCatalog, {
       showDuckDBTypes: settings.showDuckDBTypes,
-      rootIcon: HardDrive,
+      rootIcon: Cpu,
       onTableAction: onShellInsert ? (schema, table) => onShellInsert(`memory.${schema}.${table}`) : undefined,
     });
   }, [memoryCatalog, settings.showDuckDBTypes]);
-  const filteredMemoryData = useMemo(
-    () => memoryTreeData ? filterTree(memoryTreeData, search) : null,
-    [memoryTreeData, search]
-  );
+
+  const combinedData = useMemo(() => {
+    const sorted = [...treeData, ...memoryTreeData].sort((a, b) => a.name.localeCompare(b.name));
+    // Attach refresh action to the first catalog node
+    if (sorted.length > 0 && onRefresh) {
+      sorted[0] = { ...sorted[0], actions: buildRefreshAction(onRefresh, refreshing) };
+    }
+    return sorted;
+  }, [treeData, memoryTreeData, onRefresh, refreshing]);
+  const filteredData = useMemo(() => filterTree(combinedData, search), [combinedData, search]);
 
   const selectedTreeId = useMemo(
     () => selection ? selectionToTreeId(selection, catalog.catalogName) : catalog.catalogName,
@@ -87,16 +100,6 @@ export function Sidebar({ catalog, memoryCatalog, selection, onSelect, onOpenShe
           onSelectChange={handleSelectChange}
           initialSelectedItemId={selectedTreeId}
         />
-        {filteredMemoryData && (
-          <div className="mt-2 pt-2 border-t border-border">
-            <TreeView
-              data={filteredMemoryData}
-              expandAll={!!search}
-              onSelectChange={handleSelectChange}
-              initialSelectedItemId={selectedTreeId}
-            />
-          </div>
-        )}
       </div>
 
       {/* Shell + Settings + Copyright */}

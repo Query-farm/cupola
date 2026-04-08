@@ -26,6 +26,7 @@ const colorMap: Record<CatalogObjectType, string> = {
 };
 
 const badgeColorMap: Record<string, string> = {
+  schema: "bg-green-50 text-green-700",
   table: "bg-blue-50 text-blue-700",
   view: "bg-violet-50 text-violet-700",
   function: "bg-amber-50 text-amber-700",

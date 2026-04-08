@@ -1,12 +1,7 @@
 import { useEffect, useState } from "react";
-import { getUserInfo, type UserInfo as UserInfoData } from "@/lib/auth";
-import { Button } from "@/components/ui/button";
+import { getUserInfo, clearAuth, type UserInfo as UserInfoData } from "@/lib/auth";
 
-interface Props {
-  logoutUrl: string;
-}
-
-export function UserInfo({ logoutUrl }: Props) {
+export function UserInfo() {
   const [user, setUser] = useState<UserInfoData | null>(null);
 
   useEffect(() => {
@@ -14,6 +9,12 @@ export function UserInfo({ logoutUrl }: Props) {
   }, []);
 
   if (!user) return null;
+
+  const handleSignOut = () => {
+    clearAuth();
+    // Navigate to the frontend homepage (no ?service= param)
+    window.location.href = window.location.origin + window.location.pathname;
+  };
 
   return (
     <div className="flex items-center gap-2 text-sm">
@@ -27,12 +28,12 @@ export function UserInfo({ logoutUrl }: Props) {
       <span className="text-card-foreground font-medium">
         {user.email || user.sub || ""}
       </span>
-      <a
-        href={logoutUrl}
-        className="text-muted-foreground hover:text-destructive text-xs ml-1"
+      <button
+        onClick={handleSignOut}
+        className="text-muted-foreground hover:text-destructive text-xs ml-1 cursor-pointer"
       >
         Sign out
-      </a>
+      </button>
     </div>
   );
 }

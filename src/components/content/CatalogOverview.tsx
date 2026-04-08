@@ -6,7 +6,7 @@ import type { CatalogData } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
 import { CatalogListItem } from "./CatalogListItem";
 import { TagsTable } from "./TagsTable";
-import { filterDisplayTags } from "@/lib/tags";
+import { filterDisplayTags, TAG_DESCRIPTION_MD } from "@/lib/tags";
 import { DescriptionSection } from "./DescriptionSection";
 
 interface Props {
@@ -45,35 +45,39 @@ export function CatalogOverview({ catalog, serviceUrl, onNavigate }: Props) {
         <p className="text-muted-foreground mb-6">{catalog.catalogComment}</p>
       )}
 
-      {catalog.catalogTags?.description_md && (
-        <DescriptionSection markdown={catalog.catalogTags.description_md} defaultOpen />
+      {catalog.catalogTags?.[TAG_DESCRIPTION_MD] && (
+        <DescriptionSection markdown={catalog.catalogTags[TAG_DESCRIPTION_MD]} defaultOpen />
       )}
 
       <ConnectBox catalogName={catalog.catalogName} serviceUrl={serviceUrl} />
 
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3 mt-8">
-        Schemas
-      </h2>
-      <div className="grid gap-2">
-        {catalog.schemas.map((s) => {
-          const counts = [
-            `${s.tables.length} tables`,
-            s.views.length > 0 ? `${s.views.length} views` : null,
-          ].filter(Boolean).join(", ");
-          return (
-            <CatalogListItem
-              key={s.info.name}
-              icon={Folder}
-              iconClassName={getColorForType("schema")}
-              title={s.info.name}
-              description={s.info.comment || undefined}
-              badge={s.info.name === catalog.defaultSchema ? "default" : undefined}
-              rightLabel={counts}
-              onClick={() => onNavigate({ type: "schema", name: s.info.name, schema: s.info.name })}
-            />
-          );
-        })}
-      </div>
+      {catalog.schemas.length > 0 && (
+        <>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3 mt-8">
+            Schemas
+          </h2>
+          <div className="grid gap-2">
+            {catalog.schemas.map((s) => {
+              const counts = [
+                `${s.tables.length} tables`,
+                s.views.length > 0 ? `${s.views.length} views` : null,
+              ].filter(Boolean).join(", ");
+              return (
+                <CatalogListItem
+                  key={s.info.name}
+                  icon={Folder}
+                  iconClassName={getColorForType("schema")}
+                  title={s.info.name}
+                  description={s.info.comment || undefined}
+                  badge={s.info.name === catalog.defaultSchema ? "default" : undefined}
+                  rightLabel={counts}
+                  onClick={() => onNavigate({ type: "schema", name: s.info.name, schema: s.info.name })}
+                />
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {(() => {
         const filtered = filterDisplayTags(catalog.catalogTags);

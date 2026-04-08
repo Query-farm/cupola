@@ -17,6 +17,7 @@ import type {
 } from "vgi/client";
 import { getAuthToken } from "./auth";
 import { arrowFieldToDuckDB } from "./arrow-to-duckdb";
+import { bridge } from "./shell-bridge";
 
 /** Column info extracted from a TableInfo's serialized Arrow schema. */
 export interface ColumnInfo {
@@ -61,6 +62,12 @@ export function getServiceUrl(): string {
   if (typeof window === "undefined") return "";
   const params = new URLSearchParams(window.location.search);
   return params.get("service") || window.location.origin;
+}
+
+/** Whether a ?service= URL parameter was explicitly provided. */
+export function hasExplicitService(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).has("service");
 }
 
 /** Extract column info from a TableInfo's serialized Arrow schema bytes.
@@ -158,6 +165,57 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
     return { catalogName, catalogComment, catalogTags, defaultSchema, schemas };
   } finally {
     client.close();
+  }
+}
+
+/** Per-column statistics from vgi_table_statistics(). */
+export interface ColumnStats {
+  columnType: string;
+  min: any;
+  max: any;
+  hasNull: boolean;
+  hasNotNull: boolean;
+  distinctCount: number;
+}
+
+/**
+ * Fetch column statistics via the DuckDB WASM shell bridge.
+ * Returns null if the shell isn't running, the query fails, or the table has no stats.
+ */
+export async function fetchColumnStats(
+  catalogName: string,
+  schemaName: string,
+  tableName: string,
+): Promise<Map<string, ColumnStats> | null> {
+  const queryFn = bridge.query;
+  if (!queryFn) return null;
+
+  try {
+    const sql = `SELECT column_name, column_type, min, max, has_null, has_not_null, distinct_count FROM vgi_table_statistics('${catalogName.replace(/'/g, "''")}', '${schemaName.replace(/'/g, "''")}', '${tableName.replace(/'/g, "''")}')`;
+    const result = await queryFn(sql);
+    if (!result.ok || !result.arrowBuffers?.length) return null;
+
+    const { tableFromIPC } = await import("apache-arrow");
+    const buf = result.arrowBuffers[0];
+    const table = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+    if (table.numRows === 0) return null;
+
+    const stats = new Map<string, ColumnStats>();
+    for (let i = 0; i < table.numRows; i++) {
+      const columnName = String(table.getChildAt(0)?.get(i) ?? "");
+      stats.set(columnName, {
+        columnType: String(table.getChildAt(1)?.get(i) ?? ""),
+        min: table.getChildAt(2)?.get(i) ?? null,
+        max: table.getChildAt(3)?.get(i) ?? null,
+        hasNull: Boolean(table.getChildAt(4)?.get(i)),
+        hasNotNull: Boolean(table.getChildAt(5)?.get(i)),
+        distinctCount: Number(table.getChildAt(6)?.get(i) ?? -1),
+      });
+    }
+    return stats;
+  } catch (e) {
+    console.error("Failed to fetch column statistics:", e);
+    return null;
   }
 }
 
