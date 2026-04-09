@@ -159,8 +159,12 @@ const FILTER_OPS = [
   ">=", "<=", ">", "<",
 ];
 
-function duckdbTypeToPsp(name: string): ColumnType {
+// Types that Perspective cannot handle — skip these columns entirely
+const UNSUPPORTED_PSP_TYPES = new Set(["geometry", "blob", "wkb_geometry"]);
+
+function duckdbTypeToPsp(name: string): ColumnType | null {
   name = name.toLowerCase();
+  if (UNSUPPORTED_PSP_TYPES.has(name)) return null;
   if (name === "varchar" || name === "utf8") return "string";
   if (name === "double" || name === "hugeint" || name === "float64" || name.startsWith("decimal")) return "float";
   if (name === "bigint" || name.startsWith("int") || name.startsWith("uint") || name.startsWith("smallint") || name.startsWith("tinyint")) return "integer";
@@ -168,7 +172,6 @@ function duckdbTypeToPsp(name: string): ColumnType {
   if (name.startsWith("bool")) return "boolean";
   if (name.startsWith("timestamp")) return "datetime";
   if (name.startsWith("json") || name.startsWith("struct")) return "string";
-  console.warn(`Unknown DuckDB type for Perspective: '${name}'`);
   return "string";
 }
 
@@ -304,11 +307,13 @@ export class VgiDuckDBHandler {
     const schema: Record<string, ColumnType> = {};
     for (const row of rows) {
       if (!row.column_name?.startsWith("__")) {
+        const pspType = duckdbTypeToPsp(row.column_type);
+        if (pspType === null) continue; // skip unsupported types (geometry, blob, etc.)
         // Return hyphenated names to match Perspective's convention.
         // The rename view (created in tableMakeView) maps these back to
         // underscored DuckDB column names.
         const name = row.column_name.replace(/_/g, "-");
-        schema[name] = duckdbTypeToPsp(row.column_type);
+        schema[name] = pspType;
       }
     }
     return schema;
@@ -470,7 +475,9 @@ export class VgiDuckDBHandler {
     const schema: Record<string, ColumnType> = {};
     for (const row of rows) {
       if (!row.column_name?.startsWith("__")) {
-        schema[row.column_name] = duckdbTypeToPsp(row.column_type);
+        const pspType = duckdbTypeToPsp(row.column_type);
+        if (pspType === null) continue;
+        schema[row.column_name] = pspType;
       }
     }
     return schema;
@@ -479,7 +486,7 @@ export class VgiDuckDBHandler {
   async tableValidateExpression(tableId: string, expression: string): Promise<ColumnType> {
     const sql = this.sqlBuilder.tableValidateExpression(tableId, expression);
     const rows = await queryRows(sql);
-    return duckdbTypeToPsp(rows[0]?.column_type ?? "varchar");
+    return duckdbTypeToPsp(rows[0]?.column_type ?? "varchar") ?? "string";
   }
 
   async viewGetMinMax(viewId: string, columnName: string, config: any): Promise<{ min: any; max: any }> {

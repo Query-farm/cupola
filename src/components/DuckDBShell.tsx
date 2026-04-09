@@ -258,6 +258,12 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
 
   // Auto-load Perspective virtual server when tab is active and a table is selected
   const perspectiveTableRef = useRef<string | null>(null);
+  // Clear perspective state when switching away so it reloads fresh on return
+  useEffect(() => {
+    if (activeTab !== "perspective") {
+      perspectiveTableRef.current = null;
+    }
+  }, [activeTab]);
   useEffect(() => {
     if (mode === "minimized" || activeTab !== "perspective" || !selectedTable) return;
     const tableId = `${catalogName}.${selectedTable.schemaName}.${selectedTable.name}`;
@@ -319,9 +325,12 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
 
         if (cancelled) return;
 
-        // Remove any stale viewer and create fresh for this virtual server connection
-        const oldViewer = container.querySelector("perspective-viewer");
-        if (oldViewer) oldViewer.remove();
+        // Clean up stale viewer — must call delete() to release WASM virtual server views
+        const oldViewer = container.querySelector("perspective-viewer") as any;
+        if (oldViewer) {
+          try { await oldViewer.delete(); } catch { /* ignore cleanup errors */ }
+          oldViewer.remove();
+        }
 
         const viewer = document.createElement("perspective-viewer") as any;
         viewer.setAttribute("theme", "Pro Light");
@@ -1128,6 +1137,7 @@ function initShell(
   let currentWasmVersion = "";
 
   // Only set up SABs and init for new workers
+  let cancelInt32: Int32Array | null = null;
   if (isNewWorker) {
     (bridge as any)._oauthSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(8192) : null;
     if ((bridge as any)._oauthSAB) worker.postMessage({ type: "init-oauth-sab", sab: (bridge as any)._oauthSAB });
@@ -1135,8 +1145,7 @@ function initShell(
     const cancelSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;
     if (cancelSAB) worker.postMessage({ type: "init-cancel-sab", sab: cancelSAB });
 
-    // Expose cancel function for external callers (Ask AI chat)
-    const cancelInt32 = cancelSAB ? new Int32Array(cancelSAB) : null;
+    cancelInt32 = cancelSAB ? new Int32Array(cancelSAB) : null;
     bridge.cancelQuery = () => {
       if (cancelInt32) Atomics.store(cancelInt32, 0, 1);
     };
@@ -1270,7 +1279,7 @@ function initShell(
                 console.log("[shell] Re-attach SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
                 const reattach = await runQueryAsync(attachSql);
                 if (reattach.ok) {
-                  writeln(`Re-attached ${config.catalogName} with fresh credentials`, "32");
+                  // Silent — user doesn't need to know about credential refresh
                 } else {
                   const errStr = reattach.error ?? "";
                   console.log("[shell] Re-attach failed:", errStr);
@@ -1342,6 +1351,19 @@ function initShell(
 
         // Auto-save on page unload
         window.addEventListener("beforeunload", () => { autoSave(); });
+
+        // Query DuckDB's timezone setting for timestamp_tz formatting
+        try {
+          const tzResult = await runQueryAsync("SELECT current_setting('TimeZone') as tz");
+          if (tzResult.ok && tzResult.arrowBuffers?.length) {
+            const tzTable = tableFromIPC(tzResult.arrowBuffers[0]);
+            const tzVal = tzTable.getChildAt(0)?.get(0);
+            if (tzVal) {
+              const { setDuckDBTimezone } = await import("@/lib/format");
+              setDuckDBTimezone(String(tzVal));
+            }
+          }
+        } catch { /* ignore — will fall back to browser timezone */ }
 
         // Shell is fully ready — expose runQuery for external callers
         bridge.runQuery = runQuery;
@@ -1517,6 +1539,91 @@ function initShell(
           }
         } else {
           writeln(`Max display rows: ${maxDisplayRows}`, "33");
+        }
+        continue;
+      }
+      if (trimmed === ".test_formats") {
+        // Run test_all_types() and compare formatted output against DuckDB CLI reference
+        writeln("Running format tests against DuckDB CLI reference...", "33");
+        try {
+          const result = await runQueryAsync("SELECT * FROM test_all_types() LIMIT 2");
+          if (!result.ok || !result.arrowBuffers?.length) {
+            writeln(`Query failed: ${result.error}`, "31");
+          } else {
+            const table = tableFromIPC(result.arrowBuffers[0]);
+            const fields = table.schema.fields;
+            // Log Arrow schema details for debugging
+            for (const f of fields) {
+              if (["hugeint", "uhugeint", "time_tz"].includes(f.name)) {
+                const meta: Record<string, string> = {};
+                if (f.metadata) { for (const [k, v] of f.metadata) meta[k] = v; }
+                console.log(`SCHEMA ${f.name}: type=${f.type?.toString()} typeId=${f.type?.typeId} byteWidth=${(f.type as any)?.byteWidth} meta=${JSON.stringify(meta)}`);
+              }
+            }
+            // Expected values from DuckDB CLI (line mode) — row 0 = min, row 1 = max
+            const expected: Record<string, [string, string]> = {
+              "bool": ["false", "true"],
+              "tinyint": ["-128", "127"],
+              "smallint": ["-32768", "32767"],
+              "int": ["-2147483648", "2147483647"],
+              "bigint": ["-9223372036854775808", "9223372036854775807"],
+              "hugeint": ["-170141183460469231731687303715884105728", "170141183460469231731687303715884105727"],
+              "uhugeint": ["0", "340282366920938463463374607431768211455"],
+              "utinyint": ["0", "255"],
+              "usmallint": ["0", "65535"],
+              "uint": ["0", "4294967295"],
+              "ubigint": ["0", "18446744073709551615"],
+              "date": ["5877642-06-25 (BC)", "5881580-07-10"],
+              "time": ["00:00:00", "24:00:00"],
+              "timestamp": ["290309-12-22 (BC) 00:00:00", "294247-01-10 04:00:54.775806"],
+              "timestamp_s": ["290309-12-22 (BC) 00:00:00", "294247-01-10 04:00:54"],
+              "timestamp_ms": ["290309-12-22 (BC) 00:00:00", "294247-01-10 04:00:54.775"],
+              "timestamp_ns": ["1677-09-22 00:00:00", "2262-04-11 23:47:16.854775806"],
+              "time_tz": ["00:00:00+15:59:59", "24:00:00-15:59:59"],
+              "timestamp_tz": ["290309-12-21 (BC) 19:03:58-04:56", "294247-01-09 23:00:54.776806-05"],
+              "float": ["-3.4028235e+38", "3.4028235e+38"],
+              "double": ["-1.7976931348623157e+308", "1.7976931348623157e+308"],
+              "dec_4_1": ["-999.9", "999.9"],
+              "dec_9_4": ["-99999.9999", "99999.9999"],
+              "dec_18_6": ["-999999999999.999999", "999999999999.999999"],
+              "dec38_10": ["-9999999999999999999999999999.9999999999", "9999999999999999999999999999.9999999999"],
+              "uuid": ["00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff"],
+              "varchar": ["🦆🦆🦆🦆🦆🦆", "goo\tse"],
+              "small_enum": ["DUCK_DUCK_ENUM", "GOOSE"],
+              "medium_enum": ["enum_0", "enum_299"],
+              "large_enum": ["enum_0", "enum_69999"],
+              "time_ns": ["00:00:00", "24:00:00"],
+            };
+            let passed = 0, failed = 0;
+            for (let c = 0; c < fields.length; c++) {
+              const name = fields[c].name;
+              const exp = expected[name];
+              if (!exp) continue; // skip complex/array/struct types
+              for (let r = 0; r < 2; r++) {
+                const val = safeGet(table.getChildAt(c), r);
+                const got = val === null || val === undefined ? "NULL" : formatVal(val, fields[c]);
+                if (got === exp[r]) {
+                  passed++;
+                } else {
+                  failed++;
+                  const typeInfo = fields[c].type?.toString() || "?";
+                  const valType = val === null ? "null" : typeof val === "object" ? val.constructor?.name || "object" : typeof val;
+                  const meta = fields[c].metadata ? JSON.stringify(Object.fromEntries(fields[c].metadata)) : "none";
+                  writeln(`  FAIL ${name}[${r}]: expected "${exp[r]}" got "${got}"`, "31");
+                  console.log(`FAIL ${name}[${r}]: expected "${exp[r]}" got "${got}" | arrowType="${typeInfo}" valType=${valType} meta=${meta} rawVal=${val instanceof Uint32Array ? Array.from(val).join(",") : String(val).slice(0, 50)}`);
+                }
+              }
+            }
+            if (failed === 0) {
+              writeln(`All ${passed} tests passed.`, "32");
+              console.log(`FORMAT_TEST: All ${passed} tests passed.`);
+            } else {
+              writeln(`${passed} passed, ${failed} failed.`, "31");
+              console.log(`FORMAT_TEST: ${passed} passed, ${failed} failed.`);
+            }
+          }
+        } catch (err: any) {
+          writeln(`Test error: ${err.message}`, "31");
         }
         continue;
       }
@@ -2175,6 +2282,156 @@ function initShell(
   }
 
   // Format a value for terminal display, using formatCellValue with Arrow field precision.
+  /** Safely read a value from an Arrow column, handling BigInt overflow. */
+  function safeGet(column: any, row: number): any {
+    if (!column) return null;
+
+    const typeStr = column.type?.toString() || "";
+
+    // Date32: read raw int32 days to avoid precision loss from Arrow's ms conversion
+    if (typeStr.includes("Date32")) {
+      const chunk = column.data?.[0] ?? column.data;
+      if (chunk?.values instanceof Int32Array) {
+        const idx = row - (chunk.offset ?? 0);
+        // Check null bitmap — bit=1 means valid, bit=0 means null
+        const nullBitmap = chunk.nullBitmap;
+        if (nullBitmap && nullBitmap.length > 0) {
+          const byteIdx = idx >> 3;
+          const bitIdx = idx & 7;
+          if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
+        }
+        // Also check nullCount — if 0, all values are valid
+        if (chunk.nullCount > 0 && !nullBitmap) return null; // shouldn't happen
+        return { __rawDays: chunk.values[idx] };
+      }
+    }
+
+    // Dictionary/Enum: Arrow CDN library may not resolve dictionary IPC batches properly.
+    // Walk the entire internal structure to find the dictionary data.
+    if (typeStr.includes("Dictionary")) {
+      const chunk = column.data?.[0] ?? column.data;
+      if (chunk) {
+        const idx = row - (chunk.offset ?? 0);
+        // Check null bitmap
+        const nullBitmap = chunk.nullBitmap;
+        if (nullBitmap && nullBitmap.length > 0) {
+          const byteIdx = idx >> 3;
+          const bitIdx = idx & 7;
+          if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
+        }
+        const dictIdx = chunk.values?.[idx];
+        if (dictIdx !== null && dictIdx !== undefined) {
+          // Search everywhere for the dictionary
+          const candidates = [
+            chunk.dictionary, column.data?.dictionary, column.dictionary,
+            column._offsets?.[0]?.dictionary,
+          ];
+          // Also check column.data array items
+          if (Array.isArray(column.data)) {
+            for (const d of column.data) {
+              candidates.push(d?.dictionary);
+            }
+          }
+          for (const dict of candidates) {
+            if (!dict) continue;
+            try {
+              if (typeof dict.get === "function") {
+                const val = dict.get(dictIdx);
+                if (val !== null && val !== undefined) return val;
+              }
+              // Data object with valueOffsets (Utf8 dictionary)
+              if (dict.values && dict.valueOffsets) {
+                const start = dict.valueOffsets[dictIdx];
+                const end = dict.valueOffsets[dictIdx + 1];
+                if (start !== undefined && end !== undefined) {
+                  return new TextDecoder().decode(dict.values.subarray(start, end));
+                }
+              }
+              // Nested: dict.data?.[0] might have the actual values
+              const inner = dict.data?.[0] ?? dict.data;
+              if (inner?.values && inner?.valueOffsets) {
+                const start = inner.valueOffsets[dictIdx];
+                const end = inner.valueOffsets[dictIdx + 1];
+                if (start !== undefined && end !== undefined) {
+                  return new TextDecoder().decode(inner.values.subarray(start, end));
+                }
+              }
+            } catch { /* try next */ }
+          }
+          // Last resort: log what we have for debugging
+          console.log(`[safeGet] Dictionary not resolved: idx=${dictIdx}, chunk keys:`, Object.keys(chunk), "column keys:", Object.keys(column));
+        }
+      }
+    }
+
+    // Timestamp<NANOSECOND>: Arrow truncates BigInt64 to Number, losing precision.
+    // Read raw BigInt from BigInt64Array to preserve nanosecond values.
+    if (typeStr.includes("NANOSECOND")) {
+      const chunk = column.data?.[0] ?? column.data;
+      const values = chunk?.values;
+      if (values instanceof BigInt64Array) {
+        const idx = row - (chunk.offset ?? 0);
+        const nullBitmap = chunk.nullBitmap;
+        if (nullBitmap && nullBitmap.length > 0) {
+          const byteIdx = idx >> 3;
+          const bitIdx = idx & 7;
+          if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
+        }
+        return values[idx]; // BigInt — preserves full nanosecond precision
+      }
+    }
+
+    try {
+      const val = column.get(row);
+      if (val === null || val === undefined) {
+        // For dictionary columns, .get() may return null if the dictionary lookup fails.
+        // Try to resolve manually: get the index from the indices array, then look up in dictionary.
+        const typeStr = column.type?.toString() || "";
+        if (typeStr.includes("Dictionary")) {
+          const chunk = column.data?.[0] ?? column.data;
+          const indices = chunk?.values;
+          const dict = chunk?.dictionary;
+          if (indices && dict) {
+            const idx = indices[row - (chunk.offset ?? 0)];
+            if (idx !== null && idx !== undefined) {
+              // Check validity bitmap
+              const nullBitmap = chunk.nullBitmap;
+              const adjustedRow = row - (chunk.offset ?? 0);
+              if (nullBitmap) {
+                const byteIdx = adjustedRow >> 3;
+                const bitIdx = adjustedRow & 7;
+                if ((nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
+              }
+              return dict.get(idx);
+            }
+          }
+        }
+        return val;
+      }
+      return val;
+    } catch {
+      // Arrow throws on BigInt values outside safe integer range — read raw BigInt directly
+      const chunk = column.data?.[0] ?? column.data;
+      const values = chunk?.values;
+      if (values instanceof BigInt64Array || values instanceof BigUint64Array) {
+        const idx = row - (chunk?.offset ?? 0);
+        if (idx >= 0 && idx < values.length) return values[idx];
+      }
+      // For Uint32Array-backed types (Int128, Decimal128), return the raw array
+      if (values instanceof Uint32Array) {
+        const typeWidth = chunk?.type?.bitWidth;
+        if (typeWidth === 128) {
+          const wordsPerValue = 4;
+          const idx = (row - (chunk?.offset ?? 0)) * wordsPerValue;
+          if (idx >= 0 && idx + wordsPerValue <= values.length) {
+            return values.slice(idx, idx + wordsPerValue);
+          }
+        }
+      }
+      return null;
+    }
+  }
+
   function formatVal(val: any, field: any): string {
     if (val === null || val === undefined) return "NULL";
     return formatCellValue(val, field?.name, field);
@@ -2205,7 +2462,7 @@ function initShell(
     for (const r of displayIndices) {
       const row: string[] = [];
       for (let c = 0; c < totalCols; c++) {
-        row.push(formatVal(table.getChildAt(c)?.get(r), fields[c]));
+        row.push(formatVal(safeGet(table.getChildAt(c), r), fields[c]));
       }
       grid.push(row);
     }
@@ -2495,7 +2752,7 @@ function initShell(
       rl.println(`\x1b[2m─${label}${"─".repeat(dashCount)}\x1b[0m`);
       // Fields
       for (let c = 0; c < totalCols; c++) {
-        const val = formatVal(table.getChildAt(c)?.get(r), fields[c]);
+        const val = formatVal(safeGet(table.getChildAt(c), r), fields[c]);
         const name = names[c].padStart(maxNameLen);
         const display = val === "NULL" ? `\x1b[2mNULL\x1b[0m` : val;
         rl.println(`${name} = ${display}`);
@@ -2527,7 +2784,7 @@ function initShell(
     for (let r = 0; r < numRows; r++) {
       const row: any[] = [];
       for (let c = 0; c < totalCols; c++) {
-        const val = table.getChildAt(c)?.get(r);
+        const val = safeGet(table.getChildAt(c), r);
         row.push(val instanceof Uint8Array ? "[binary]" : formatVal(val, fields[c]));
       }
       data.push(row);

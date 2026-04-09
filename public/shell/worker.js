@@ -169,7 +169,8 @@ function runStatement(sql) {
 }
 
 async function init() {
-    postMessage({ type: 'log', msg: 'Loading WASM module (MAIN_MODULE)...', cls: 'info' });
+    // Loading messages logged to console only — keep terminal clean
+    console.log('[worker] Loading WASM module...');
 
     // Intercept WebAssembly.instantiate and instantiateStreaming to capture the Memory object
     // (Emscripten threads build doesn't expose it on the module)
@@ -229,8 +230,8 @@ async function init() {
         locateFile: (path) => wasmBase + path,
         mainScriptUrlOrBlob: pthreadWorkerUrl,
     });
-    postMessage({ type: 'log', msg: 'Opening database...', cls: 'info' });
-    const config = JSON.stringify({ allowUnsignedExtensions: true, query: { castBigIntToDouble: false } });
+    console.log('[worker] Opening database...');
+    const config = JSON.stringify({ allowUnsignedExtensions: true, arrowLosslessConversion: true, query: { castBigIntToDouble: false } });
     const [openStatus, openData, openSize] = callSRet(module, 'duckdb_web_open', ['string'], [config]);
     if (openStatus !== 0) {
         postMessage({ type: 'log', msg: `Open failed: ${openSize > 0 ? readString(module, openData, openSize) : 'unknown'}`, cls: 'err' });
@@ -243,6 +244,7 @@ async function init() {
     runQuery("SET enable_progress_bar_print=false");
     runQuery("SET autoinstall_known_extensions=false");
     runQuery("SET autoload_known_extensions=true");
+    runQuery("SET arrow_lossless_conversion=true");
     const workerBase = self.location.href.replace(/\/[^/]*$/, '');
     runQuery(`SET custom_extension_repository='${workerBase}/extensions'`);
 
