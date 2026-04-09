@@ -693,6 +693,109 @@ function formatUUID(bytes: Uint8Array): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
+/**
+ * Safely read a value from an Arrow column, handling:
+ * - BigInt overflow (Arrow throws for values outside safe integer range)
+ * - Date32 precision loss (reads raw int32 days instead of lossy milliseconds)
+ * - Nanosecond timestamp precision (reads raw BigInt64)
+ * - Dictionary/enum resolution (manual lookup when Arrow JS fails)
+ * - Extension types (hugeint, uhugeint, time_tz as FixedSizeBinary)
+ */
+export function safeGetArrowValue(column: any, row: number): any {
+  if (!column) return null;
+
+  const typeStr = column.type?.toString() || "";
+
+  // Date32: read raw int32 days to avoid precision loss from Arrow's ms conversion
+  if (typeStr.includes("Date32")) {
+    const chunk = column.data?.[0] ?? column.data;
+    if (chunk?.values instanceof Int32Array) {
+      const idx = row - (chunk.offset ?? 0);
+      const nullBitmap = chunk.nullBitmap;
+      if (nullBitmap && nullBitmap.length > 0) {
+        const byteIdx = idx >> 3;
+        const bitIdx = idx & 7;
+        if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
+      }
+      if (chunk.nullCount > 0 && !nullBitmap) return null;
+      return { __rawDays: chunk.values[idx] };
+    }
+  }
+
+  // Timestamp<NANOSECOND>: Arrow truncates BigInt64 to Number, losing precision.
+  if (typeStr.includes("NANOSECOND")) {
+    const chunk = column.data?.[0] ?? column.data;
+    const values = chunk?.values;
+    if (values instanceof BigInt64Array) {
+      const idx = row - (chunk.offset ?? 0);
+      const nullBitmap = chunk.nullBitmap;
+      if (nullBitmap && nullBitmap.length > 0) {
+        const byteIdx = idx >> 3;
+        const bitIdx = idx & 7;
+        if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
+      }
+      return values[idx];
+    }
+  }
+
+  // Dictionary/Enum: manual resolution when Arrow JS CDN fails
+  if (typeStr.includes("Dictionary")) {
+    const chunk = column.data?.[0] ?? column.data;
+    if (chunk) {
+      const idx = row - (chunk.offset ?? 0);
+      const nullBitmap = chunk.nullBitmap;
+      if (nullBitmap && nullBitmap.length > 0) {
+        const byteIdx = idx >> 3;
+        const bitIdx = idx & 7;
+        if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
+      }
+      const dictIdx = chunk.values?.[idx];
+      if (dictIdx !== null && dictIdx !== undefined) {
+        const dict = chunk.dictionary ?? column.data?.dictionary ?? column.dictionary;
+        if (dict) {
+          try {
+            if (typeof dict.get === "function") {
+              const val = dict.get(dictIdx);
+              if (val !== null && val !== undefined) return val;
+            }
+            const inner = dict.data?.[0] ?? dict.data;
+            if (inner?.values && inner?.valueOffsets) {
+              const start = inner.valueOffsets[dictIdx];
+              const end = inner.valueOffsets[dictIdx + 1];
+              if (start !== undefined && end !== undefined) {
+                return new TextDecoder().decode(inner.values.subarray(start, end));
+              }
+            }
+          } catch { /* fall through to column.get */ }
+        }
+      }
+    }
+  }
+
+  try {
+    return column.get(row);
+  } catch {
+    // BigInt overflow — read raw value from underlying typed array
+    const chunk = column.data?.[0] ?? column.data;
+    const values = chunk?.values;
+    if (values instanceof BigInt64Array || values instanceof BigUint64Array) {
+      const idx = row - (chunk?.offset ?? 0);
+      if (idx >= 0 && idx < values.length) return values[idx];
+    }
+    if (values instanceof Uint32Array) {
+      const typeWidth = chunk?.type?.bitWidth;
+      if (typeWidth === 128) {
+        const wordsPerValue = 4;
+        const idx = (row - (chunk?.offset ?? 0)) * wordsPerValue;
+        if (idx >= 0 && idx + wordsPerValue <= values.length) {
+          return values.slice(idx, idx + wordsPerValue);
+        }
+      }
+    }
+    return null;
+  }
+}
+
 export function isNullValue(value: any): boolean {
   return value === null || value === undefined;
 }

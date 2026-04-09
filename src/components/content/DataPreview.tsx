@@ -11,6 +11,7 @@ import {
 import { DataGrid } from "./DataGrid";
 import type { ColumnInfo } from "@/lib/service";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
+import { safeGetArrowValue } from "@/lib/format";
 import { bridge } from "@/lib/shell-bridge";
 
 const PAGE_SIZES = [25, 50, 100, 200];
@@ -50,7 +51,7 @@ function arrowTableToRows(table: any): { columns: string[]; columnInfo: ColumnIn
   for (let r = 0; r < table.numRows; r++) {
     const row: Record<string, any> = {};
     for (let c = 0; c < fields.length; c++) {
-      row[columns[c]] = table.getChildAt(c)?.get(r);
+      row[columns[c]] = safeGetArrowValue(table.getChildAt(c), r);
     }
     rows.push(row);
   }
