@@ -229,9 +229,10 @@ async function init() {
     module = await DuckDB({
         locateFile: (path) => wasmBase + path,
         mainScriptUrlOrBlob: pthreadWorkerUrl,
+        pthreadPoolSize: 1,
     });
     console.log('[worker] Opening database...');
-    const config = JSON.stringify({ allowUnsignedExtensions: true, arrowLosslessConversion: true, query: { castBigIntToDouble: false } });
+    const config = JSON.stringify({ allowUnsignedExtensions: true, arrowLosslessConversion: true, maximumThreads: 1, query: { castBigIntToDouble: false } });
     const [openStatus, openData, openSize] = callSRet(module, 'duckdb_web_open', ['string'], [config]);
     if (openStatus !== 0) {
         postMessage({ type: 'log', msg: `Open failed: ${openSize > 0 ? readString(module, openData, openSize) : 'unknown'}`, cls: 'err' });

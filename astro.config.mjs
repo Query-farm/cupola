@@ -32,14 +32,9 @@ export default defineConfig({
         name: 'shell-wasm-direct-serve',
         configureServer(server) {
           server.middlewares.use((req, res, next) => {
-            // COOP/COEP headers required for SharedArrayBuffer (DuckDB-WASM shell)
-            // COOP/COEP for SharedArrayBuffer — required for production deployments.
-            // On localhost, Chrome allows SAB without these headers.
-            // Note: COEP can interfere with sub-worker resource loading in dev.
-            if (req.headers.host && !req.headers.host.startsWith('localhost')) {
-              res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-              res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
-            }
+            // COOP/COEP required for SharedArrayBuffer (DuckDB-WASM COI/threads build)
+            res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+            res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
             res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
             // Serve shell/wasm/ files directly to avoid transform pipeline hangs
