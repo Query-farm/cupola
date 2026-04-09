@@ -191,7 +191,9 @@ export async function fetchColumnStats(
   if (!queryFn) return null;
 
   try {
-    const sql = `SELECT column_name, column_type, min, max, has_null, has_not_null, distinct_count FROM vgi_table_statistics('${catalogName.replace(/'/g, "''")}', '${schemaName.replace(/'/g, "''")}', '${tableName.replace(/'/g, "''")}')`;
+    const esc = (s: string) => s.replace(/'/g, "''");
+    const sql = `SELECT column_name, column_type, min, max, has_null, has_not_null, distinct_count FROM vgi_table_statistics('${esc(catalogName)}', '${esc(schemaName)}', '${esc(tableName)}')`;
+
     const result = await queryFn(sql);
     if (!result.ok || !result.arrowBuffers?.length) return null;
 

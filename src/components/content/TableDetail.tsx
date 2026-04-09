@@ -52,13 +52,6 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
     return map;
   }, [foreignKeys]);
 
-  function handleCopy() {
-    navigator.clipboard.writeText(sampleSql).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    }).catch(() => {});
-  }
-
   const hasConstraints =
     foreignKeys.length > 0 ||
     table.primaryKeyConstraints.length > 0 ||

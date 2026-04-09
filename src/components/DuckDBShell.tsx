@@ -499,11 +499,6 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         }}
       >
         <div ref={containerRef} className="h-full w-full overflow-hidden" />
-        {termSize && (
-          <div className="absolute bottom-1 right-4 text-[10px] font-mono text-terminal-fg/20 pointer-events-none">
-            {termSize.cols}&times;{termSize.rows}
-          </div>
-        )}
       </div>
 
       {/* Data Preview */}
@@ -769,6 +764,24 @@ function initShell(
     term.loadAddon(rl);
     term.open(container);
     try { term.loadAddon(new WGA.WebglAddon()); } catch { /* canvas fallback */ }
+
+    // Batch writes within the same microtask to prevent flicker.
+    // xterm-readline clears + redraws the line in separate write() calls;
+    // this combines them into a single write so they render in one frame.
+    const _origWrite = term.write.bind(term);
+    let _writeBuf = "";
+    let _flushScheduled = false;
+    term.write = function(data: any) {
+      _writeBuf += data;
+      if (!_flushScheduled) {
+        _flushScheduled = true;
+        queueMicrotask(() => {
+          _origWrite(_writeBuf);
+          _writeBuf = "";
+          _flushScheduled = false;
+        });
+      }
+    };
 
     // ---- Tab completion state ----
     const comp = {
@@ -1064,15 +1077,19 @@ function initShell(
     }
   }
 
+  let fitTimer: ReturnType<typeof setTimeout> | null = null;
   const safeFit = () => {
     try {
-      // Don't fit when container is hidden — fitting to 0 cols corrupts the readline buffer
       if (container.offsetWidth > 0 && container.offsetHeight > 0) {
         fitAddon?.fit();
       }
     } catch {}
   };
-  const resizeObserver = new ResizeObserver(safeFit);
+  const debouncedFit = () => {
+    if (fitTimer) clearTimeout(fitTimer);
+    fitTimer = setTimeout(safeFit, 50);
+  };
+  const resizeObserver = new ResizeObserver(debouncedFit);
   resizeObserver.observe(container);
 
   // Fit after reparenting
@@ -1119,13 +1136,9 @@ function initShell(
     if (cancelSAB) worker.postMessage({ type: "init-cancel-sab", sab: cancelSAB });
 
     // Expose cancel function for external callers (Ask AI chat)
+    const cancelInt32 = cancelSAB ? new Int32Array(cancelSAB) : null;
     bridge.cancelQuery = () => {
-      if (cancelSAB) {
-        const int32 = new Int32Array(cancelSAB);
-        Atomics.store(int32, 0, 1);
-        // Reset after a short delay so future queries aren't pre-cancelled
-        setTimeout(() => Atomics.store(int32, 0, 0), 500);
-      }
+      if (cancelInt32) Atomics.store(cancelInt32, 0, 1);
     };
   }
 
@@ -1193,15 +1206,21 @@ function initShell(
       const oauthSAB = (bridge as any)._oauthSAB as SharedArrayBuffer | null;
       console.log("[shell] DuckDB requesting auth, token available:", !!config.token, "SAB available:", !!oauthSAB);
       if (config.token && oauthSAB) {
-        // Token interception — pass cached token directly
+        // Token interception — pass cached token directly via SharedArrayBuffer
         console.log("[shell] Passing token to DuckDB via SAB:", config.token.substring(0, 20) + "...");
         const int32 = new Int32Array(oauthSAB);
         const bytes = new Uint8Array(oauthSAB);
         const encoded = new TextEncoder().encode(config.token);
-        new DataView(oauthSAB).setInt32(4, encoded.length, true);
-        bytes.set(encoded, 8);
-        Atomics.store(int32, 0, 1);
-        Atomics.notify(int32, 0);
+        const maxTokenBytes = oauthSAB.byteLength - 8; // 8 bytes reserved for header
+        if (encoded.length > maxTokenBytes) {
+          console.error("[shell] Token too large for SAB:", encoded.length, "bytes, max:", maxTokenBytes);
+          window.open(d.url, "_blank", "popup,width=500,height=700");
+        } else {
+          new DataView(oauthSAB).setInt32(4, encoded.length, true);
+          bytes.set(encoded, 8);
+          Atomics.store(int32, 0, 1);
+          Atomics.notify(int32, 0);
+        }
       } else {
         console.log("[shell] No token — opening auth popup:", d.url?.substring(0, 80));
         window.open(d.url, "_blank", "popup,width=500,height=700");
@@ -1839,6 +1858,7 @@ function initShell(
                 const elapsed = performance.now() - t0;
                 clearProgressBar();
                 queryRunning = false;
+                if (cancelInt32) Atomics.store(cancelInt32, 0, 0);
 
                 // Find user question for context
                 const lastUserMsg = aiMessages.filter(m => m.role === 'user').pop();
@@ -2041,6 +2061,7 @@ function initShell(
       const elapsed = performance.now() - t0;
       clearProgressBar();
       queryRunning = false;
+      if (cancelInt32) Atomics.store(cancelInt32, 0, 0); // reset cancel flag for next query
 
       if (!result.ok) {
         const errStr = result.error || "unknown";
@@ -2614,6 +2635,7 @@ function initShell(
   return {
     cleanup: () => {
       resizeObserver.disconnect();
+      inputTracker.dispose();
       // Don't terminate shared worker or dispose shared terminal
       bridge.shellFitAddon = null;
       bridge.insertText = null;
