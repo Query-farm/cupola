@@ -1,3 +1,3 @@
 # Proxy oversized WASM files to R2 (Cloudflare Pages 25MB limit)
-/shell/wasm/duckdb-eh.wasm https://assets.cupola.query-farm.services/shell/wasm/duckdb-eh.wasm 301
+/shell/wasm/duckdb-coi.wasm https://assets.cupola.query-farm.services/shell/wasm/duckdb-coi.wasm 301
 /shell/wasm/duckdb_wasm.wasm https://assets.cupola.query-farm.services/shell/wasm/duckdb_wasm.wasm 301

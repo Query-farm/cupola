@@ -9,8 +9,8 @@ echo "==> Building..."
 bun run build
 
 # Verify WASM assets were resolved (symlinks dereferenced by Astro)
-if [ ! -f dist/shell/wasm/duckdb-eh.wasm ]; then
-  echo "ERROR: dist/shell/wasm/duckdb-eh.wasm not found."
+if [ ! -f dist/shell/wasm/duckdb-coi.wasm ]; then
+  echo "ERROR: dist/shell/wasm/duckdb-coi.wasm not found."
   echo "Make sure public/shell/wasm/ symlinks point to actual WASM files."
   exit 1
 fi

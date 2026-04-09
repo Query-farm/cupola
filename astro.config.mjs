@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import { resolve } from 'node:path';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
@@ -24,15 +25,36 @@ export default defineConfig({
     },
     plugins: [
       tailwindcss(),
-      // COOP/COEP headers required for SharedArrayBuffer (DuckDB-WASM shell)
+      // Serve shell/wasm files directly, bypassing Vite's transform pipeline.
+      // Without this, pthread sub-worker requests for duckdb-coi.js hang because
+      // Vite's middleware holds the connection open for JS transform processing.
       {
-        name: 'coop-coep-headers',
+        name: 'shell-wasm-direct-serve',
         configureServer(server) {
-          server.middlewares.use((_req, res, next) => {
-            res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-            res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
-            // Allow cross-origin resources (CDN scripts, WASM files)
+          server.middlewares.use((req, res, next) => {
+            // COOP/COEP headers required for SharedArrayBuffer (DuckDB-WASM shell)
+            // COOP/COEP for SharedArrayBuffer — required for production deployments.
+            // On localhost, Chrome allows SAB without these headers.
+            // Note: COEP can interfere with sub-worker resource loading in dev.
+            if (req.headers.host && !req.headers.host.startsWith('localhost')) {
+              res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+              res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+            }
             res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+
+            // Serve shell/wasm/ files directly to avoid transform pipeline hangs
+            if (req.url?.startsWith('/shell/wasm/') || req.url?.startsWith('/shell/extensions/')) {
+              const relPath = req.url.split('?')[0];
+              let filePath = resolve('public' + relPath);
+              try { filePath = realpathSync(filePath); } catch {}
+              if (existsSync(filePath)) {
+                const ext = filePath.split('.').pop();
+                const types = { js: 'application/javascript', wasm: 'application/wasm' };
+                res.setHeader('Content-Type', types[ext] || 'application/octet-stream');
+                res.end(readFileSync(filePath));
+                return;
+              }
+            }
             next();
           });
         },
