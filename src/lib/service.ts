@@ -146,8 +146,8 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
           client
             .schemaContentsFunctions(attachId, info.name, "TABLE_FUNCTION")
             .catch(() => []),
-          client.schemaContentsMacros(attachId, info.name, "scalar_macro").catch(() => []),
-          client.schemaContentsMacros(attachId, info.name, "table_macro").catch(() => []),
+          client.schemaContentsMacros(attachId, info.name, "SCALAR_MACRO").catch(() => []),
+          client.schemaContentsMacros(attachId, info.name, "TABLE_MACRO").catch(() => []),
         ]);
         const macros = [...scalarMacros, ...tableMacros];
         return { info, tables, views, functions, macros } as ResolvedSchema;
