@@ -134,7 +134,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
 
   // Resolve selected table or view for Data Preview and Perspective tabs
   // Search both VGI catalog and memory catalog
-  const allCatalogs = [catalogData, (window as any)?.__memoryCatalog].filter(Boolean);
+  const allCatalogs = [catalogData, bridge.memoryCatalog].filter(Boolean);
   const findInCatalogs = (type: "table" | "view", name?: string, schema?: string) => {
     if (!name || !schema) return null;
     for (const cat of allCatalogs) {
@@ -525,10 +525,10 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
       </div>
 
       {/* Data Preview */}
-      {mode !== "minimized" && activeTab === "preview" && (selectedTable || selectedView) && (
+      {mode !== "minimized" && activeTab === "preview" && hasSelectedTableOrView && (
         <div className="flex-1 min-h-0 overflow-hidden bg-card">
           <DataPreview
-            tablePath={`${selection?.catalog || catalogName}.${selection?.schema || (selectedTable || selectedView)?.schemaName}.${(selectedTable || selectedView)!.name}`}
+            tablePath={`${selection?.catalog || catalogName}.${selection?.schema || (selectedTable || selectedView)?.schemaName || "main"}.${selection?.name || (selectedTable || selectedView)?.name}`}
           />
         </div>
       )}
@@ -2712,7 +2712,7 @@ function initShell(
     const parts = dottedName.split(".");
     if (parts.length !== 3) return null;
     const [cat, schema, table] = parts;
-    const catalogs = [config.catalogData, (window as any)?.__memoryCatalog].filter(Boolean);
+    const catalogs = [config.catalogData, bridge.memoryCatalog].filter(Boolean);
     for (const catData of catalogs) {
       if (catData.catalogName !== cat) continue;
       const s = catData.schemas.find((s: any) => s.info.name === schema);
