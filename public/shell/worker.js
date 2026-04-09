@@ -1,13 +1,38 @@
 // DuckDB-WASM Worker — runs DuckDB in a Web Worker where sync XHR and SAB work.
 
-var WASM_BUILD_VERSION = "duckdb-1.5.1-vgi-20260404";
+var WASM_BUILD_VERSION = "duckdb-1.5.1-vgi-coi-20260409";
 
 // OAuth SAB state — initialized from main thread
 var oauthSAB = null;
 var oauthInt32 = null;
 var oauthBytes = null;
 
-importScripts('./wasm/duckdb-eh.js');
+// Minimal DUCKDB_RUNTIME shim — the COI Emscripten module calls through
+// globalThis.DUCKDB_RUNTIME for filesystem, feature detection, and UDFs.
+// We only need stubs since VGI tables use HTTP (not the DuckDB filesystem).
+globalThis.DUCKDB_RUNTIME = {
+    testPlatformFeature: (mod, feature) => feature === 1 ? true : false, // 1=BIGINT64ARRAY
+    getDefaultDataProtocol: () => 0, // NATIVE
+    openFile: () => 0,
+    closeFile: () => {},
+    syncFile: () => {},
+    truncateFile: () => {},
+    readFile: () => 0,
+    writeFile: () => 0,
+    getLastFileModificationTime: () => 0,
+    checkDirectory: () => false,
+    createDirectory: () => {},
+    removeDirectory: () => {},
+    listDirectoryEntries: () => false,
+    glob: () => {},
+    moveFile: () => {},
+    checkFile: () => false,
+    removeFile: () => {},
+    dropFile: () => {},
+    callScalarUDF: () => {},
+};
+
+importScripts('./wasm/duckdb-coi.js');
 
 // Cancel signal via SharedArrayBuffer — main thread sets [0]=1 to request cancel
 var cancelFlag = null;
@@ -27,11 +52,13 @@ function callSRet(mod, funcName, argTypes, args) {
 }
 
 function readString(mod, ptr, len) {
-    return new TextDecoder().decode(new Uint8Array(mod.HEAPU8.buffer, ptr, len));
+    // Copy from shared WASM memory — TextDecoder rejects SharedArrayBuffer views
+    return new TextDecoder().decode(mod.HEAPU8.slice(ptr, ptr + len));
 }
 
 let module = null;
 let connHdl = null;
+let wasmMemoryRef = null; // WebAssembly.Memory — captured during init
 
 function runQuery(sql) {
     const [qStatus, qData, qSize] = callSRet(
@@ -144,12 +171,65 @@ function runStatement(sql) {
 async function init() {
     postMessage({ type: 'log', msg: 'Loading WASM module (MAIN_MODULE)...', cls: 'info' });
 
+    // Intercept WebAssembly.instantiate and instantiateStreaming to capture the Memory object
+    // (Emscripten threads build doesn't expose it on the module)
+    function captureMemory(importObject, result) {
+        if (wasmMemoryRef) return;
+        // Check imports
+        if (importObject) {
+            for (const ns of Object.values(importObject)) {
+                if (ns && typeof ns === 'object') {
+                    for (const v of Object.values(ns)) {
+                        if (v instanceof WebAssembly.Memory) {
+                            wasmMemoryRef = v;
+                            console.log('[worker] Captured WebAssembly.Memory from imports');
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        // Check exports
+        const exports = result?.instance?.exports || result?.exports;
+        if (exports) {
+            for (const v of Object.values(exports)) {
+                if (v instanceof WebAssembly.Memory) {
+                    wasmMemoryRef = v;
+                    console.log('[worker] Captured WebAssembly.Memory from exports');
+                    return;
+                }
+            }
+        }
+    }
+    const origInstantiate = WebAssembly.instantiate;
+    WebAssembly.instantiate = async function(source, importObject) {
+        captureMemory(importObject, null);
+        const result = await origInstantiate.call(this, source, importObject);
+        captureMemory(null, result);
+        return result;
+    };
+    const origInstantiateStreaming = WebAssembly.instantiateStreaming;
+    if (origInstantiateStreaming) {
+        WebAssembly.instantiateStreaming = async function(source, importObject) {
+            captureMemory(importObject, null);
+            const result = await origInstantiateStreaming.call(this, source, importObject);
+            captureMemory(null, result);
+            return result;
+        };
+    }
+
     // WASM base URL: configurable via message from main thread, falls back to relative path.
     // When deployed to Cloudflare Pages, large WASM files (>25MB) are served from R2.
     const wasmBase = self.__wasmBaseUrl || './wasm/';
+    // Point pthread sub-workers to a wrapper script that calls DuckDB() factory.
+    // With -sMODULARIZE, sub-workers must explicitly invoke the factory to set up
+    // the pthread message handler — loading duckdb-coi.js alone just defines it.
+    const pthreadWorkerUrl = new URL('./wasm/duckdb-coi-pthread.js', self.location.href).href;
     module = await DuckDB({
-        locateFile: (path) => wasmBase + path
+        locateFile: (path) => wasmBase + path,
+        mainScriptUrlOrBlob: pthreadWorkerUrl,
     });
+    postMessage({ type: 'log', msg: 'Opening database...', cls: 'info' });
     const config = JSON.stringify({ allowUnsignedExtensions: true, query: { castBigIntToDouble: false } });
     const [openStatus, openData, openSize] = callSRet(module, 'duckdb_web_open', ['string'], [config]);
     if (openStatus !== 0) {
@@ -169,14 +249,19 @@ async function init() {
     const exts = ['json', 'icu', 'autocomplete', 'spatial', 'vgi'];
     const failed = [];
     for (const ext of exts) {
-        const r = runQuery(`LOAD '${workerBase}/extensions/v1.5.1/wasm_eh/${ext}.duckdb_extension.wasm'`);
-        if (!r.ok) failed.push(ext);
+        const r = runQuery(`LOAD '${workerBase}/extensions/v1.5.1/wasm_threads/${ext}.duckdb_extension.wasm'`);
+        if (!r.ok) { console.error(`[ext] ${ext}: ${r.error}`); failed.push(ext); }
     }
     if (failed.length > 0) {
         postMessage({ type: 'log', msg: `Failed to load extensions: ${failed.join(', ')}`, cls: 'err' });
     }
 
-    postMessage({ type: 'ready' });
+    // Log memory info for debugging
+    const memBuf = module.HEAPU8.buffer;
+    const initialMB = Math.round(memBuf.byteLength / (1024*1024));
+    console.log('[worker] WASM ready. Initial memory:', initialMB, 'MB, wasmMemoryRef captured:', !!wasmMemoryRef);
+
+    postMessage({ type: 'ready', wasmVersion: WASM_BUILD_VERSION });
     processPendingMessages();
 }
 
@@ -262,22 +347,50 @@ function handleMessage(data) {
         try {
             const snapshot = new Uint8Array(data.memory);
             const currentSize = module.HEAPU8.buffer.byteLength;
+            const snapshotMB = Math.round(data.size / (1024*1024));
+            const currentMB = Math.round(currentSize / (1024*1024));
+            console.log('[restore] Snapshot size:', snapshotMB, 'MB, current WASM memory:', currentMB, 'MB, delta:', snapshotMB - currentMB, 'MB');
             if (data.size > currentSize) {
-                // Grow WASM memory directly (page size = 64KB)
-                const neededPages = Math.ceil((data.size - currentSize) / 65536);
-                try {
-                    module.wasmMemory.grow(neededPages);
-                } catch (growErr) {
-                    postMessage({ type: 'log', msg: 'Restore failed: could not grow memory by ' + neededPages + ' pages (' + Math.round(data.size / (1024*1024)) + ' MB needed)', cls: 'err' });
+                const wasmMem = wasmMemoryRef || module.wasmMemory || module.asm?.memory;
+                if (!wasmMem) {
+                    console.error('[restore] Cannot grow: no WebAssembly.Memory object found');
+                    postMessage({ type: 'log', msg: 'Restore failed: snapshot (' + snapshotMB + ' MB) exceeds WASM memory (' + currentMB + ' MB) and memory cannot be resized', cls: 'err' });
                     return;
                 }
-                // After grow, Emscripten's HEAPU8 may be stale — update heap views
+
+                // Grow in a loop — SharedArrayBuffer may need multiple grows
+                const targetSize = data.size;
+                let attempts = 0;
+                while (wasmMem.buffer.byteLength < targetSize && attempts < 50) {
+                    const remaining = targetSize - wasmMem.buffer.byteLength;
+                    const pages = Math.ceil(remaining / 65536);
+                    console.log('[restore] Grow attempt', attempts + 1, ': need', pages, 'pages, buffer is', wasmMem.buffer.byteLength, 'target', targetSize);
+                    try {
+                        const oldPages = wasmMem.grow(pages);
+                        console.log('[restore] Grew from', oldPages, 'pages, buffer now', wasmMem.buffer.byteLength);
+                    } catch (growErr) {
+                        console.error('[restore] wasmMemory.grow failed:', growErr.message);
+                        postMessage({ type: 'log', msg: 'Restore failed: could not grow memory (snapshot: ' + snapshotMB + ' MB, current: ' + Math.round(wasmMem.buffer.byteLength / (1024*1024)) + ' MB)', cls: 'err' });
+                        return;
+                    }
+                    attempts++;
+                }
+
+                // Update Emscripten's heap views to point at the new buffer
                 if (module.updateMemoryViews) module.updateMemoryViews();
                 else if (module._emscripten_notify_memory_growth) module._emscripten_notify_memory_growth(0);
+                // HEAPU8 may still reference old buffer — reconstruct from Memory
+                if (module.HEAPU8.buffer !== wasmMem.buffer) {
+                    console.log('[restore] Rebuilding HEAPU8 from grown Memory buffer');
+                    module.HEAPU8 = new Uint8Array(wasmMem.buffer);
+                    module.HEAPF64 = new Float64Array(wasmMem.buffer);
+                }
+
                 if (module.HEAPU8.buffer.byteLength < data.size) {
-                    postMessage({ type: 'log', msg: 'Restore failed: memory grew but still too small (' + module.HEAPU8.buffer.byteLength + ' < ' + data.size + ')', cls: 'err' });
+                    postMessage({ type: 'log', msg: 'Restore failed: memory grew to ' + Math.round(module.HEAPU8.buffer.byteLength / (1024*1024)) + ' MB but snapshot needs ' + snapshotMB + ' MB', cls: 'err' });
                     return;
                 }
+                console.log('[restore] Memory grown successfully to', Math.round(module.HEAPU8.buffer.byteLength / (1024*1024)), 'MB');
             }
             module.HEAPU8.set(snapshot);
             connHdl = data.connHdl;

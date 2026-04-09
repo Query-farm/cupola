@@ -88,8 +88,12 @@ function isTokenExpired(token: string): boolean {
 export function getAuthToken(): string | null {
   const fragmentToken = _extractFragmentToken();
   if (fragmentToken) {
+    const payload = decodeJwtPayload(fragmentToken);
+    const exp = payload?.exp ? new Date(payload.exp * 1000).toISOString() : "no-exp";
+    const now = new Date().toISOString();
+    console.log("[auth] getAuthToken: fragment token found, exp:", exp, "now:", now, "expired:", isTokenExpired(fragmentToken));
     if (isTokenExpired(fragmentToken)) {
-      console.warn("[auth] Fragment token is expired, clearing");
+      console.warn("[auth] Fragment token is expired, clearing. exp:", exp, "now:", now);
       clearAuth();
       return null;
     }
@@ -101,14 +105,19 @@ export function getAuthToken(): string | null {
     new RegExp(`(^|;)\\s*${AUTH_COOKIE_NAME}=([^;]+)`)
   );
   if (match) {
+    const payload = decodeJwtPayload(match[2]);
+    const exp = payload?.exp ? new Date(payload.exp * 1000).toISOString() : "no-exp";
+    const now = new Date().toISOString();
+    console.log("[auth] getAuthToken: cookie token found, exp:", exp, "now:", now, "expired:", isTokenExpired(match[2]));
     if (isTokenExpired(match[2])) {
-      console.warn("[auth] Cookie token is expired, clearing");
+      console.warn("[auth] Cookie token is expired, clearing. exp:", exp, "now:", now);
       clearAuth();
       return null;
     }
     _hadToken = true;
     return match[2];
   }
+  console.log("[auth] getAuthToken: no token found (no fragment, no cookie). _hadToken:", _hadToken);
   return null;
 }
 
@@ -120,9 +129,11 @@ export function hadAuthToken(): boolean {
 /** Redirect to the VGI server to re-authenticate. */
 export function redirectToAuth(serviceUrl: string): void {
   if (typeof window === "undefined") return;
-  window.location.href =
-    `${serviceUrl}${serviceUrl.includes("?") ? "&" : "?"}` +
+  const redirectUrl = `${serviceUrl}${serviceUrl.includes("?") ? "&" : "?"}` +
     `_vgi_return_to=${encodeURIComponent(window.location.href)}`;
+  console.log("[auth] redirectToAuth: redirecting to:", redirectUrl);
+  console.trace("[auth] redirectToAuth call stack");
+  window.location.href = redirectUrl;
 }
 
 /** Get OAuth metadata from the fragment redirect (for DuckDB secret creation). */
@@ -133,6 +144,7 @@ export function getOAuthMeta(): OAuthMeta | null {
 
 /** Clear all cached auth state (in-memory token and cookie). */
 export function clearAuth(): void {
+  console.log("[auth] clearAuth: clearing cached token and cookie");
   _cachedToken = null;
   _cachedOAuthMeta = null;
   if (typeof document !== "undefined") {

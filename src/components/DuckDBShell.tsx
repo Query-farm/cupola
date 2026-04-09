@@ -770,12 +770,283 @@ function initShell(
     term.open(container);
     try { term.loadAddon(new WGA.WebglAddon()); } catch { /* canvas fallback */ }
 
-    // Ctrl+K clears the terminal
+    // ---- Tab completion state ----
+    const comp = {
+      active: false, items: [] as any[], idx: 0, start: 0, original: "",
+      menuLines: 0, numCols: 1, numRows: 1, colWidth: 10,
+    };
+
+    function computeLayout() {
+      const maxLen = Math.max(...comp.items.map((c: any) => c.suggestion.length));
+      comp.colWidth = maxLen + 2;
+      comp.numCols = Math.max(1, Math.floor(term.cols / comp.colWidth));
+      comp.numRows = Math.ceil(comp.items.length / comp.numCols);
+    }
+
+    function clearCompletionMenu() {
+      if (comp.menuLines > 0) {
+        for (let i = 0; i < comp.menuLines; i++) {
+          term.write("\r\n\x1b[2K");
+        }
+        term.write(`\x1b[${comp.menuLines}A`);
+        comp.menuLines = 0;
+      }
+    }
+
+    function renderCompletionMenu() {
+      clearCompletionMenu();
+      const lines: string[] = [];
+      for (let row = 0; row < comp.numRows; row++) {
+        let line = "";
+        for (let col = 0; col < comp.numCols; col++) {
+          const i = row * comp.numCols + col;
+          if (i >= comp.items.length) continue;
+          const text = comp.items[i].suggestion.padEnd(comp.colWidth);
+          line += i === comp.idx ? `\x1b[7m${text}\x1b[0m` : text;
+        }
+        lines.push(line);
+      }
+      for (const line of lines) {
+        term.write("\r\n\x1b[2K" + line);
+      }
+      if (lines.length > 0) {
+        term.write(`\x1b[${lines.length}A\r`);
+      }
+      comp.menuLines = lines.length;
+      if (rl.state) rl.state.refresh();
+    }
+
+    function applyCompletion(idx: number) {
+      if (!rl.state) return;
+      const c = comp.items[idx];
+      const before = comp.original.slice(0, comp.start);
+      rl.state.update(before + c.suggestion);
+    }
+
+    function exitCompletionMode(accept: boolean) {
+      if (!comp.active) return;
+      comp.active = false;
+      if (!accept && rl.state) rl.state.update(comp.original);
+      clearCompletionMenu();
+      if (rl.state) rl.state.refresh();
+    }
+
+    function enterCompletionMode(items: any[], start: number, original: string) {
+      comp.active = true;
+      comp.items = items;
+      comp.idx = 0;
+      comp.start = start;
+      comp.original = original;
+      comp.menuLines = 0;
+      computeLayout();
+      applyCompletion(0);
+      renderCompletionMenu();
+    }
+
+    function moveCompletion(newIdx: number) {
+      if (newIdx < 0 || newIdx >= comp.items.length) return;
+      comp.idx = newIdx;
+      applyCompletion(comp.idx);
+      renderCompletionMenu();
+    }
+
+    // ---- Ctrl+R reverse history search state ----
+    let reverseSearchActive = false;
+    let reverseSearchTerm = "";
+    let reverseSearchIdx = -1;
+    let reverseSearchMatch = "";
+    let reverseSearchPreBuffer = "";
+    let reverseSearchLineShown = false;
+
+    function renderSearchLine() {
+      if (!rl.state) return;
+      // Combine search indicator + match into the readline buffer itself
+      // This lets readline handle all wrapping and redrawing
+      const prefix = `\x1b[33m(reverse-i-search)\x1b[0m "\x1b[1m${reverseSearchTerm}\x1b[0m":  `;
+      rl.state.update(prefix + (reverseSearchMatch || ""));
+      rl.state.refresh();
+      reverseSearchLineShown = true;
+    }
+
+    function clearSearchLine() {
+      reverseSearchLineShown = false;
+    }
+
+    function doReverseSearch() {
+      const needle = reverseSearchTerm.toLowerCase();
+      if (!needle) { reverseSearchMatch = ""; return; }
+      // xterm-readline stores history as rl.history (array) or rl.history.entries
+      const entries: string[] = Array.isArray(rl.history) ? rl.history : (rl.history?.entries ?? []);
+      const start = reverseSearchIdx >= 0 ? reverseSearchIdx + 1 : 0;
+      for (let i = start; i < entries.length; i++) {
+        if (entries[i].toLowerCase().includes(needle)) {
+          reverseSearchIdx = i;
+          reverseSearchMatch = entries[i];
+          return;
+        }
+      }
+      // No new match — keep current
+    }
+
+    function exitReverseSearch(accept: boolean) {
+      reverseSearchActive = false;
+      clearSearchLine();
+      if (rl.state) {
+        rl.state.update(accept && reverseSearchMatch ? reverseSearchMatch : reverseSearchPreBuffer);
+        rl.state.refresh();
+      }
+      reverseSearchTerm = "";
+      reverseSearchIdx = -1;
+      reverseSearchMatch = "";
+      reverseSearchPreBuffer = "";
+    }
+
+    // Key event handler: tab completion, Ctrl+R reverse search, Ctrl+K
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
-      if (e.key === "k" && (e.ctrlKey || e.metaKey) && e.type === "keydown") {
+      if (e.type !== "keydown") {
+        // Suppress keyup for keys we handle during completion or search
+        if (comp.active && ["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Escape", "Enter"].includes(e.key)) {
+          return false;
+        }
+        if (reverseSearchActive && !e.ctrlKey) return false;
+        return true;
+      }
+
+      // ---- Tab completion navigation ----
+      if (comp.active) {
+        if (e.key === "ArrowRight" || (e.key === "Tab" && !e.shiftKey)) {
+          e.preventDefault();
+          moveCompletion((comp.idx + 1) % comp.items.length);
+          return false;
+        }
+        if (e.key === "ArrowLeft" || (e.key === "Tab" && e.shiftKey)) {
+          e.preventDefault();
+          moveCompletion((comp.idx - 1 + comp.items.length) % comp.items.length);
+          return false;
+        }
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          const next = comp.idx + comp.numCols;
+          moveCompletion(next < comp.items.length ? next : comp.idx);
+          return false;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          const prev = comp.idx - comp.numCols;
+          moveCompletion(prev >= 0 ? prev : comp.idx);
+          return false;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          exitCompletionMode(true);
+          return false;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          exitCompletionMode(false);
+          return false;
+        }
+        // Any other key accepts current completion and passes through
+        exitCompletionMode(true);
+        return true;
+      }
+
+      // ---- Ctrl+K clears terminal ----
+      if (e.key === "k" && (e.ctrlKey || e.metaKey)) {
         term.clear();
         return false;
       }
+
+      // ---- Ctrl+C during reverse search cancels it ----
+      if (e.key === "c" && e.ctrlKey && reverseSearchActive) {
+        exitReverseSearch(false);
+        return false;
+      }
+
+      // ---- Ctrl+R — start or continue reverse search ----
+      if (e.key === "r" && e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        if (!reverseSearchActive) {
+          reverseSearchActive = true;
+          reverseSearchTerm = "";
+          reverseSearchIdx = -1;
+          reverseSearchMatch = "";
+          reverseSearchPreBuffer = rl.state ? rl.state.buffer?.() || "" : "";
+          renderSearchLine();
+        } else {
+          doReverseSearch();
+          renderSearchLine();
+        }
+        return false;
+      }
+
+      // ---- Keys during reverse search ----
+      if (reverseSearchActive) {
+        if (e.key === "Enter") { exitReverseSearch(true); return false; }
+        if (e.key === "Escape") { exitReverseSearch(false); return false; }
+        if (e.key === "Backspace") {
+          reverseSearchTerm = reverseSearchTerm.slice(0, -1);
+          reverseSearchIdx = -1;
+          doReverseSearch();
+          renderSearchLine();
+          return false;
+        }
+        if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+          reverseSearchTerm += e.key;
+          reverseSearchIdx = -1;
+          doReverseSearch();
+          renderSearchLine();
+          return false;
+        }
+        if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return false;
+        exitReverseSearch(true);
+        return true;
+      }
+
+      // ---- Tab triggers completion ----
+      if (e.key === "Tab" && !e.shiftKey) {
+        e.preventDefault();
+        const state = rl.state;
+        if (state) {
+          const buf = state.buffer();
+          if (buf.trim()) {
+            onCompletionsReceived = (completions) => {
+              if (!completions || completions.length === 0) return;
+              const currentBuf = state.buffer();
+              const hasTies = completions.length > 1 &&
+                completions[0].score === completions[1].score;
+
+              if (!hasTies) {
+                // Single best match — auto-insert
+                const c = completions[0];
+                const typed = currentBuf.slice(c.start);
+                const toInsert = c.suggestion.slice(typed.length);
+                if (toInsert) state.editInsert(toInsert);
+              } else {
+                // Multiple tied matches — insert common prefix or show menu
+                const start = completions[0].start;
+                const typed = currentBuf.slice(start);
+                let common = completions[0].suggestion;
+                for (let i = 1; i < completions.length; i++) {
+                  let j = 0;
+                  while (j < common.length && j < completions[i].suggestion.length &&
+                    common[j].toLowerCase() === completions[i].suggestion[j].toLowerCase()) j++;
+                  common = common.slice(0, j);
+                }
+                const toInsert = common.slice(typed.length);
+                if (toInsert) {
+                  state.editInsert(toInsert);
+                } else {
+                  enterCompletionMode(completions, start, currentBuf);
+                }
+              }
+            };
+            worker.postMessage({ type: "complete", text: buf });
+          }
+        }
+        return false;
+      }
+
       return true;
     });
 
@@ -837,6 +1108,7 @@ function initShell(
   const isNewWorker = !bridge.worker;
   const worker = bridge.worker || new Worker("/shell/worker.js");
   bridge.worker = worker;
+  let currentWasmVersion = "";
 
   // Only set up SABs and init for new workers
   if (isNewWorker) {
@@ -859,9 +1131,11 @@ function initShell(
 
   let queryRunning = false;
   let outputMode: "box" | "line" = "box";
+  let maxDisplayRows = 40;
   let lastTable: any = null;
   let lastArrowBuffer: Uint8Array | null = null;
   let lastAutoSave = 0; // timestamp of last auto-save
+  let autoSaveEnabled = true;
 
   /** Take a snapshot from the worker. */
   function takeSnapshot(): Promise<{ memory: ArrayBuffer; size: number; connHdl: number; wasmVersion: string }> {
@@ -898,7 +1172,7 @@ function initShell(
 
   /** Auto-save the current session to IndexedDB. */
   async function autoSave() {
-    if (!config.serviceUrl) return;
+    if (!config.serviceUrl || !autoSaveEnabled) return;
     try {
       const snap = await takeSnapshot();
       await saveAutoSave(config.serviceUrl, snap.wasmVersion, snap.memory, snap.connHdl);
@@ -908,6 +1182,9 @@ function initShell(
       console.warn("[session] Auto-save failed:", err);
     }
   }
+
+  // Shared callback for tab completion — set by key handler, called by worker.onmessage
+  let onCompletionsReceived: ((completions: any[]) => void) | null = null;
 
   worker.onmessage = (e: MessageEvent) => {
     const d = e.data;
@@ -939,13 +1216,21 @@ function initShell(
     }
 
     if (d.type === "ready") {
+      currentWasmVersion = d.wasmVersion || "";
       (async () => {
         // Try to restore previous session from IndexedDB
+        // Skip restore if ?noreset or ?fresh is in the URL (escape hatch for corrupted snapshots)
+        const skipRestore = new URLSearchParams(window.location.search).has("fresh");
         let restored = false;
-        if (config.serviceUrl) {
+        if (skipRestore && config.serviceUrl) {
+          // Delete the saved snapshot so next load is clean
+          try { await deleteSession(`${config.serviceUrl}::${AUTOSAVE_NAME}`); } catch { /* ignore */ }
+          writeln("Fresh start — cleared saved session.", "33");
+        }
+        if (config.serviceUrl && !skipRestore) {
           try {
             const autoSaveSession = await getAutoSave(config.serviceUrl);
-            if (autoSaveSession) {
+            if (autoSaveSession && autoSaveSession.wasmVersion === currentWasmVersion) {
               const memory = await decompressMemory(autoSaveSession);
               await restoreSnapshot(memory, memory.byteLength, autoSaveSession.connHdl);
               const when = new Date(autoSaveSession.timestamp).toLocaleString();
@@ -957,32 +1242,36 @@ function initShell(
                 const oauthMeta = getOAuthMeta();
                 const esc = (s: string) => s.replace(/'/g, "''");
                 const escId = (s: string) => `"${s.replace(/"/g, '""')}"`;
-                // Switch away from the catalog before detaching, then detach
                 await runQueryAsync(`USE memory`);
-                await runQueryAsync(`DETACH IF EXISTS ${escId(config.catalogName)}`);
-                let attachSql = `ATTACH '${esc(config.catalogName)}' AS ${escId(config.catalogName)} (TYPE vgi, LOCATION '${esc(config.serviceUrl!)}'`;
+                let attachSql = `ATTACH OR REPLACE '${esc(config.catalogName)}' AS ${escId(config.catalogName)} (TYPE vgi, LOCATION '${esc(config.serviceUrl!)}'`;
                 if (oauthMeta?.refreshToken) {
                   attachSql += `, oauth_refresh_token '${esc(oauthMeta.refreshToken)}'`;
                 }
                 attachSql += `)`;
+                console.log("[shell] Re-attach SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
                 const reattach = await runQueryAsync(attachSql);
                 if (reattach.ok) {
                   writeln(`Re-attached ${config.catalogName} with fresh credentials`, "32");
                 } else {
                   const errStr = reattach.error ?? "";
+                  console.log("[shell] Re-attach failed:", errStr);
                   const isAuthError = /oauth|auth|401|403|invalid_grant|token.*expired|token.*failed/i.test(errStr);
                   if (isAuthError) {
+                    console.log("[shell] Re-attach auth error, redirecting");
                     redirectToAuth(config.serviceUrl!);
                     return;
                   }
                   writeln(`Re-attach failed: ${errStr}`, "31");
                 }
               }
+
+              // Refresh sidebar to show in-memory tables from the restored snapshot
+              bridge.refreshMemoryTables?.();
             }
           } catch (err: any) {
             console.warn("[session] Auto-restore failed:", err);
-            writeln(`Previous session could not be restored: ${err.message}`, "33");
-            // Delete the corrupted auto-save so it doesn't fail again on next load
+            writeln("Previous session expired, starting fresh.", "33");
+            // Delete the bad auto-save so it doesn't fail again on next load
             try {
               await deleteSession(`${config.serviceUrl}::${AUTOSAVE_NAME}`);
             } catch { /* ignore cleanup errors */ }
@@ -994,20 +1283,23 @@ function initShell(
           // Build ATTACH SQL — include oauth_refresh_token if we have it from the frontend OAuth redirect
           const oauthMeta = getOAuthMeta();
           const esc = (s: string) => s.replace(/'/g, "''");
-          let attachSql = `ATTACH '${esc(config.catalogName)}' AS ${config.catalogName} (TYPE vgi, LOCATION '${esc(config.serviceUrl)}'`;
+          let attachSql = `ATTACH OR REPLACE '${esc(config.catalogName)}' AS ${config.catalogName} (TYPE vgi, LOCATION '${esc(config.serviceUrl)}'`;
           if (oauthMeta?.refreshToken) {
             attachSql += `, oauth_refresh_token '${esc(oauthMeta.refreshToken)}'`;
             console.log("[shell] Including oauth_refresh_token in ATTACH");
           }
           attachSql += `)`;
+          console.log("[shell] ATTACH SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
           const result = await runQueryAsync(attachSql);
           if (result.ok) {
             await runQueryAsync(`USE ${config.catalogName}`);
             writeln(`Connected to ${config.catalogName}`, "32");
           } else {
             const errStr = result.error ?? "";
+            console.log("[shell] ATTACH failed:", errStr);
             const isAuthError = /oauth|auth|401|403|invalid_grant|token.*expired|token.*failed/i.test(errStr);
             if (isAuthError) {
+              console.log("[shell] Auth error detected, redirecting. config.token:", config.token ? config.token.substring(0, 20) + "..." : "NONE");
               redirectToAuth(config.serviceUrl);
               return;
             }
@@ -1037,6 +1329,33 @@ function initShell(
         window.dispatchEvent(new Event("duckdb-ready"));
         readLoop();
       })();
+      return;
+    }
+
+    if (d.type === "completions") {
+      if (onCompletionsReceived) {
+        const completions: any[] = [];
+        if (d.arrowBuffers) {
+          try {
+            for (const buf of d.arrowBuffers) {
+              const table = tableFromIPC(new Uint8Array(buf));
+              const sugCol = table.getChild("suggestion");
+              const startCol = table.getChild("suggestion_start");
+              const scoreCol = table.getChild("suggestion_score");
+              for (let i = 0; i < table.numRows; i++) {
+                completions.push({
+                  suggestion: sugCol ? String(sugCol.get(i)) : "",
+                  start: startCol ? Number(startCol.get(i)) : 0,
+                  score: scoreCol ? Number(scoreCol.get(i)) : 0,
+                });
+              }
+            }
+          } catch { /* ignore parse errors */ }
+        }
+        const cb = onCompletionsReceived;
+        onCompletionsReceived = null;
+        cb(completions);
+      }
       return;
     }
 
@@ -1155,14 +1474,43 @@ function initShell(
         writeln(".ai                Enter AI mode (resumes last conversation)");
         writeln(".ai new            Start a new AI conversation");
         writeln(".ai name <text>    Name the AI conversation");
-        writeln(".save              Download DuckDB snapshot");
-        writeln(".load              Restore DuckDB from snapshot file");
+        writeln(".save <name>       Download DuckDB snapshot as file");
+        writeln(".load              Restore DuckDB from a snapshot file");
         writeln(".mode box          Table output with box drawing (default)");
         writeln(".mode line         One field per line, vertical display");
+        writeln(`.maxrows [n]       Set max display rows (current: ${maxDisplayRows})`);
         writeln(".download csv      Download last result as CSV");
         writeln(".download excel    Download last result as Excel (.xlsx)");
+        writeln(".reset             Clear saved session and reload with fresh database");
         writeln(".perspective       Open last result in Perspective viewer");
         writeln(".kepler            Switch to Map tab");
+        continue;
+      }
+      if (trimmed.startsWith(".maxrows")) {
+        const arg = trimmed.split(/\s+/)[1];
+        if (arg) {
+          const n = parseInt(arg, 10);
+          if (n >= 2 && Number.isFinite(n)) {
+            maxDisplayRows = n % 2 === 0 ? n : n + 1; // ensure even for head/tail split
+            writeln(`Max display rows: ${maxDisplayRows}`, "33");
+          } else {
+            writeln("Usage: .maxrows <number> (minimum 2)", "33");
+          }
+        } else {
+          writeln(`Max display rows: ${maxDisplayRows}`, "33");
+        }
+        continue;
+      }
+      if (trimmed === ".reset") {
+        writeln("Clearing saved session...", "33");
+        autoSaveEnabled = false;
+        if (config.serviceUrl) {
+          try {
+            await deleteSession(`${config.serviceUrl}::${AUTOSAVE_NAME}`);
+          } catch { /* ignore */ }
+        }
+        writeln("Reloading with fresh database.", "33");
+        window.location.reload();
         continue;
       }
       if (trimmed.startsWith(".mode")) {
@@ -1203,50 +1551,88 @@ function initShell(
         continue;
       }
 
-      // .save — snapshot WASM memory and download as file
-      // .save [name] — save session to IndexedDB
+      // .save <name> — snapshot WASM memory and download as file
       if (trimmed === ".save" || trimmed.startsWith(".save ")) {
-        const name = trimmed.slice(5).trim() || new Date().toLocaleString();
-        if (!config.serviceUrl) { writeln("No service URL — cannot save session.", "31"); continue; }
-        writeln(`Saving session "${name}"...`, "33");
+        const name = trimmed.slice(5).trim();
+        if (!name) { writeln("Usage: .save <filename>", "33"); continue; }
+        writeln(`Saving snapshot...`, "33");
         try {
           const snap = await takeSnapshot();
-          await saveSession(config.serviceUrl, name, snap.wasmVersion, snap.memory, snap.connHdl);
-          writeln(`Session saved.`, "32");
+          // Compress the WASM memory
+          const compressed = await new Response(
+            new Blob([snap.memory]).stream().pipeThrough(new CompressionStream("gzip"))
+          ).arrayBuffer();
+          // Build file: JSON header line + newline + compressed data
+          const header = JSON.stringify({
+            version: 1,
+            wasmVersion: snap.wasmVersion,
+            connHdl: snap.connHdl,
+            memorySize: snap.memory.byteLength,
+            timestamp: new Date().toISOString(),
+          });
+          const headerBytes = new TextEncoder().encode(header + "\n");
+          const file = new Uint8Array(headerBytes.length + compressed.byteLength);
+          file.set(headerBytes, 0);
+          file.set(new Uint8Array(compressed), headerBytes.length);
+          // Download
+          const filename = name.endsWith(".duckdb-snap") ? name : name + ".duckdb-snap";
+          const blob = new Blob([file], { type: "application/octet-stream" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url; a.download = filename; a.click();
+          URL.revokeObjectURL(url);
+          const sizeMB = (file.byteLength / (1024 * 1024)).toFixed(1);
+          writeln(`Downloaded ${filename} (${sizeMB} MB compressed)`, "32");
         } catch (err: any) {
           writeln(`Save failed: ${err.message}`, "31");
         }
         continue;
       }
 
-      // .load [name] — restore session from IndexedDB
-      if (trimmed === ".load" || trimmed.startsWith(".load ")) {
-        const name = trimmed.slice(5).trim();
-        if (!config.serviceUrl) { writeln("No service URL — cannot load session.", "31"); continue; }
+      // .load — open file picker, save to IndexedDB as auto-save, then reload
+      // (Restoring raw WASM memory must happen right after init when the function
+      // table layout matches — mid-session restores cause signature mismatches.)
+      if (trimmed === ".load") {
+        writeln("Select a .duckdb-snap file to restore...", "33");
         try {
-          if (!name) {
-            // List available sessions and let user pick
-            const sessions = await listSessions(config.serviceUrl);
-            const named = sessions.filter(s => s.name !== AUTOSAVE_NAME);
-            if (named.length === 0) { writeln("No saved sessions. Use .save <name> to create one.", "33"); continue; }
-            writeln("Saved sessions:", "33");
-            for (const s of named) {
-              const when = new Date(s.timestamp).toLocaleString();
-              const size = (s.sizeBytes / (1024 * 1024)).toFixed(1);
-              writeln(`  ${s.name}  (${when}, ${size} MB)`);
-            }
-            writeln("Use .load <name> to restore.", "33");
-          } else {
-            const id = `${config.serviceUrl}::${name}`;
-            const session = await loadSession(id);
-            if (!session) { writeln(`Session "${name}" not found.`, "31"); continue; }
-            writeln(`Loading "${name}" (${(session.sizeBytes / (1024 * 1024)).toFixed(1)} MB)...`, "33");
-            const memory = await decompressMemory(session);
-            await restoreSnapshot(memory, memory.byteLength, session.connHdl);
-            writeln(`Restored "${name}".`, "32");
+          const file = await new Promise<File>((resolve, reject) => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = ".duckdb-snap";
+            input.onchange = () => input.files?.[0] ? resolve(input.files[0]) : reject(new Error("No file selected"));
+            input.oncancel = () => reject(new Error("Cancelled"));
+            input.click();
+          });
+          writeln(`Loading ${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`, "33");
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          // Parse header
+          const newlineIdx = bytes.indexOf(10); // \n
+          if (newlineIdx < 0) { writeln("Invalid snapshot file — no header found.", "31"); continue; }
+          const header = JSON.parse(new TextDecoder().decode(bytes.slice(0, newlineIdx)));
+          if (header.wasmVersion !== currentWasmVersion) {
+            writeln(`Snapshot was saved with a different WASM build (${header.wasmVersion}) and cannot be restored.`, "31");
+            continue;
           }
+          if (!config.serviceUrl) { writeln("No service URL — cannot restore.", "31"); continue; }
+          // Decompress the snapshot memory, save to IndexedDB as auto-save, then reload.
+          // Restore must happen right after WASM init (matching function table layout).
+          const compressedData = bytes.slice(newlineIdx + 1);
+          const memory = await new Response(
+            new Blob([compressedData]).stream().pipeThrough(new DecompressionStream("gzip"))
+          ).arrayBuffer();
+          await saveAutoSave(
+            config.serviceUrl,
+            header.wasmVersion,
+            memory,
+            header.connHdl,
+          );
+          autoSaveEnabled = false; // don't overwrite with current state on unload
+          writeln("Snapshot loaded. Reloading to restore...", "32");
+          window.location.reload();
         } catch (err: any) {
-          writeln(`Load failed: ${err.message}`, "31");
+          if (err.message !== "Cancelled") {
+            writeln(`Load failed: ${err.message}`, "31");
+          }
         }
         continue;
       }
@@ -1780,11 +2166,22 @@ function initShell(
     const totalCols = fields.length;
     if (totalCols === 0) { writeln("(empty)"); return; }
 
-    const displayRows = Math.min(numRows, 500);
+    const HALF = Math.floor(maxDisplayRows / 2);
+    const truncated = numRows > maxDisplayRows;
+
+    // Determine which row indices to display
+    const displayIndices: number[] = [];
+    if (!truncated) {
+      for (let r = 0; r < numRows; r++) displayIndices.push(r);
+    } else {
+      for (let r = 0; r < HALF; r++) displayIndices.push(r);
+      for (let r = numRows - HALF; r < numRows; r++) displayIndices.push(r);
+    }
+    const displayRows = displayIndices.length;
 
     // Build formatted string grid: rows[r][c]
     const grid: string[][] = [];
-    for (let r = 0; r < displayRows; r++) {
+    for (const r of displayIndices) {
       const row: string[] = [];
       for (let c = 0; c < totalCols; c++) {
         row.push(formatVal(table.getChildAt(c)?.get(r), fields[c]));
@@ -1947,6 +2344,18 @@ function initShell(
         chars: { ...tableOpts.chars, "top": "", "top-mid": "", "top-left": "", "top-right": "" },
       });
       for (let r = 0; r < displayRows; r++) {
+        // Insert 3 gap indicator rows between head and tail sections
+        if (truncated && r === HALF) {
+          for (let g = 0; g < 3; g++) {
+            const gapRow: any[] = [];
+            for (let vi = 0; vi < shownCount; vi++) {
+              if (ellipsisPos === vi) gapRow.push({ content: "·", hAlign: "center" as const });
+              gapRow.push({ content: "·", hAlign: "center" as const });
+            }
+            if (ellipsisPos === shownCount) gapRow.push({ content: "·", hAlign: "center" as const });
+            dataTbl.push(gapRow);
+          }
+        }
         const row: any[] = [];
         for (let vi = 0; vi < shownCount; vi++) {
           if (ellipsisPos === vi) {
@@ -1970,7 +2379,9 @@ function initShell(
       }
 
       // Footer
-      const rowText = `${numRows} row${numRows !== 1 ? "s" : ""}`;
+      const rowText = truncated
+        ? `${numRows} row${numRows !== 1 ? "s" : ""} (${displayRows} shown)`
+        : `${numRows} row${numRows !== 1 ? "s" : ""}`;
       const colText = hiddenCount > 0
         ? `${totalCols} columns (${shownCount} shown)`
         : `${totalCols} column${totalCols !== 1 ? "s" : ""}`;
@@ -2035,12 +2446,28 @@ function initShell(
     const totalCols = fields.length;
     if (totalCols === 0) { writeln("(empty)"); return; }
 
-    const displayRows = Math.min(numRows, 500);
+    const LINE_HALF = Math.floor(maxDisplayRows / 2);
+    const lineTruncated = numRows > maxDisplayRows;
+    const lineIndices: number[] = [];
+    if (!lineTruncated) {
+      for (let r = 0; r < numRows; r++) lineIndices.push(r);
+    } else {
+      for (let r = 0; r < LINE_HALF; r++) lineIndices.push(r);
+      for (let r = numRows - LINE_HALF; r < numRows; r++) lineIndices.push(r);
+    }
+
     const names: string[] = fields.map((f: any) => f.name);
     const maxNameLen = Math.max(...names.map((n: string) => n.length));
     const lineWidth = Math.min(term.cols, maxNameLen + 30);
 
-    for (let r = 0; r < displayRows; r++) {
+    for (let i = 0; i < lineIndices.length; i++) {
+      // Insert gap indicator between head and tail
+      if (lineTruncated && i === LINE_HALF) {
+        const gapLabel = ` · · · ${numRows - maxDisplayRows} records omitted · · · `;
+        const gapDashes = Math.max(0, lineWidth - gapLabel.length - 1);
+        rl.println(`\x1b[2m─${gapLabel}${"─".repeat(gapDashes)}\x1b[0m`);
+      }
+      const r = lineIndices[i];
       // Record header
       const label = ` RECORD ${r + 1} `;
       const dashCount = Math.max(0, lineWidth - label.length - 1);
@@ -2055,7 +2482,10 @@ function initShell(
     }
 
     // Footer
-    const rowText = `${numRows} row${numRows !== 1 ? "s" : ""}`;
+    const displayCount = lineIndices.length;
+    const rowText = lineTruncated
+      ? `${numRows} row${numRows !== 1 ? "s" : ""} (${displayCount} shown)`
+      : `${numRows} row${numRows !== 1 ? "s" : ""}`;
     const colText = `${totalCols} column${totalCols !== 1 ? "s" : ""}`;
     const timeText = elapsedMs != null
       ? (elapsedMs < 1000 ? `${Math.round(elapsedMs)}ms` : `${(elapsedMs / 1000).toFixed(2)}s`)
@@ -2132,12 +2562,36 @@ function initShell(
   // If terminal already existed, everything (readLoop, handlers) is still running
   // — no need to reinitialize
 
+  // Find geometry columns for a fully-qualified table name so they can be excluded.
+  // Returns comma-separated geometry column names, or null if none found.
+  function getGeometryExclude(dottedName: string): string | null {
+    const parts = dottedName.split(".");
+    if (parts.length !== 3) return null;
+    const [cat, schema, table] = parts;
+    const catalogs = [config.catalogData, (window as any)?.__memoryCatalog].filter(Boolean);
+    for (const catData of catalogs) {
+      if (catData.catalogName !== cat) continue;
+      const s = catData.schemas.find((s: any) => s.info.name === schema);
+      const t = s?.tables.find((t: any) => t.name === table);
+      if (!t) continue;
+      const geomCols = getColumns(t).filter((c) => c.duckdbType === "GEOMETRY").map((c) => c.name);
+      return geomCols.length > 0 ? geomCols.join(", ") : null;
+    }
+    return null;
+  }
+
   // Insert text into the terminal's current input line.
   // If the input is empty and the text looks like a table name, wrap it in SELECT * FROM.
+  // Geometry columns are excluded via EXCLUDE since they have no shell representation.
   function insertText(text: string) {
     const isTable = text.includes(".") && !text.includes(" ") && !text.includes("(");
     if (isTable && promptInputEmpty) {
-      term.paste(`SELECT * FROM ${text} LIMIT 100;`);
+      const exclude = getGeometryExclude(text);
+      if (exclude) {
+        term.paste(`SELECT * EXCLUDE (${exclude}) FROM ${text} LIMIT 100;`);
+      } else {
+        term.paste(`SELECT * FROM ${text} LIMIT 100;`);
+      }
     } else {
       term.paste(text);
     }

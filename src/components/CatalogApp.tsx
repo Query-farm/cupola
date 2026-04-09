@@ -346,6 +346,7 @@ export function CatalogApp() {
     async (isRefresh = false) => {
       // If we previously had auth but the token is now expired, redirect to re-auth
       if (!getAuthToken() && hadAuthToken()) {
+        console.log("[catalog] Token expired but hadAuthToken=true, redirecting to re-auth");
         redirectToAuth(serviceUrl);
         return;
       }
@@ -397,11 +398,20 @@ export function CatalogApp() {
     return () => window.removeEventListener("popstate", onPopState);
   }, [data]);
 
-  // Auth error — redirect to sign-in (unless server already gave us a bad token)
+  // Auth error — redirect to sign-in, but break the loop if we already tried recently.
   useEffect(() => {
     if (!error) return;
     const isAuthError = error.toLowerCase().includes("auth") || error.includes("401");
     if (isAuthError) {
+      // Break redirect loops: if we redirected within the last 10 seconds, don't redirect again
+      const lastRedirect = Number(sessionStorage.getItem("_vgi_auth_redirect_ts") || "0");
+      const now = Date.now();
+      if (now - lastRedirect < 10_000) {
+        console.warn("[catalog] Auth redirect loop detected — last redirect was", now - lastRedirect, "ms ago. Stopping.");
+        return;
+      }
+      sessionStorage.setItem("_vgi_auth_redirect_ts", String(now));
+      console.log("[catalog] Auth error detected, redirecting. error:", error);
       redirectToAuth(serviceUrl);
     }
   }, [error, serviceUrl]);
