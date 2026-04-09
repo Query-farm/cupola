@@ -186,13 +186,27 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         if (cancelled || !containerRef.current) return;
 
         // Dynamic ESM imports
-        const [{ tableFromIPC }, { Readline }] = await Promise.all([
+        const [arrowModule, { Readline }] = await Promise.all([
           import(/* @vite-ignore */ ARROW_CDN),
           import(/* @vite-ignore */ READLINE_CDN),
         ]);
         if (cancelled || !containerRef.current) return;
 
         setLoading(false);
+
+        // Use RecordBatchFileReader for proper dictionary batch handling.
+        // tableFromIPC doesn't populate dictionary data from IPC file format.
+        const { tableFromIPC: _origTableFromIPC, RecordBatchFileReader, Table: ArrowTable } = arrowModule;
+        const tableFromIPC = (buf: any) => {
+          try {
+            const reader = RecordBatchFileReader.from(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+            const batches = [...reader];
+            if (batches.length === 0) return _origTableFromIPC(buf);
+            return new ArrowTable(batches);
+          } catch {
+            return _origTableFromIPC(buf);
+          }
+        };
 
         const shellToken = getAuthToken();
         console.log("[shell] Initializing DuckDB shell, token:", shellToken ? shellToken.substring(0, 20) + "..." : "NONE");
@@ -2359,7 +2373,16 @@ function initShell(
             } catch { /* try next */ }
           }
           // Last resort: log what we have for debugging
-          console.log(`[safeGet] Dictionary not resolved: idx=${dictIdx}, chunk keys:`, Object.keys(chunk), "column keys:", Object.keys(column));
+          const dict = chunk.dictionary;
+          console.log(`[safeGet] Dictionary debug: idx=${dictIdx}`,
+            "chunk.dictionary:", dict,
+            "dict type:", dict?.constructor?.name,
+            "dict.length:", dict?.length,
+            "dict.data:", dict?.data,
+            "dict.data[0]:", dict?.data?.[0],
+            "dict.data[0].values:", dict?.data?.[0]?.values?.slice?.(0, 50),
+            "dict.data[0].valueOffsets:", dict?.data?.[0]?.valueOffsets?.slice?.(0, 10),
+          );
         }
       }
     }
