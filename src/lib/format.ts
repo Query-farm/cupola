@@ -25,7 +25,7 @@ const TIME_TYPES = new Set(["TIME", "TIME_NS", "TIME WITH TIME ZONE", "TIMETZ"])
  * Uses Arrow field type or DuckDB type string for formatting decisions.
  * Output matches DuckDB CLI formatting — no locale commas.
  */
-export function formatCellValue(value: any, columnName?: string, field?: any, duckdbType?: string): string {
+export function formatCellValue(value: any, _columnName?: string, field?: any, duckdbType?: string): string {
   if (value === null || value === undefined) return "";
 
   // DuckDB Arrow extension types (arrow_lossless_conversion=true)
@@ -267,42 +267,34 @@ function toNumber(value: any): number | null {
 // 128-bit integer formatting (Hugeint / UHugeint)
 // ============================================================================
 
+/** Assemble a Uint32Array (little-endian words) into a signed or unsigned BigInt. */
+function uint32ArrayToBigInt(words: Uint32Array, signed: boolean): bigint {
+  if (words.length >= 4) {
+    const raw = BigInt(words[0]) | (BigInt(words[1]) << 32n) | (BigInt(words[2]) << 64n) | (BigInt(words[3]) << 96n);
+    if (!signed) return raw;
+    if (raw & (1n << 127n)) {
+      const mask = (1n << 128n) - 1n;
+      return -(((raw ^ mask) + 1n) & mask);
+    }
+    return raw;
+  }
+  if (words.length >= 2) {
+    const raw = BigInt(words[0]) | (BigInt(words[1]) << 32n);
+    if (!signed) return raw;
+    if (raw & (1n << 63n)) {
+      const mask = (1n << 64n) - 1n;
+      return -(((raw ^ mask) + 1n) & mask);
+    }
+    return raw;
+  }
+  return 0n;
+}
+
 /** Format a 128-bit integer value. Arrow gives us Uint32Array with 4 words (little-endian). */
 function formatInt128(value: any, unsigned: boolean): string {
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "number") return value.toString();
-
-  // Uint32Array with 4 words (128-bit little-endian)
-  if (value instanceof Uint32Array && value.length >= 4) {
-    // Combine 4 x 32-bit words into a BigInt
-    const w0 = BigInt(value[0]);
-    const w1 = BigInt(value[1]);
-    const w2 = BigInt(value[2]);
-    const w3 = BigInt(value[3]);
-    const raw = w0 | (w1 << BigInt(32)) | (w2 << BigInt(64)) | (w3 << BigInt(96));
-
-    if (unsigned) {
-      return raw.toString();
-    }
-    // Signed: check MSB
-    const mask128 = (BigInt(1) << BigInt(128)) - BigInt(1);
-    const signBit = BigInt(1) << BigInt(127);
-    if (raw & signBit) {
-      // Negative: two's complement
-      const magnitude = ((raw ^ mask128) + BigInt(1)) & mask128;
-      return "-" + magnitude.toString();
-    }
-    return raw.toString();
-  }
-
-  // Fallback: 2 words (64-bit)
-  if (value instanceof Uint32Array && value.length >= 2) {
-    const lo = BigInt(value[0]);
-    const hi = BigInt(value[1]);
-    const raw = lo | (hi << BigInt(32));
-    return raw.toString();
-  }
-
+  if (value instanceof Uint32Array) return uint32ArrayToBigInt(value, !unsigned).toString();
   return String(value);
 }
 
@@ -314,36 +306,7 @@ function formatInt128(value: any, unsigned: boolean): string {
 function decimalToBigInt(value: any): bigint | null {
   if (typeof value === "bigint") return value;
   if (typeof value === "number") return BigInt(Math.round(value));
-
-  // Arrow Decimal128: Uint32Array with 4 uint32 words (little-endian 128-bit signed integer)
-  if (value instanceof Uint32Array && value.length >= 4) {
-    const w0 = BigInt(value[0]);
-    const w1 = BigInt(value[1]);
-    const w2 = BigInt(value[2]);
-    const w3 = BigInt(value[3]);
-    const raw = w0 | (w1 << BigInt(32)) | (w2 << BigInt(64)) | (w3 << BigInt(96));
-
-    const signBit = BigInt(1) << BigInt(127);
-    const mask128 = (BigInt(1) << BigInt(128)) - BigInt(1);
-    if (raw & signBit) {
-      return -((raw ^ mask128) + BigInt(1) & mask128);
-    }
-    return raw;
-  }
-
-  // 2-word fallback
-  if (value instanceof Uint32Array && value.length >= 2) {
-    const lo = BigInt(value[0]);
-    const hi = BigInt(value[1]);
-    const signBit = BigInt(1) << BigInt(63);
-    const raw = lo | (hi << BigInt(32));
-    if (raw & signBit) {
-      const mask64 = (BigInt(1) << BigInt(64)) - BigInt(1);
-      return -((raw ^ mask64) + BigInt(1) & mask64);
-    }
-    return raw;
-  }
-
+  if (value instanceof Uint32Array && value.length >= 2) return uint32ArrayToBigInt(value, true);
   return null;
 }
 
@@ -654,9 +617,6 @@ function getTimezoneOffsetSeconds(tzName: string, utcDays: number, utcHour: numb
       const localH = parseInt(parts.hour) % 24;
       const localMin = parseInt(parts.minute);
       const localS = parseInt(parts.second);
-      // Compute offset = local - utc in seconds
-      const utcTotalSec = utcDays * 86400 + utcHour * 3600 + utcMinute * 60 + utcSecond;
-      // Convert local back to epoch seconds using civil calendar
       const { year: uY, month: uM, day: uD } = civilFromDays(utcDays);
       // If same date, offset is just the time difference
       if (localY === uY && localM === uM && localD === uD) {
@@ -942,20 +902,9 @@ function formatBignum(bytes: Uint8Array): string {
   return isPositive ? magnitude.toString() : "-" + magnitude.toString();
 }
 
-/** Format a 16-byte FixedSizeBinary as a signed or unsigned 128-bit integer. */
+/** Format a 16-byte FixedSizeBinary as a signed or unsigned 128-bit integer string. */
 function formatFixedBinaryInt128(bytes: Uint8Array, signed: boolean): string {
-  const dv = new DataView(bytes.buffer, bytes.byteOffset, 16);
-  const lo = dv.getBigUint64(0, true);
-  const hi = dv.getBigUint64(8, true);
-  const raw = lo | (hi << 64n);
-  if (!signed) return raw.toString();
-  // Signed: two's complement
-  const signBit = 1n << 127n;
-  if (raw & signBit) {
-    const mask = (1n << 128n) - 1n;
-    return "-" + (((raw ^ mask) + 1n) & mask).toString();
-  }
-  return raw.toString();
+  return readInt128(bytes, signed).toString();
 }
 
 /** Format a timezone offset in seconds as ±HH[:MM[:SS]] (omitting zero-value MM/SS components). */
@@ -988,14 +937,6 @@ function formatUUID(bytes: Uint8Array): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
-/**
- * Safely read a value from an Arrow column, handling:
- * - BigInt overflow (Arrow throws for values outside safe integer range)
- * - Date32 precision loss (reads raw int32 days instead of lossy milliseconds)
- * - Nanosecond timestamp precision (reads raw BigInt64)
- * - Dictionary/enum resolution (manual lookup when Arrow JS fails)
- * - Extension types (hugeint, uhugeint, time_tz as FixedSizeBinary)
- */
 /** Check if a row is null according to Arrow's null bitmap. Returns true if null. */
 function isArrowNull(nullBitmap: Uint8Array | null | undefined, idx: number): boolean {
   if (!nullBitmap || nullBitmap.length === 0) return false;
@@ -1004,6 +945,14 @@ function isArrowNull(nullBitmap: Uint8Array | null | undefined, idx: number): bo
   return byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0;
 }
 
+/**
+ * Safely read a value from an Arrow column, handling:
+ * - BigInt overflow (Arrow throws for values outside safe integer range)
+ * - Date32 precision loss (reads raw int32 days instead of lossy milliseconds)
+ * - Nanosecond timestamp precision (reads raw BigInt64)
+ * - Dictionary/enum resolution (manual lookup when Arrow JS fails)
+ * - Extension types (hugeint, uhugeint, time_tz as FixedSizeBinary)
+ */
 export function safeGetArrowValue(column: any, row: number, field?: any): any {
   if (!column) return null;
 
