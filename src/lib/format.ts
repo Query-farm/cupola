@@ -59,9 +59,18 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
     if (value.__bigintList !== undefined) {
       const items = value.__bigintList as (bigint | null)[];
       const childField = value.field;
+      // Check if child is a timestamp type (DuckDB quotes timestamps in arrays)
+      const childTypeStr = childField?.type?.toString() || "";
+      const isTimestamp = childTypeStr.startsWith("Timestamp");
       const parts = items.map((v: bigint | null) => {
         if (v === null) return "NULL";
-        return formatCellValue(v, undefined, childField);
+        const formatted = formatCellValue(v, undefined, childField);
+        // DuckDB quotes timestamp values in arrays (they contain spaces),
+        // but not infinity/-infinity
+        if (isTimestamp && formatted !== "infinity" && formatted !== "-infinity") {
+          return `'${formatted}'`;
+        }
+        return formatted;
       });
       return `[${parts.join(", ")}]`;
     }
@@ -1190,41 +1199,55 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
     }
   }
 
+  // List/FixedSizeList with BigInt child values (e.g. List<Timestamp>):
+  // Arrow's getTimestamp* calls bigIntToNumber which throws for infinity sentinels.
+  // Proactively extract raw BigInt values to bypass Arrow's getter entirely.
+  if (typeStr.startsWith("List") || typeStr.startsWith("FixedSizeList")) {
+    try {
+      const chunk = column.data?.[0] ?? column.data;
+      if (chunk) {
+        const childChunk = chunk.children?.[0];
+        const childValues = childChunk?.values;
+        if (childValues instanceof BigInt64Array || childValues instanceof BigUint64Array) {
+          const adj = row - (chunk.offset ?? 0);
+          // Null check for the list element itself
+          const nullBitmap = chunk.nullBitmap;
+          if (nullBitmap && nullBitmap.length > 0) {
+            const byteIdx = adj >> 3;
+            const bitIdx = adj & 7;
+            if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
+          }
+          // Get list element offsets
+          const offsets = chunk.valueOffsets;
+          if (offsets) {
+            const start = offsets[adj];
+            const end = offsets[adj + 1];
+            const childNullBitmap = childChunk.nullBitmap;
+            const items: (bigint | null)[] = [];
+            for (let j = start; j < end; j++) {
+              if (childNullBitmap && childNullBitmap.length > 0) {
+                const byteIdx = j >> 3;
+                const bitIdx = j & 7;
+                if (byteIdx < childNullBitmap.length && (childNullBitmap[byteIdx] & (1 << bitIdx)) === 0) {
+                  items.push(null);
+                  continue;
+                }
+              }
+              items.push(childValues[j]);
+            }
+            const childField = field?.type?.children?.[0] ?? null;
+            return { __bigintList: items, field: childField };
+          }
+        }
+      }
+    } catch { /* fall through to column.get */ }
+  }
+
   try {
     return column.get(row);
   } catch (getErr: any) {
-    // For List columns with BigInt overflow, manually extract elements from raw data
-    try {
-    if (typeStr.startsWith("List") || typeStr.startsWith("FixedSizeList")) {
-      const chunk = column.data?.[0] ?? column.data;
-      const offsets = chunk?.valueOffsets;
-      const childChunk = chunk?.children?.[0];
-      if (offsets && childChunk) {
-        const start = offsets[row + (chunk.offset ?? 0)];
-        const end = offsets[row + (chunk.offset ?? 0) + 1];
-        const childValues = childChunk.values;
-        if (childValues instanceof BigInt64Array || childValues instanceof BigUint64Array) {
-          // Build array of BigInt values, checking null bitmap
-          const nullBitmap = childChunk.nullBitmap;
-          const items: (bigint | null)[] = [];
-          for (let j = start; j < end; j++) {
-            if (nullBitmap && nullBitmap.length > 0) {
-              const byteIdx = j >> 3;
-              const bitIdx = j & 7;
-              if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) {
-                items.push(null);
-                continue;
-              }
-            }
-            items.push(childValues[j]);
-          }
-          // Return a tagged value that formatCellValue can handle
-          const childField = field?.type?.children?.[0] ?? null;
-          return { __bigintList: items, field: childField };
-        }
-      }
-    }
     // BigInt overflow — read raw value from underlying typed array
+    try {
     const chunk = column.data?.[0] ?? column.data;
     const values = chunk?.values;
     if (values instanceof BigInt64Array || values instanceof BigUint64Array) {
@@ -1242,7 +1265,7 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
       }
     }
     return null;
-    } catch { return null; } // inner try/catch for List handling
+    } catch { return null; }
   }
 }
 
