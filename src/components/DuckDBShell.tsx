@@ -23,6 +23,7 @@ import {
 import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 import { estimateCost, formatCost } from "@/lib/pricing";
 import { formatCellValue, safeGetArrowValue } from "@/lib/format";
+import { printBoxTable, printLineTable, type TerminalOutput } from "@/lib/shell-table-renderer";
 import { bridge } from "@/lib/shell-bridge";
 import { getTerminalTheme } from "@/lib/theme";
 import {
@@ -280,7 +281,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   }, [activeTab]);
   useEffect(() => {
     if (mode === "minimized" || activeTab !== "perspective" || !selectedTable) return;
-    const tableId = `${catalogName}.${selectedTable.schemaName}.${selectedTable.name}`;
+    const tableId = `${selection?.catalog || catalogName}.${selectedTable.schemaName}.${selectedTable.name}`;
     // Don't reload if already showing this table
     if (perspectiveTableRef.current === tableId) return;
 
@@ -387,7 +388,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
     })();
 
     return () => { cancelled = true; };
-  }, [mode, activeTab, selectedTable, catalogName]);
+  }, [mode, activeTab, selectedTable, selection, catalogName]);
 
   const tabCls = (tab: string) => {
     const active = activeTab === tab;
@@ -2333,339 +2334,18 @@ function initShell(
     return formatCellValue(val, field?.name, field);
   }
 
-  // Duckbox-style table rendering using cli-table3
+  // Terminal output adapter for shell-table-renderer
+  const termOutput: TerminalOutput = {
+    get cols() { return term.cols; },
+    println: (line: string) => rl.println(line),
+  };
+
   async function printTable(table: any, elapsedMs?: number) {
-    const fields = table.schema.fields;
-    const numRows = table.numRows;
-    const totalCols = fields.length;
-    if (totalCols === 0) { writeln("(empty)"); return; }
-
-    const HALF = Math.floor(maxDisplayRows / 2);
-    const truncated = numRows > maxDisplayRows;
-
-    // Determine which row indices to display
-    const displayIndices: number[] = [];
-    if (!truncated) {
-      for (let r = 0; r < numRows; r++) displayIndices.push(r);
-    } else {
-      for (let r = 0; r < HALF; r++) displayIndices.push(r);
-      for (let r = numRows - HALF; r < numRows; r++) displayIndices.push(r);
-    }
-    const displayRows = displayIndices.length;
-
-    // Build formatted string grid: rows[r][c]
-    const grid: string[][] = [];
-    for (const r of displayIndices) {
-      const row: string[] = [];
-      for (let c = 0; c < totalCols; c++) {
-        row.push(formatVal(safeGet(table.getChildAt(c), r, fields[c]), fields[c]));
-      }
-      grid.push(row);
-    }
-
-    // Measure ideal widths and get type names
-    const MAX_COL_WIDTH = 20;
-    const names: string[] = fields.map((f: any) => f.name);
-    const types: string[] = fields.map((f: any) => fieldToDuckDBType(f));
-    const isNumeric: boolean[] = fields.map((f: any) => isNumericField(f));
-    const idealWidths: number[] = [];
-    for (let c = 0; c < totalCols; c++) {
-      let w = Math.max(names[c].length, types[c].length);
-      for (let r = 0; r < displayRows; r++) w = Math.max(w, grid[r][c].length);
-      idealWidths.push(Math.min(w, MAX_COL_WIDTH));
-    }
-
-    // Determine which columns fit in terminal width
-    // Each column uses: 1(pad) + width + 1(pad) + 1(border) = width + 3
-    // Plus 1 for the left border
-    const termW = term.cols;
-    const calcTotal = (widths: number[]) => 1 + widths.reduce((s, w) => s + w + 3, 0);
-
-    let visibleIndices: number[];
-    let ellipsisPos: number | null = null; // insert position in visible array
-
-    if (calcTotal(idealWidths) <= termW) {
-      // All columns fit
-      visibleIndices = idealWidths.map((_, i) => i);
-    } else {
-      // Zig-zag prune from middle
-      const ELLIPSIS_COST = 4; // "│ … │" = 1 + 3
-      const hidden = new Set<number>();
-      const mid = Math.floor(totalCols / 2);
-      // Build zig-zag order: mid, mid-1, mid+1, mid-2, mid+2, ...
-      const order: number[] = [mid];
-      for (let d = 1; d < totalCols; d++) {
-        if (mid - d >= 0) order.push(mid - d);
-        if (mid + d < totalCols) order.push(mid + d);
-      }
-
-      for (const idx of order) {
-        hidden.add(idx);
-        const remaining = idealWidths.filter((_, i) => !hidden.has(i));
-        if (calcTotal(remaining) + ELLIPSIS_COST <= termW) break;
-      }
-
-      visibleIndices = [];
-      let insertedEllipsis = false;
-      for (let i = 0; i < totalCols; i++) {
-        if (hidden.has(i)) {
-          if (!insertedEllipsis) {
-            ellipsisPos = visibleIndices.length;
-            insertedEllipsis = true;
-          }
-        } else {
-          visibleIndices.push(i);
-        }
-      }
-      // If ellipsis not yet placed (all hidden cols were at end), place at end
-      if (hidden.size > 0 && ellipsisPos === null) {
-        ellipsisPos = visibleIndices.length;
-      }
-    }
-
-    const shownCount = visibleIndices.length;
-    const hiddenCount = totalCols - shownCount;
-
-    // Distribute leftover terminal width to columns that were capped at MAX_COL_WIDTH
-    {
-      const ellipsisCost = ellipsisPos != null ? 4 : 0;
-      const usedWidth = 1 + ellipsisCost + visibleIndices.reduce((s, ci) => s + idealWidths[ci] + 3, 0);
-      let slack = termW - usedWidth;
-      if (slack > 0) {
-        // Find natural (uncapped) widths for visible columns
-        const naturalWidths = visibleIndices.map(ci => {
-          let w = Math.max(names[ci].length, types[ci].length);
-          for (let r = 0; r < displayRows; r++) w = Math.max(w, grid[r][ci].length);
-          return w;
-        });
-        // Columns that were capped and could use more space
-        const expandable = visibleIndices.map((ci, vi) => naturalWidths[vi] > idealWidths[ci] ? vi : -1).filter(i => i >= 0);
-        while (slack > 0 && expandable.length > 0) {
-          const share = Math.max(1, Math.floor(slack / expandable.length));
-          let expanded = false;
-          for (let i = expandable.length - 1; i >= 0; i--) {
-            const vi = expandable[i];
-            const ci = visibleIndices[vi];
-            const need = naturalWidths[vi] - idealWidths[ci];
-            if (need <= 0) { expandable.splice(i, 1); continue; }
-            const give = Math.min(need, share, slack);
-            idealWidths[ci] += give;
-            slack -= give;
-            expanded = true;
-            if (idealWidths[ci] >= naturalWidths[vi]) expandable.splice(i, 1);
-            if (slack <= 0) break;
-          }
-          if (!expanded) break;
-        }
-      }
-    }
-
-    try {
-      const Table = (await import(/* @vite-ignore */ "cli-table3")).default;
-
-      // Build colWidths and colAligns arrays, inserting ellipsis column
-      const colWidths: number[] = [];
-      const colAligns: ("left" | "right" | "center")[] = [];
-      const headerRow: any[] = [];
-      const typeRow: any[] = [];
-
-      for (let vi = 0; vi < shownCount; vi++) {
-        if (ellipsisPos === vi) {
-          colWidths.push(3); // " … " = 1 pad + 1 char + 1 pad
-          colAligns.push("center");
-          headerRow.push({ content: "…", hAlign: "center" as const });
-          typeRow.push({ content: " ", hAlign: "center" as const });
-        }
-        const ci = visibleIndices[vi];
-        colWidths.push(idealWidths[ci] + 2); // +2 for padding
-        colAligns.push(isNumeric[ci] ? "right" : "left");
-        headerRow.push({ content: `\x1b[1m${truncStr(names[ci], idealWidths[ci])}\x1b[0m`, hAlign: "center" as const });
-        typeRow.push({ content: `\x1b[90m${truncStr(types[ci], idealWidths[ci])}\x1b[0m`, hAlign: "center" as const });
-      }
-      // Ellipsis at end
-      if (ellipsisPos === shownCount) {
-        colWidths.push(3);
-        colAligns.push("center");
-        headerRow.push({ content: "…", hAlign: "center" as const });
-        typeRow.push({ content: " ", hAlign: "center" as const });
-      }
-
-      const tableOpts = {
-        colWidths,
-        colAligns,
-        chars: { "mid": "", "left-mid": "", "mid-mid": "", "right-mid": "" },
-        style: { head: [], border: [], "padding-left": 1, "padding-right": 1, compact: true },
-      };
-
-      // Header table — bottom border uses ├┼┤ when data follows, └┴┘ when empty
-      const hdrBottomChars = displayRows === 0
-        ? { "bottom": "─", "bottom-mid": "┴", "bottom-left": "└", "bottom-right": "┘" }
-        : { "bottom": "─", "bottom-mid": "┼", "bottom-left": "├", "bottom-right": "┤" };
-      const hdrTbl = new Table({
-        ...tableOpts,
-        chars: { ...tableOpts.chars, ...hdrBottomChars },
-      });
-      hdrTbl.push(headerRow);
-      hdrTbl.push(typeRow);
-      const hdrOutput = hdrTbl.toString();
-      for (const line of hdrOutput.split("\n")) {
-        rl.println(line);
-      }
-
-      // Data table — no top border (header's bottom is the separator)
-      const dataTbl = new Table({
-        ...tableOpts,
-        chars: { ...tableOpts.chars, "top": "", "top-mid": "", "top-left": "", "top-right": "" },
-      });
-      for (let r = 0; r < displayRows; r++) {
-        // Insert 3 gap indicator rows between head and tail sections
-        if (truncated && r === HALF) {
-          for (let g = 0; g < 3; g++) {
-            const gapRow: any[] = [];
-            for (let vi = 0; vi < shownCount; vi++) {
-              if (ellipsisPos === vi) gapRow.push({ content: "·", hAlign: "center" as const });
-              gapRow.push({ content: "·", hAlign: "center" as const });
-            }
-            if (ellipsisPos === shownCount) gapRow.push({ content: "·", hAlign: "center" as const });
-            dataTbl.push(gapRow);
-          }
-        }
-        const row: any[] = [];
-        for (let vi = 0; vi < shownCount; vi++) {
-          if (ellipsisPos === vi) {
-            row.push({ content: "…", hAlign: "center" as const });
-          }
-          const ci = visibleIndices[vi];
-          const val = grid[r][ci];
-          const display = val === "NULL"
-            ? `\x1b[2mNULL\x1b[0m`
-            : truncStr(val, idealWidths[ci]);
-          row.push(isNumeric[ci] ? { content: display, hAlign: "right" as const } : display);
-        }
-        if (ellipsisPos === shownCount) {
-          row.push({ content: "…", hAlign: "center" as const });
-        }
-        dataTbl.push(row);
-      }
-      const dataOutput = dataTbl.toString();
-      for (const line of dataOutput.split("\n")) {
-        rl.println(line);
-      }
-
-      // Footer
-      const rowText = truncated
-        ? `${numRows} row${numRows !== 1 ? "s" : ""} (${displayRows} shown)`
-        : `${numRows} row${numRows !== 1 ? "s" : ""}`;
-      const colText = hiddenCount > 0
-        ? `${totalCols} columns (${shownCount} shown)`
-        : `${totalCols} column${totalCols !== 1 ? "s" : ""}`;
-      const timeText = elapsedMs != null
-        ? (elapsedMs < 1000 ? `${Math.round(elapsedMs)}ms` : `${(elapsedMs / 1000).toFixed(2)}s`)
-        : "";
-      const footerParts = [rowText, totalCols > 1 ? colText : "", timeText].filter(Boolean);
-      rl.println(`\x1b[2m${footerParts.join("    ")}\x1b[0m`);
-    } catch (err: any) {
-      // Fallback: simple pipe-separated
-      for (const row of grid) {
-        rl.println(row.join(" | "));
-      }
-      rl.println(`(${numRows} row${numRows !== 1 ? "s" : ""})`);
-    }
+    return printBoxTable(table, termOutput, maxDisplayRows, elapsedMs);
   }
 
-  /** Truncate a string to maxLen, appending … if needed. */
-  function truncStr(s: string, maxLen: number): string {
-    if (s.length <= maxLen) return s;
-    return s.slice(0, maxLen - 1) + "…";
-  }
-
-  /** Check if an Arrow field represents a numeric type. */
-  function isNumericField(field: any): boolean {
-    const t = field.type?.toString() || "";
-    return /^(Int|Uint|Float|Decimal|float|int|uint|double)/i.test(t) ||
-      t.startsWith("Duration");
-  }
-
-  /** Map Arrow field to a short DuckDB type name for the type row. */
-  function fieldToDuckDBType(field: any): string {
-    const t = field.type?.toString() || "?";
-    const map: Record<string, string> = {
-      "Utf8": "varchar", "LargeUtf8": "varchar",
-      "Int8": "tinyint", "Int16": "smallint", "Int32": "int32", "Int64": "int64",
-      "Uint8": "utinyint", "Uint16": "usmallint", "Uint32": "uint32", "Uint64": "uint64",
-      "Float16": "float", "Float32": "float", "Float64": "double",
-      "Bool": "boolean", "Binary": "blob", "LargeBinary": "blob",
-    };
-    if (map[t]) return map[t];
-    if (t.startsWith("Dictionary<")) {
-      const inner = t.match(/,\s*(.+)>$/)?.[1];
-      return inner && map[inner] ? map[inner] : "varchar";
-    }
-    if (t.startsWith("Timestamp")) return "timestamp";
-    if (t.startsWith("Date")) return "date";
-    if (t.startsWith("Time")) return "time";
-    if (t.startsWith("Decimal")) return "decimal";
-    if (t.startsWith("Struct")) return "struct";
-    if (t.includes("List")) return "list";
-    // Check extension metadata for geometry
-    const ext = field.metadata?.get?.("ARROW:extension:name");
-    if (ext?.startsWith("geoarrow.")) return "geometry";
-    return t.toLowerCase();
-  }
-
-  /** Line mode: render each record vertically, one field per line. */
   function printLine(table: any, elapsedMs?: number) {
-    const fields = table.schema.fields;
-    const numRows = table.numRows;
-    const totalCols = fields.length;
-    if (totalCols === 0) { writeln("(empty)"); return; }
-
-    const LINE_HALF = Math.floor(maxDisplayRows / 2);
-    const lineTruncated = numRows > maxDisplayRows;
-    const lineIndices: number[] = [];
-    if (!lineTruncated) {
-      for (let r = 0; r < numRows; r++) lineIndices.push(r);
-    } else {
-      for (let r = 0; r < LINE_HALF; r++) lineIndices.push(r);
-      for (let r = numRows - LINE_HALF; r < numRows; r++) lineIndices.push(r);
-    }
-
-    const names: string[] = fields.map((f: any) => f.name);
-    const maxNameLen = Math.max(...names.map((n: string) => n.length));
-    const lineWidth = Math.min(term.cols, maxNameLen + 30);
-
-    for (let i = 0; i < lineIndices.length; i++) {
-      // Insert gap indicator between head and tail
-      if (lineTruncated && i === LINE_HALF) {
-        const gapLabel = ` · · · ${numRows - maxDisplayRows} records omitted · · · `;
-        const gapDashes = Math.max(0, lineWidth - gapLabel.length - 1);
-        rl.println(`\x1b[2m─${gapLabel}${"─".repeat(gapDashes)}\x1b[0m`);
-      }
-      const r = lineIndices[i];
-      // Record header
-      const label = ` RECORD ${r + 1} `;
-      const dashCount = Math.max(0, lineWidth - label.length - 1);
-      rl.println(`\x1b[2m─${label}${"─".repeat(dashCount)}\x1b[0m`);
-      // Fields
-      for (let c = 0; c < totalCols; c++) {
-        const val = formatVal(safeGet(table.getChildAt(c), r, fields[c]), fields[c]);
-        const name = names[c].padStart(maxNameLen);
-        const display = val === "NULL" ? `\x1b[2mNULL\x1b[0m` : val;
-        rl.println(`${name} = ${display}`);
-      }
-    }
-
-    // Footer
-    const displayCount = lineIndices.length;
-    const rowText = lineTruncated
-      ? `${numRows} row${numRows !== 1 ? "s" : ""} (${displayCount} shown)`
-      : `${numRows} row${numRows !== 1 ? "s" : ""}`;
-    const colText = `${totalCols} column${totalCols !== 1 ? "s" : ""}`;
-    const timeText = elapsedMs != null
-      ? (elapsedMs < 1000 ? `${Math.round(elapsedMs)}ms` : `${(elapsedMs / 1000).toFixed(2)}s`)
-      : "";
-    const footerParts = [rowText, colText, timeText].filter(Boolean);
-    rl.println(`\x1b[2m${footerParts.join("    ")}\x1b[0m`);
+    return printLineTable(table, termOutput, maxDisplayRows, elapsedMs);
   }
 
   /** Download the last result as CSV or Excel. */
@@ -2799,8 +2479,6 @@ function initShell(
     insertText,
   };
 }
-
-/** Check if the terminal's current input line is empty (just the prompt). */
 
 // ---------------------------------------------------------------------------
 // Perspective viewer — loads CDN scripts and renders inline
