@@ -458,7 +458,7 @@ function formatTimestamp(value: any, unit: "s" | "ms" | "us" | "ns", tz: string 
   }
   // DuckDB timestamp infinity sentinels (max/min int64)
   if (v >= 9223372036854775807n) return "infinity";
-  if (v <= -9223372036854775808n) return "-infinity";
+  if (v <= -9223372036854775807n) return "-infinity";
 
   // Convert to nanoseconds internally to preserve max precision
   let totalNs: bigint;

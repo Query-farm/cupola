@@ -1620,7 +1620,7 @@ function initShell(
               "double_array": ["[]", "[42.0, nan, inf, -inf, NULL, -42.0]"],
               "date_array": ["[]", "[1970-01-01, infinity, -infinity, NULL, 2022-05-12]"],
               "timestamp_array": ["[]", "['1970-01-01 00:00:00', infinity, -infinity, NULL, '2022-05-12 16:23:45']"],
-              "timestamptz_array": ["[]", "['1969-12-31 19:00:00-05', infinity, -infinity, NULL, '2022-05-12 19:23:45-04']"],
+              "timestamptz_array": ["[]", "['1969-12-31 19:00:00-05', infinity, -infinity, NULL, '2022-05-12 18:23:45-05']"],
               "varchar_array": ["[]", "[🦆🦆🦆🦆🦆🦆, goose, NULL, '']"],
               "nested_int_array": ["[]", "[[], [42, 999, NULL, NULL, -42], NULL, [], [42, 999, NULL, NULL, -42]]"],
               "fixed_int_array": ["[NULL, 2, 3]", "[4, 5, 6]"],
