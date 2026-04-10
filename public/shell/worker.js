@@ -198,12 +198,16 @@ async function init() {
     // With -sMODULARIZE, sub-workers must explicitly invoke the factory to set up
     // the pthread message handler — loading duckdb-coi.js alone just defines it.
     const pthreadWorkerUrl = new URL('./wasm/duckdb-coi-pthread.js', self.location.href).href;
-    // Localhost dev server uses 1 thread to avoid Vite middleware issues with
-    // many concurrent pthread sub-worker fetches. Production CDN uses
-    // hardwareConcurrency. Multi-threaded init only works because the query
-    // execution path below uses async polling with event-loop yields — without
-    // those yields, pthread proxy messages from sub-workers would deadlock
-    // the parent worker.
+    // The DuckDB-WASM threads build has a bug where extension LOAD fails with
+    // "need to see wasm magic number" if the database was opened with
+    // maximumThreads > 1 — the parallel task scheduler corrupts the extension
+    // binary buffer during loading. Workaround: open with maximumThreads=1,
+    // load extensions, then SET threads=N to enable multi-threading for
+    // subsequent queries. The pthread pool is still pre-allocated at
+    // pthreadPoolSize so query parallelism works after the bump.
+    //
+    // Localhost dev server uses 1 thread throughout to avoid Vite middleware
+    // issues with many concurrent pthread sub-worker fetches.
     const isLocal = self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1';
     const threadCount = isLocal ? 1 : (navigator.hardwareConcurrency || 4);
     module = await DuckDB({
@@ -212,7 +216,7 @@ async function init() {
         pthreadPoolSize: threadCount,
     });
     console.log('[worker] Opening database...');
-    const config = JSON.stringify({ allowUnsignedExtensions: true, arrowLosslessConversion: true, maximumThreads: threadCount, query: { castBigIntToDouble: false } });
+    const config = JSON.stringify({ allowUnsignedExtensions: true, arrowLosslessConversion: true, maximumThreads: 1, query: { castBigIntToDouble: false } });
     const [openStatus, openData, openSize] = callSRet(module, 'duckdb_web_open', ['string'], [config]);
     if (openStatus !== 0) {
         postMessage({ type: 'log', msg: `Open failed: ${openSize > 0 ? readString(module, openData, openSize) : 'unknown'}`, cls: 'err' });
@@ -237,6 +241,12 @@ async function init() {
     }
     if (failed.length > 0) {
         postMessage({ type: 'log', msg: `Failed to load extensions: ${failed.join(', ')}`, cls: 'err' });
+    }
+
+    // Bump thread count after extensions are loaded so queries can run in parallel.
+    if (threadCount > 1) {
+        const r = await runQueryAsync(`SET threads=${threadCount}`);
+        if (!r.ok) console.error(`[worker] SET threads=${threadCount} failed:`, r.error);
     }
 
     // Log memory info for debugging
