@@ -430,9 +430,6 @@ function formatTimestamp(value: any, unit: "s" | "ms" | "us" | "ns", tz: string 
   } else if (typeof value === "number") {
     if (value === Infinity) return "infinity";
     if (value === -Infinity) return "-infinity";
-    // Arrow converts timestamp infinity (max int64 microseconds) to milliseconds
-    // which exceeds safe integer range but doesn't become JS Infinity
-    if (Math.abs(value) > 9.2e15) return value > 0 ? "infinity" : "-infinity";
     v = BigInt(Math.round(value));
   } else {
     return String(value);
@@ -793,23 +790,27 @@ function formatArrowValue(value: any, field?: any): string {
   // Map: {key1=value1, key2=value2}
   if (typeStr.startsWith("Map")) {
     try {
+      // Arrow Map's toJSON() returns {key1: value1, key2: value2}
+      if (typeof value.toJSON === "function") {
+        const obj = value.toJSON();
+        const entries = Object.entries(obj);
+        if (entries.length === 0) return "{}";
+        const parts = entries.map(([k, v]) => {
+          const fv = v === null || v === undefined ? "NULL" : formatNestedValue(v);
+          return `${k}=${fv}`;
+        });
+        return `{${parts.join(", ")}}`;
+      }
+      // Fallback: iterate entries
       const entries: string[] = [];
       const len = value.length ?? 0;
       for (let i = 0; i < len; i++) {
         const entry = value.get(i);
         if (!entry) continue;
-        let k: any, v: any;
-        if (typeof entry.toJSON === "function") {
-          const json = entry.toJSON();
-          k = json.key ?? json.keys ?? Object.values(json)[0];
-          v = json.value ?? json.values ?? Object.values(json)[1];
-        } else {
-          k = entry.key ?? entry.get?.("key") ?? entry.get?.(0);
-          v = entry.value ?? entry.get?.("value") ?? entry.get?.(1);
-        }
-        const fk = k === null || k === undefined ? "NULL" : formatNestedValue(k);
-        const fv = v === null || v === undefined ? "NULL" : formatNestedValue(v);
-        entries.push(`${fk}=${fv}`);
+        const json = typeof entry.toJSON === "function" ? entry.toJSON() : entry;
+        const k = json.key ?? Object.keys(json)[0];
+        const v = json.value ?? Object.values(json)[0];
+        entries.push(`${formatNestedValue(k)}=${formatNestedValue(v)}`);
       }
       return `{${entries.join(", ")}}`;
     } catch {
@@ -885,7 +886,9 @@ function formatArrowValue(value: any, field?: any): string {
         // Nested vector (list of lists, list of structs)
         parts.push(formatArrowValue(item));
       } else if (syntheticField) {
-        parts.push(formatCellValue(item, undefined, syntheticField));
+        const formatted = formatCellValue(item, undefined, syntheticField);
+        // DuckDB shows empty strings as '' inside arrays
+        parts.push(formatted === "" ? "''" : formatted);
       } else {
         parts.push(formatNestedValue(item));
       }
@@ -932,6 +935,8 @@ function formatNestedValue(val: any): string {
   if (typeof val === "bigint") return val.toString();
   if (typeof val === "boolean") return val ? "true" : "false";
   if (typeof val === "number") return val.toString();
+  // DuckDB shows empty strings as '' inside arrays/structs
+  if (typeof val === "string" && val === "") return "''";
   return String(val);
 }
 
