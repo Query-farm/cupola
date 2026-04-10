@@ -55,6 +55,7 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
     if (value.__uint128 !== undefined) return (value.__uint128 as bigint).toString();
     if (value.__decimal128 !== undefined) return formatDecimal(value.__decimal128, value.scale ?? 0);
     if (value.__uuid !== undefined) return formatUUID(value.__uuid);
+    if (value.__interval !== undefined) return formatInterval(value.__interval);
     if (value.__timeTz !== undefined) {
       const { micros, offsetSecs } = value.__timeTz;
       const timeStr = formatTimeValue(micros, "us", false);
@@ -70,21 +71,21 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
     }
   }
 
-  // Binary / Uint8Array → check for extension types first, then [binary]
+  // Binary / Uint8Array → check for extension types first, then format as blob
   if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+    const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
     if (field) {
       try {
         const extMeta = field.metadata?.get?.("ARROW:extension:metadata");
         if (extMeta) {
           const typeName = JSON.parse(extMeta)?.type_name;
-          if (typeName === "bignum" || typeName === "varint") {
-            const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
-            return formatBignum(bytes);
-          }
+          if (typeName === "bignum" || typeName === "varint") return formatBignum(bytes);
+          if (typeName === "bit") return formatBitString(bytes);
         }
       } catch { /* ignore */ }
     }
-    return "[binary]";
+    // BLOB: format as DuckDB hex string
+    return formatBlob(bytes);
   }
 
   // Arrow field — precise type dispatch
@@ -137,6 +138,11 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
     if (typeStr.startsWith("Time")) {
       const hasNs = typeStr.includes("NANOSECOND") || typeStr.includes("Nanosecond");
       return formatTimeValue(value, hasNs ? "ns" : "us", false);
+    }
+
+    // Interval
+    if (typeStr.startsWith("Interval")) {
+      return formatInterval(value);
     }
 
     // Int128 types (Hugeint, UHugeint) — Arrow gives us a Uint32Array
@@ -209,16 +215,20 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
 
   // Object — geometry, struct, arrays, Date, etc.
   if (typeof value === "object" && value !== null) {
-    // GeoJSON geometry objects have a "type" string like "Point", "Polygon", etc.
-    // AND a "coordinates" array. Don't match Arrow Vectors which also have .type.
+    // GeoJSON geometry objects
     if (value.coordinates && typeof value.type === "string" &&
         ["Point", "MultiPoint", "LineString", "MultiLineString", "Polygon", "MultiPolygon", "GeometryCollection"].includes(value.type)) {
       return "[geometry]";
     }
     if (value instanceof Date) return formatDateFromDays(Math.floor(value.getTime() / 86400000));
-    // Arrow Vector/List objects — format as DuckDB-style array/struct
+    // Arrow Vector objects with .toArray() — lists, maps, vectors
     if (typeof value.toArray === "function") {
-      return formatArrowValue(value);
+      return formatArrowValue(value, field);
+    }
+    // Plain JS objects (including StructRow proxies) — format as DuckDB-style struct
+    if (!Array.isArray(value) && !(value instanceof Uint8Array) && !(value instanceof Int32Array) &&
+        !(value instanceof Float64Array) && !(value instanceof BigInt64Array)) {
+      return formatPlainStruct(value);
     }
     try { return JSON.stringify(value); } catch { return "[object]"; }
   }
@@ -577,10 +587,63 @@ function formatTimeValue(value: any, unit: "us" | "ns", hasTz: boolean): string 
 
 /** Format an interval value. */
 function formatInterval(value: any): string {
+  let months = 0, days = 0, micros = 0;
+
   if (typeof value === "object" && value !== null) {
-    try { return JSON.stringify(value); } catch {}
+    months = value.months ?? value[0] ?? 0;
+    days = value.days ?? value[1] ?? 0;
+    const ns = value.nanoseconds ?? value[2] ?? 0;
+    micros = typeof ns === "bigint" ? Number(ns / 1000n) : Math.floor(Number(ns) / 1000);
   }
-  return String(value);
+
+  const parts: string[] = [];
+  const years = Math.floor(months / 12);
+  const remainMonths = months % 12;
+  if (years !== 0) parts.push(`${years} year${years !== 1 ? "s" : ""}`);
+  if (remainMonths !== 0) parts.push(`${remainMonths} month${remainMonths !== 1 ? "s" : ""}`);
+  if (days !== 0) parts.push(`${days} day${days !== 1 ? "s" : ""}`);
+
+  // Time component from microseconds
+  const absMicros = Math.abs(micros);
+  const hours = Math.floor(absMicros / 3600000000);
+  const mins = Math.floor((absMicros % 3600000000) / 60000000);
+  const secs = Math.floor((absMicros % 60000000) / 1000000);
+  const fracUs = absMicros % 1000000;
+  const sign = micros < 0 ? "-" : "";
+  let timeStr = `${sign}${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  if (fracUs > 0) {
+    timeStr += "." + String(fracUs).padStart(6, "0").replace(/0+$/, "");
+  }
+
+  if (parts.length === 0 && micros === 0) return "00:00:00";
+  if (parts.length > 0 && micros === 0) return parts.join(" ") + " 00:00:00";
+  if (parts.length === 0) return timeStr;
+  return parts.join(" ") + " " + timeStr;
+}
+
+/** Format DuckDB BIT extension type — first byte is padding count (bits to skip at start). */
+function formatBitString(bytes: Uint8Array): string {
+  if (bytes.length < 2) return "";
+  const padding = bytes[0];
+  let bits = "";
+  for (let i = 1; i < bytes.length; i++) {
+    bits += bytes[i].toString(2).padStart(8, "0");
+  }
+  // Remove padding bits from the start
+  return bits.slice(padding);
+}
+
+/** Format BLOB as DuckDB-style hex string — printable ASCII shown as-is, others as \xHH. */
+function formatBlob(bytes: Uint8Array): string {
+  let result = "";
+  for (const b of bytes) {
+    if (b >= 32 && b < 127 && b !== 92) { // printable ASCII except backslash
+      result += String.fromCharCode(b);
+    } else {
+      result += "\\x" + b.toString(16).padStart(2, "0");
+    }
+  }
+  return result;
 }
 
 // ============================================================================
@@ -688,48 +751,43 @@ function readInt128(bytes: Uint8Array, signed: boolean): bigint {
 }
 
 /** Format an Arrow Vector value (List, Struct, Map) in DuckDB's display style. */
-function formatArrowValue(value: any): string {
-  // Check if it's a struct-like object (has named fields but toArray gives child vectors)
-  const type = value.type;
+function formatArrowValue(value: any, field?: any): string {
+  const type = value.type ?? field?.type;
   const typeStr = type?.toString() || "";
 
   // Struct: {'field': value, ...}
   if (typeStr.startsWith("Struct")) {
-    const children = type.children || [];
-    const parts: string[] = [];
-    for (let i = 0; i < children.length; i++) {
-      const name = children[i].name;
-      const child = value.get(i) ?? value.get(name);
-      const formatted = child === null || child === undefined ? "NULL" : formatNestedValue(child);
-      parts.push(`'${name}': ${formatted}`);
-    }
-    return `{${parts.join(", ")}}`;
+    try {
+      const obj = typeof value.toJSON === "function" ? value.toJSON() : value;
+      return formatPlainStruct(obj);
+    } catch { /* fall through */ }
   }
 
   // Map: {key1=value1, key2=value2}
   if (typeStr.startsWith("Map")) {
     try {
-      const arr = value.toArray();
-      const parts: string[] = [];
-      for (const entry of arr) {
-        const k = entry?.key ?? entry?.get?.(0);
-        const v = entry?.value ?? entry?.get?.(1);
+      const entries: string[] = [];
+      for (let i = 0; i < value.length; i++) {
+        const entry = value.get(i);
+        if (!entry) continue;
+        const k = entry.key ?? entry.get?.(0) ?? entry.get?.("key");
+        const v = entry.value ?? entry.get?.(1) ?? entry.get?.("value");
         const fk = k === null || k === undefined ? "NULL" : formatNestedValue(k);
         const fv = v === null || v === undefined ? "NULL" : formatNestedValue(v);
-        parts.push(`${fk}=${fv}`);
+        entries.push(`${fk}=${fv}`);
       }
-      return `{${parts.join(", ")}}`;
+      return `{${entries.join(", ")}}`;
     } catch {
       return "{}";
     }
   }
 
-  // List/Array: [val1, val2, ...]
+  // List/FixedSizeList/Array: [val1, val2, ...]
   try {
-    const arr = value.toArray();
+    const len = value.length ?? value.numRows ?? 0;
     const parts: string[] = [];
-    for (let i = 0; i < arr.length; i++) {
-      const item = arr[i];
+    for (let i = 0; i < len; i++) {
+      const item = value.get(i);
       if (item === null || item === undefined) {
         parts.push("NULL");
       } else {
@@ -742,17 +800,37 @@ function formatArrowValue(value: any): string {
   }
 }
 
+/** Format a plain JS object as DuckDB-style struct: {'key': value, ...} */
+function formatPlainStruct(obj: any): string {
+  const entries = Object.entries(obj);
+  const parts = entries.map(([k, v]) => {
+    const formatted = v === null || v === undefined ? "NULL" : formatNestedValue(v);
+    return `'${k}': ${formatted}`;
+  });
+  return `{${parts.join(", ")}}`;
+}
+
 /** Format a nested value inside an array/struct for DuckDB-style display. */
 function formatNestedValue(val: any): string {
   if (val === null || val === undefined) return "NULL";
   if (typeof val === "object" && val !== null) {
+    if (val.__rawDays !== undefined) return formatDateFromDays(val.__rawDays);
+    if (val.__int128 !== undefined) return (val.__int128 as bigint).toString();
+    if (val.__uint128 !== undefined) return (val.__uint128 as bigint).toString();
+    if (val.__timeTz !== undefined) return formatCellValue(val);
+    if (val.__uuid !== undefined) return formatUUID(val.__uuid);
     if (val instanceof Uint8Array) return "[binary]";
     if (typeof val.toArray === "function") return formatArrowValue(val);
     if (val instanceof Date) return formatDateFromDays(Math.floor(val.getTime() / 86400000));
+    // Plain struct object
+    if (!Array.isArray(val) && !(val instanceof Int32Array) && !(val instanceof Float64Array)) {
+      return formatPlainStruct(val);
+    }
     try { return JSON.stringify(val); } catch { return "[object]"; }
   }
   if (typeof val === "bigint") return val.toString();
   if (typeof val === "boolean") return val ? "true" : "false";
+  if (typeof val === "number") return val.toString();
   return String(val);
 }
 
@@ -835,6 +913,30 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
   if (!column) return null;
 
   const typeStr = column.type?.toString() || "";
+
+  // Interval<MONTH_DAY_NANO>: read raw 16-byte struct (4+4+8) from data buffer
+  if (typeStr.includes("Interval")) {
+    const chunk = column.data?.[0] ?? column.data;
+    if (chunk?.values) {
+      const idx = row - (chunk.offset ?? 0);
+      const nullBitmap = chunk.nullBitmap;
+      if (nullBitmap && nullBitmap.length > 0) {
+        const byteIdx = idx >> 3;
+        const bitIdx = idx & 7;
+        if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
+      }
+      // MONTH_DAY_NANO: 16 bytes per value — int32 months, int32 days, int64 nanoseconds
+      const byteOffset = idx * 16;
+      const dv = new DataView(chunk.values.buffer, chunk.values.byteOffset + byteOffset, 16);
+      return {
+        __interval: {
+          months: dv.getInt32(0, true),
+          days: dv.getInt32(4, true),
+          nanoseconds: dv.getBigInt64(8, true),
+        }
+      };
+    }
+  }
 
   // FixedSizeBinary extension types (arrow_lossless_conversion=true):
   // hugeint, uhugeint, time_tz, uuid
