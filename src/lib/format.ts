@@ -76,16 +76,7 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
     }
     if (value.__timeTz !== undefined) {
       const { micros, offsetSecs } = value.__timeTz;
-      const timeStr = formatTimeValue(micros, "us", false);
-      const absOff = Math.abs(offsetSecs);
-      const offH = Math.floor(absOff / 3600);
-      const offM = Math.floor((absOff % 3600) / 60);
-      const offS = absOff % 60;
-      const offSign = offsetSecs >= 0 ? "+" : "-";
-      let offStr = `${offSign}${String(offH).padStart(2, "0")}`;
-      if (offM > 0 || offS > 0) offStr += `:${String(offM).padStart(2, "0")}`;
-      if (offS > 0) offStr += `:${String(offS).padStart(2, "0")}`;
-      return `${timeStr}${offStr}`;
+      return `${formatTimeValue(micros, "us", false)}${formatTzOffset(offsetSecs)}`;
     }
   }
 
@@ -222,18 +213,8 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
     return value.toString();
   }
 
-  // Number — format without locale commas
-  if (typeof value === "number") {
-    // Use scientific notation for extreme values (like DuckDB does for float/double)
-    if (Number.isFinite(value) && !Number.isInteger(value)) {
-      const abs = Math.abs(value);
-      if (abs >= 1e15 || (abs > 0 && abs < 1e-4)) {
-        return value.toString(); // JS toString() uses scientific notation for these ranges
-      }
-    }
-    if (Number.isInteger(value)) return value.toString();
-    return value.toString();
-  }
+  // Number — JS toString() already handles scientific notation for extreme values
+  if (typeof value === "number") return value.toString();
 
   // Object — geometry, struct, arrays, Date, etc.
   if (typeof value === "object" && value !== null) {
@@ -492,83 +473,47 @@ function formatTimestamp(value: any, unit: "s" | "ms" | "us" | "ns", tz: string 
     }
   }
 
-  const hour = Number(remainder / nsPerHour);
-  const minute = Number((remainder % nsPerHour) / nsPerMinute);
-  const second = Number((remainder % nsPerMinute) / nsPerSecond);
-  const fracNs = Number(remainder % nsPerSecond);
-
-  const { year, month, day } = civilFromDays(days);
-  const bc = year <= 0;
-  const displayYear = bc ? 1 - year : year;
-  const yStr = displayYear < 10000 ? String(displayYear).padStart(4, "0") : String(displayYear);
-  const bcStr = bc ? " (BC)" : "";
-  const dateStr = `${yStr}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-  const timeStr = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`;
-
-  let fracStr = "";
-  if (fracDigits > 0 && fracNs > 0) {
-    const fullFrac = String(fracNs).padStart(9, "0"); // always 9 digits (nanoseconds)
-    const trimmed = fullFrac.slice(0, fracDigits).replace(/0+$/, "");
-    if (trimmed) fracStr = "." + trimmed;
+  /** Format nanoseconds (with known days/remainder split) into "YYYY-MM-DD (BC) HH:MM:SS.frac" */
+  function fmtNs(d: number, rem: bigint): string {
+    const h = Number(rem / nsPerHour);
+    const m = Number((rem % nsPerHour) / nsPerMinute);
+    const s = Number((rem % nsPerMinute) / nsPerSecond);
+    const fNs = Number(rem % nsPerSecond);
+    const dateStr = formatCivilDate(...Object.values(civilFromDays(d)) as [number, number, number]);
+    const timeStr = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    let fracStr = "";
+    if (fracDigits > 0 && fNs > 0) {
+      const trimmed = String(fNs).padStart(9, "0").slice(0, fracDigits).replace(/0+$/, "");
+      if (trimmed) fracStr = "." + trimmed;
+    }
+    return `${dateStr} ${timeStr}${fracStr}`;
   }
 
   // If timezone is specified (e.g., "UTC"), convert to local timezone
   if (tz) {
-    // Get the timezone offset in seconds using DuckDB's timezone setting
+    const hour = Number(remainder / nsPerHour);
+    const minute = Number((remainder % nsPerHour) / nsPerMinute);
+    const second = Number((remainder % nsPerMinute) / nsPerSecond);
     const tzName = _duckdbTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
     const offsetSecs = getTimezoneOffsetSeconds(tzName, days, hour, minute, second);
 
     // Apply offset to the UTC nanoseconds
-    const offsetNs = BigInt(offsetSecs) * nsPerSecond;
-    const localNs = totalNs + offsetNs;
-
-    // Recalculate days and time from local nanoseconds
+    const localNs = totalNs + BigInt(offsetSecs) * nsPerSecond;
     let localDays: number;
     let localRemainder: bigint;
-    if (localNs >= BigInt(0)) {
+    if (localNs >= 0n) {
       localDays = Number(localNs / nsPerDay);
       localRemainder = localNs % nsPerDay;
     } else {
       localDays = Number(localNs / nsPerDay);
       localRemainder = localNs % nsPerDay;
-      if (localRemainder < BigInt(0)) {
-        localDays--;
-        localRemainder += nsPerDay;
-      }
+      if (localRemainder < 0n) { localDays--; localRemainder += nsPerDay; }
     }
 
-    const lHour = Number(localRemainder / nsPerHour);
-    const lMinute = Number((localRemainder % nsPerHour) / nsPerMinute);
-    const lSecond = Number((localRemainder % nsPerMinute) / nsPerSecond);
-    const lFracNs = Number(localRemainder % nsPerSecond);
-
-    const { year: lYear, month: lMonth, day: lDay } = civilFromDays(localDays);
-    const lBc = lYear <= 0;
-    const lDisplayYear = lBc ? 1 - lYear : lYear;
-    const lYStr = lDisplayYear < 10000 ? String(lDisplayYear).padStart(4, "0") : String(lDisplayYear);
-    const lBcStr = lBc ? " (BC)" : "";
-    const lDateStr = `${lYStr}-${String(lMonth).padStart(2, "0")}-${String(lDay).padStart(2, "0")}`;
-    const lTimeStr = `${String(lHour).padStart(2, "0")}:${String(lMinute).padStart(2, "0")}:${String(lSecond).padStart(2, "0")}`;
-
-    let lFracStr = "";
-    if (fracDigits > 0 && lFracNs > 0) {
-      const fullFrac = String(lFracNs).padStart(9, "0");
-      const trimmed = fullFrac.slice(0, fracDigits).replace(/0+$/, "");
-      if (trimmed) lFracStr = "." + trimmed;
-    }
-
-    // Format offset as ±HH[:MM]
-    const absOff = Math.abs(offsetSecs);
-    const offH = Math.floor(absOff / 3600);
-    const offM = Math.floor((absOff % 3600) / 60);
-    const offSign = offsetSecs >= 0 ? "+" : "-";
-    const offStr = offM > 0 ? `${offSign}${String(offH).padStart(2, "0")}:${String(offM).padStart(2, "0")}`
-      : `${offSign}${String(offH).padStart(2, "0")}`;
-
-    return `${lDateStr}${lBcStr} ${lTimeStr}${lFracStr}${offStr}`;
+    return `${fmtNs(localDays, localRemainder)}${formatTzOffset(offsetSecs)}`;
   }
 
-  return `${dateStr}${bcStr} ${timeStr}${fracStr}`;
+  return fmtNs(days, remainder);
 }
 
 // ============================================================================
@@ -682,11 +627,6 @@ function formatBlob(bytes: Uint8Array): string {
 }
 
 // ============================================================================
-// Exports for other modules
-// ============================================================================
-
-/** Check if a value is null/undefined. */
-// ============================================================================
 // Timezone offset calculation (for timestamp_tz display)
 // ============================================================================
 
@@ -769,7 +709,6 @@ function getDuckDBExtensionType(field: any): string | null {
   return null;
 }
 
-/** Format a 16-byte FixedSizeBinary as a signed or unsigned 128-bit integer. */
 /** Format a float/double matching DuckDB CLI: 42.0 for whole numbers, nan/inf lowercase. */
 function formatFloat(value: number, sigFigs: number): string {
   if (Number.isNaN(value)) return "nan";
@@ -1019,6 +958,19 @@ function formatFixedBinaryInt128(bytes: Uint8Array, signed: boolean): string {
   return raw.toString();
 }
 
+/** Format a timezone offset in seconds as ±HH[:MM[:SS]] (omitting zero-value MM/SS components). */
+function formatTzOffset(offsetSecs: number): string {
+  const absOff = Math.abs(offsetSecs);
+  const offH = Math.floor(absOff / 3600);
+  const offM = Math.floor((absOff % 3600) / 60);
+  const offS = absOff % 60;
+  const sign = offsetSecs >= 0 ? "+" : "-";
+  let s = `${sign}${String(offH).padStart(2, "0")}`;
+  if (offM > 0 || offS > 0) s += `:${String(offM).padStart(2, "0")}`;
+  if (offS > 0) s += `:${String(offS).padStart(2, "0")}`;
+  return s;
+}
+
 /** Format an 8-byte FixedSizeBinary as DuckDB's TIME WITH TIME ZONE.
  *  DuckDB packs time_tz as: bits[63:24] = microseconds, bits[23:0] = offset_encoded
  *  where offset_encoded = 57599 - offset_seconds (so UTC+00 = 57599, max = 115198) */
@@ -1026,19 +978,8 @@ function formatFixedBinaryTimeTz(bytes: Uint8Array): string {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, 8);
   const raw = dv.getBigUint64(0, true);
   const micros = Number(raw >> 24n);
-  const encodedOffset = Number(raw & 0xFFFFFFn);
-  const offsetSecs = 57599 - encodedOffset; // positive = east of UTC
-
-  const timeStr = formatTimeValue(micros, "us", false);
-  const absOff = Math.abs(offsetSecs);
-  const offH = Math.floor(absOff / 3600);
-  const offM = Math.floor((absOff % 3600) / 60);
-  const offS = absOff % 60;
-  const offSign = offsetSecs >= 0 ? "+" : "-";
-  let offStr = `${offSign}${String(offH).padStart(2, "0")}`;
-  if (offM > 0 || offS > 0) offStr += `:${String(offM).padStart(2, "0")}`;
-  if (offS > 0) offStr += `:${String(offS).padStart(2, "0")}`;
-  return `${timeStr}${offStr}`;
+  const offsetSecs = 57599 - Number(raw & 0xFFFFFFn);
+  return `${formatTimeValue(micros, "us", false)}${formatTzOffset(offsetSecs)}`;
 }
 
 /** Format a 16-byte FixedSizeBinary as a UUID string. */
@@ -1055,6 +996,14 @@ function formatUUID(bytes: Uint8Array): string {
  * - Dictionary/enum resolution (manual lookup when Arrow JS fails)
  * - Extension types (hugeint, uhugeint, time_tz as FixedSizeBinary)
  */
+/** Check if a row is null according to Arrow's null bitmap. Returns true if null. */
+function isArrowNull(nullBitmap: Uint8Array | null | undefined, idx: number): boolean {
+  if (!nullBitmap || nullBitmap.length === 0) return false;
+  const byteIdx = idx >> 3;
+  const bitIdx = idx & 7;
+  return byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0;
+}
+
 export function safeGetArrowValue(column: any, row: number, field?: any): any {
   if (!column) return null;
 
@@ -1065,12 +1014,7 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
     const chunk = column.data?.[0] ?? column.data;
     if (chunk?.values) {
       const idx = row - (chunk.offset ?? 0);
-      const nullBitmap = chunk.nullBitmap;
-      if (nullBitmap && nullBitmap.length > 0) {
-        const byteIdx = idx >> 3;
-        const bitIdx = idx & 7;
-        if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
-      }
+      if (isArrowNull(chunk.nullBitmap, idx)) return null;
       // MONTH_DAY_NANO: 16 bytes per value — int32 months, int32 days, int64 nanoseconds
       const byteOffset = idx * 16;
       const dv = new DataView(chunk.values.buffer, chunk.values.byteOffset + byteOffset, 16);
@@ -1101,12 +1045,7 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
       if (chunk) {
         const byteWidth = column.type?.byteWidth ?? (extTypeName === "time_tz" ? 8 : 16);
         const adjustedRow = row - (chunk.offset ?? 0);
-        const nullBitmap = chunk.nullBitmap;
-        if (nullBitmap && nullBitmap.length > 0) {
-          const byteIdx = adjustedRow >> 3;
-          const bitIdx = adjustedRow & 7;
-          if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
-        }
+        if (isArrowNull(chunk.nullBitmap, adjustedRow)) return null;
         const values = chunk.values;
         if (values) {
           const offset = adjustedRow * byteWidth;
@@ -1138,13 +1077,8 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
     const chunk = column.data?.[0] ?? column.data;
     if (chunk?.values instanceof Int32Array) {
       const idx = row - (chunk.offset ?? 0);
-      const nullBitmap = chunk.nullBitmap;
-      if (nullBitmap && nullBitmap.length > 0) {
-        const byteIdx = idx >> 3;
-        const bitIdx = idx & 7;
-        if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
-      }
-      if (chunk.nullCount > 0 && !nullBitmap) return null;
+      if (isArrowNull(chunk.nullBitmap, idx)) return null;
+      if (chunk.nullCount > 0 && !chunk.nullBitmap) return null;
       return { __rawDays: chunk.values[idx] };
     }
   }
@@ -1155,12 +1089,7 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
     const values = chunk?.values;
     if (values instanceof BigInt64Array) {
       const idx = row - (chunk.offset ?? 0);
-      const nullBitmap = chunk.nullBitmap;
-      if (nullBitmap && nullBitmap.length > 0) {
-        const byteIdx = idx >> 3;
-        const bitIdx = idx & 7;
-        if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
-      }
+      if (isArrowNull(chunk.nullBitmap, idx)) return null;
       return values[idx];
     }
   }
@@ -1170,12 +1099,7 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
     const chunk = column.data?.[0] ?? column.data;
     if (chunk) {
       const idx = row - (chunk.offset ?? 0);
-      const nullBitmap = chunk.nullBitmap;
-      if (nullBitmap && nullBitmap.length > 0) {
-        const byteIdx = idx >> 3;
-        const bitIdx = idx & 7;
-        if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
-      }
+      if (isArrowNull(chunk.nullBitmap, idx)) return null;
       const dictIdx = chunk.values?.[idx];
       if (dictIdx !== null && dictIdx !== undefined) {
         const dict = chunk.dictionary ?? column.data?.dictionary ?? column.dictionary;
@@ -1210,30 +1134,15 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
         const childValues = childChunk?.values;
         if (childValues instanceof BigInt64Array || childValues instanceof BigUint64Array) {
           const adj = row - (chunk.offset ?? 0);
-          // Null check for the list element itself
-          const nullBitmap = chunk.nullBitmap;
-          if (nullBitmap && nullBitmap.length > 0) {
-            const byteIdx = adj >> 3;
-            const bitIdx = adj & 7;
-            if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
-          }
+          if (isArrowNull(chunk.nullBitmap, adj)) return null;
           // Get list element offsets
           const offsets = chunk.valueOffsets;
           if (offsets) {
             const start = offsets[adj];
             const end = offsets[adj + 1];
-            const childNullBitmap = childChunk.nullBitmap;
             const items: (bigint | null)[] = [];
             for (let j = start; j < end; j++) {
-              if (childNullBitmap && childNullBitmap.length > 0) {
-                const byteIdx = j >> 3;
-                const bitIdx = j & 7;
-                if (byteIdx < childNullBitmap.length && (childNullBitmap[byteIdx] & (1 << bitIdx)) === 0) {
-                  items.push(null);
-                  continue;
-                }
-              }
-              items.push(childValues[j]);
+              items.push(isArrowNull(childChunk.nullBitmap, j) ? null : childValues[j]);
             }
             const childField = field?.type?.children?.[0] ?? null;
             return { __bigintList: items, field: childField };
@@ -1245,27 +1154,21 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
 
   try {
     return column.get(row);
-  } catch (getErr: any) {
+  } catch {
     // BigInt overflow — read raw value from underlying typed array
     try {
-    const chunk = column.data?.[0] ?? column.data;
-    const values = chunk?.values;
-    if (values instanceof BigInt64Array || values instanceof BigUint64Array) {
-      const idx = row - (chunk?.offset ?? 0);
-      if (idx >= 0 && idx < values.length) return values[idx];
-    }
-    if (values instanceof Uint32Array) {
-      const typeWidth = chunk?.type?.bitWidth;
-      if (typeWidth === 128) {
-        const wordsPerValue = 4;
-        const idx = (row - (chunk?.offset ?? 0)) * wordsPerValue;
-        if (idx >= 0 && idx + wordsPerValue <= values.length) {
-          return values.slice(idx, idx + wordsPerValue);
-        }
+      const chunk = column.data?.[0] ?? column.data;
+      const values = chunk?.values;
+      if (values instanceof BigInt64Array || values instanceof BigUint64Array) {
+        const idx = row - (chunk?.offset ?? 0);
+        if (idx >= 0 && idx < values.length) return values[idx];
       }
-    }
+      if (values instanceof Uint32Array && chunk?.type?.bitWidth === 128) {
+        const idx = (row - (chunk?.offset ?? 0)) * 4;
+        if (idx >= 0 && idx + 4 <= values.length) return values.slice(idx, idx + 4);
+      }
+    } catch { /* ignore */ }
     return null;
-    } catch { return null; }
   }
 }
 
