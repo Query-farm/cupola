@@ -60,69 +60,61 @@ let module = null;
 let connHdl = null;
 let wasmMemoryRef = null; // WebAssembly.Memory — captured during init
 
-function runQuery(sql) {
-    const [qStatus, qData, qSize] = callSRet(
-        module, 'duckdb_web_query_run', ['number', 'string'], [connHdl, sql]
-    );
-    if (qStatus !== 0 && qSize > 0) {
-        return { ok: false, error: readString(module, qData, qSize) };
-    }
-    return { ok: true, status: qStatus };
+// All query execution must be async + yield to the event loop between polls.
+// When DuckDB runs with multi-threading, pthread sub-workers may call
+// pthread_create, which proxies a "spawnThread" message back to the parent
+// worker. The parent must service that message via its event loop. If the
+// parent is sync-blocked inside a ccall (e.g. duckdb_web_query_run), the proxy
+// is never delivered and both threads deadlock waiting on each other.
+function yieldEventLoop() {
+    return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function runQueryWithResults(sql) {
-    const [qStatus, qData, qSize] = callSRet(
-        module, 'duckdb_web_query_run', ['number', 'string'], [connHdl, sql]
-    );
-    if (qStatus !== 0 && qSize > 0) {
-        return { ok: false, error: readString(module, qData, qSize) };
+async function collectAndConcatChunks(firstChunk) {
+    const chunks = [firstChunk];
+    while (true) {
+        await yieldEventLoop();
+        const [fStatus, fData, fSize] = callSRet(
+            module, 'duckdb_web_query_fetch_results', ['number'], [connHdl]
+        );
+        if (fStatus !== 0 || fData === 0 || fSize === 0) break;
+        chunks.push(new Uint8Array(module.HEAPU8.buffer, fData, fSize).slice());
     }
-    if (qData > 0 && qSize > 0) {
-        const arrowBuffer = new Uint8Array(qSize);
-        arrowBuffer.set(new Uint8Array(module.HEAPU8.buffer, qData, qSize));
-        return { ok: true, arrowBuffers: [arrowBuffer.buffer] };
+    const totalSize = chunks.reduce((s, c) => s + c.byteLength, 0);
+    const combined = new Uint8Array(totalSize);
+    let offset = 0;
+    for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.byteLength;
     }
-    return { ok: true };
+    return combined.buffer;
 }
 
-function runQueryPolling(sql) {
-    // Start pending query (allow_stream_result = false)
+async function runQueryAsync(sql, opts) {
+    const reportProgress = opts && opts.reportProgress;
+    const allowCancel = opts && opts.allowCancel;
+
     const [startStatus, startData, startSize] = callSRet(
         module, 'duckdb_web_pending_query_start', ['number', 'string', 'boolean'], [connHdl, sql, false]
     );
     if (startStatus !== 0 && startSize > 0) {
         return { ok: false, error: readString(module, startData, startSize) };
     }
-    // Start returned first chunk — collect all IPC messages and concatenate
+    // Start returned first chunk immediately — concat remaining and return.
     if (startData > 0 && startSize > 0) {
-        const chunks = [new Uint8Array(module.HEAPU8.buffer, startData, startSize).slice()];
-        // Fetch remaining IPC messages (record batches)
-        while (true) {
-            const [fStatus, fData, fSize] = callSRet(
-                module, 'duckdb_web_query_fetch_results', ['number'], [connHdl]
-            );
-            if (fStatus !== 0 || fData === 0 || fSize === 0) break;
-            chunks.push(new Uint8Array(module.HEAPU8.buffer, fData, fSize).slice());
-        }
-        // Concatenate all chunks into a single Arrow IPC stream
-        const totalSize = chunks.reduce((s, c) => s + c.byteLength, 0);
-        const combined = new Uint8Array(totalSize);
-        let offset = 0;
-        for (const chunk of chunks) {
-            combined.set(chunk, offset);
-            offset += chunk.byteLength;
-        }
-        return { ok: true, arrowBuffers: [combined.buffer] };
+        const firstChunk = new Uint8Array(module.HEAPU8.buffer, startData, startSize).slice();
+        return { ok: true, arrowBuffers: [await collectAndConcatChunks(firstChunk)] };
     }
 
-    // Poll until result or cancellation
-    var lastProgressPost = 0;
+    let lastProgressPost = 0;
     while (true) {
-        if (cancelFlag && Atomics.load(cancelFlag, 0) === 1) {
+        if (allowCancel && cancelFlag && Atomics.load(cancelFlag, 0) === 1) {
             module.ccall('duckdb_web_pending_query_cancel', 'boolean', ['number', 'string'], [connHdl, '']);
             Atomics.store(cancelFlag, 0, 0);
             return { ok: false, error: 'Query cancelled' };
         }
+
+        await yieldEventLoop();
 
         const [pollStatus, pollData, pollSize] = callSRet(
             module, 'duckdb_web_pending_query_poll', ['number', 'string'], [connHdl, '']
@@ -132,40 +124,20 @@ function runQueryPolling(sql) {
             return { ok: false, error: readString(module, pollData, pollSize) };
         }
 
-        // Poll returned result — collect and concatenate IPC messages
         if (pollData > 0 && pollSize > 0) {
-            const chunks = [new Uint8Array(module.HEAPU8.buffer, pollData, pollSize).slice()];
-            while (true) {
-                const [fStatus, fData, fSize] = callSRet(
-                    module, 'duckdb_web_query_fetch_results', ['number'], [connHdl]
-                );
-                if (fStatus !== 0 || fData === 0 || fSize === 0) break;
-                chunks.push(new Uint8Array(module.HEAPU8.buffer, fData, fSize).slice());
-            }
-            const totalSize = chunks.reduce((s, c) => s + c.byteLength, 0);
-            const combined = new Uint8Array(totalSize);
-            let offset = 0;
-            for (const chunk of chunks) {
-                combined.set(chunk, offset);
-                offset += chunk.byteLength;
-            }
-            return { ok: true, arrowBuffers: [combined.buffer] };
+            const firstChunk = new Uint8Array(module.HEAPU8.buffer, pollData, pollSize).slice();
+            return { ok: true, arrowBuffers: [await collectAndConcatChunks(firstChunk)] };
         }
 
-        // Not ready yet — report progress (throttled to ~7 updates/sec)
-        var now = performance.now();
-        if (now - lastProgressPost >= 150) {
-            var pct = module.ccall('duckdb_web_get_query_progress', 'number', ['number'], [connHdl]);
-            postMessage({ type: 'progress', percentage: pct });
-            lastProgressPost = now;
+        if (reportProgress) {
+            const now = performance.now();
+            if (now - lastProgressPost >= 150) {
+                const pct = module.ccall('duckdb_web_get_query_progress', 'number', ['number'], [connHdl]);
+                postMessage({ type: 'progress', percentage: pct });
+                lastProgressPost = now;
+            }
         }
     }
-}
-
-
-// Fallback: use synchronous query_run for statements that don't need cancellation
-function runStatement(sql) {
-    return runQuery(sql);
 }
 
 async function init() {
@@ -226,13 +198,21 @@ async function init() {
     // With -sMODULARIZE, sub-workers must explicitly invoke the factory to set up
     // the pthread message handler — loading duckdb-coi.js alone just defines it.
     const pthreadWorkerUrl = new URL('./wasm/duckdb-coi-pthread.js', self.location.href).href;
+    // Localhost dev server uses 1 thread to avoid Vite middleware issues with
+    // many concurrent pthread sub-worker fetches. Production CDN uses
+    // hardwareConcurrency. Multi-threaded init only works because the query
+    // execution path below uses async polling with event-loop yields — without
+    // those yields, pthread proxy messages from sub-workers would deadlock
+    // the parent worker.
+    const isLocal = self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1';
+    const threadCount = isLocal ? 1 : (navigator.hardwareConcurrency || 4);
     module = await DuckDB({
         locateFile: (path) => wasmBase + path,
         mainScriptUrlOrBlob: pthreadWorkerUrl,
-        pthreadPoolSize: 1,
+        pthreadPoolSize: threadCount,
     });
     console.log('[worker] Opening database...');
-    const config = JSON.stringify({ allowUnsignedExtensions: true, arrowLosslessConversion: true, maximumThreads: 1, query: { castBigIntToDouble: false } });
+    const config = JSON.stringify({ allowUnsignedExtensions: true, arrowLosslessConversion: true, maximumThreads: threadCount, query: { castBigIntToDouble: false } });
     const [openStatus, openData, openSize] = callSRet(module, 'duckdb_web_open', ['string'], [config]);
     if (openStatus !== 0) {
         postMessage({ type: 'log', msg: `Open failed: ${openSize > 0 ? readString(module, openData, openSize) : 'unknown'}`, cls: 'err' });
@@ -241,18 +221,18 @@ async function init() {
 
     connHdl = module.ccall('duckdb_web_connect', 'number', [], []);
 
-    runQuery("SET enable_progress_bar=true");
-    runQuery("SET enable_progress_bar_print=false");
-    runQuery("SET autoinstall_known_extensions=false");
-    runQuery("SET autoload_known_extensions=true");
-    runQuery("SET arrow_lossless_conversion=true");
+    await runQueryAsync("SET enable_progress_bar=true");
+    await runQueryAsync("SET enable_progress_bar_print=false");
+    await runQueryAsync("SET autoinstall_known_extensions=false");
+    await runQueryAsync("SET autoload_known_extensions=true");
+    await runQueryAsync("SET arrow_lossless_conversion=true");
     const workerBase = self.location.href.replace(/\/[^/]*$/, '');
-    runQuery(`SET custom_extension_repository='${workerBase}/extensions'`);
+    await runQueryAsync(`SET custom_extension_repository='${workerBase}/extensions'`);
 
     const exts = ['json', 'icu', 'autocomplete', 'spatial', 'vgi'];
     const failed = [];
     for (const ext of exts) {
-        const r = runQuery(`LOAD '${workerBase}/extensions/v1.5.1/wasm_threads/${ext}.duckdb_extension.wasm'`);
+        const r = await runQueryAsync(`LOAD '${workerBase}/extensions/v1.5.1/wasm_threads/${ext}.duckdb_extension.wasm'`);
         if (!r.ok) { console.error(`[ext] ${ext}: ${r.error}`); failed.push(ext); }
     }
     if (failed.length > 0) {
@@ -271,11 +251,20 @@ async function init() {
 // Queue messages that arrive before the module is ready
 var pendingMessages = [];
 var moduleReady = false;
+// Serialize message handling — async handlers must run one at a time so that
+// concurrent queries don't interleave on the same DuckDB connection.
+var messageQueue = Promise.resolve();
+
+function enqueueMessage(data) {
+    messageQueue = messageQueue.then(() => handleMessage(data)).catch((err) => {
+        console.error('[worker] handleMessage error:', err);
+    });
+}
 
 function processPendingMessages() {
     moduleReady = true;
     for (var i = 0; i < pendingMessages.length; i++) {
-        handleMessage(pendingMessages[i]);
+        enqueueMessage(pendingMessages[i]);
     }
     pendingMessages = [];
 }
@@ -298,13 +287,13 @@ onmessage = function(e) {
         pendingMessages.push(data);
         return;
     }
-    handleMessage(data);
+    enqueueMessage(data);
 };
 
-function handleMessage(data) {
+async function handleMessage(data) {
     if (data.type === 'complete') {
         const text = data.text;
-        const r = runQueryWithResults("CALL sql_auto_complete('" + text.replace(/'/g, "''") + "')");
+        const r = await runQueryAsync("CALL sql_auto_complete('" + text.replace(/'/g, "''") + "')");
         if (r.ok && r.arrowBuffers) {
             postMessage({ type: 'completions', arrowBuffers: r.arrowBuffers }, r.arrowBuffers);
         } else {
@@ -315,7 +304,7 @@ function handleMessage(data) {
     if (data.type === 'query') {
         const sql = data.sql;
         const qid = data.queryId;
-        const r = runQueryPolling(sql);
+        const r = await runQueryAsync(sql, { reportProgress: true, allowCancel: true });
         if (r.arrowBuffers) {
             postMessage({ type: 'result', ok: true, arrowBuffers: r.arrowBuffers, queryId: qid }, r.arrowBuffers);
         } else {
@@ -324,10 +313,9 @@ function handleMessage(data) {
         return;
     }
     if (data.type === 'query-sync') {
-        // Synchronous query — returns single Arrow IPC buffer (not streaming chunks)
         const sql = data.sql;
         const qid = data.queryId;
-        const r = runQueryWithResults(sql);
+        const r = await runQueryAsync(sql);
         if (r.arrowBuffers) {
             postMessage({ type: 'result', ok: true, arrowBuffers: r.arrowBuffers, queryId: qid }, r.arrowBuffers);
         } else {
