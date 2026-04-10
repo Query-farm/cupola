@@ -1608,24 +1608,53 @@ function initShell(
               "medium_enum": ["enum_0", "enum_299"],
               "large_enum": ["enum_0", "enum_69999"],
               "time_ns": ["00:00:00", "24:00:00"],
+              "interval": ["00:00:00", "83 years 3 months 999 days 00:16:39.999999"],
+              "bit": ["0010001001011100010101011010111", "10101"],
+              "blob": ["thisisalongblob\\x00withnullbytes", "\\x00\\x00\\x00a"],
+              "union": ["Frank", "5"],
+              "struct": ["{'a': NULL, 'b': NULL}", "{'a': 42, 'b': 🦆🦆🦆🦆🦆🦆}"],
+              "struct_of_arrays": ["{'a': NULL, 'b': NULL}", "{'a': [42, 999, NULL, NULL, -42], 'b': [🦆🦆🦆🦆🦆🦆, goose, NULL, '']}"],
+              "array_of_structs": ["[]", "[{'a': NULL, 'b': NULL}, {'a': 42, 'b': 🦆🦆🦆🦆🦆🦆}, NULL]"],
+              "map": ["{}", "{key1=🦆🦆🦆🦆🦆🦆, key2=goose}"],
+              "int_array": ["[]", "[42, 999, NULL, NULL, -42]"],
+              "double_array": ["[]", "[42.0, nan, inf, -inf, NULL, -42.0]"],
+              "date_array": ["[]", "[1970-01-01, infinity, -infinity, NULL, 2022-05-12]"],
+              "timestamp_array": ["[]", "['1970-01-01 00:00:00', infinity, -infinity, NULL, '2022-05-12 16:23:45']"],
+              "timestamptz_array": ["[]", "['1969-12-31 19:00:00-05', infinity, -infinity, NULL, '2022-05-12 19:23:45-04']"],
+              "varchar_array": ["[]", "[🦆🦆🦆🦆🦆🦆, goose, NULL, '']"],
+              "nested_int_array": ["[]", "[[], [42, 999, NULL, NULL, -42], NULL, [], [42, 999, NULL, NULL, -42]]"],
+              "fixed_int_array": ["[NULL, 2, 3]", "[4, 5, 6]"],
+              "fixed_varchar_array": ["[a, NULL, c]", "[d, e, f]"],
+              "fixed_nested_int_array": ["[[NULL, 2, 3], NULL, [NULL, 2, 3]]", "[[4, 5, 6], [NULL, 2, 3], [4, 5, 6]]"],
+              "fixed_nested_varchar_array": ["[[a, NULL, c], NULL, [a, NULL, c]]", "[[d, e, f], [a, NULL, c], [d, e, f]]"],
+              "fixed_struct_array": ["[{'a': NULL, 'b': NULL}, {'a': 42, 'b': 🦆🦆🦆🦆🦆🦆}, {'a': NULL, 'b': NULL}]", "[{'a': 42, 'b': 🦆🦆🦆🦆🦆🦆}, {'a': NULL, 'b': NULL}, {'a': 42, 'b': 🦆🦆🦆🦆🦆🦆}]"],
+              "struct_of_fixed_array": ["{'a': [NULL, 2, 3], 'b': [a, NULL, c]}", "{'a': [4, 5, 6], 'b': [d, e, f]}"],
+              "fixed_array_of_int_list": ["[[], [42, 999, NULL, NULL, -42], []]", "[[42, 999, NULL, NULL, -42], [], [42, 999, NULL, NULL, -42]]"],
+              "list_of_fixed_int_array": ["[[NULL, 2, 3], [4, 5, 6], [NULL, 2, 3]]", "[[4, 5, 6], [NULL, 2, 3], [4, 5, 6]]"],
             };
             let passed = 0, failed = 0;
             for (let c = 0; c < fields.length; c++) {
               const name = fields[c].name;
               const exp = expected[name];
-              if (!exp) continue; // skip complex/array/struct types
+              if (!exp) continue;
               for (let r = 0; r < 2; r++) {
-                const val = safeGet(table.getChildAt(c), r, fields[c]);
-                const got = val === null || val === undefined ? "NULL" : formatVal(val, fields[c]);
-                if (got === exp[r]) {
-                  passed++;
-                } else {
+                try {
+                  const val = safeGet(table.getChildAt(c), r, fields[c]);
+                  const got = val === null || val === undefined ? "NULL" : formatVal(val, fields[c]);
+                  if (got === exp[r]) {
+                    passed++;
+                  } else {
+                    failed++;
+                    const typeInfo = fields[c].type?.toString() || "?";
+                    const valType = val === null ? "null" : typeof val === "object" ? val.constructor?.name || "object" : typeof val;
+                    const meta = fields[c].metadata ? JSON.stringify(Object.fromEntries(fields[c].metadata)) : "none";
+                    writeln(`  FAIL ${name}[${r}]: expected "${exp[r]}" got "${got}"`, "31");
+                    console.log(`FAIL ${name}[${r}]: expected "${exp[r]}" got "${got}" | arrowType="${typeInfo}" valType=${valType} meta=${meta} rawVal=${val instanceof Uint32Array ? Array.from(val).join(",") : String(val).slice(0, 50)}`);
+                  }
+                } catch (e: any) {
                   failed++;
-                  const typeInfo = fields[c].type?.toString() || "?";
-                  const valType = val === null ? "null" : typeof val === "object" ? val.constructor?.name || "object" : typeof val;
-                  const meta = fields[c].metadata ? JSON.stringify(Object.fromEntries(fields[c].metadata)) : "none";
-                  writeln(`  FAIL ${name}[${r}]: expected "${exp[r]}" got "${got}"`, "31");
-                  console.log(`FAIL ${name}[${r}]: expected "${exp[r]}" got "${got}" | arrowType="${typeInfo}" valType=${valType} meta=${meta} rawVal=${val instanceof Uint32Array ? Array.from(val).join(",") : String(val).slice(0, 50)}`);
+                  writeln(`  ERROR ${name}[${r}]: ${e.message}`, "31");
+                  console.log(`ERROR ${name}[${r}]: ${e.message}`);
                 }
               }
             }
