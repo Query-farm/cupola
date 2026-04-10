@@ -389,6 +389,10 @@ function formatCivilDate(year: number, month: number, day: number): string {
 
 /** Format a date from days since Unix epoch. */
 function formatDateFromDays(days: number): string {
+  // DuckDB sentinel values for date infinity
+  // infinity = max_date + 1 = 2147483647, -infinity = min_date - 1 = -2147483647
+  if (days >= 2147483647) return "infinity";
+  if (days <= -2147483647) return "-infinity";
   const { year, month, day } = civilFromDays(days);
   return formatCivilDate(year, month, day);
 }
@@ -424,10 +428,15 @@ function formatTimestamp(value: any, unit: "s" | "ms" | "us" | "ns", tz: string 
   if (typeof value === "bigint") {
     v = value;
   } else if (typeof value === "number") {
+    if (value === Infinity) return "infinity";
+    if (value === -Infinity) return "-infinity";
     v = BigInt(Math.round(value));
   } else {
     return String(value);
   }
+  // DuckDB timestamp infinity sentinels (max/min int64)
+  if (v >= 9223372036854775807n) return "infinity";
+  if (v <= -9223372036854775808n) return "-infinity";
 
   // Convert to nanoseconds internally to preserve max precision
   let totalNs: bigint;
@@ -808,9 +817,39 @@ function formatArrowValue(value: any, field?: any): string {
     const syntheticField = elementField ?? (innerType ? { type: innerType, metadata: null } : null);
     const parts: string[] = [];
     for (let i = 0; i < len; i++) {
-      const item = value.get(i);
+      let item: any;
+      try {
+        item = value.get(i);
+      } catch {
+        // BigInt overflow in nested values — read raw from buffer
+        const chunk = value.data?.[0] ?? value.data;
+        const vals = chunk?.values;
+        if (vals instanceof BigInt64Array || vals instanceof BigUint64Array) {
+          const idx = i - (chunk?.offset ?? 0);
+          item = vals[idx];
+        } else {
+          parts.push("???");
+          continue;
+        }
+      }
       if (item === null || item === undefined) {
         parts.push("NULL");
+      } else if (typeof item === "object" && typeof item.toJSON === "function" && !Array.isArray(item)) {
+        // Could be struct row proxy or FixedSizeList — check toJSON result
+        try {
+          const json = item.toJSON();
+          const keys = Object.keys(json);
+          // Empty object from empty array/list
+          if (keys.length === 0 && typeof item.length === "number") {
+            parts.push("[]");
+          } else if (keys.length === 0 || (keys.length > 0 && keys.every(k => /^\d+$/.test(k)))) {
+            // FixedSizeList — format as array
+            const arrParts = keys.map(k => json[k] === null || json[k] === undefined ? "NULL" : formatNestedValue(json[k]));
+            parts.push(`[${arrParts.join(", ")}]`);
+          } else {
+            parts.push(formatPlainStruct(json));
+          }
+        } catch { parts.push(String(item)); }
       } else if (typeof item === "object" && typeof item.toArray === "function") {
         // Nested vector (list of lists, list of structs)
         parts.push(formatArrowValue(item));
