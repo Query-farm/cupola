@@ -20,6 +20,7 @@ import { GeometryViewer } from "./GeometryViewer";
 interface Props {
   columnNames: string[];
   columnInfo?: ColumnInfo[];
+  arrowFields?: any[];
   rows: Record<string, any>[];
   startRow?: number;
   /** Remove outer border and rounding for embedding in full-bleed containers. */
@@ -40,8 +41,8 @@ function isNumericType(duckdbType: string): boolean {
   return NUMERIC_TYPES.has(base);
 }
 
-export function DataGrid({ columnNames, columnInfo, rows, startRow = 0, borderless }: Props) {
-  // Build a map of column name → ColumnInfo for type lookups
+export function DataGrid({ columnNames, columnInfo, arrowFields, rows, startRow = 0, borderless }: Props) {
+  // Build maps for type lookups
   const infoByName = useMemo(() => {
     const map = new Map<string, ColumnInfo>();
     if (columnInfo) {
@@ -49,6 +50,14 @@ export function DataGrid({ columnNames, columnInfo, rows, startRow = 0, borderle
     }
     return map;
   }, [columnInfo]);
+
+  const fieldByName = useMemo(() => {
+    const map = new Map<string, any>();
+    if (arrowFields) {
+      for (const f of arrowFields) map.set(f.name, f);
+    }
+    return map;
+  }, [arrowFields]);
 
   const tableColumns = useMemo<ColumnDef<Record<string, any>>[]>(
     () =>
@@ -71,7 +80,8 @@ export function DataGrid({ columnNames, columnInfo, rows, startRow = 0, borderle
               const rowIdx = startRow + row.index + 1;
               return <GeometryViewer wkb={val} label={`Row ${rowIdx}`} />;
             }
-            const display = formatCellValue(val, column.id, undefined, info?.duckdbType);
+            const field = fieldByName.get(column.id);
+            const display = formatCellValue(val, column.id, field, info?.duckdbType);
             return <span className={`font-mono ${numeric ? "text-right block tabular-nums" : ""}`}>{display}</span>;
           },
         };

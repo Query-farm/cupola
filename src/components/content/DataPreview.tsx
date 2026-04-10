@@ -37,7 +37,7 @@ async function queryDuckDB(sql: string): Promise<{ table: any; error?: string }>
   return { table };
 }
 
-function arrowTableToRows(table: any): { columns: string[]; columnInfo: ColumnInfo[]; rows: Record<string, any>[] } {
+function arrowTableToRows(table: any): { columns: string[]; columnInfo: ColumnInfo[]; arrowFields: any[]; rows: Record<string, any>[] } {
   const fields = table.schema.fields;
   const columns = fields.map((f: any) => f.name);
   const columnInfo: ColumnInfo[] = fields.map((f: any) => ({
@@ -56,12 +56,13 @@ function arrowTableToRows(table: any): { columns: string[]; columnInfo: ColumnIn
     rows.push(row);
   }
 
-  return { columns, columnInfo, rows };
+  return { columns, columnInfo, arrowFields: fields, rows };
 }
 
 export function DataPreview({ tablePath }: Props) {
   const [columns, setColumns] = useState<string[]>([]);
   const [columnInfo, setColumnInfo] = useState<ColumnInfo[]>([]);
+  const [arrowFields, setArrowFields] = useState<any[]>([]);
   const [rows, setRows] = useState<Record<string, any>[]>([]);
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -92,9 +93,10 @@ export function DataPreview({ tablePath }: Props) {
         }
         return;
       }
-      const { columns: cols, columnInfo: info, rows: data } = arrowTableToRows(table);
+      const { columns: cols, columnInfo: info, arrowFields: fields, rows: data } = arrowTableToRows(table);
       setColumns(cols);
       setColumnInfo(info);
+      setArrowFields(fields);
       setRows(data);
     } catch (err: any) {
       if (thisRequest !== requestIdRef.current) return;
@@ -187,6 +189,7 @@ export function DataPreview({ tablePath }: Props) {
         <DataGrid
           columnNames={columns}
           columnInfo={columnInfo}
+          arrowFields={arrowFields}
           rows={rows}
           startRow={startRow}
           borderless
