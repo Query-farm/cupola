@@ -207,10 +207,19 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
     return value.toString();
   }
 
-  // Object — geometry, struct, Date, etc.
+  // Object — geometry, struct, arrays, Date, etc.
   if (typeof value === "object" && value !== null) {
-    if (value.type || value.coordinates) return "[geometry]";
+    // GeoJSON geometry objects have a "type" string like "Point", "Polygon", etc.
+    // AND a "coordinates" array. Don't match Arrow Vectors which also have .type.
+    if (value.coordinates && typeof value.type === "string" &&
+        ["Point", "MultiPoint", "LineString", "MultiLineString", "Polygon", "MultiPolygon", "GeometryCollection"].includes(value.type)) {
+      return "[geometry]";
+    }
     if (value instanceof Date) return formatDateFromDays(Math.floor(value.getTime() / 86400000));
+    // Arrow Vector/List objects — format as DuckDB-style array/struct
+    if (typeof value.toArray === "function") {
+      return formatArrowValue(value);
+    }
     try { return JSON.stringify(value); } catch { return "[object]"; }
   }
 
@@ -676,6 +685,75 @@ function readInt128(bytes: Uint8Array, signed: boolean): bigint {
     return -(((raw ^ mask) + 1n) & mask);
   }
   return raw;
+}
+
+/** Format an Arrow Vector value (List, Struct, Map) in DuckDB's display style. */
+function formatArrowValue(value: any): string {
+  // Check if it's a struct-like object (has named fields but toArray gives child vectors)
+  const type = value.type;
+  const typeStr = type?.toString() || "";
+
+  // Struct: {'field': value, ...}
+  if (typeStr.startsWith("Struct")) {
+    const children = type.children || [];
+    const parts: string[] = [];
+    for (let i = 0; i < children.length; i++) {
+      const name = children[i].name;
+      const child = value.get(i) ?? value.get(name);
+      const formatted = child === null || child === undefined ? "NULL" : formatNestedValue(child);
+      parts.push(`'${name}': ${formatted}`);
+    }
+    return `{${parts.join(", ")}}`;
+  }
+
+  // Map: {key1=value1, key2=value2}
+  if (typeStr.startsWith("Map")) {
+    try {
+      const arr = value.toArray();
+      const parts: string[] = [];
+      for (const entry of arr) {
+        const k = entry?.key ?? entry?.get?.(0);
+        const v = entry?.value ?? entry?.get?.(1);
+        const fk = k === null || k === undefined ? "NULL" : formatNestedValue(k);
+        const fv = v === null || v === undefined ? "NULL" : formatNestedValue(v);
+        parts.push(`${fk}=${fv}`);
+      }
+      return `{${parts.join(", ")}}`;
+    } catch {
+      return "{}";
+    }
+  }
+
+  // List/Array: [val1, val2, ...]
+  try {
+    const arr = value.toArray();
+    const parts: string[] = [];
+    for (let i = 0; i < arr.length; i++) {
+      const item = arr[i];
+      if (item === null || item === undefined) {
+        parts.push("NULL");
+      } else {
+        parts.push(formatNestedValue(item));
+      }
+    }
+    return `[${parts.join(", ")}]`;
+  } catch {
+    return String(value);
+  }
+}
+
+/** Format a nested value inside an array/struct for DuckDB-style display. */
+function formatNestedValue(val: any): string {
+  if (val === null || val === undefined) return "NULL";
+  if (typeof val === "object" && val !== null) {
+    if (val instanceof Uint8Array) return "[binary]";
+    if (typeof val.toArray === "function") return formatArrowValue(val);
+    if (val instanceof Date) return formatDateFromDays(Math.floor(val.getTime() / 86400000));
+    try { return JSON.stringify(val); } catch { return "[object]"; }
+  }
+  if (typeof val === "bigint") return val.toString();
+  if (typeof val === "boolean") return val ? "true" : "false";
+  return String(val);
 }
 
 /** Format DuckDB's BIGNUM binary format to a decimal string.
