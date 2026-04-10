@@ -1043,35 +1043,6 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
     }
   }
 
-  // Dictionary/Enum: manual resolution when Arrow JS CDN fails
-  if (typeStr.includes("Dictionary")) {
-    const chunk = column.data?.[0] ?? column.data;
-    if (chunk) {
-      const idx = row - (chunk.offset ?? 0);
-      if (isArrowNull(chunk.nullBitmap, idx)) return null;
-      const dictIdx = chunk.values?.[idx];
-      if (dictIdx !== null && dictIdx !== undefined) {
-        const dict = chunk.dictionary ?? column.data?.dictionary ?? column.dictionary;
-        if (dict) {
-          try {
-            if (typeof dict.get === "function") {
-              const val = dict.get(dictIdx);
-              if (val !== null && val !== undefined) return val;
-            }
-            const inner = dict.data?.[0] ?? dict.data;
-            if (inner?.values && inner?.valueOffsets) {
-              const start = inner.valueOffsets[dictIdx];
-              const end = inner.valueOffsets[dictIdx + 1];
-              if (start !== undefined && end !== undefined) {
-                return new TextDecoder().decode(inner.values.subarray(start, end));
-              }
-            }
-          } catch { /* fall through to column.get */ }
-        }
-      }
-    }
-  }
-
   // List/FixedSizeList with BigInt child values (e.g. List<Timestamp>):
   // Arrow's getTimestamp* calls bigIntToNumber which throws for infinity sentinels.
   // Proactively extract raw BigInt values to bypass Arrow's getter entirely.
