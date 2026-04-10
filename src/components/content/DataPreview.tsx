@@ -51,7 +51,7 @@ function arrowTableToRows(table: any): { columns: string[]; columnInfo: ColumnIn
   for (let r = 0; r < table.numRows; r++) {
     const row: Record<string, any> = {};
     for (let c = 0; c < fields.length; c++) {
-      row[columns[c]] = safeGetArrowValue(table.getChildAt(c), r);
+      row[columns[c]] = safeGetArrowValue(table.getChildAt(c), r, fields[c]);
     }
     rows.push(row);
   }

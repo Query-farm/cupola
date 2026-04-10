@@ -54,6 +54,7 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
     if (value.__int128 !== undefined) return (value.__int128 as bigint).toString();
     if (value.__uint128 !== undefined) return (value.__uint128 as bigint).toString();
     if (value.__decimal128 !== undefined) return formatDecimal(value.__decimal128, value.scale ?? 0);
+    if (value.__uuid !== undefined) return formatUUID(value.__uuid);
     if (value.__timeTz !== undefined) {
       const { micros, offsetSecs } = value.__timeTz;
       const timeStr = formatTimeValue(micros, "us", false);
@@ -650,6 +651,22 @@ function getDuckDBExtensionType(field: any): string | null {
 }
 
 /** Format a 16-byte FixedSizeBinary as a signed or unsigned 128-bit integer. */
+/** Read a 16-byte FixedSizeBinary as a signed or unsigned 128-bit BigInt. */
+function readInt128(bytes: Uint8Array, signed: boolean): bigint {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, 16);
+  const lo = dv.getBigUint64(0, true);
+  const hi = dv.getBigUint64(8, true);
+  const raw = lo | (hi << 64n);
+  if (!signed) return raw;
+  const signBit = 1n << 127n;
+  if (raw & signBit) {
+    const mask = (1n << 128n) - 1n;
+    return -(((raw ^ mask) + 1n) & mask);
+  }
+  return raw;
+}
+
+/** Format a 16-byte FixedSizeBinary as a signed or unsigned 128-bit integer. */
 function formatFixedBinaryInt128(bytes: Uint8Array, signed: boolean): string {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, 16);
   const lo = dv.getBigUint64(0, true);
@@ -701,10 +718,59 @@ function formatUUID(bytes: Uint8Array): string {
  * - Dictionary/enum resolution (manual lookup when Arrow JS fails)
  * - Extension types (hugeint, uhugeint, time_tz as FixedSizeBinary)
  */
-export function safeGetArrowValue(column: any, row: number): any {
+export function safeGetArrowValue(column: any, row: number, field?: any): any {
   if (!column) return null;
 
   const typeStr = column.type?.toString() || "";
+
+  // FixedSizeBinary extension types (arrow_lossless_conversion=true):
+  // hugeint, uhugeint, time_tz, uuid — return tagged values for formatCellValue
+  if (typeStr.startsWith("FixedSizeBinary")) {
+    const meta = field?.metadata ?? column.type?.metadata;
+    let extTypeName: string | null = null;
+    let extName: string | null = null;
+    try {
+      const extMeta = meta?.get?.("ARROW:extension:metadata");
+      if (extMeta) extTypeName = JSON.parse(extMeta)?.type_name ?? null;
+      extName = meta?.get?.("ARROW:extension:name") ?? null;
+    } catch { /* ignore */ }
+
+    if (extTypeName || extName) {
+      const chunk = column.data?.[0] ?? column.data;
+      if (chunk) {
+        const byteWidth = column.type?.byteWidth ?? (extTypeName === "time_tz" ? 8 : 16);
+        const adjustedRow = row - (chunk.offset ?? 0);
+        const nullBitmap = chunk.nullBitmap;
+        if (nullBitmap && nullBitmap.length > 0) {
+          const byteIdx = adjustedRow >> 3;
+          const bitIdx = adjustedRow & 7;
+          if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) return null;
+        }
+        const values = chunk.values;
+        if (values) {
+          const offset = adjustedRow * byteWidth;
+          const bytes = new Uint8Array(values.buffer, values.byteOffset + offset, byteWidth);
+          if (extTypeName === "hugeint") return { __int128: readInt128(bytes, true) };
+          if (extTypeName === "uhugeint") return { __uint128: readInt128(bytes, false) };
+          if (extTypeName === "time_tz") {
+            const dv = new DataView(bytes.buffer, bytes.byteOffset, 8);
+            const raw = dv.getBigUint64(0, true);
+            return { __timeTz: { micros: Number(raw >> 24n), offsetSecs: 57599 - Number(raw & 0xFFFFFFn) } };
+          }
+          if (extName === "arrow.uuid") return { __uuid: bytes.slice() };
+        }
+      }
+    }
+  }
+
+  // arrow.bool8: Int8 representing boolean
+  if (field?.metadata?.get?.("ARROW:extension:name") === "arrow.bool8") {
+    try {
+      const val = column.get(row);
+      if (val === null || val === undefined) return null;
+      return val !== 0;
+    } catch { return null; }
+  }
 
   // Date32: read raw int32 days to avoid precision loss from Arrow's ms conversion
   if (typeStr.includes("Date32")) {

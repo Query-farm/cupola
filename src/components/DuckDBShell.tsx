@@ -1614,7 +1614,7 @@ function initShell(
               const exp = expected[name];
               if (!exp) continue; // skip complex/array/struct types
               for (let r = 0; r < 2; r++) {
-                const val = safeGet(table.getChildAt(c), r);
+                const val = safeGet(table.getChildAt(c), r, fields[c]);
                 const got = val === null || val === undefined ? "NULL" : formatVal(val, fields[c]);
                 if (got === exp[r]) {
                   passed++;
@@ -2328,7 +2328,7 @@ function initShell(
     for (const r of displayIndices) {
       const row: string[] = [];
       for (let c = 0; c < totalCols; c++) {
-        row.push(formatVal(safeGet(table.getChildAt(c), r), fields[c]));
+        row.push(formatVal(safeGet(table.getChildAt(c), r, fields[c]), fields[c]));
       }
       grid.push(row);
     }
@@ -2618,7 +2618,7 @@ function initShell(
       rl.println(`\x1b[2m─${label}${"─".repeat(dashCount)}\x1b[0m`);
       // Fields
       for (let c = 0; c < totalCols; c++) {
-        const val = formatVal(safeGet(table.getChildAt(c), r), fields[c]);
+        const val = formatVal(safeGet(table.getChildAt(c), r, fields[c]), fields[c]);
         const name = names[c].padStart(maxNameLen);
         const display = val === "NULL" ? `\x1b[2mNULL\x1b[0m` : val;
         rl.println(`${name} = ${display}`);
@@ -2650,7 +2650,7 @@ function initShell(
     for (let r = 0; r < numRows; r++) {
       const row: any[] = [];
       for (let c = 0; c < totalCols; c++) {
-        const val = safeGet(table.getChildAt(c), r);
+        const val = safeGet(table.getChildAt(c), r, fields[c]);
         row.push(val instanceof Uint8Array ? "[binary]" : formatVal(val, fields[c]));
       }
       data.push(row);
