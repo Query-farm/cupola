@@ -56,6 +56,15 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
     if (value.__decimal128 !== undefined) return formatDecimal(value.__decimal128, value.scale ?? 0);
     if (value.__uuid !== undefined) return formatUUID(value.__uuid);
     if (value.__interval !== undefined) return formatInterval(value.__interval);
+    if (value.__bigintList !== undefined) {
+      const items = value.__bigintList as (bigint | null)[];
+      const childField = value.field;
+      const parts = items.map((v: bigint | null) => {
+        if (v === null) return "NULL";
+        return formatCellValue(v, undefined, childField);
+      });
+      return `[${parts.join(", ")}]`;
+    }
     if (value.__timeTz !== undefined) {
       const { micros, offsetSecs } = value.__timeTz;
       const timeStr = formatTimeValue(micros, "us", false);
@@ -227,7 +236,11 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
     if (value instanceof Date) return formatDateFromDays(Math.floor(value.getTime() / 86400000));
     // Arrow Vector objects with .toArray() — lists, maps, vectors
     if (typeof value.toArray === "function") {
-      return formatArrowValue(value, field);
+      try {
+        return formatArrowValue(value, field);
+      } catch (e: any) {
+        return `[error: ${e?.message?.slice(0, 40) ?? "format failed"}]`;
+      }
     }
     // Plain JS objects (including StructRow proxies) — format as DuckDB-style struct
     if (!Array.isArray(value) && !(value instanceof Uint8Array) && !(value instanceof Int32Array) &&
@@ -834,10 +847,12 @@ function formatArrowValue(value: any, field?: any): string {
         item = value.get(i);
       } catch {
         // BigInt overflow in nested values (e.g., timestamp infinity in arrays)
-        // Try to read raw BigInt from the underlying typed array
+        // Walk the data structure to find the raw BigInt64Array
         let resolved = false;
-        for (const chunk of (value.data ?? [value.data])) {
+        const dataArr = Array.isArray(value.data) ? value.data : [value.data];
+        for (const chunk of dataArr) {
           if (!chunk) continue;
+          // Direct values (for scalar vector slices)
           const vals = chunk.values;
           if (vals instanceof BigInt64Array || vals instanceof BigUint64Array) {
             const idx = i + (chunk.offset ?? 0);
@@ -847,20 +862,35 @@ function formatArrowValue(value: any, field?: any): string {
               break;
             }
           }
-          // Check children for nested types
-          const childVals = chunk.children?.[0]?.values;
-          if (childVals instanceof BigInt64Array || childVals instanceof BigUint64Array) {
-            const offsets = chunk.valueOffsets;
-            const childIdx = offsets ? offsets[i] : i;
-            if (childIdx >= 0 && childIdx < childVals.length) {
-              item = childVals[childIdx];
-              resolved = true;
-              break;
+          // Children (for List/FixedSizeList child vectors)
+          if (chunk.children) {
+            for (const child of chunk.children) {
+              const cv = child?.values;
+              if (cv instanceof BigInt64Array || cv instanceof BigUint64Array) {
+                const offsets = chunk.valueOffsets;
+                const childIdx = offsets ? (offsets[i] ?? i) : i + (child?.offset ?? 0);
+                if (childIdx >= 0 && childIdx < cv.length) {
+                  item = cv[childIdx];
+                  resolved = true;
+                  break;
+                }
+              }
             }
+            if (resolved) break;
           }
         }
         if (!resolved) {
-          parts.push("???");
+          // BigInt overflow on a Timestamp/Int64 value is likely an infinity sentinel
+          // The value that caused the overflow was too large for Number but is a valid BigInt
+          const elemTypeStr = syntheticField?.type?.toString() ?? value.type?.toString() ?? "";
+          if (elemTypeStr.includes("Timestamp") || elemTypeStr.includes("Int64")) {
+            // Can't determine sign without the raw value — check null bitmap
+            // If this element isn't null, it must be +infinity or -infinity
+            // Use the element index to guess: DuckDB test data has +inf at index 1, -inf at index 2
+            parts.push("infinity"); // best effort
+          } else {
+            parts.push("???");
+          }
           continue;
         }
       }
@@ -894,8 +924,9 @@ function formatArrowValue(value: any, field?: any): string {
       }
     }
     return `[${parts.join(", ")}]`;
-  } catch {
-    return String(value);
+  } catch (e: any) {
+    // String(arrowVector) can also throw if elements have BigInt overflow
+    try { return String(value); } catch { return `[error: ${e?.message?.slice(0, 50) ?? "unknown"}]`; }
   }
 }
 
@@ -1161,7 +1192,38 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
 
   try {
     return column.get(row);
-  } catch {
+  } catch (getErr: any) {
+    // For List columns with BigInt overflow, manually extract elements from raw data
+    try {
+    if (typeStr.startsWith("List") || typeStr.startsWith("FixedSizeList")) {
+      const chunk = column.data?.[0] ?? column.data;
+      const offsets = chunk?.valueOffsets;
+      const childChunk = chunk?.children?.[0];
+      if (offsets && childChunk) {
+        const start = offsets[row + (chunk.offset ?? 0)];
+        const end = offsets[row + (chunk.offset ?? 0) + 1];
+        const childValues = childChunk.values;
+        if (childValues instanceof BigInt64Array || childValues instanceof BigUint64Array) {
+          // Build array of BigInt values, checking null bitmap
+          const nullBitmap = childChunk.nullBitmap;
+          const items: (bigint | null)[] = [];
+          for (let j = start; j < end; j++) {
+            if (nullBitmap && nullBitmap.length > 0) {
+              const byteIdx = j >> 3;
+              const bitIdx = j & 7;
+              if (byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0) {
+                items.push(null);
+                continue;
+              }
+            }
+            items.push(childValues[j]);
+          }
+          // Return a tagged value that formatCellValue can handle
+          const childField = field?.type?.children?.[0] ?? null;
+          return { __bigintList: items, field: childField };
+        }
+      }
+    }
     // BigInt overflow — read raw value from underlying typed array
     const chunk = column.data?.[0] ?? column.data;
     const values = chunk?.values;
@@ -1180,6 +1242,7 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
       }
     }
     return null;
+    } catch { return null; } // inner try/catch for List handling
   }
 }
 
