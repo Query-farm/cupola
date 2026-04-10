@@ -102,7 +102,7 @@ function respond(obj: R2ObjectBody, key: string, extraHeaders?: Record<string, s
     "Content-Type": contentType(key),
     "Cache-Control": cacheControl(key, false),
     "Cross-Origin-Opener-Policy": "same-origin",
-    "Cross-Origin-Embedder-Policy": "credentialless",
+    "Cross-Origin-Embedder-Policy": "require-corp",
     "Cross-Origin-Resource-Policy": "cross-origin",
   });
   if (extraHeaders) {
@@ -118,6 +118,16 @@ export const onRequest: PagesFunction<Env> = async (context) => {
   // ---- Root → /latest/ ----
   if (path === "/" || path === "") {
     return Response.redirect(`${url.origin}/latest/`, 302);
+  }
+
+  // ---- /npm/* → proxy to cdn.jsdelivr.net (ESM CDN transitive deps) ----
+  if (path.startsWith("/npm/")) {
+    const cdnUrl = `https://cdn.jsdelivr.net${path}`;
+    const cdnResp = await fetch(cdnUrl, { headers: { "User-Agent": "cupola" } });
+    const headers = new Headers(cdnResp.headers);
+    headers.set("Access-Control-Allow-Origin", "*");
+    headers.set("Cache-Control", "public, max-age=31536000, immutable");
+    return new Response(cdnResp.body, { status: cdnResp.status, headers });
   }
 
   // ---- /latest/ → /v{latest_version}/ ----

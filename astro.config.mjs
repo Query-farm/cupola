@@ -34,7 +34,7 @@ export default defineConfig({
           server.middlewares.use((req, res, next) => {
             // COOP/COEP required for SharedArrayBuffer (DuckDB-WASM COI/threads build)
             res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-            res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+            res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
             res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
             // Serve shell/wasm/ files directly to avoid transform pipeline hangs
@@ -59,6 +59,13 @@ export default defineConfig({
       fs: {
         // Allow serving symlinked files from wasm-upgrades build
         allow: ['..'],
+      },
+      proxy: {
+        // ESM CDN transitive deps resolve against the page origin
+        '/npm': {
+          target: 'https://cdn.jsdelivr.net',
+          changeOrigin: true,
+        },
       },
     },
     optimizeDeps: {
