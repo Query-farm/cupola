@@ -19,6 +19,26 @@ export interface QueryHistoryEntry {
   rowCount?: number;
   error?: string;
   userQuestion?: string;
+  conversationId?: string;
+  conversationName?: string;
+}
+
+/** Create and record a query history entry. */
+export function recordQuery(opts: {
+  sql: string;
+  executionTimeMs: number;
+  success: boolean;
+  rowCount?: number;
+  error?: string;
+  userQuestion?: string;
+  conversationId?: string;
+  conversationName?: string;
+}): void {
+  bridge.addQueryHistoryEntry?.({
+    id: Date.now(),
+    timestamp: Date.now(),
+    ...opts,
+  });
 }
 
 export const bridge = {
@@ -49,3 +69,6 @@ export const bridge = {
   showKepler: null as (() => void) | null,
   addQueryHistoryEntry: null as ((entry: QueryHistoryEntry) => void) | null,
 };
+
+// Expose on window for Playwright/test access (survives HMR module replacement)
+if (typeof window !== "undefined") (window as any).__bridge = bridge;

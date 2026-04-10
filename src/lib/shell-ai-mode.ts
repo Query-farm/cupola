@@ -13,7 +13,7 @@ import {
 } from "@/lib/ai-agent";
 import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 import { estimateCost, formatCost } from "@/lib/pricing";
-import { bridge } from "@/lib/shell-bridge";
+import { bridge, recordQuery } from "@/lib/shell-bridge";
 import type { CatalogData } from "@/lib/service";
 
 /** Persistent AI conversation state — survives across .ai mode entries. */
@@ -133,9 +133,8 @@ function createToolExecutor(
       if (!result.ok) {
         const errMsg = result.error || "Query failed";
         term.println(`\x1b[31m  Error: ${errMsg}\x1b[0m`);
-        bridge.addQueryHistoryEntry?.({
-          id: Date.now(), timestamp: Date.now(), sql: input.sql,
-          executionTimeMs: elapsed, success: false, error: errMsg,
+        recordQuery({
+          sql: input.sql, executionTimeMs: elapsed, success: false, error: errMsg,
           userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
         });
         if (errMsg.includes("HTTP Error") || errMsg.includes("HTTP 5")) {
@@ -148,9 +147,8 @@ function createToolExecutor(
 
       if (!result.arrowBuffers?.length) {
         term.println(`\x1b[2m  OK (no results)\x1b[0m`);
-        bridge.addQueryHistoryEntry?.({
-          id: Date.now(), timestamp: Date.now(), sql: input.sql,
-          executionTimeMs: elapsed, success: true, rowCount: 0,
+        recordQuery({
+          sql: input.sql, executionTimeMs: elapsed, success: true, rowCount: 0,
           userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
         });
         return JSON.stringify({ ok: true, message: "Query executed successfully (no results)" });
@@ -159,9 +157,8 @@ function createToolExecutor(
       const table = ops.tableFromIPC(result.arrowBuffers[0]);
       await ops.printTable(table);
       const { json } = formatArrowTableAsJson(table);
-      bridge.addQueryHistoryEntry?.({
-        id: Date.now(), timestamp: Date.now(), sql: input.sql,
-        executionTimeMs: elapsed, success: true, rowCount: table.numRows,
+      recordQuery({
+        sql: input.sql, executionTimeMs: elapsed, success: true, rowCount: table.numRows,
         userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
       });
       return json;

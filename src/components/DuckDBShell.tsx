@@ -15,7 +15,8 @@ import { formatCellValue, safeGetArrowValue } from "@/lib/format";
 import { printBoxTable, printLineTable, type TerminalOutput } from "@/lib/shell-table-renderer";
 import { handleDotCommand, type ShellState, type ShellIO } from "@/lib/shell-commands";
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "@/lib/shell-ai-mode";
-import { bridge } from "@/lib/shell-bridge";
+import { attachInputHandlers, type CompletionItem } from "@/lib/shell-input";
+import { bridge, recordQuery } from "@/lib/shell-bridge";
 import { getTerminalTheme } from "@/lib/theme";
 import {
   saveSession, saveAutoSave, loadSession, getAutoSave,
@@ -27,20 +28,7 @@ const KeplerMap = lazy(() => import("./KeplerMap").then((m) => ({ default: m.Kep
 
 import type { CatalogData } from "@/lib/service";
 
-export interface QueryHistoryEntry {
-  id: number;
-  timestamp: number;
-  sql: string;
-  executionTimeMs: number;
-  success: boolean;
-  error?: string;
-  rowCount?: number;
-  userQuestion?: string;
-  /** Groups queries from the same AI conversation session. */
-  conversationId?: string;
-  /** Display name for the AI conversation. */
-  conversationName?: string;
-}
+export type { QueryHistoryEntry } from "@/lib/shell-bridge";
 
 export type ShellMode = "minimized" | "panel" | "maximized" | "fullscreen";
 
@@ -744,6 +732,7 @@ function initShell(
   // Singleton terminal — reuse across shell instances
   const isNewTerminal = !bridge.shellTerm;
   let term: any, fitAddon: any, rl: any;
+  let shellInputHandlers: ReturnType<typeof attachInputHandlers>;
 
   if (isNewTerminal) {
     term = new T({
@@ -779,284 +768,9 @@ function initShell(
       }
     };
 
-    // ---- Tab completion state ----
-    const comp = {
-      active: false, items: [] as any[], idx: 0, start: 0, original: "",
-      menuLines: 0, numCols: 1, numRows: 1, colWidth: 10,
-    };
-
-    function computeLayout() {
-      const maxLen = Math.max(...comp.items.map((c: any) => c.suggestion.length));
-      comp.colWidth = maxLen + 2;
-      comp.numCols = Math.max(1, Math.floor(term.cols / comp.colWidth));
-      comp.numRows = Math.ceil(comp.items.length / comp.numCols);
-    }
-
-    function clearCompletionMenu() {
-      if (comp.menuLines > 0) {
-        for (let i = 0; i < comp.menuLines; i++) {
-          term.write("\r\n\x1b[2K");
-        }
-        term.write(`\x1b[${comp.menuLines}A`);
-        comp.menuLines = 0;
-      }
-    }
-
-    function renderCompletionMenu() {
-      clearCompletionMenu();
-      const lines: string[] = [];
-      for (let row = 0; row < comp.numRows; row++) {
-        let line = "";
-        for (let col = 0; col < comp.numCols; col++) {
-          const i = row * comp.numCols + col;
-          if (i >= comp.items.length) continue;
-          const text = comp.items[i].suggestion.padEnd(comp.colWidth);
-          line += i === comp.idx ? `\x1b[7m${text}\x1b[0m` : text;
-        }
-        lines.push(line);
-      }
-      for (const line of lines) {
-        term.write("\r\n\x1b[2K" + line);
-      }
-      if (lines.length > 0) {
-        term.write(`\x1b[${lines.length}A\r`);
-      }
-      comp.menuLines = lines.length;
-      if (rl.state) rl.state.refresh();
-    }
-
-    function applyCompletion(idx: number) {
-      if (!rl.state) return;
-      const c = comp.items[idx];
-      const before = comp.original.slice(0, comp.start);
-      rl.state.update(before + c.suggestion);
-    }
-
-    function exitCompletionMode(accept: boolean) {
-      if (!comp.active) return;
-      comp.active = false;
-      if (!accept && rl.state) rl.state.update(comp.original);
-      clearCompletionMenu();
-      if (rl.state) rl.state.refresh();
-    }
-
-    function enterCompletionMode(items: any[], start: number, original: string) {
-      comp.active = true;
-      comp.items = items;
-      comp.idx = 0;
-      comp.start = start;
-      comp.original = original;
-      comp.menuLines = 0;
-      computeLayout();
-      applyCompletion(0);
-      renderCompletionMenu();
-    }
-
-    function moveCompletion(newIdx: number) {
-      if (newIdx < 0 || newIdx >= comp.items.length) return;
-      comp.idx = newIdx;
-      applyCompletion(comp.idx);
-      renderCompletionMenu();
-    }
-
-    // ---- Ctrl+R reverse history search state ----
-    let reverseSearchActive = false;
-    let reverseSearchTerm = "";
-    let reverseSearchIdx = -1;
-    let reverseSearchMatch = "";
-    let reverseSearchPreBuffer = "";
-    let reverseSearchLineShown = false;
-
-    function renderSearchLine() {
-      if (!rl.state) return;
-      // Combine search indicator + match into the readline buffer itself
-      // This lets readline handle all wrapping and redrawing
-      const prefix = `\x1b[33m(reverse-i-search)\x1b[0m "\x1b[1m${reverseSearchTerm}\x1b[0m":  `;
-      rl.state.update(prefix + (reverseSearchMatch || ""));
-      rl.state.refresh();
-      reverseSearchLineShown = true;
-    }
-
-    function clearSearchLine() {
-      reverseSearchLineShown = false;
-    }
-
-    function doReverseSearch() {
-      const needle = reverseSearchTerm.toLowerCase();
-      if (!needle) { reverseSearchMatch = ""; return; }
-      // xterm-readline stores history as rl.history (array) or rl.history.entries
-      const entries: string[] = Array.isArray(rl.history) ? rl.history : (rl.history?.entries ?? []);
-      const start = reverseSearchIdx >= 0 ? reverseSearchIdx + 1 : 0;
-      for (let i = start; i < entries.length; i++) {
-        if (entries[i].toLowerCase().includes(needle)) {
-          reverseSearchIdx = i;
-          reverseSearchMatch = entries[i];
-          return;
-        }
-      }
-      // No new match — keep current
-    }
-
-    function exitReverseSearch(accept: boolean) {
-      reverseSearchActive = false;
-      clearSearchLine();
-      if (rl.state) {
-        rl.state.update(accept && reverseSearchMatch ? reverseSearchMatch : reverseSearchPreBuffer);
-        rl.state.refresh();
-      }
-      reverseSearchTerm = "";
-      reverseSearchIdx = -1;
-      reverseSearchMatch = "";
-      reverseSearchPreBuffer = "";
-    }
-
-    // Key event handler: tab completion, Ctrl+R reverse search, Ctrl+K
-    term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
-      if (e.type !== "keydown") {
-        // Suppress keyup for keys we handle during completion or search
-        if (comp.active && ["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Escape", "Enter"].includes(e.key)) {
-          return false;
-        }
-        if (reverseSearchActive && !e.ctrlKey) return false;
-        return true;
-      }
-
-      // ---- Tab completion navigation ----
-      if (comp.active) {
-        if (e.key === "ArrowRight" || (e.key === "Tab" && !e.shiftKey)) {
-          e.preventDefault();
-          moveCompletion((comp.idx + 1) % comp.items.length);
-          return false;
-        }
-        if (e.key === "ArrowLeft" || (e.key === "Tab" && e.shiftKey)) {
-          e.preventDefault();
-          moveCompletion((comp.idx - 1 + comp.items.length) % comp.items.length);
-          return false;
-        }
-        if (e.key === "ArrowDown") {
-          e.preventDefault();
-          const next = comp.idx + comp.numCols;
-          moveCompletion(next < comp.items.length ? next : comp.idx);
-          return false;
-        }
-        if (e.key === "ArrowUp") {
-          e.preventDefault();
-          const prev = comp.idx - comp.numCols;
-          moveCompletion(prev >= 0 ? prev : comp.idx);
-          return false;
-        }
-        if (e.key === "Enter") {
-          e.preventDefault();
-          exitCompletionMode(true);
-          return false;
-        }
-        if (e.key === "Escape") {
-          e.preventDefault();
-          exitCompletionMode(false);
-          return false;
-        }
-        // Any other key accepts current completion and passes through
-        exitCompletionMode(true);
-        return true;
-      }
-
-      // ---- Ctrl+K clears terminal ----
-      if (e.key === "k" && (e.ctrlKey || e.metaKey)) {
-        term.clear();
-        return false;
-      }
-
-      // ---- Ctrl+C during reverse search cancels it ----
-      if (e.key === "c" && e.ctrlKey && reverseSearchActive) {
-        exitReverseSearch(false);
-        return false;
-      }
-
-      // ---- Ctrl+R — start or continue reverse search ----
-      if (e.key === "r" && e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        if (!reverseSearchActive) {
-          reverseSearchActive = true;
-          reverseSearchTerm = "";
-          reverseSearchIdx = -1;
-          reverseSearchMatch = "";
-          reverseSearchPreBuffer = rl.state ? rl.state.buffer?.() || "" : "";
-          renderSearchLine();
-        } else {
-          doReverseSearch();
-          renderSearchLine();
-        }
-        return false;
-      }
-
-      // ---- Keys during reverse search ----
-      if (reverseSearchActive) {
-        if (e.key === "Enter") { exitReverseSearch(true); return false; }
-        if (e.key === "Escape") { exitReverseSearch(false); return false; }
-        if (e.key === "Backspace") {
-          reverseSearchTerm = reverseSearchTerm.slice(0, -1);
-          reverseSearchIdx = -1;
-          doReverseSearch();
-          renderSearchLine();
-          return false;
-        }
-        if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
-          reverseSearchTerm += e.key;
-          reverseSearchIdx = -1;
-          doReverseSearch();
-          renderSearchLine();
-          return false;
-        }
-        if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return false;
-        exitReverseSearch(true);
-        return true;
-      }
-
-      // ---- Tab triggers completion ----
-      if (e.key === "Tab" && !e.shiftKey) {
-        e.preventDefault();
-        const state = rl.state;
-        if (state) {
-          const buf = state.buffer();
-          if (buf.trim()) {
-            onCompletionsReceived = (completions) => {
-              if (!completions || completions.length === 0) return;
-              const currentBuf = state.buffer();
-              const hasTies = completions.length > 1 &&
-                completions[0].score === completions[1].score;
-
-              if (!hasTies) {
-                // Single best match — auto-insert
-                const c = completions[0];
-                const typed = currentBuf.slice(c.start);
-                const toInsert = c.suggestion.slice(typed.length);
-                if (toInsert) state.editInsert(toInsert);
-              } else {
-                // Multiple tied matches — insert common prefix or show menu
-                const start = completions[0].start;
-                const typed = currentBuf.slice(start);
-                let common = completions[0].suggestion;
-                for (let i = 1; i < completions.length; i++) {
-                  let j = 0;
-                  while (j < common.length && j < completions[i].suggestion.length &&
-                    common[j].toLowerCase() === completions[i].suggestion[j].toLowerCase()) j++;
-                  common = common.slice(0, j);
-                }
-                const toInsert = common.slice(typed.length);
-                if (toInsert) {
-                  state.editInsert(toInsert);
-                } else {
-                  enterCompletionMode(completions, start, currentBuf);
-                }
-              }
-            };
-            worker.postMessage({ type: "complete", text: buf });
-          }
-        }
-        return false;
-      }
-
-      return true;
+    // Tab completion + Ctrl+R reverse search (delegated to shell-input.ts)
+    shellInputHandlers = attachInputHandlers(term, rl, (text) => {
+      worker.postMessage({ type: "complete", text });
     });
 
     bridge.shellTerm = term;
@@ -1204,9 +918,6 @@ function initShell(
     }
     return sql + `)`;
   }
-
-  // Shared callback for tab completion — set by key handler, called by worker.onmessage
-  let onCompletionsReceived: ((completions: any[]) => void) | null = null;
 
   worker.onmessage = (e: MessageEvent) => {
     const d = e.data;
@@ -1360,29 +1071,25 @@ function initShell(
     }
 
     if (d.type === "completions") {
-      if (onCompletionsReceived) {
-        const completions: any[] = [];
-        if (d.arrowBuffers) {
-          try {
-            for (const buf of d.arrowBuffers) {
-              const table = tableFromIPC(new Uint8Array(buf));
-              const sugCol = table.getChild("suggestion");
-              const startCol = table.getChild("suggestion_start");
-              const scoreCol = table.getChild("suggestion_score");
-              for (let i = 0; i < table.numRows; i++) {
-                completions.push({
-                  suggestion: sugCol ? String(sugCol.get(i)) : "",
-                  start: startCol ? Number(startCol.get(i)) : 0,
-                  score: scoreCol ? Number(scoreCol.get(i)) : 0,
-                });
-              }
+      const completions: CompletionItem[] = [];
+      if (d.arrowBuffers) {
+        try {
+          for (const buf of d.arrowBuffers) {
+            const table = tableFromIPC(new Uint8Array(buf));
+            const sugCol = table.getChild("suggestion");
+            const startCol = table.getChild("suggestion_start");
+            const scoreCol = table.getChild("suggestion_score");
+            for (let i = 0; i < table.numRows; i++) {
+              completions.push({
+                suggestion: sugCol ? String(sugCol.get(i)) : "",
+                start: startCol ? Number(startCol.get(i)) : 0,
+                score: scoreCol ? Number(scoreCol.get(i)) : 0,
+              });
             }
-          } catch { /* ignore parse errors */ }
-        }
-        const cb = onCompletionsReceived;
-        onCompletionsReceived = null;
-        cb(completions);
+          }
+        } catch { /* ignore parse errors */ }
       }
+      shellInputHandlers?.onCompletions(completions);
       return;
     }
 
@@ -1625,27 +1332,13 @@ function initShell(
             await printTable(table, elapsed);
           }
 
-          bridge.addQueryHistoryEntry?.({
-            id: Date.now(),
-            timestamp: Date.now(),
-            sql: trimmed,
-            executionTimeMs: elapsed,
-            success: true,
-            rowCount: table.numRows,
-          });
+          recordQuery({ sql: trimmed, executionTimeMs: elapsed, success: true, rowCount: table.numRows });
         } catch (err: any) {
           writeln(`Failed to render: ${err.message}`, "31");
         }
       } else {
         writeln("OK", "32");
-        bridge.addQueryHistoryEntry?.({
-          id: Date.now(),
-          timestamp: Date.now(),
-          sql: trimmed,
-          executionTimeMs: elapsed,
-          success: true,
-          rowCount: 0,
-        });
+        recordQuery({ sql: trimmed, executionTimeMs: elapsed, success: true, rowCount: 0 });
       }
 
       // Refresh prompt catalog if the query might have changed it
@@ -1742,9 +1435,10 @@ function initShell(
   if (isNewWorker) {
     // First shell: init worker, wait for ready, ATTACH, then start readLoop
     worker.postMessage({ type: "init" });
+  } else {
+    // Reconnecting — readLoop is already running, re-expose runQuery
+    bridge.runQuery = runQuery;
   }
-  // If terminal already existed, everything (readLoop, handlers) is still running
-  // — no need to reinitialize
 
   // Find geometry columns for a fully-qualified table name so they can be excluded.
   // Returns comma-separated geometry column names, or null if none found.
