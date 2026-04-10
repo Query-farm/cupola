@@ -281,15 +281,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
 
     (async () => {
       try {
-        // Ensure Perspective CDN scripts are loaded
-        if (!perspectiveLoaded) {
-          const perspective = await import(/* @vite-ignore */ getPerspectiveCDN()[0]);
-          await Promise.all(getPerspectiveCDN().slice(1).map(url => import(/* @vite-ignore */ url)));
-          perspectiveMod = perspective.default;
-          perspectiveWorker = await perspectiveMod.worker();
-          perspectiveLoaded = true;
-        }
-
+        await ensurePerspectiveLoaded();
         if (cancelled) return;
 
         // Wait for DuckDB to be fully ready (ATTACH complete, readLoop started)
@@ -297,21 +289,10 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
           await new Promise<void>((resolve) => {
             const onReady = () => { resolve(); window.removeEventListener("duckdb-ready", onReady); };
             window.addEventListener("duckdb-ready", onReady);
-            // Check again in case it became ready between the check and the listener
             if (bridge.runQuery) onReady();
           });
         }
         if (cancelled) return;
-
-        // Load Perspective CSS (themes + pro theme)
-        for (const css of ["/perspective/themes.css", "/perspective/pro.css"]) {
-          if (!document.querySelector(`link[href="${css}"]`)) {
-            const link = document.createElement("link");
-            link.rel = "stylesheet";
-            link.href = css;
-            document.head.appendChild(link);
-          }
-        }
 
         const container = perspectiveRef.current;
         if (!container || cancelled) return;
@@ -1164,6 +1145,8 @@ function initShell(
   let lastArrowBuffer: Uint8Array | null = null;
   let lastAutoSave = 0; // timestamp of last auto-save
   let autoSaveEnabled = true;
+  let autoSaveIntervalId: ReturnType<typeof setInterval> | null = null;
+  let beforeUnloadHandler: (() => void) | null = null;
 
   /** Take a snapshot from the worker. */
   function takeSnapshot(): Promise<{ memory: ArrayBuffer; size: number; connHdl: number; wasmVersion: string }> {
@@ -1209,6 +1192,17 @@ function initShell(
     } catch (err) {
       console.warn("[session] Auto-save failed:", err);
     }
+  }
+
+  /** Build the ATTACH SQL for the VGI catalog, including oauth_refresh_token if available. */
+  function buildAttachSql(): string {
+    const esc = (s: string) => s.replace(/'/g, "''");
+    const oauthMeta = getOAuthMeta();
+    let sql = `ATTACH OR REPLACE '${esc(config.catalogName)}' AS "${config.catalogName.replace(/"/g, '""')}" (TYPE vgi, LOCATION '${esc(config.serviceUrl)}'`;
+    if (oauthMeta?.refreshToken) {
+      sql += `, oauth_refresh_token '${esc(oauthMeta.refreshToken)}'`;
+    }
+    return sql + `)`;
   }
 
   // Shared callback for tab completion — set by key handler, called by worker.onmessage
@@ -1273,15 +1267,8 @@ function initShell(
 
               // Re-attach the catalog with a fresh token if auth is in use
               if (config.catalogName && config.token) {
-                const oauthMeta = getOAuthMeta();
-                const esc = (s: string) => s.replace(/'/g, "''");
-                const escId = (s: string) => `"${s.replace(/"/g, '""')}"`;
                 await runQueryAsync(`USE memory`);
-                let attachSql = `ATTACH OR REPLACE '${esc(config.catalogName)}' AS ${escId(config.catalogName)} (TYPE vgi, LOCATION '${esc(config.serviceUrl!)}'`;
-                if (oauthMeta?.refreshToken) {
-                  attachSql += `, oauth_refresh_token '${esc(oauthMeta.refreshToken)}'`;
-                }
-                attachSql += `)`;
+                const attachSql = buildAttachSql();
                 console.log("[shell] Re-attach SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
                 const reattach = await runQueryAsync(attachSql);
                 if (reattach.ok) {
@@ -1314,15 +1301,7 @@ function initShell(
 
         if (!restored && config.serviceUrl && config.catalogName) {
           writeln(`Connecting to ${config.catalogName}...`, "33");
-          // Build ATTACH SQL — include oauth_refresh_token if we have it from the frontend OAuth redirect
-          const oauthMeta = getOAuthMeta();
-          const esc = (s: string) => s.replace(/'/g, "''");
-          let attachSql = `ATTACH OR REPLACE '${esc(config.catalogName)}' AS ${config.catalogName} (TYPE vgi, LOCATION '${esc(config.serviceUrl)}'`;
-          if (oauthMeta?.refreshToken) {
-            attachSql += `, oauth_refresh_token '${esc(oauthMeta.refreshToken)}'`;
-            console.log("[shell] Including oauth_refresh_token in ATTACH");
-          }
-          attachSql += `)`;
+          const attachSql = buildAttachSql();
           console.log("[shell] ATTACH SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
           const result = await runQueryAsync(attachSql);
           if (result.ok) {
@@ -1349,14 +1328,15 @@ function initShell(
         }
 
         // Set up periodic auto-save (every 5 minutes)
-        setInterval(() => {
+        autoSaveIntervalId = setInterval(() => {
           if (config.serviceUrl && Date.now() - lastAutoSave > 60_000) {
             autoSave();
           }
         }, 300_000);
 
         // Auto-save on page unload
-        window.addEventListener("beforeunload", () => { autoSave(); });
+        beforeUnloadHandler = () => { autoSave(); };
+        window.addEventListener("beforeunload", beforeUnloadHandler);
 
         // Query DuckDB's timezone setting for timestamp_tz formatting
         try {
@@ -1819,6 +1799,8 @@ function initShell(
     cleanup: () => {
       resizeObserver.disconnect();
       inputTracker.dispose();
+      if (autoSaveIntervalId) clearInterval(autoSaveIntervalId);
+      if (beforeUnloadHandler) window.removeEventListener("beforeunload", beforeUnloadHandler);
       // Don't terminate shared worker or dispose shared terminal
       bridge.shellFitAddon = null;
       bridge.insertText = null;
@@ -1843,14 +1825,12 @@ function getPerspectiveCDN() {
     `${origin}/perspective/perspective-viewer-d3fc.js`,
   ];
 }
-const PERSPECTIVE_CSS = "/perspective/themes.css";
-
 let perspectiveLoaded = false;
-let perspectiveMod: any = null;  // The perspective module (for createMessageHandler, GenericSQLVirtualServerModel)
-let perspectiveWorker: any = null;  // A perspective worker instance (for direct Arrow loading)
+let perspectiveMod: any = null;
+let perspectiveWorker: any = null;
 
-async function loadPerspective(container: HTMLElement, arrowBuffer: Uint8Array) {
-  // Load Perspective CSS (themes + pro theme)
+/** Load Perspective CSS and scripts (idempotent). */
+async function ensurePerspectiveLoaded(): Promise<void> {
   for (const css of ["/perspective/themes.css", "/perspective/pro.css"]) {
     if (!document.querySelector(`link[href="${css}"]`)) {
       const link = document.createElement("link");
@@ -1859,16 +1839,17 @@ async function loadPerspective(container: HTMLElement, arrowBuffer: Uint8Array) 
       document.head.appendChild(link);
     }
   }
-
-  // Load scripts via dynamic import (ES modules)
   if (!perspectiveLoaded) {
     const perspective = await import(/* @vite-ignore */ getPerspectiveCDN()[0]);
-    // Import viewer + plugins (register custom elements)
     await Promise.all(getPerspectiveCDN().slice(1).map(url => import(/* @vite-ignore */ url)));
     perspectiveMod = perspective.default;
     perspectiveWorker = await perspectiveMod.worker();
     perspectiveLoaded = true;
   }
+}
+
+async function loadPerspective(container: HTMLElement, arrowBuffer: Uint8Array) {
+  await ensurePerspectiveLoaded();
 
   // Create or reuse the viewer element
   let viewer = container.querySelector("perspective-viewer") as any;
