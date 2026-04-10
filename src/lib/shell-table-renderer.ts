@@ -2,6 +2,7 @@
  * Terminal table rendering for DuckDB query results.
  * Box-mode (cli-table3) and line-mode output matching DuckDB CLI style.
  */
+import type { Table, Field } from "apache-arrow";
 import { formatCellValue, safeGetArrowValue } from "@/lib/format";
 
 /** Minimal terminal output interface needed by the renderers. */
@@ -17,7 +18,7 @@ export interface TerminalOutput {
 // ---------------------------------------------------------------------------
 
 /** Format a value for display, returning "NULL" for null/undefined. */
-function formatVal(val: any, field: any): string {
+function formatVal(val: unknown, field: Field): string {
   if (val === null || val === undefined) return "NULL";
   return formatCellValue(val, field?.name, field);
 }
@@ -29,14 +30,14 @@ export function truncStr(s: string, maxLen: number): string {
 }
 
 /** Check if an Arrow field represents a numeric type. */
-export function isNumericField(field: any): boolean {
+export function isNumericField(field: Field): boolean {
   const t = field.type?.toString() || "";
   return /^(Int|Uint|Float|Decimal|float|int|uint|double)/i.test(t) ||
     t.startsWith("Duration");
 }
 
 /** Map Arrow field to a short DuckDB type name for the type row. */
-export function fieldToDuckDBType(field: any): string {
+export function fieldToDuckDBType(field: Field): string {
   const t = field.type?.toString() || "?";
   const map: Record<string, string> = {
     "Utf8": "varchar", "LargeUtf8": "varchar",
@@ -94,7 +95,7 @@ function getDisplayIndices(numRows: number, maxDisplayRows: number): { indices: 
 }
 
 /** Extract a formatted string grid from an Arrow table for the given row indices. */
-function buildGrid(table: any, fields: any[], displayIndices: number[]): string[][] {
+function buildGrid(table: Table, fields: Field[], displayIndices: number[]): string[][] {
   const totalCols = fields.length;
   const grid: string[][] = [];
   for (const r of displayIndices) {
@@ -208,7 +209,7 @@ function distributeSlack(
  * Render an Arrow table in DuckDB box-drawing style using cli-table3.
  * Falls back to pipe-separated output if cli-table3 fails to load.
  */
-export async function printBoxTable(table: any, out: TerminalOutput, maxDisplayRows: number, elapsedMs?: number): Promise<void> {
+export async function printBoxTable(table: Table, out: TerminalOutput, maxDisplayRows: number, elapsedMs?: number): Promise<void> {
   const fields = table.schema.fields;
   const numRows = table.numRows;
   const totalCols = fields.length;
@@ -218,9 +219,9 @@ export async function printBoxTable(table: any, out: TerminalOutput, maxDisplayR
   const grid = buildGrid(table, fields, indices);
   const displayRows = indices.length;
 
-  const names: string[] = fields.map((f: any) => f.name);
-  const types: string[] = fields.map((f: any) => fieldToDuckDBType(f));
-  const isNumeric: boolean[] = fields.map((f: any) => isNumericField(f));
+  const names = fields.map((f) => f.name);
+  const types = fields.map((f) => fieldToDuckDBType(f));
+  const isNumeric = fields.map((f) => isNumericField(f));
   const idealWidths = computeIdealWidths(names, types, grid, totalCols);
 
   const { visibleIndices, ellipsisPos } = pruneColumns(idealWidths, out.cols);
@@ -232,10 +233,11 @@ export async function printBoxTable(table: any, out: TerminalOutput, maxDisplayR
   try {
     const Table = (await import(/* @vite-ignore */ "cli-table3")).default;
 
+    type CellContent = string | { content: string; hAlign: "left" | "right" | "center" };
     const colWidths: number[] = [];
     const colAligns: ("left" | "right" | "center")[] = [];
-    const headerRow: any[] = [];
-    const typeRow: any[] = [];
+    const headerRow: CellContent[] = [];
+    const typeRow: CellContent[] = [];
 
     for (let vi = 0; vi < shownCount; vi++) {
       if (ellipsisPos === vi) {
@@ -281,7 +283,7 @@ export async function printBoxTable(table: any, out: TerminalOutput, maxDisplayR
     for (let r = 0; r < displayRows; r++) {
       if (truncated && r === half) {
         for (let g = 0; g < 3; g++) {
-          const gapRow: any[] = [];
+          const gapRow: CellContent[] = [];
           for (let vi = 0; vi < shownCount; vi++) {
             if (ellipsisPos === vi) gapRow.push({ content: "·", hAlign: "center" as const });
             gapRow.push({ content: "·", hAlign: "center" as const });
@@ -290,7 +292,7 @@ export async function printBoxTable(table: any, out: TerminalOutput, maxDisplayR
           dataTbl.push(gapRow);
         }
       }
-      const row: any[] = [];
+      const row: CellContent[] = [];
       for (let vi = 0; vi < shownCount; vi++) {
         if (ellipsisPos === vi) row.push({ content: "…", hAlign: "center" as const });
         const ci = visibleIndices[vi];
@@ -314,14 +316,14 @@ export async function printBoxTable(table: any, out: TerminalOutput, maxDisplayR
 /**
  * Render an Arrow table in line mode — one field per line, vertically.
  */
-export function printLineTable(table: any, out: TerminalOutput, maxDisplayRows: number, elapsedMs?: number): void {
+export function printLineTable(table: Table, out: TerminalOutput, maxDisplayRows: number, elapsedMs?: number): void {
   const fields = table.schema.fields;
   const numRows = table.numRows;
   const totalCols = fields.length;
   if (totalCols === 0) { out.println("(empty)"); return; }
 
   const { indices, truncated, half } = getDisplayIndices(numRows, maxDisplayRows);
-  const names: string[] = fields.map((f: any) => f.name);
+  const names = fields.map((f) => f.name);
   const maxNameLen = Math.max(...names.map((n: string) => n.length));
   const lineWidth = Math.min(out.cols, maxNameLen + 30);
 
