@@ -70,9 +70,8 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
     }
   }
 
-  // Binary / Uint8Array → check for string-encoded extension types first, then [binary]
+  // Binary / Uint8Array → check for extension types first, then [binary]
   if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
-    // Some DuckDB extension types (bignum, varint) store strings as binary
     if (field) {
       try {
         const extMeta = field.metadata?.get?.("ARROW:extension:metadata");
@@ -80,7 +79,7 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
           const typeName = JSON.parse(extMeta)?.type_name;
           if (typeName === "bignum" || typeName === "varint") {
             const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
-            return new TextDecoder().decode(bytes);
+            return formatBignum(bytes);
           }
         }
       } catch { /* ignore */ }
@@ -677,6 +676,29 @@ function readInt128(bytes: Uint8Array, signed: boolean): bigint {
     return -(((raw ^ mask) + 1n) & mask);
   }
   return raw;
+}
+
+/** Format DuckDB's BIGNUM binary format to a decimal string.
+ *  Header (3 bytes): byte[0] bit 7 = sign (0=negative, 1=positive),
+ *  remaining 23 bits = data byte count.
+ *  Data bytes: big-endian magnitude. For negative, bytes are bitwise inverted. */
+function formatBignum(bytes: Uint8Array): string {
+  if (bytes.length < 3) return "0";
+  const HEADER_SIZE = 3;
+  const isPositive = (bytes[0] & 0x80) !== 0;
+  // Data byte count from header (23 bits: 7 bits of byte[0] + byte[1] + byte[2])
+  const dataSize = ((bytes[0] & 0x7F) << 16) | (bytes[1] << 8) | bytes[2];
+  if (dataSize === 0) return "0";
+
+  // Extract magnitude bytes (big-endian). For negative, invert each byte.
+  let magnitude = BigInt(0);
+  for (let i = 0; i < dataSize && HEADER_SIZE + i < bytes.length; i++) {
+    let b = bytes[HEADER_SIZE + i];
+    if (!isPositive) b = (~b) & 0xFF;
+    magnitude = (magnitude << 8n) | BigInt(b);
+  }
+
+  return isPositive ? magnitude.toString() : "-" + magnitude.toString();
 }
 
 /** Format a 16-byte FixedSizeBinary as a signed or unsigned 128-bit integer. */
