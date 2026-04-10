@@ -159,20 +159,120 @@ const FILTER_OPS = [
   ">=", "<=", ">", "<",
 ];
 
-// Types that Perspective cannot handle — skip these columns entirely
-const UNSUPPORTED_PSP_TYPES = new Set(["geometry", "blob", "wkb_geometry"]);
+import { Type as ArrowType } from "apache-arrow";
 
-function duckdbTypeToPsp(name: string): ColumnType | null {
-  name = name.toLowerCase();
-  if (UNSUPPORTED_PSP_TYPES.has(name)) return null;
-  if (name === "varchar" || name === "utf8") return "string";
-  if (name === "double" || name === "hugeint" || name === "float64" || name.startsWith("decimal")) return "float";
-  if (name === "bigint" || name.startsWith("int") || name.startsWith("uint") || name.startsWith("smallint") || name.startsWith("tinyint")) return "integer";
-  if (name.startsWith("date")) return "date";
-  if (name.startsWith("bool")) return "boolean";
-  if (name.startsWith("timestamp")) return "datetime";
-  if (name.startsWith("json") || name.startsWith("struct")) return "string";
-  return "string";
+/**
+ * Map an Arrow field's DataType to a Perspective column type.
+ * Returns null for types Perspective cannot handle (nested, geometry, blob, etc.).
+ * Uses Arrow's numeric typeId for reliable classification instead of string matching.
+ */
+function arrowTypeToPsp(field: any): ColumnType | null {
+  const dt = field.type;
+  if (!dt) return null;
+  const id = dt.typeId;
+
+  // Check extension metadata for geometry types
+  const extName = field.metadata?.get?.("ARROW:extension:name") ?? "";
+  if (extName.startsWith("geoarrow.")) return null;
+
+  switch (id) {
+    // Strings
+    case ArrowType.Utf8:
+    case ArrowType.LargeUtf8:
+      return "string";
+
+    // Integers
+    case ArrowType.Int8:
+    case ArrowType.Int16:
+    case ArrowType.Int32:
+    case ArrowType.Int64:
+    case ArrowType.Uint8:
+    case ArrowType.Uint16:
+    case ArrowType.Uint32:
+    case ArrowType.Uint64:
+    case ArrowType.Int:
+      return "integer";
+
+    // Floats
+    case ArrowType.Float16:
+    case ArrowType.Float32:
+    case ArrowType.Float64:
+    case ArrowType.Float:
+    case ArrowType.Decimal:
+      return "float";
+
+    // Boolean
+    case ArrowType.Bool:
+      return "boolean";
+
+    // Date
+    case ArrowType.Date:
+    case ArrowType.DateDay:
+    case ArrowType.DateMillisecond:
+      return "date";
+
+    // Timestamp (with or without timezone)
+    case ArrowType.Timestamp:
+    case ArrowType.TimestampSecond:
+    case ArrowType.TimestampMillisecond:
+    case ArrowType.TimestampMicrosecond:
+    case ArrowType.TimestampNanosecond:
+      return "datetime";
+
+    // FixedSizeBinary — only accept known sizes:
+    // 16 bytes: hugeint/uhugeint (no ext name), uuid (arrow.uuid)
+    // 8 bytes: timetz
+    case ArrowType.FixedSizeBinary: {
+      const size = dt.byteWidth;
+      if (size === 16 && extName === "arrow.uuid") return "string";
+      if (size === 16) return "float"; // hugeint/uhugeint → f64
+      if (size === 8) return "string"; // timetz
+      return null; // unknown fixed-size binary — exclude
+    }
+
+    // Binary types — only accept bit (small). Blob/bignum/varint excluded.
+    case ArrowType.Binary:
+    case ArrowType.LargeBinary: {
+      const extMeta = field.metadata?.get?.("ARROW:extension:metadata");
+      if (extMeta) {
+        try {
+          if (JSON.parse(extMeta)?.type_name === "bit") return "string";
+        } catch {}
+      }
+      return null;
+    }
+
+    // Interval
+    case ArrowType.Interval:
+    case ArrowType.IntervalDayTime:
+    case ArrowType.IntervalYearMonth:
+      return "string";
+
+    // Dictionary-encoded (typically enum/low-cardinality strings)
+    case ArrowType.Dictionary:
+      return "string";
+
+    // Nested/composite types — Perspective cannot handle these
+    case ArrowType.List:
+    case ArrowType.Struct:
+    case ArrowType.Map:
+    case ArrowType.DenseUnion:
+    case ArrowType.SparseUnion:
+    case ArrowType.FixedSizeList:
+    case ArrowType.LargeList:
+      return null;
+
+    default:
+      return null;
+  }
+}
+
+/** Get Arrow schema fields for a table by querying LIMIT 0. */
+async function getArrowSchema(tableId: string): Promise<any[]> {
+  const result = await runQuery(`SELECT * FROM ${tableId} LIMIT 0`);
+  if (!result.ok || !result.arrowBuffers?.length) return [];
+  const table = tableFromIPC(new Uint8Array(result.arrowBuffers[0]));
+  return table.schema.fields;
 }
 
 /** Execute a SQL query via the shared DuckDB WASM worker. */
@@ -298,23 +398,15 @@ export class VgiDuckDBHandler {
   }
 
   async tableSchema(tableId: string): Promise<Record<string, ColumnType>> {
-    // If tableId has no dots, it's a view ID — qualify with memory.main
-    let sql = this.sqlBuilder.tableSchema(tableId);
-    if (!tableId.includes(".")) {
-      sql = this.qualifyViewSql(sql, tableId);
-    }
-    const rows = await queryRows(sql);
+    const qualifiedId = tableId.includes(".") ? tableId : `memory.main."${tableId}"`;
+    const fields = await getArrowSchema(qualifiedId);
     const schema: Record<string, ColumnType> = {};
-    for (const row of rows) {
-      if (!row.column_name?.startsWith("__")) {
-        const pspType = duckdbTypeToPsp(row.column_type);
-        if (pspType === null) continue; // skip unsupported types (geometry, blob, etc.)
-        // Return hyphenated names to match Perspective's convention.
-        // The rename view (created in tableMakeView) maps these back to
-        // underscored DuckDB column names.
-        const name = row.column_name.replace(/_/g, "-");
-        schema[name] = pspType;
-      }
+    for (const field of fields) {
+      if (field.name.startsWith("__")) continue;
+      const pspType = arrowTypeToPsp(field);
+      if (pspType === null) continue;
+      const name = field.name.replace(/_/g, "-");
+      schema[name] = pspType;
     }
     return schema;
   }
@@ -333,12 +425,31 @@ export class VgiDuckDBHandler {
     const renameViewId = `memory.main."__psp_rename_${tableId.replace(/\./g, "_")}"`;
     if (this.renameViewCache.has(tableId)) return renameViewId;
 
-    // Get source columns
-    const descSql = this.sqlBuilder.tableSchema(tableId);
-    const rows = await queryRows(descSql);
-    const aliases = rows
-      .filter((r: any) => !r.column_name?.startsWith("__"))
-      .map((r: any) => `"${r.column_name}" as "${r.column_name.replace(/_/g, "-")}"`)
+    // Get Arrow schema to classify columns by their actual Arrow DataType
+    const fields = await getArrowSchema(tableId);
+    const aliases = fields
+      .filter((f: any) => !f.name.startsWith("__") && arrowTypeToPsp(f) !== null)
+      .map((f: any) => {
+        const col = `"${f.name}"`;
+        const alias = `"${f.name.replace(/_/g, "-")}"`;
+        const pspType = arrowTypeToPsp(f);
+        const typeStr = f.type?.toString() ?? "";
+        const isTz = typeStr.includes(",") && typeStr.includes("Timestamp"); // Timestamp<MICROSECOND, UTC>
+
+        // Clamp date values to JS Date range to avoid RangeError in Perspective's datagrid
+        if (pspType === "date") {
+          return `CASE WHEN ${col} BETWEEN '0001-01-01'::DATE AND '9999-12-31'::DATE THEN ${col} ELSE NULL END as ${alias}`;
+        }
+        if (pspType === "datetime") {
+          // Precision variants (Second, Nanosecond) need TRY_CAST to avoid overflow with extreme values
+          const targetType = isTz ? "TIMESTAMPTZ" : "TIMESTAMP";
+          const isBase = typeStr.includes("MICROSECOND") || typeStr.includes("MILLISECOND");
+          const castCol = isBase ? col : `TRY_CAST(${col} AS ${targetType})`;
+          const caseExpr = `CASE WHEN ${castCol} BETWEEN '0001-01-01'::${targetType} AND '9999-12-31'::${targetType} THEN ${castCol} ELSE NULL END`;
+          return isTz ? `CAST(${caseExpr} AS ${targetType}) as ${alias}` : `${caseExpr} as ${alias}`;
+        }
+        return `${col} as ${alias}`;
+      })
       .join(", ");
 
     // Include rowid if the source table supports it, so downstream views can ORDER BY rowid
@@ -478,23 +589,25 @@ export class VgiDuckDBHandler {
   }
 
   async viewSchema(viewId: string): Promise<Record<string, ColumnType>> {
-    // Describe the view table in memory.main
-    const rows = await queryRows(`DESCRIBE memory.main."${viewId}"`);
+    const fields = await getArrowSchema(`memory.main."${viewId}"`);
     const schema: Record<string, ColumnType> = {};
-    for (const row of rows) {
-      if (!row.column_name?.startsWith("__")) {
-        const pspType = duckdbTypeToPsp(row.column_type);
-        if (pspType === null) continue;
-        schema[row.column_name] = pspType;
-      }
+    for (const field of fields) {
+      if (field.name.startsWith("__")) continue;
+      const pspType = arrowTypeToPsp(field);
+      if (pspType === null) continue;
+      schema[field.name] = pspType;
     }
     return schema;
   }
 
   async tableValidateExpression(tableId: string, expression: string): Promise<ColumnType> {
+    // Expression validation still uses DESCRIBE since the SQL builder generates the query
     const sql = this.sqlBuilder.tableValidateExpression(tableId, expression);
-    const rows = await queryRows(sql);
-    return duckdbTypeToPsp(rows[0]?.column_type ?? "varchar") ?? "string";
+    const result = await runQuery(sql);
+    if (!result.ok || !result.arrowBuffers?.length) return "string";
+    const table = tableFromIPC(new Uint8Array(result.arrowBuffers[0]));
+    const field = table.schema.fields[0];
+    return field ? (arrowTypeToPsp(field) ?? "string") : "string";
   }
 
   async viewGetMinMax(viewId: string, columnName: string, config: any): Promise<{ min: any; max: any }> {
