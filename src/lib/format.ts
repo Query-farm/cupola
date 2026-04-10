@@ -430,6 +430,9 @@ function formatTimestamp(value: any, unit: "s" | "ms" | "us" | "ns", tz: string 
   } else if (typeof value === "number") {
     if (value === Infinity) return "infinity";
     if (value === -Infinity) return "-infinity";
+    // Arrow converts timestamp infinity (max int64 microseconds) to milliseconds
+    // which exceeds safe integer range but doesn't become JS Infinity
+    if (Math.abs(value) > 9.2e15) return value > 0 ? "infinity" : "-infinity";
     v = BigInt(Math.round(value));
   } else {
     return String(value);
@@ -791,11 +794,19 @@ function formatArrowValue(value: any, field?: any): string {
   if (typeStr.startsWith("Map")) {
     try {
       const entries: string[] = [];
-      for (let i = 0; i < value.length; i++) {
+      const len = value.length ?? 0;
+      for (let i = 0; i < len; i++) {
         const entry = value.get(i);
         if (!entry) continue;
-        const k = entry.key ?? entry.get?.(0) ?? entry.get?.("key");
-        const v = entry.value ?? entry.get?.(1) ?? entry.get?.("value");
+        let k: any, v: any;
+        if (typeof entry.toJSON === "function") {
+          const json = entry.toJSON();
+          k = json.key ?? json.keys ?? Object.values(json)[0];
+          v = json.value ?? json.values ?? Object.values(json)[1];
+        } else {
+          k = entry.key ?? entry.get?.("key") ?? entry.get?.(0);
+          v = entry.value ?? entry.get?.("value") ?? entry.get?.(1);
+        }
         const fk = k === null || k === undefined ? "NULL" : formatNestedValue(k);
         const fv = v === null || v === undefined ? "NULL" : formatNestedValue(v);
         entries.push(`${fk}=${fv}`);
@@ -821,13 +832,33 @@ function formatArrowValue(value: any, field?: any): string {
       try {
         item = value.get(i);
       } catch {
-        // BigInt overflow in nested values — read raw from buffer
-        const chunk = value.data?.[0] ?? value.data;
-        const vals = chunk?.values;
-        if (vals instanceof BigInt64Array || vals instanceof BigUint64Array) {
-          const idx = i - (chunk?.offset ?? 0);
-          item = vals[idx];
-        } else {
+        // BigInt overflow in nested values (e.g., timestamp infinity in arrays)
+        // Try to read raw BigInt from the underlying typed array
+        let resolved = false;
+        for (const chunk of (value.data ?? [value.data])) {
+          if (!chunk) continue;
+          const vals = chunk.values;
+          if (vals instanceof BigInt64Array || vals instanceof BigUint64Array) {
+            const idx = i + (chunk.offset ?? 0);
+            if (idx >= 0 && idx < vals.length) {
+              item = vals[idx];
+              resolved = true;
+              break;
+            }
+          }
+          // Check children for nested types
+          const childVals = chunk.children?.[0]?.values;
+          if (childVals instanceof BigInt64Array || childVals instanceof BigUint64Array) {
+            const offsets = chunk.valueOffsets;
+            const childIdx = offsets ? offsets[i] : i;
+            if (childIdx >= 0 && childIdx < childVals.length) {
+              item = childVals[childIdx];
+              resolved = true;
+              break;
+            }
+          }
+        }
+        if (!resolved) {
           parts.push("???");
           continue;
         }
@@ -887,8 +918,13 @@ function formatNestedValue(val: any): string {
     if (val instanceof Uint8Array) return "[binary]";
     if (typeof val.toArray === "function") return formatArrowValue(val);
     if (val instanceof Date) return formatDateFromDays(Math.floor(val.getTime() / 86400000));
+    // Plain JS array (from toJSON on Arrow List/FixedSizeList)
+    if (Array.isArray(val)) {
+      const items = val.map(v => v === null || v === undefined ? "NULL" : formatNestedValue(v));
+      return `[${items.join(", ")}]`;
+    }
     // Plain struct object
-    if (!Array.isArray(val) && !(val instanceof Int32Array) && !(val instanceof Float64Array)) {
+    if (!(val instanceof Int32Array) && !(val instanceof Float64Array)) {
       return formatPlainStruct(val);
     }
     try { return JSON.stringify(val); } catch { return "[object]"; }
