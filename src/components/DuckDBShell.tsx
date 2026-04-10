@@ -11,20 +11,10 @@ import { getColumns } from "@/lib/service";
 import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
 import { getAuthToken, getOAuthMeta, redirectToAuth } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
-import {
-  runAgentTurn,
-  buildSystemPrompt,
-  executeListTables,
-  executeDescribeTable,
-  executeReadQueryResults,
-  formatArrowTableAsJson,
-  type MessageParam,
-} from "@/lib/ai-agent";
-import { createMarkdownRenderer } from "@/lib/markdown-ansi";
-import { estimateCost, formatCost } from "@/lib/pricing";
 import { formatCellValue, safeGetArrowValue } from "@/lib/format";
 import { printBoxTable, printLineTable, type TerminalOutput } from "@/lib/shell-table-renderer";
 import { handleDotCommand, type ShellState, type ShellIO } from "@/lib/shell-commands";
+import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "@/lib/shell-ai-mode";
 import { bridge } from "@/lib/shell-bridge";
 import { getTerminalTheme } from "@/lib/theme";
 import {
@@ -1474,9 +1464,11 @@ function initShell(
   }
 
   // Persistent AI conversation state (survives across .ai mode entries)
-  let aiMessages: MessageParam[] = [];
-  let aiConversationId = `ai-${Date.now()}`;
-  let aiConversationName = "";
+  const aiConv: AIConversationState = {
+    messages: [],
+    conversationId: `ai-${Date.now()}`,
+    conversationName: "",
+  };
 
   // Read loop
   let prefillText = "";
@@ -1539,377 +1531,30 @@ function initShell(
         if (await handleDotCommand(trimmed, shellState, shellIO)) continue;
       }
 
-      // -----------------------------------------------------------------------
-      // AI mode
-      // -----------------------------------------------------------------------
+      // AI mode (delegated to shell-ai-mode.ts)
       if (trimmed === ".ai" || trimmed === ".ai new" || trimmed.startsWith(".ai name ")) {
-        // Handle .ai name <text> — set conversation name without entering AI mode
-        if (trimmed.startsWith(".ai name ")) {
-          aiConversationName = trimmed.slice(9).trim();
-          writeln(`Conversation named: ${aiConversationName}`, "33");
-          continue;
-        }
-
-        // Read API key fresh from localStorage (user may have set it after shell opened)
-        let aiApiKey = config.aiApiKey || "";
-        let aiModel = config.aiModel || "claude-sonnet-4-20250514";
-        let aiMaxToolRounds = 20;
-        try {
-          const stored = localStorage.getItem("vgi-frontend-settings");
-          if (stored) {
-            const s = JSON.parse(stored);
-            if (s.anthropicApiKey) aiApiKey = s.anthropicApiKey;
-            if (s.aiModel) aiModel = s.aiModel;
-            if (s.aiMaxToolRounds) aiMaxToolRounds = s.aiMaxToolRounds;
-          }
-        } catch {}
-
-        if (!aiApiKey) {
-          writeln("No API key configured. Set your Anthropic API key in Settings.", "31");
-          continue;
-        }
-        if (!config.catalogData) {
-          writeln("Catalog data not available. Try again after the catalog loads.", "31");
-          continue;
-        }
-
-        // .ai new → start fresh conversation
-        if (trimmed === ".ai new") {
-          aiMessages = [];
-          aiConversationId = `ai-${Date.now()}`;
-          aiConversationName = "";
-          writeln("Starting new AI conversation. Type .exit to return to SQL.", "35");
-        } else if (aiMessages.length > 0) {
-          // Resume existing conversation
-          const msgCount = aiMessages.length;
-          const nameHint = aiConversationName ? ` (${aiConversationName})` : "";
-          writeln(`Resuming AI conversation${nameHint} — ${msgCount} messages. Type .ai new for a fresh start.`, "35");
-        } else {
-          writeln("Entering AI mode. Type .exit to return to SQL.", "35");
-        }
-        writeln("");
-        bridge.inAiMode = true;
-
-        const systemPrompt = buildSystemPrompt(config.catalogData, config.serviceUrl, bridge.memoryCatalog);
-        let aiAbort: AbortController | null = null;
-
-        // Braille spinner
-        const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let spinnerInterval: ReturnType<typeof setInterval> | null = null;
-        let spinnerFrame = 0;
-        let spinnerLabel = "";
-
-        function startSpinner(label: string) {
-          spinnerLabel = label;
-          spinnerFrame = 0;
-          if (spinnerInterval) return; // already running, just update label
-          spinnerInterval = setInterval(() => {
-            // Don't write spinner when terminal is hidden — \r won't work on zero-width terminal
-            if (term.cols < 2) return;
-            const frame = spinnerFrames[spinnerFrame % spinnerFrames.length];
-            term.write(`\r\x1b[1;35m${frame} ${spinnerLabel}\x1b[0m\x1b[K`);
-            spinnerFrame++;
-          }, 100);
-        }
-
-        function stopSpinner() {
-          if (spinnerInterval) {
-            clearInterval(spinnerInterval);
-            spinnerInterval = null;
-            term.write("\r\x1b[K"); // Clear the spinner line
-          }
-        }
-
-        // Ctrl+D or Escape exits AI mode
-        let ctrlDExit = false;
-        const ctrlDDisposable = term.onData((data: string) => {
-          if (data === "\x04" || data === "\x1b") { // Ctrl+D or Escape
-            ctrlDExit = true;
-            // Submit empty line to unblock rl.read()
-            term.paste("\r");
-          }
-        });
-
-        // AI read loop
-        aiLoop: while (true) {
-          const userInput = await rl.read("\x1b[1;36mAI\x1b[0m > ");
-
-          if (ctrlDExit) {
-            ctrlDExit = false;
-            ctrlDDisposable.dispose();
-            writeln("Exiting AI mode.", "35");
-            writeln("");
-            break;
-          }
-
-          const aiTrimmed = userInput.trim();
-
-          if (!aiTrimmed) {
-            if (rl.history?.length) rl.history.pop();
-            continue;
-          }
-
-          if (aiTrimmed === ".help" || aiTrimmed === "/help") {
-            writeln("/new               Start a new conversation");
-            writeln("/name <text>       Name this conversation");
-            writeln("/clear             Clear conversation history");
-            writeln("/exit              Return to SQL mode");
-            writeln("/help              Show this help");
-            continue;
-          }
-
-          if (aiTrimmed === "/new") {
-            aiMessages = [];
-            aiConversationId = `ai-${Date.now()}`;
-            aiConversationName = "";
-            writeln("Started new conversation.", "33");
-            continue;
-          }
-
-          if (aiTrimmed === ".clear" || aiTrimmed === "/clear") {
-            aiMessages = [];
-            aiConversationId = `ai-${Date.now()}`;
-            aiConversationName = "";
-            writeln("Conversation cleared.", "33");
-            continue;
-          }
-
-          if (aiTrimmed.startsWith(".name ") || aiTrimmed.startsWith("/name ")) {
-            aiConversationName = aiTrimmed.slice(6).trim();
-            writeln(`Conversation named: ${aiConversationName}`, "33");
-            continue;
-          }
-
-          if (aiTrimmed === ".exit" || aiTrimmed === "/exit") {
-            ctrlDDisposable.dispose();
-            writeln("Exiting AI mode.", "35");
-            writeln("");
-            break;
-          }
-
-          aiMessages.push({ role: "user", content: aiTrimmed });
-          // Auto-name conversation from first user question if not explicitly named
-          if (!aiConversationName) {
-            aiConversationName = aiTrimmed.length > 50 ? aiTrimmed.slice(0, 50) + "…" : aiTrimmed;
-          }
-          aiAbort = new AbortController();
-          let textBuffer = "";
-
-          // Ctrl+C / Escape handler — abort the in-flight request
-          const cancelDisposable = term.onData((data: string) => {
-            if ((data === "\x03" || data === "\x1b") && aiAbort) { // Ctrl+C or Escape
-              aiAbort.abort();
-            }
-          });
-
-          startSpinner("Thinking...");
-
-          try {
-            // Tool executor
-            const executeTool = async (name: string, input: any): Promise<string> => {
-              if (name === "run_sql") {
-                stopSpinner();
-                queryRunning = true;
-                const t0 = performance.now();
-                const result = await runQueryAsync(input.sql);
-                const elapsed = performance.now() - t0;
-                clearProgressBar();
-                queryRunning = false;
-                if (cancelInt32) Atomics.store(cancelInt32, 0, 0);
-
-                // Find user question for context
-                const lastUserMsg = aiMessages.filter(m => m.role === 'user').pop();
-                const userQuestion = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : undefined;
-
-                if (!result.ok) {
-                  const errMsg = result.error || "Query failed";
-                  rl.println(`\x1b[31m  Error: ${errMsg}\x1b[0m`);
-
-                  // Track failed query in history
-                  bridge.addQueryHistoryEntry?.({
-                    id: Date.now(),
-                    timestamp: Date.now(),
-                    sql: input.sql,
-                    executionTimeMs: elapsed,
-                    success: false,
-                    error: errMsg,
-                    userQuestion,
-                    conversationId: aiConversationId,
-                    conversationName: aiConversationName,
-                  });
-
-                  // HTTP errors mean the VGI server connection is broken — abort the agent loop
-                  if (errMsg.includes("HTTP Error") || errMsg.includes("HTTP 5")) {
-                    // TODO: Report this error to the developer for exception tracking
-                    const fatal = new Error(`VGI connection error: ${errMsg}`);
-                    (fatal as any).fatal = true;
-                    throw fatal;
-                  }
-
-                  throw new Error(errMsg);
-                }
-                if (!result.arrowBuffers?.length) {
-                  rl.println(`\x1b[2m  OK (no results)\x1b[0m`);
-                  bridge.addQueryHistoryEntry?.({
-                    id: Date.now(),
-                    timestamp: Date.now(),
-                    sql: input.sql,
-                    executionTimeMs: elapsed,
-                    success: true,
-                    rowCount: 0,
-                    userQuestion,
-                    conversationId: aiConversationId,
-                    conversationName: aiConversationName,
-                  });
-                  return JSON.stringify({ ok: true, message: "Query executed successfully (no results)" });
-                }
-                const table = tableFromIPC(result.arrowBuffers[0]);
-                await printTable(table);
-                const { json } = formatArrowTableAsJson(table);
-
-                // Track successful query in history
-                bridge.addQueryHistoryEntry?.({
-                  id: Date.now(),
-                  timestamp: Date.now(),
-                  sql: input.sql,
-                  executionTimeMs: elapsed,
-                  success: true,
-                  rowCount: table.numRows,
-                  userQuestion,
-                  conversationId: aiConversationId,
-                  conversationName: aiConversationName,
-                });
-
-                return json;
-              }
-              if (name === "read_query_results") {
-                return executeReadQueryResults(input.result_id, input.offset, input.limit);
-              }
-              if (name === "list_tables") {
-                return executeListTables(config.catalogData!);
-              }
-              if (name === "describe_table") {
-                return executeDescribeTable(config.catalogData!, input.schema, input.table);
-              }
-              if (name === "ask_user") {
-                stopSpinner();
-                // Display question and options
-                rl.println("");
-                rl.println(`\x1b[1m${input.question}\x1b[0m`);
-                const options: string[] = input.options || [];
-                for (let i = 0; i < options.length; i++) {
-                  rl.println(`  \x1b[33m${i + 1}.\x1b[0m ${options[i]}`);
-                }
-                rl.println("");
-                const choice = await rl.read("Select: ");
-                const idx = parseInt(choice.trim(), 10) - 1;
-                if (idx >= 0 && idx < options.length) {
-                  return `User selected: ${options[idx]}`;
-                }
-                return `User responded: ${choice.trim()}`;
-              }
-              return JSON.stringify({ error: `Unknown tool: ${name}` });
-            };
-
-            await runAgentTurn(
-              aiApiKey,
-              aiModel,
-              aiMessages,
-              systemPrompt,
-              executeTool,
-              {
-                onText: (chunk) => {
-                  textBuffer += chunk;
-                },
-                onToolCall: (name, input) => {
-                  stopSpinner();
-                  // Render any buffered text before showing tool call
-                  if (textBuffer) {
-                    rl.println("");
-                    const md = createMarkdownRenderer(term.cols);
-                    term.write(md.push(textBuffer + "\n"));
-                    term.write(md.end());
-                    textBuffer = "";
-                  }
-                  rl.println("");
-                  if (name === "run_sql") {
-                    const sqlLabel = "── SQL ";
-                    const lineWidth = Math.max(0, term.cols - sqlLabel.length - 1);
-                    rl.println(`\x1b[2m${sqlLabel}${"─".repeat(lineWidth)}\x1b[0m`);
-                    rl.println(`\x1b[33m${input.sql}\x1b[0m`);
-                    rl.println("");
-                  } else if (name === "describe_table") {
-                    rl.println(`\x1b[2m  📋 Describing ${input.schema}.${input.table}\x1b[0m`);
-                  } else if (name === "list_tables") {
-                    rl.println(`\x1b[2m  📋 Listing tables\x1b[0m`);
-                  } else if (name === "ask_user") {
-                    // Handled in executeTool
-                  } else {
-                    rl.println(`\x1b[2m  [${name}]\x1b[0m`);
-                  }
-                },
-                onToolResult: () => {
-                  rl.println("");
-                  startSpinner("Thinking...");
-                },
-                onDone: (usage) => {
-                  stopSpinner();
-                  // Render the complete response with markdown formatting
-                  if (textBuffer) {
-                    rl.println("");
-                    const md = createMarkdownRenderer(term.cols);
-                    term.write(md.push(textBuffer + "\n"));
-                    term.write(md.end());
-                    textBuffer = "";
-                  }
-                  rl.println("");
-                  if (usage) {
-                    const cost = estimateCost(aiModel, usage.inputTokens, usage.outputTokens);
-                    const costStr = formatCost(cost);
-                    rl.println(`\x1b[2m  tokens: ${usage.inputTokens.toLocaleString()} in, ${usage.outputTokens.toLocaleString()} out (${costStr})\x1b[0m`);
-                  }
-                  rl.println("");
-                  rl.println("");
-                },
-                onError: (error) => {
-                  stopSpinner();
-                  rl.println("");
-                  writeln(`Error: ${error}`, "31");
-                  rl.println("");
-                },
-                onRetry: (message) => {
-                  if (message) {
-                    startSpinner(message);
-                  } else {
-                    startSpinner("Thinking...");
-                  }
-                },
-              },
-              aiAbort.signal,
-              aiMaxToolRounds
-            );
-          } catch (err: any) {
-            stopSpinner();
-            if (err.name === "AbortError" || err.message === "Cancelled.") {
-              rl.println("");
-              writeln("Cancelled.", "33");
-              rl.println("");
-              // Remove the partial assistant message from history
-              if (aiMessages.length && aiMessages[aiMessages.length - 1].role === "user") {
-                // User message was added but no response — keep it for retry
-              }
-            } else {
-              rl.println("");
-              writeln(`Error: ${err.message || err}`, "31");
-              rl.println("");
-            }
-          } finally {
-            cancelDisposable.dispose();
-          }
-        }
-
-        bridge.inAiMode = false;
-        continue; // Back to SQL readLoop
+        const aiTerm: AITerminal = {
+          get cols() { return term.cols; },
+          write: (data: string) => term.write(data),
+          paste: (text: string) => term.paste(text),
+          println: (line: string) => rl.println(line),
+          writeln,
+          read: (prompt: string) => rl.read(prompt),
+          onData: (handler: (data: string) => void) => term.onData(handler),
+          get history() { return rl.history; },
+        };
+        const aiOps: AIShellOps = {
+          catalogData: config.catalogData!,
+          serviceUrl: config.serviceUrl,
+          runQueryAsync,
+          tableFromIPC,
+          printTable,
+          clearProgressBar,
+          setQueryRunning: (running: boolean) => { queryRunning = running; },
+          resetCancelFlag: () => { if (cancelInt32) Atomics.store(cancelInt32, 0, 0); },
+        };
+        await runAIMode(trimmed, aiConv, aiTerm, aiOps, { apiKey: config.aiApiKey || "", model: config.aiModel || "claude-sonnet-4-20250514" });
+        continue;
       }
 
       queryRunning = true;
