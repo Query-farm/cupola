@@ -70,8 +70,21 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
     }
   }
 
-  // Binary / Uint8Array → geometry or binary indicator
+  // Binary / Uint8Array → check for string-encoded extension types first, then [binary]
   if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+    // Some DuckDB extension types (bignum, varint) store strings as binary
+    if (field) {
+      try {
+        const extMeta = field.metadata?.get?.("ARROW:extension:metadata");
+        if (extMeta) {
+          const typeName = JSON.parse(extMeta)?.type_name;
+          if (typeName === "bignum" || typeName === "varint") {
+            const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+            return new TextDecoder().decode(bytes);
+          }
+        }
+      } catch { /* ignore */ }
+    }
     return "[binary]";
   }
 
@@ -724,7 +737,7 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
   const typeStr = column.type?.toString() || "";
 
   // FixedSizeBinary extension types (arrow_lossless_conversion=true):
-  // hugeint, uhugeint, time_tz, uuid — return tagged values for formatCellValue
+  // hugeint, uhugeint, time_tz, uuid
   if (typeStr.startsWith("FixedSizeBinary")) {
     const meta = field?.metadata ?? column.type?.metadata;
     let extTypeName: string | null = null;
