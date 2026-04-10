@@ -341,7 +341,15 @@ export class VgiDuckDBHandler {
       .map((r: any) => `"${r.column_name}" as "${r.column_name.replace(/_/g, "-")}"`)
       .join(", ");
 
-    await runQuery(`CREATE OR REPLACE VIEW ${renameViewId} AS SELECT ${aliases} FROM ${tableId}`);
+    // Include rowid if the source table supports it, so downstream views can ORDER BY rowid
+    let hasRowid = false;
+    try {
+      const r = await runQuery(`SELECT rowid FROM ${tableId} LIMIT 0`);
+      hasRowid = r.ok;
+    } catch {}
+    const selectCols = hasRowid ? `rowid, ${aliases}` : aliases;
+
+    await runQuery(`CREATE OR REPLACE VIEW ${renameViewId} AS SELECT ${selectCols} FROM ${tableId}`);
     this.renameViewCache.add(tableId);
     return renameViewId;
   }
