@@ -113,8 +113,12 @@ export function formatCellValue(value: any, columnName?: string, field?: any, du
 
     // Float32 — limit to 8 significant digits to match DuckDB CLI display
     if (typeStr === "Float32" && typeof value === "number") {
-      // DuckDB uses printf %g with 8 significant figures for FLOAT
-      return Number(value.toPrecision(8)).toString();
+      return formatFloat(value, 8);
+    }
+
+    // Float64/Double — DuckDB shows 42.0 for whole numbers, nan/inf lowercase
+    if (typeStr === "Float64" && typeof value === "number") {
+      return formatFloat(value, 17);
     }
 
     // Timestamps — dispatch by precision from Arrow type
@@ -735,6 +739,17 @@ function getDuckDBExtensionType(field: any): string | null {
 }
 
 /** Format a 16-byte FixedSizeBinary as a signed or unsigned 128-bit integer. */
+/** Format a float/double matching DuckDB CLI: 42.0 for whole numbers, nan/inf lowercase. */
+function formatFloat(value: number, sigFigs: number): string {
+  if (Number.isNaN(value)) return "nan";
+  if (value === Infinity) return "inf";
+  if (value === -Infinity) return "-inf";
+  const s = sigFigs < 17 ? Number(value.toPrecision(sigFigs)).toString() : value.toString();
+  // DuckDB shows .0 suffix for whole-number doubles
+  if (Number.isFinite(value) && !s.includes(".") && !s.includes("e")) return s + ".0";
+  return s;
+}
+
 /** Read a 16-byte FixedSizeBinary as a signed or unsigned 128-bit BigInt. */
 function readInt128(bytes: Uint8Array, signed: boolean): bigint {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, 16);
@@ -752,7 +767,7 @@ function readInt128(bytes: Uint8Array, signed: boolean): bigint {
 
 /** Format an Arrow Vector value (List, Struct, Map) in DuckDB's display style. */
 function formatArrowValue(value: any, field?: any): string {
-  const type = value.type ?? field?.type;
+  const type = field?.type ?? value.type;
   const typeStr = type?.toString() || "";
 
   // Struct: {'field': value, ...}
@@ -785,11 +800,22 @@ function formatArrowValue(value: any, field?: any): string {
   // List/FixedSizeList/Array: [val1, val2, ...]
   try {
     const len = value.length ?? value.numRows ?? 0;
+    // Get element type — either from the parent List type's children, or from
+    // the inner vector's type (for nested Arrow vectors from .get())
+    const elementField = type?.children?.[0] ?? null;
+    // The inner vector (from value.get(i)) carries its own .type — use it as a field
+    const innerType = value.data?.[0]?.type ?? value.type?.children?.[0]?.type ?? null;
+    const syntheticField = elementField ?? (innerType ? { type: innerType, metadata: null } : null);
     const parts: string[] = [];
     for (let i = 0; i < len; i++) {
       const item = value.get(i);
       if (item === null || item === undefined) {
         parts.push("NULL");
+      } else if (typeof item === "object" && typeof item.toArray === "function") {
+        // Nested vector (list of lists, list of structs)
+        parts.push(formatArrowValue(item));
+      } else if (syntheticField) {
+        parts.push(formatCellValue(item, undefined, syntheticField));
       } else {
         parts.push(formatNestedValue(item));
       }
