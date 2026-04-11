@@ -134,7 +134,8 @@ export const onRequest: PagesFunction<Env> = async (context) => {
   // the edge cache. We add an `x-cupola-cache` header so we can
   // verify hits independently.
   const cache = (caches as unknown as { default: Cache }).default;
-  if (context.request.method === "GET") {
+  const isLatestMarkerPath = path === "/_latest" || path.endsWith("/_latest");
+  if (context.request.method === "GET" && !isLatestMarkerPath) {
     const cached = await cache.match(context.request);
     if (cached) {
       const hit = new Response(cached.body, cached);
@@ -142,14 +143,33 @@ export const onRequest: PagesFunction<Env> = async (context) => {
       return hit;
     }
   }
+  // Evict any stale `/_latest` entry left over from a previous deploy
+  // before we cached _latest had been excluded — once per request, fire
+  // and forget. After all old entries TTL out this is a no-op.
+  if (isLatestMarkerPath && context.request.method === "GET") {
+    try { context.waitUntil(cache.delete(context.request)); } catch { /* ignore */ }
+  }
 
   // Helper: cache a GET response before returning it. We tee the body
   // into two ReadableStreams — one for the client response, one for
   // caches.default.put — and drive the cache write via waitUntil so
   // the first request doesn't eat the write latency.
+  //
+  // The `_latest` marker is explicitly excluded — it's the deploy
+  // pointer, changes on every release, and would otherwise stick at
+  // the previous version's value in the per-colo cache for an hour.
+  // The function reads `_latest` via the R2 binding (not via this HTTP
+  // path) when it needs to resolve the latest version internally, so
+  // skipping the HTTP cache for it has no effect on user-facing
+  // routing.
   const cacheAndReturn = async (res: Response): Promise<Response> => {
-    if (context.request.method !== "GET" || res.status !== 200 || !res.body) {
+    const isLatestMarker = path === "/_latest" || path.endsWith("/_latest");
+    if (context.request.method !== "GET" || res.status !== 200 || !res.body || isLatestMarker) {
       res.headers.set("x-cupola-cache", "SKIP");
+      if (isLatestMarker) {
+        // Force the browser/CDN not to cache it either.
+        res.headers.set("Cache-Control", "no-store, max-age=0");
+      }
       return res;
     }
     const [forClient, forCache] = res.body.tee();
