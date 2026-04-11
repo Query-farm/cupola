@@ -643,12 +643,16 @@ function ConnectForm() {
 
 /** Welcome page shown when no ?service= parameter is provided. */
 function WelcomePage({ logoUrl }: { logoUrl: string }) {
-  const [recent, setRecent] = useState(() => getRecentServices());
-  // window.location.origin can't be read at SSR time; use a placeholder that
-  // matches between server and client, then swap it in via useEffect after
-  // hydration. Without this, hydration fails with React error #418.
+  // Both recent services (from localStorage) and window.location.origin are
+  // client-only state. Initialize empty for SSR so the server-rendered HTML
+  // matches the first client render, then populate via useEffect after
+  // hydration. Without this, React #418 fires due to SSR/client mismatch.
+  const [recent, setRecent] = useState<RecentService[]>([]);
   const [origin, setOrigin] = useState("");
-  useEffect(() => { setOrigin(window.location.origin); }, []);
+  useEffect(() => {
+    setRecent(getRecentServices());
+    setOrigin(window.location.origin);
+  }, []);
 
   const handleRemove = (url: string) => {
     removeRecentService(url);
