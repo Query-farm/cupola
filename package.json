@@ -1,7 +1,7 @@
 {
   "name": "vgi-web-frontend",
   "type": "module",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "engines": {
     "node": ">=22.12.0"
   },
