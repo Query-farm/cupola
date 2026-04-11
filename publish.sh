@@ -57,7 +57,6 @@ echo "==> dist/ size: $(du -sh dist/ | cut -f1)"
 
 # ---- Upload versioned files to R2 ----
 R2_PREFIX="v${VERSION}"
-echo "==> Uploading dist/ to R2 under ${R2_PREFIX}/..."
 
 content_type() {
   local f="$1"
@@ -83,6 +82,21 @@ content_type() {
   esac
 }
 
+# Per-file wrangler upload worker — invoked in parallel by xargs -P.
+# Each call still spawns an `npx wrangler` (~2-3s cold start), but running
+# 16 at a time drops ~64 files × 3s = 3 min → ~12-15s wall time.
+upload_one() {
+  local f="$1"
+  local key_prefix="$2"   # "" for root keys, "v0.3.10/" for versioned
+  local key="${key_prefix}${f#dist/}"
+  local ct
+  ct=$(content_type "$f")
+  npx wrangler r2 object put "${R2_BUCKET}/${key}" \
+    --file "$f" --content-type "$ct" --remote 2>/dev/null
+}
+export -f content_type upload_one
+export R2_BUCKET
+
 # Astro's `base: /v${VERSION}/` versions the URLs emitted in HTML/JS but does
 # NOT change the dist/ output directory layout — files still live at dist/_astro,
 # dist/shell, etc. We add the v${VERSION}/ prefix during upload.
@@ -92,22 +106,14 @@ content_type() {
 OVERSIZED=$(find dist/ -type f -size +25M 2>/dev/null || true)
 if [ -n "$OVERSIZED" ]; then
   echo "==> Uploading shared large assets to R2 root..."
-  for f in $OVERSIZED; do
-    KEY="${f#dist/}"
-    CT=$(content_type "$f")
-    SIZE_MB=$(echo "scale=1; $(wc -c < "$f" | tr -d ' ') / 1048576" | bc)
-    echo "    ${KEY} (${SIZE_MB}MB)"
-    npx wrangler r2 object put "${R2_BUCKET}/${KEY}" --file "$f" --content-type "$CT" --remote 2>/dev/null
-  done
+  printf '%s\n' "$OVERSIZED" | xargs -n 1 -P 8 -I{} bash -c 'upload_one "$1" ""' _ {}
 fi
 
-# Upload all normal-sized files to R2 under the version prefix
+# Upload all normal-sized files to R2 under the version prefix. Parallelize
+# with xargs -P 16 so wrangler cold-start cost is amortized across workers.
 echo "==> Uploading dist/ to R2 under ${R2_PREFIX}/..."
-find dist/ -type f -not -size +25M | while read -r f; do
-  KEY="${R2_PREFIX}/${f#dist/}"
-  CT=$(content_type "$f")
-  npx wrangler r2 object put "${R2_BUCKET}/${KEY}" --file "$f" --content-type "$CT" --remote 2>/dev/null
-done
+find dist/ -type f -not -size +25M -print0 | \
+  xargs -0 -n 1 -P 16 -I{} bash -c 'upload_one "$1" "'"${R2_PREFIX}/"'"' _ {}
 echo "==> Uploaded files to R2 prefix ${R2_PREFIX}/"
 
 # Write _latest marker (temp file approach for portability)
