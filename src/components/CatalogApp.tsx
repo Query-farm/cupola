@@ -644,6 +644,11 @@ function ConnectForm() {
 /** Welcome page shown when no ?service= parameter is provided. */
 function WelcomePage({ logoUrl }: { logoUrl: string }) {
   const [recent, setRecent] = useState(() => getRecentServices());
+  // window.location.origin can't be read at SSR time; use a placeholder that
+  // matches between server and client, then swap it in via useEffect after
+  // hydration. Without this, hydration fails with React error #418.
+  const [origin, setOrigin] = useState("");
+  useEffect(() => { setOrigin(window.location.origin); }, []);
 
   const handleRemove = (url: string) => {
     removeRecentService(url);
@@ -713,7 +718,7 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
             parameter. You can also enter a service URL above, or bookmark a direct link:
           </p>
           <code className="block text-xs bg-muted text-muted-foreground px-3 py-2 rounded overflow-x-auto">
-            {typeof window !== "undefined" ? window.location.origin : ""}/?service=https://your-server.example.com
+            {origin}/?service=https://your-server.example.com
           </code>
         </div>
 
