@@ -368,15 +368,14 @@ function formatDateFromDays(days: number): string {
 // ============================================================================
 
 /** Get the timestamp unit from an Arrow type string.
- * Note: Arrow JS normalizes values — SECOND and MILLISECOND both become milliseconds,
- * MICROSECOND stays microseconds, NANOSECOND gets truncated to milliseconds (lossy).
- * The "unit" here means what Arrow actually gives us, not the original DuckDB type. */
+ * safeGetArrowValue reads the raw BigInt64 directly, so the value we receive is in
+ * the column's native unit — not Arrow's normalized milliseconds. Order matters:
+ * MILLISECOND/MICROSECOND/NANOSECOND must be checked before SECOND. */
 function getTimestampUnit(typeStr: string): "s" | "ms" | "us" | "ns" {
   if (typeStr.includes("NANOSECOND") || typeStr.includes("Nanosecond")) return "ns";
   if (typeStr.includes("MICROSECOND") || typeStr.includes("Microsecond")) return "us";
-  // Arrow converts SECOND and MILLISECOND to milliseconds
-  if (typeStr.includes("SECOND") || typeStr.includes("Second")) return "ms";
   if (typeStr.includes("MILLISECOND") || typeStr.includes("Millisecond")) return "ms";
+  if (typeStr.includes("SECOND") || typeStr.includes("Second")) return "s";
   return "us"; // default
 }
 
@@ -1032,8 +1031,10 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
     }
   }
 
-  // Timestamp<NANOSECOND>: Arrow truncates BigInt64 to Number, losing precision.
-  if (typeStr.includes("NANOSECOND")) {
+  // Timestamp: Arrow's .get() converts every unit to milliseconds via divideBigInts
+  // (lossy for MICROSECOND/NANOSECOND, and a unit-mismatch trap for formatTimestamp).
+  // Read raw BigInt64 directly so formatTimestamp can interpret values in their native unit.
+  if (typeStr.startsWith("Timestamp")) {
     const chunk = column.data?.[0] ?? column.data;
     const values = chunk?.values;
     if (values instanceof BigInt64Array) {
