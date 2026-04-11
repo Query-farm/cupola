@@ -1,6 +1,13 @@
 // DuckDB-WASM Worker — runs DuckDB in a Web Worker where sync XHR and SAB work.
 
-var WASM_BUILD_VERSION = "duckdb-1.5.1-vgi-coi-20260409";
+// Append the cupola release version (extracted from /vX.Y.Z/ in self.location)
+// so IndexedDB snapshots from prior releases are not restored into a worker
+// whose JS-side runtime state differs. The duckdb-coi.wasm bytes can be
+// identical across releases, but a snapshot also captures function-table
+// indices populated by Embind at startup — those depend on the worker.js
+// init order, so a snapshot is only safe to restore in the same release.
+var RELEASE_VERSION = self.location.pathname.match(/\/v(\d+\.\d+\.\d+)\//)?.[1] || 'unversioned';
+var WASM_BUILD_VERSION = "duckdb-1.5.1-vgi-coi-20260409-r" + RELEASE_VERSION;
 
 // OAuth SAB state — initialized from main thread
 var oauthSAB = null;
