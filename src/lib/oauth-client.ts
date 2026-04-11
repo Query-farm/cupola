@@ -580,6 +580,10 @@ export function bootstrap(onLoginComplete: (result: { serviceUrl: string; return
     const m = ev.data;
     if (!m || m.type !== "oauth-callback") return;
     if (!m.code || !m.state) return;
+    // BroadcastChannel is shared with the DuckDB shell's own OAuth popup
+    // listener. Ignore messages whose state we never started — those belong
+    // to a shell ATTACH flow and will be handled by DuckDBShell.tsx.
+    if (!readPending(m.state)) return;
     try {
       const result = await completeLoginFlow(m.code, m.state);
       console.log("[oauth] bootstrap: login complete via broadcast, return_to=", result.returnTo);

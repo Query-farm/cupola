@@ -1032,7 +1032,6 @@ function initShell(
       const cleanup = () => {
         settled = true;
         try { bc.close(); } catch { /* already closed */ }
-        clearInterval(popupPoll);
         clearTimeout(timeoutTimer);
       };
 
@@ -1052,25 +1051,20 @@ function initShell(
         try { popup.close(); } catch { /* already closed */ }
       };
 
-      // Detect user-cancel: the popup got closed before returning a code.
-      const popupPoll = setInterval(() => {
-        if (settled) return;
-        if (popup.closed) {
-          cleanup();
-          console.warn("[shell] OAuth popup closed by user before returning a code");
-          writeSab(-1, "Authentication cancelled");
-        }
-      }, 500);
-
-      // Hard ceiling so the extension's Atomics.wait loop can't hang forever
-      // if the BroadcastChannel delivery fails for any reason.
+      // We intentionally do NOT poll `popup.closed`. With COOP: same-origin
+      // (required for SharedArrayBuffer / DuckDB-WASM threads), navigating the
+      // popup cross-origin severs the browsing context group, and the
+      // disconnected WindowProxy reports `closed === true` immediately — even
+      // while the user is still mid-login. The BroadcastChannel message from
+      // oauth-callback.html (same-origin) is the only reliable signal. The
+      // timeout below bounds the worker's Atomics.wait if no callback arrives.
       const timeoutTimer = setTimeout(() => {
         if (settled) return;
         cleanup();
-        console.warn("[shell] OAuth popup timed out after 2 minutes");
+        console.warn("[shell] OAuth popup timed out after 60s");
         writeSab(-1, "Authentication timed out");
         try { popup.close(); } catch { /* already closed */ }
-      }, 120_000);
+      }, 60_000);
       return;
     }
 

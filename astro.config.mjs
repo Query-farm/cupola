@@ -37,8 +37,9 @@ export default defineConfig({
       // Vite's middleware holds the connection open for JS transform processing.
       {
         name: 'shell-wasm-direct-serve',
+        enforce: 'pre',
         configureServer(server) {
-          server.middlewares.use((req, res, next) => {
+          const handler = (req, res, next) => {
             // COOP/COEP required for SharedArrayBuffer (DuckDB-WASM COI/threads build)
             res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
             res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
@@ -62,8 +63,44 @@ export default defineConfig({
                 return;
               }
             }
+
+            // Serve version-free public files at their root path. In production
+            // these live at dist/ root (outside the version prefix), so OAuth
+            // redirect URIs like /oauth-callback.html stay stable across
+            // releases. Must run BEFORE Astro's baseMiddleware (which 404s any
+            // unversioned request that happens to match a file in public/).
+            const rootPublicFiles = ['/oauth-callback.html', '/logo-hero.png', '/favicon.svg'];
+            const reqPath = req.url?.split('?')[0];
+            if (reqPath && rootPublicFiles.includes(reqPath)) {
+              const filePath = resolve('public' + reqPath);
+              if (existsSync(filePath)) {
+                const ext = filePath.split('.').pop();
+                const types = {
+                  html: 'text/html; charset=utf-8',
+                  png: 'image/png',
+                  svg: 'image/svg+xml',
+                };
+                res.setHeader('Content-Type', types[ext] || 'application/octet-stream');
+                res.end(readFileSync(filePath));
+                return;
+              }
+            }
             next();
-          });
+          };
+          // Splice into the front of the Connect stack. A plain `.use()`
+          // appends, which places this handler AFTER Astro's baseMiddleware —
+          // too late to intercept unversioned /oauth-callback.html requests.
+          // Defer until the HTTP server is actually listening so Astro's own
+          // middlewares (registered via a separate hook chain) are already in
+          // place and we can reliably insert ahead of them.
+          const install = () => {
+            server.middlewares.stack.unshift({ route: '', handle: handler });
+          };
+          if (server.httpServer) {
+            server.httpServer.once('listening', install);
+          } else {
+            process.nextTick(install);
+          }
         },
       },
     ],

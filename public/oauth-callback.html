@@ -128,7 +128,19 @@
     ? { type: "oauth-callback", code: code, state: state }
     : { type: "oauth-callback", error: "no_code", errorDescription: "No authorization code received", state: state };
 
-  var isPopup = !!window.opener && window.opener !== window;
+  // Discriminate CASE 1 (top-level login) vs CASE 2 (shell popup) by the
+  // presence of a pending-flow marker in sessionStorage. `window.opener` is
+  // unreliable because COOP: same-origin (required for SharedArrayBuffer /
+  // DuckDB-WASM threads) severs the opener reference once the popup navigates
+  // cross-origin to the IdP. In CASE 1 the flow started in this same tab, so
+  // startLoginFlow()'s "vgi.oauth.pending.<state>" entry is still present; in
+  // CASE 2 the popup has its own fresh sessionStorage (browsing context group
+  // was severed at open), so the marker is absent.
+  var pendingRaw = null;
+  if (state) {
+    try { pendingRaw = sessionStorage.getItem("vgi.oauth.pending." + state); } catch (e) { /* storage blocked */ }
+  }
+  var isPopup = !pendingRaw;
 
   // Case 2 (popup): shout to BroadcastChannel and window.opener so the
   // cupola main thread and/or DuckDBShell.tsx's listener can pick up the
@@ -161,14 +173,11 @@
     } catch (e) {
       console.warn("[oauth-callback] failed to persist callback to sessionStorage", e);
     }
-    if (state) {
+    if (pendingRaw) {
       try {
-        var pendingRaw = sessionStorage.getItem("vgi.oauth.pending." + state);
-        if (pendingRaw) {
-          var pending = JSON.parse(pendingRaw);
-          if (pending && typeof pending.return_to === "string") {
-            returnTo = pending.return_to;
-          }
+        var pending = JSON.parse(pendingRaw);
+        if (pending && typeof pending.return_to === "string") {
+          returnTo = pending.return_to;
         }
       } catch (e) { /* fall through to fallback */ }
     }
