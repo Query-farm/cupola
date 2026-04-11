@@ -11,6 +11,15 @@ import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Header } from "./Header";
 import { Sidebar } from "./Sidebar";
+import { Button } from "./ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./ui/dialog";
 const DuckDBShell = lazy(() => import("./DuckDBShell").then(m => ({ default: m.DuckDBShell })));
 import type { ShellMode } from "./DuckDBShell";
 import { CatalogOverview } from "./content/CatalogOverview";
@@ -71,6 +80,7 @@ export function CatalogApp() {
   const shellInsertRef = useRef<((text: string) => void) | null>(null);
   const [memoryCatalog, setMemoryCatalog] = useState<CatalogData | null>(null);
   const [logoUrl, setLogoUrl] = useState(DEFAULT_LOGO);
+  const [authError, setAuthError] = useState<{ title: string; message: string } | null>(null);
 
   /** Fetch in-memory DuckDB tables via the shell worker. Returns null if shell isn't running. */
   const fetchMemoryTables = useCallback(async () => {
@@ -547,6 +557,7 @@ export function CatalogApp() {
                   onShellReady={(insert) => { shellInsertRef.current = insert; fetchMemoryTables(); }}
                   catalogData={data}
                   selection={selection}
+                  onAuthError={(title, message) => setAuthError({ title, message })}
                 />
               </div>
             </Suspense>
@@ -554,6 +565,32 @@ export function CatalogApp() {
         </div>
       </div>
     </div>
+    <Dialog open={!!authError} onOpenChange={(open) => { if (!open) setAuthError(null); }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{authError?.title ?? "Authentication error"}</DialogTitle>
+          <DialogDescription>
+            The identity provider rejected the credentials. Retrying the auth flow would hit
+            the same error — fix the underlying issue (app registration, scopes, redirect URI)
+            before trying again.
+          </DialogDescription>
+        </DialogHeader>
+        <pre className="text-xs bg-muted p-3 rounded-md overflow-auto max-h-96 whitespace-pre-wrap font-mono">
+          {authError?.message}
+        </pre>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => {
+              if (authError?.message) navigator.clipboard?.writeText(authError.message).catch(() => {});
+            }}
+          >
+            Copy
+          </Button>
+          <Button onClick={() => setAuthError(null)}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     </SettingsProvider>
   );
 }

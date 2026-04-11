@@ -43,6 +43,13 @@ interface Props {
   catalogData?: CatalogData;
   /** Current selection — used for Data Preview tab when a table is selected. */
   selection?: import("@/lib/tree").Selection | null;
+  /**
+   * Called when ATTACH fails with an unrecoverable OAuth error (e.g. the IdP
+   * returned invalid_grant on token exchange or refresh). The parent should
+   * surface this in a modal — auto-redirecting through the auth flow again
+   * would just produce the same error.
+   */
+  onAuthError?: (title: string, message: string) => void;
 }
 
 // CDN script URLs (matching public/shell/index.html versions)
@@ -93,7 +100,7 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShellReady, catalogData, selection }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShellReady, catalogData, selection, onAuthError }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const perspectiveRef = useRef<HTMLDivElement>(null);
@@ -923,6 +930,40 @@ function initShell(
     return sql + `)`;
   }
 
+  /**
+   * Classify an ATTACH error and route it.
+   *
+   * - "surfaced": the error came from the IdP rejecting our credentials
+   *   (token exchange or refresh failed, invalid_grant). Re-running the
+   *   same auth flow would hit the same wall — we show the full error
+   *   in a modal via onAuthError instead.
+   * - "redirected": the error is a recoverable pre-exchange auth state
+   *   (no token yet, bare 401/403). We send the user back through the
+   *   VGI server's auth flow to get fresh credentials. Caller should
+   *   return immediately.
+   * - "unhandled": not auth-related. Caller should fall through to its
+   *   normal error rendering.
+   */
+  function handleAttachError(errStr: string, title: string): "surfaced" | "redirected" | "unhandled" {
+    // Unrecoverable IdP rejections — the tokens we have are bad and the
+    // front-end can't fix them by retrying. Surface via modal, don't loop.
+    const isUnrecoverable = /token exchange failed|token refresh failed|invalid_grant|AADSTS\d+/i.test(errStr);
+    if (isUnrecoverable) {
+      console.log("[shell] Unrecoverable auth error, surfacing to modal:", errStr);
+      onAuthError?.(title, errStr);
+      return "surfaced";
+    }
+    // Recoverable pre-exchange auth state — we need fresh credentials.
+    const isRecoverableAuth = /oauth|auth|401|403|token.*expired/i.test(errStr);
+    if (isRecoverableAuth) {
+      console.log("[shell] Recoverable auth error, redirecting. config.token:",
+                  config.token ? config.token.substring(0, 20) + "..." : "NONE");
+      redirectToAuth(config.serviceUrl);
+      return "redirected";
+    }
+    return "unhandled";
+  }
+
   worker.onmessage = (e: MessageEvent) => {
     const d = e.data;
 
@@ -991,13 +1032,13 @@ function initShell(
                 } else {
                   const errStr = reattach.error ?? "";
                   console.log("[shell] Re-attach failed:", errStr);
-                  const isAuthError = /oauth|auth|401|403|invalid_grant|token.*expired|token.*failed/i.test(errStr);
-                  if (isAuthError) {
-                    console.log("[shell] Re-attach auth error, redirecting");
-                    redirectToAuth(config.serviceUrl!);
-                    return;
+                  const handled = handleAttachError(errStr, "Re-attach failed");
+                  if (handled === "redirected") return;
+                  if (handled === "surfaced") {
+                    // onAuthError shown as modal; leave the shell idle but usable
+                  } else {
+                    writeln(`Re-attach failed: ${errStr}`, "31");
                   }
-                  writeln(`Re-attach failed: ${errStr}`, "31");
                 }
               }
 
@@ -1025,13 +1066,11 @@ function initShell(
           } else {
             const errStr = result.error ?? "";
             console.log("[shell] ATTACH failed:", errStr);
-            const isAuthError = /oauth|auth|401|403|invalid_grant|token.*expired|token.*failed/i.test(errStr);
-            if (isAuthError) {
-              console.log("[shell] Auth error detected, redirecting. config.token:", config.token ? config.token.substring(0, 20) + "..." : "NONE");
-              redirectToAuth(config.serviceUrl);
-              return;
+            const handled = handleAttachError(errStr, "Attach failed");
+            if (handled === "redirected") return;
+            if (handled !== "surfaced") {
+              writeln(`Attach failed: ${errStr}`, "31");
             }
-            writeln(`Attach failed: ${errStr}`, "31");
           }
           writeln("");
         } else if (!restored) {
