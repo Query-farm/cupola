@@ -200,7 +200,8 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         const { cleanup, insertText } = initShell(
           containerRef.current,
           { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, catalogData, aiApiKey: settings.anthropicApiKey, aiModel: settings.aiModel },
-          { tableFromIPC, Readline }
+          { tableFromIPC, Readline },
+          { onAuthError }
         );
         cleanupRef.current = cleanup;
         onShellReady?.(insertText);
@@ -728,8 +729,10 @@ function QueryCard({ entry, compact, onRerun }: { entry: QueryHistoryEntry; comp
 function initShell(
   container: HTMLElement,
   config: { serviceUrl: string; catalogName: string; token: string | null; fontSize?: number; catalogData?: CatalogData; aiApiKey?: string; aiModel?: string },
-  modules: { tableFromIPC: any; Readline: any }
+  modules: { tableFromIPC: any; Readline: any },
+  callbacks: { onAuthError?: (title: string, message: string) => void } = {}
 ): { cleanup: () => void; insertText: (text: string) => void } {
+  const { onAuthError } = callbacks;
   const { tableFromIPC, Readline } = modules;
   const T = (window as any).Terminal;
   const FA = (window as any).FitAddon;
