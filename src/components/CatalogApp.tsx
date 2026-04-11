@@ -354,6 +354,15 @@ export function CatalogApp() {
 
   const loadCatalog = useCallback(
     async (isRefresh = false) => {
+      // No ?service= — don't try to fetchCatalog against cupola's own origin
+      // (which would 404 on /__describe__). The render path below detects
+      // "no data + no error + not loading + !hasExplicitService" and shows
+      // the welcome/connect page.
+      if (!hasExplicitService()) {
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
       // If we previously had auth but the token is now expired, redirect to re-auth
       if (!getAuthToken() && hadAuthToken()) {
         console.log("[catalog] Token expired but hadAuthToken=true, redirecting to re-auth");
@@ -425,6 +434,13 @@ export function CatalogApp() {
       redirectToAuth(serviceUrl);
     }
   }, [error, serviceUrl]);
+
+  // No ?service= — render welcome/connect page without pretending cupola
+  // itself is a VGI server. Short-circuits before the "Connecting..." flash
+  // and the 404 on /__describe__ that the old code used as a signal.
+  if (!hasExplicitService()) {
+    return <WelcomePage logoUrl={logoUrl} />;
+  }
 
   // Loading state
   if (loading) {
@@ -697,7 +713,7 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
             parameter. You can also enter a service URL above, or bookmark a direct link:
           </p>
           <code className="block text-xs bg-muted text-muted-foreground px-3 py-2 rounded overflow-x-auto">
-            {window.location.origin}/?service=https://your-server.example.com
+            {typeof window !== "undefined" ? window.location.origin : ""}/?service=https://your-server.example.com
           </code>
         </div>
 
