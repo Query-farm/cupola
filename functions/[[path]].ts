@@ -127,10 +127,20 @@ export const onRequest: PagesFunction<Env> = async (context) => {
   // into a measurable latency tax for every first-time visitor in a
   // given region. Check the Workers Cache API first, and write
   // responses back into it at the end of the request.
+  //
+  // Note: `caches.default` is a per-colo cache distinct from the
+  // Cloudflare edge cache (which Pages Functions bypass entirely), so
+  // `cf-cache-status` will still say DYNAMIC — that header reflects
+  // the edge cache. We add an `x-cupola-cache` header so we can
+  // verify hits independently.
   const cache = (caches as unknown as { default: Cache }).default;
   if (context.request.method === "GET") {
     const cached = await cache.match(context.request);
-    if (cached) return cached;
+    if (cached) {
+      const hit = new Response(cached.body, cached);
+      hit.headers.set("x-cupola-cache", "HIT");
+      return hit;
+    }
   }
 
   // Helper: cache a GET response before returning it. waitUntil keeps
@@ -140,12 +150,13 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     if (context.request.method === "GET" && res.status === 200) {
       try {
         context.waitUntil(cache.put(context.request, res.clone()));
-      } catch (e) {
+      } catch {
         // If cache.put fails (e.g. non-cacheable body), just return
         // the response — serving the asset is more important than
         // caching it.
       }
     }
+    res.headers.set("x-cupola-cache", "MISS");
     return res;
   };
 
