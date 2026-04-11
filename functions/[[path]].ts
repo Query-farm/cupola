@@ -143,21 +143,37 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     }
   }
 
-  // Helper: cache a GET response before returning it. waitUntil keeps
-  // the cache write alive after the response is sent to the client, so
-  // the first request doesn't pay extra latency for the write.
-  const cacheAndReturn = (res: Response): Response => {
-    if (context.request.method === "GET" && res.status === 200) {
-      try {
-        context.waitUntil(cache.put(context.request, res.clone()));
-      } catch {
-        // If cache.put fails (e.g. non-cacheable body), just return
-        // the response — serving the asset is more important than
-        // caching it.
-      }
+  // Helper: cache a GET response before returning it. We tee the body
+  // into two ReadableStreams — one for the client response, one for
+  // caches.default.put — and drive the cache write via waitUntil so
+  // the first request doesn't eat the write latency.
+  const cacheAndReturn = async (res: Response): Promise<Response> => {
+    if (context.request.method !== "GET" || res.status !== 200 || !res.body) {
+      res.headers.set("x-cupola-cache", "SKIP");
+      return res;
     }
-    res.headers.set("x-cupola-cache", "MISS");
-    return res;
+    const [forClient, forCache] = res.body.tee();
+    const clientRes = new Response(forClient, {
+      status: res.status,
+      statusText: res.statusText,
+      headers: res.headers,
+    });
+    clientRes.headers.set("x-cupola-cache", "MISS");
+    const cacheRes = new Response(forCache, {
+      status: res.status,
+      statusText: res.statusText,
+      headers: res.headers,
+    });
+    try {
+      context.waitUntil(
+        cache.put(context.request, cacheRes).catch((err) => {
+          console.warn("[function] cache.put failed:", err);
+        }),
+      );
+    } catch (err) {
+      console.warn("[function] cache.put (waitUntil) threw synchronously:", err);
+    }
+    return clientRes;
   };
 
   // ---- /npm/* → proxy to cdn.jsdelivr.net (ESM CDN transitive deps) ----
