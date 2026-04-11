@@ -94,18 +94,24 @@
 <script>
 (function () {
   // Entra / Google / Okta PKCE redirect lands here with ?code=... or ?error=...
-  // We forward the result to the cupola main window and to any extension
-  // worker that's waiting on a SharedArrayBuffer via BroadcastChannel.
   //
-  // Two shipping paths, both tried:
+  // Two delivery paths depending on whether this page is running as a
+  // popup (shell ATTACH flow — case 2) or as a top-level navigation
+  // (homepage Connect flow — case 1):
   //
-  //   1. BroadcastChannel("vgi-oauth") — the cupola-owned channel used by
-  //      the new SPA OAuth client (homepage flow) and by DuckDBShell.tsx's
-  //      popup handler (shell ATTACH flow).
+  //   CASE 1 (top-level): CatalogApp has unmounted, so there's no
+  //     BroadcastChannel listener in this tab to receive a postMessage.
+  //     We stash {code, state, error, errorDescription} in sessionStorage
+  //     under "vgi.oauth.callback" and navigate back to the `return_to`
+  //     URL that startLoginFlow() stored in "vgi.oauth.pending.<state>".
+  //     On the next page load cupola's oauth-client.bootstrap() reads the
+  //     stashed callback, calls completeLoginFlow(), and resumes.
   //
-  //   2. window.opener.postMessage(...) — fallback for environments where
-  //      BroadcastChannel is blocked (older Safari with strict isolation)
-  //      or when the popup was opened cross-context.
+  //   CASE 2 (popup): a duckdb-wasm extension worker is blocked on
+  //     Atomics.wait inside _duckdb_wasm_open_auth_url, and cupola's main
+  //     thread is listening on BroadcastChannel("vgi-oauth") to receive
+  //     the code and write it to the SAB. Post the message, close the
+  //     window, and the extension unblocks with the real auth code.
   //
   // This file is intentionally version-free (lives at /oauth-callback.html,
   // not under /v{version}/) so the Entra app registration can pin a stable
@@ -122,21 +128,54 @@
     ? { type: "oauth-callback", code: code, state: state }
     : { type: "oauth-callback", error: "no_code", errorDescription: "No authorization code received", state: state };
 
-  // Post to the cupola main window via BroadcastChannel
-  try {
-    if (typeof BroadcastChannel !== "undefined") {
-      var bc = new BroadcastChannel("vgi-oauth");
-      bc.postMessage(msg);
-      bc.close();
-    }
-  } catch (e) { /* BroadcastChannel unavailable — fall through to postMessage */ }
+  var isPopup = !!window.opener && window.opener !== window;
 
-  // Fallback: post to the opener window if this is a popup
-  try {
-    if (window.opener && !window.opener.closed) {
-      window.opener.postMessage(msg, window.location.origin);
+  // Case 2 (popup): shout to BroadcastChannel and window.opener so the
+  // cupola main thread and/or DuckDBShell.tsx's listener can pick up the
+  // code. BroadcastChannel is the preferred path; postMessage is a
+  // fallback for strict cross-origin contexts where BroadcastChannel
+  // delivery fails.
+  if (isPopup) {
+    try {
+      if (typeof BroadcastChannel !== "undefined") {
+        var bc = new BroadcastChannel("vgi-oauth");
+        bc.postMessage(msg);
+        bc.close();
+      }
+    } catch (e) { /* BroadcastChannel unavailable */ }
+    try {
+      if (!window.opener.closed) {
+        window.opener.postMessage(msg, window.location.origin);
+      }
+    } catch (e) { /* opener access blocked by cross-origin policy */ }
+  }
+
+  // Case 1 (top-level): stash the result in sessionStorage and navigate
+  // back to the `return_to` URL that startLoginFlow() recorded when the
+  // flow began. Cupola's oauth-client.bootstrap() picks it up on the next
+  // page load.
+  var returnTo = null;
+  if (!isPopup) {
+    try {
+      sessionStorage.setItem("vgi.oauth.callback", JSON.stringify(msg));
+    } catch (e) {
+      console.warn("[oauth-callback] failed to persist callback to sessionStorage", e);
     }
-  } catch (e) { /* opener access blocked by cross-origin policy */ }
+    if (state) {
+      try {
+        var pendingRaw = sessionStorage.getItem("vgi.oauth.pending." + state);
+        if (pendingRaw) {
+          var pending = JSON.parse(pendingRaw);
+          if (pending && typeof pending.return_to === "string") {
+            returnTo = pending.return_to;
+          }
+        }
+      } catch (e) { /* fall through to fallback */ }
+    }
+    // Fallback if the pending flow is missing (session cleared, tab swap,
+    // etc.): just go to cupola's root and let CatalogApp figure it out.
+    if (!returnTo) returnTo = window.location.origin + "/";
+  }
 
   // Update UI
   var title = document.getElementById("title");
@@ -150,14 +189,19 @@
     iconCircle.className = "icon-circle icon-circle-error";
     iconSvg.className = "icon-error";
     iconSvg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>';
+    // Top-level error: navigate back so the user sees the modal instead of
+    // being stuck on this page.
+    if (!isPopup && returnTo) {
+      setTimeout(function () { window.location.href = returnTo; }, 2000);
+    }
   } else {
     title.textContent = "Authentication Successful";
-    message.textContent = window.opener ? "You can close this window." : "Redirecting...";
-    // Popup: close after a short delay so the user sees the confirmation.
-    // Top-level redirect: the main cupola app will pick up the BroadcastChannel
-    // message and navigate away from this page.
-    if (window.opener) {
+    message.textContent = isPopup ? "You can close this window." : "Redirecting...";
+    if (isPopup) {
       setTimeout(function () { window.close(); }, 1500);
+    } else if (returnTo) {
+      // Short delay so the user gets visual confirmation before the bounce.
+      setTimeout(function () { window.location.href = returnTo; }, 300);
     }
   }
 })();

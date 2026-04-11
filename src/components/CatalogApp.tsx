@@ -3,7 +3,12 @@ import { fetchCatalog, getServiceUrl, hasExplicitService, type CatalogData, type
 import { tableFromIPC } from "apache-arrow";
 import { type Selection } from "@/lib/tree";
 import { getAuthToken, hadAuthToken, redirectToAuth } from "@/lib/auth";
-import { bootstrap as oauthBootstrap, startLoginFlow, hasTokens as hasOAuthTokens } from "@/lib/oauth-client";
+import {
+  bootstrap as oauthBootstrap,
+  consumePendingCallback,
+  startLoginFlow,
+  hasTokens as hasOAuthTokens,
+} from "@/lib/oauth-client";
 import { SettingsProvider } from "@/lib/settings";
 import { bridge } from "@/lib/shell-bridge";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
@@ -415,19 +420,31 @@ export function CatalogApp() {
     [serviceUrl]
   );
 
+  // Process any pending SPA OAuth callback before the first catalog fetch.
+  // This is the "returning from the IdP" path: oauth-callback.html stashed
+  // `{code, state}` in sessionStorage and navigated us back here. We need
+  // to exchange the code for tokens BEFORE loadCatalog runs — otherwise
+  // the first fetchCatalog call goes out with no Authorization header and
+  // triggers another OAuth redirect, creating a loop.
   useEffect(() => {
-    loadCatalog();
+    let cancelled = false;
+    (async () => {
+      try {
+        await consumePendingCallback();
+      } catch (err) {
+        console.error("[catalog] consumePendingCallback threw", err);
+      }
+      if (!cancelled) loadCatalog();
+    })();
+    return () => { cancelled = true; };
   }, [loadCatalog]);
 
-  // Bootstrap the SPA OAuth BroadcastChannel listener once. When a callback
-  // message arrives (from a completed login flow in this tab or a popup),
-  // we've already stored the tokens in sessionStorage, so just retry the
-  // catalog load. If the callback result came back with a return_to that
-  // differs from our current URL (e.g. the user was redirected here from
-  // oauth-callback.html), navigate back.
+  // BroadcastChannel listener for the *popup* OAuth flow (shell ATTACH
+  // case). The main flow — top-level redirect from the homepage — is
+  // handled by the consumePendingCallback path above.
   useEffect(() => {
     oauthBootstrap((result) => {
-      console.log("[catalog] OAuth login complete for", result.serviceUrl);
+      console.log("[catalog] OAuth login complete (broadcast) for", result.serviceUrl);
       if (result.returnTo && result.returnTo !== window.location.href) {
         window.location.href = result.returnTo;
         return;

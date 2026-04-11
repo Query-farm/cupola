@@ -489,30 +489,83 @@ export function hasTokens(serviceUrl: string): boolean {
 // ---------------------------------------------------------------------------
 
 let bootstrapped = false;
+let pendingCallbackPromise: Promise<{ serviceUrl: string; returnTo: string } | null> | null = null;
 
-/** Must be called once from CatalogApp (or the top-level mount). Opens a
- *  BroadcastChannel listener, and if we're on the oauth-callback.html page
- *  directly, parses the URL and posts the message ourselves. */
+const CALLBACK_STASH_KEY = "vgi.oauth.callback";
+
+/** Check sessionStorage for a callback stash left by oauth-callback.html
+ *  and, if present, exchange the code for tokens. Returns the flow result
+ *  or null if there was nothing to process. Safe to call multiple times —
+ *  the first call consumes the stash, subsequent calls return the cached
+ *  promise from that first call. Callers should `await` this before any
+ *  code that reads tokens (e.g. fetchCatalog's getAuthTokenForService). */
+export function consumePendingCallback(): Promise<{ serviceUrl: string; returnTo: string } | null> {
+  if (pendingCallbackPromise) return pendingCallbackPromise;
+  if (typeof window === "undefined") return Promise.resolve(null);
+
+  pendingCallbackPromise = (async () => {
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem(CALLBACK_STASH_KEY);
+    } catch {
+      return null;
+    }
+    if (!raw) return null;
+    try {
+      sessionStorage.removeItem(CALLBACK_STASH_KEY);
+    } catch { /* ignore */ }
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      console.warn("[oauth] consumePendingCallback: could not parse stash");
+      return null;
+    }
+    if (!parsed || parsed.type !== "oauth-callback") return null;
+    if (parsed.error) {
+      console.error("[oauth] consumePendingCallback: callback carried error",
+                    parsed.error, parsed.errorDescription);
+      return null;
+    }
+    if (!parsed.code || !parsed.state) {
+      console.warn("[oauth] consumePendingCallback: stash missing code/state", parsed);
+      return null;
+    }
+    try {
+      const result = await completeLoginFlow(parsed.code, parsed.state);
+      console.log("[oauth] consumePendingCallback: login complete, return_to=", result.returnTo);
+      return result;
+    } catch (err) {
+      console.error("[oauth] consumePendingCallback: completeLoginFlow failed", err);
+      return null;
+    }
+  })();
+  return pendingCallbackPromise;
+}
+
+/** Subscribes to `BroadcastChannel("vgi-oauth")` for the *rare* case where
+ *  a popup oauth-callback.html message lands on cupola's main tab instead
+ *  of on DuckDBShell.tsx's own listener (i.e. the cupola main thread
+ *  opened the popup). For the top-level redirect flow, callers should
+ *  `await consumePendingCallback()` before their first auth-dependent
+ *  fetch — bootstrap() does NOT handle that path because React effects
+ *  run after the initial render, which is too late for the initial
+ *  fetchCatalog call. */
 export function bootstrap(onLoginComplete: (result: { serviceUrl: string; returnTo: string }) => void): void {
   if (bootstrapped || typeof window === "undefined") return;
   bootstrapped = true;
 
-  // Callback coming from a popup or a top-level redirect via
-  // oauth-callback.html. Both routes end up here.
   const bc = new BroadcastChannel("vgi-oauth");
   bc.onmessage = async (ev: MessageEvent) => {
     const m = ev.data;
     if (!m || m.type !== "oauth-callback") return;
-    if (!m.code || !m.state) {
-      console.warn("[oauth] bootstrap: callback with no code/state", m);
-      return;
-    }
+    if (!m.code || !m.state) return;
     try {
       const result = await completeLoginFlow(m.code, m.state);
-      console.log("[oauth] bootstrap: login complete, returning to", result.returnTo);
+      console.log("[oauth] bootstrap: login complete via broadcast, return_to=", result.returnTo);
       onLoginComplete(result);
     } catch (err) {
-      console.error("[oauth] bootstrap: completeLoginFlow failed", err);
+      console.error("[oauth] bootstrap: completeLoginFlow (broadcast) failed", err);
     }
   };
 }
