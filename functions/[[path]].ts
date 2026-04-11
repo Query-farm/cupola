@@ -2,15 +2,25 @@
  * Cloudflare Pages Function — versioned asset serving from R2.
  *
  * URL scheme:
- *   /                → 302 → /latest/
- *   /latest/         → 302 → /v{latest_version}/
- *   /v0.1.0/*        → serve from R2 prefix "v0.1.0/"
- *   /_astro/*        → cookie-based version resolution (absolute paths from HTML)
- *   /favicon.svg     → same cookie-based fallback
+ *   /                     → 302 → /latest/
+ *   /latest/              → 302 → /v{latest_version}/
+ *   /v0.1.0/*             → serve from R2 prefix "v0.1.0/"
+ *   /oauth-callback.html  → latest-version fallback (stable Entra SPA URI)
  *
- * A cookie `_cupola_v` tracks which version the user is browsing so that
- * absolute asset paths emitted by Astro (e.g. /_astro/main.abc.js) resolve
- * to the correct version's files in R2.
+ * Astro's `base: /v{version}/` means every in-app asset reference is
+ * versioned, so the bulk of traffic flows through the `/v{semver}/*` branch
+ * and is safely edge-cached forever (`Cache-Control: immutable`). The
+ * latest-version fallback exists solely for the SPA OAuth redirect URI —
+ * oauth-callback.html must be reachable at a stable, version-free URL so
+ * the Entra app registration can pin it as a redirect URI that survives
+ * deploys. Its contents are stable across deploys so serving from latest
+ * is fine.
+ *
+ * IMPORTANT: responses do not carry `Set-Cookie`. Cloudflare's default
+ * cache behavior refuses to edge-cache any response with Set-Cookie, and
+ * an earlier iteration of this function set a `_cupola_v` cookie on every
+ * response — which turned the 33MB spatial.wasm + 32MB duckdb-coi.wasm
+ * into origin-hit-every-time requests (cf-cache-status: DYNAMIC).
  */
 
 interface Env {
@@ -44,16 +54,6 @@ const CONTENT_TYPES: Record<string, string> = {
 function contentType(key: string): string {
   const ext = key.split(".").pop()?.toLowerCase() ?? "";
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
-}
-
-function versionCookie(version: string): string {
-  return `_cupola_v=${version}; Path=/; SameSite=Lax; Max-Age=86400`;
-}
-
-function readVersionCookie(request: Request): string | null {
-  const cookie = request.headers.get("Cookie") ?? "";
-  const match = cookie.match(/_cupola_v=([^;]+)/);
-  return match ? match[1] : null;
 }
 
 /** Try to fetch a key from R2, falling back to key + "index.html" for directories. */
@@ -158,26 +158,31 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     }
 
     const resolvedKey = remainder === "" || remainder.endsWith("/") ? "index.html" : r2Key;
+    // Do NOT set a Set-Cookie header here — Cloudflare's default cache
+    // rules refuse to cache any response carrying Set-Cookie, which
+    // turned the 33MB spatial.wasm + 32MB duckdb-coi.wasm into
+    // origin-hit-every-time requests (cf-cache-status: DYNAMIC). Since
+    // the URL itself is already versioned, the cookie-based version
+    // routing for unversioned fallback is dead weight for any request
+    // that comes through this branch. The `/oauth-callback.html` path
+    // still works via the latest-version fallback below.
     return respond(obj, resolvedKey, {
       "Cache-Control": cacheControl(r2Key, true),
-      "Set-Cookie": versionCookie(`v${version}`),
     });
   }
 
-  // ---- Absolute paths (/_astro/*, /favicon.svg, /shell/*, etc.) ----
-  // These come from HTML that references assets with absolute paths.
-  // Use the version cookie to determine which version's files to serve,
-  // with fallback to root-level R2 keys (shared large assets like WASM).
+  // ---- Absolute paths (/oauth-callback.html, legacy /_astro/*, etc.) ----
+  // With Astro's `base: /v{version}/` every in-app reference is
+  // versioned, so the only things that hit this branch in normal
+  // operation are:
+  //   - /oauth-callback.html (Entra SPA redirect URI, intentionally
+  //     unversioned so the Entra app registration can pin a stable URL)
+  //   - stragglers from the pre-base-config era that users have
+  //     bookmarked
+  // Both cases are fine to serve from whatever version is currently
+  // marked as `_latest` — oauth-callback.html's contents are stable
+  // across deploys and stragglers are already broken in practice.
   const stripped = path.startsWith("/") ? path.slice(1) : path;
-
-  const versionPrefix = readVersionCookie(context.request) ?? null;
-  if (versionPrefix) {
-    const r2Key = `${versionPrefix}/${stripped}`;
-    const obj = await fetchWithFallback(context.env.ASSETS_BUCKET, r2Key, stripped);
-    if (obj) {
-      return respond(obj, stripped);
-    }
-  }
 
   // ---- Fallback: try to find in the latest version, then root-level ----
   const latestObj = await context.env.ASSETS_BUCKET.get("_latest");

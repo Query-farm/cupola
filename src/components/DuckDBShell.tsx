@@ -827,10 +827,18 @@ function initShell(
   // Progress bar
   let progressLine = false;
   function renderProgressBar(pct: number) {
-    const label = ` ${String(Math.round(pct)).padStart(3)}%`;
+    // DuckDB's get_query_progress returns -1 when progress reporting is
+    // disabled (we disable C++ enable_progress_bar to avoid a Safari
+    // Embind crash), NaN if the query hasn't started, or a finite value
+    // in [0,100] during a running query. Clamp to [0,100] so downstream
+    // Math.round + String.repeat can't receive anything out of range.
+    if (!Number.isFinite(pct)) return;
+    const clamped = Math.max(0, Math.min(100, pct));
+    const label = ` ${String(Math.round(clamped)).padStart(3)}%`;
     const barWidth = Math.max(10, term.cols - label.length - 2);
-    const filled = Math.round((pct / 100) * barWidth);
-    const bar = " \x1b[32m" + "█".repeat(filled) + "\x1b[2m" + "░".repeat(barWidth - filled) + "\x1b[0m";
+    const filled = Math.max(0, Math.min(barWidth, Math.round((clamped / 100) * barWidth)));
+    const empty = Math.max(0, barWidth - filled);
+    const bar = " \x1b[32m" + "█".repeat(filled) + "\x1b[2m" + "░".repeat(empty) + "\x1b[0m";
     term.write(`\r${bar}${label}\x1b[K`);
     progressLine = true;
   }
@@ -1069,6 +1077,19 @@ function initShell(
     if (d.type === "log") {
       const colorMap: Record<string, string> = { ok: "32", err: "31", info: "33" };
       if (d.msg) writeln(d.msg, colorMap[d.cls]);
+      return;
+    }
+
+    if (d.type === "init-status") {
+      // Render a self-updating status line while the worker warms up.
+      // Each new message overwrites the previous one via \r; on `done`
+      // we advance to a fresh line so subsequent writeln calls don't
+      // overwrite the status line.
+      const text = String(d.message ?? "");
+      term.write(`\r\x1b[36m${text}\x1b[0m\x1b[K`);
+      if (d.done) {
+        term.write("\r\x1b[K"); // clear the status line entirely
+      }
       return;
     }
 

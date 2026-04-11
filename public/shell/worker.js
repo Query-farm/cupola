@@ -147,9 +147,19 @@ async function runQueryAsync(sql, opts) {
     }
 }
 
+// Send a transient status line to the shell so users can see what init is
+// doing while DuckDB warms up. DuckDBShell renders these in-place (one
+// rewriting line), so we can stream phase updates without polluting
+// terminal history. `done` finalizes the line so subsequent writeln calls
+// go on a fresh row.
+function postInitStatus(phase, message, done) {
+    postMessage({ type: 'init-status', phase: phase, message: message, done: !!done });
+}
+
 async function init() {
     // Loading messages logged to console only — keep terminal clean
     console.log('[worker] Loading WASM module...');
+    postInitStatus('wasm', 'Downloading DuckDB WASM runtime…');
 
     // Intercept WebAssembly.instantiate and instantiateStreaming to capture the Memory object
     // (Emscripten threads build doesn't expose it on the module)
@@ -223,6 +233,7 @@ async function init() {
         pthreadPoolSize: threadCount,
     });
     console.log('[worker] Opening database...');
+    postInitStatus('open', 'Opening database…');
     const config = JSON.stringify({ allowUnsignedExtensions: true, arrowLosslessConversion: true, maximumThreads: 1, query: { castBigIntToDouble: false } });
     const [openStatus, openData, openSize] = callSRet(module, 'duckdb_web_open', ['string'], [config]);
     if (openStatus !== 0) {
@@ -232,11 +243,13 @@ async function init() {
 
     connHdl = module.ccall('duckdb_web_connect', 'number', [], []);
 
-    // Don't enable DuckDB's built-in progress bar — it tries to call back into
-    // JS via Embind on a method our DUCKDB_RUNTIME shim doesn't implement,
-    // which throws on Safari ("toValue(handle)[getStringOrSymbol(methodName)]
-    // is not a function"). We poll duckdb_web_get_query_progress ourselves
-    // inside runQueryAsync and post {type:'progress'} messages directly.
+    // Enable DuckDB's built-in progress tracking. This populates the
+    // counter that duckdb_web_get_query_progress reads, which we poll from
+    // runQueryAsync and post back as {type:'progress'} messages. Setting
+    // enable_progress_bar_print=false suppresses the C++ side's stderr
+    // output — we render the bar ourselves in DuckDBShell.renderProgressBar.
+    await runQueryAsync("SET enable_progress_bar=true");
+    await runQueryAsync("SET enable_progress_bar_print=false");
     await runQueryAsync("SET autoinstall_known_extensions=false");
     await runQueryAsync("SET autoload_known_extensions=true");
     await runQueryAsync("SET arrow_lossless_conversion=true");
@@ -245,7 +258,9 @@ async function init() {
 
     const exts = ['json', 'icu', 'autocomplete', 'spatial', 'vgi'];
     const failed = [];
-    for (const ext of exts) {
+    for (let i = 0; i < exts.length; i++) {
+        const ext = exts[i];
+        postInitStatus('ext:' + ext, `Loading extension ${i + 1}/${exts.length}: ${ext}…`);
         const r = await runQueryAsync(`LOAD '${workerBase}/extensions/v1.5.1/wasm_threads/${ext}.duckdb_extension.wasm'`);
         if (!r.ok) { console.error(`[ext] ${ext}: ${r.error}`); failed.push(ext); }
     }
@@ -255,6 +270,7 @@ async function init() {
 
     // Bump thread count after extensions are loaded so queries can run in parallel.
     if (threadCount > 1) {
+        postInitStatus('threads', `Enabling ${threadCount}-thread execution…`);
         const r = await runQueryAsync(`SET threads=${threadCount}`);
         if (!r.ok) console.error(`[worker] SET threads=${threadCount} failed:`, r.error);
     }
@@ -264,6 +280,7 @@ async function init() {
     const initialMB = Math.round(memBuf.byteLength / (1024*1024));
     console.log('[worker] WASM ready. Initial memory:', initialMB, 'MB, wasmMemoryRef captured:', !!wasmMemoryRef);
 
+    postInitStatus('ready', 'Ready.', true);
     postMessage({ type: 'ready', wasmVersion: WASM_BUILD_VERSION });
     processPendingMessages();
 }
