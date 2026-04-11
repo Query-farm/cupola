@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, type PointerEvent as
 import { fetchCatalog, getServiceUrl, hasExplicitService, type CatalogData, type ResolvedSchema } from "@/lib/service";
 import { tableFromIPC } from "apache-arrow";
 import { type Selection } from "@/lib/tree";
-import { getAuthToken, hadAuthToken, redirectToAuth } from "@/lib/auth";
+import { getAuthToken, getAuthTokenForService, hadAuthToken, redirectToAuth } from "@/lib/auth";
 import {
   bootstrap as oauthBootstrap,
   consumePendingCallback,
@@ -375,11 +375,15 @@ export function CatalogApp() {
         setRefreshing(false);
         return;
       }
-      // If we previously had auth but the token is now expired, kick off
-      // a fresh SPA login flow. We reach this branch via the same tab after
-      // the OAuth tokens we stored were invalidated server-side.
-      if (!getAuthToken() && hadAuthToken()) {
-        console.log("[catalog] Token expired but hadAuthToken=true, starting SPA login");
+      // Token-expired pre-check is service-scoped now that tokens live in
+      // the per-service SPA store. We only pre-emptively kick off a new
+      // login if we previously *had* tokens for this specific service and
+      // they're gone now (e.g. tokens revoked remotely). A missing token
+      // on first visit is fine — fetchCatalog will get 401 and the error
+      // branch will start the login flow.
+      const haveTokenNow = await getAuthTokenForService(serviceUrl);
+      if (!haveTokenNow && hadAuthToken() && hasOAuthTokens(serviceUrl)) {
+        console.log("[catalog] Token expired but SPA tokens existed for this service, re-auth");
         startLoginFlow(serviceUrl).catch((err) => {
           console.error("[catalog] startLoginFlow failed:", err);
           setError(err instanceof Error ? err.message : "Failed to start login");

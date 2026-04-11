@@ -126,18 +126,6 @@ export function getAuthToken(): string | null {
     _hadToken = true;
     return match[2];
   }
-  // Last-ditch: if *any* SPA tokens exist in sessionStorage, mark _hadToken
-  // so callers know the user has authenticated in this tab before. We can't
-  // return a specific bearer here because we don't know which service.
-  if (typeof sessionStorage !== "undefined") {
-    for (let i = 0; i < sessionStorage.length; i++) {
-      const key = sessionStorage.key(i);
-      if (key && key.startsWith("vgi.oauth.tokens.")) {
-        _hadToken = true;
-        break;
-      }
-    }
-  }
   return null;
 }
 
