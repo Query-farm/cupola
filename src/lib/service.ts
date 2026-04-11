@@ -15,7 +15,7 @@ import type {
   MacroInfo,
   CatalogAttachResult,
 } from "vgi/client";
-import { getAuthToken } from "./auth";
+import { getAuthToken, getAuthTokenForService } from "./auth";
 import { arrowFieldToDuckDB } from "./arrow-to-duckdb";
 import { bridge } from "./shell-bridge";
 
@@ -117,7 +117,7 @@ export function getForeignKeys(table: TableInfo): ForeignKeyInfo[] {
 
 /** Connect to a VGI service and fetch all catalog metadata. */
 export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
-  const token = getAuthToken();
+  const token = await getAuthTokenForService(serviceUrl);
   console.log("[service] fetchCatalog:", serviceUrl, token ? "with token" : "NO TOKEN");
   const rpc = httpConnect(serviceUrl, {
     authorization: token ? `Bearer ${token}` : undefined,
@@ -236,12 +236,12 @@ const PAGE_SIZE = 50;
  * Returns an object with `loadNextPage()` and `close()` methods.
  * Each call to `loadNextPage()` fetches the next PAGE_SIZE rows.
  */
-export function createTableQuery(
+export async function createTableQuery(
   serviceUrl: string,
   catalogName: string,
   functionName: string,
 ) {
-  const token = getAuthToken();
+  const token = await getAuthTokenForService(serviceUrl);
   const rpc = httpConnect(serviceUrl, {
     authorization: token ? `Bearer ${token}` : undefined,
   });

@@ -3,6 +3,7 @@ import { fetchCatalog, getServiceUrl, hasExplicitService, type CatalogData, type
 import { tableFromIPC } from "apache-arrow";
 import { type Selection } from "@/lib/tree";
 import { getAuthToken, hadAuthToken, redirectToAuth } from "@/lib/auth";
+import { bootstrap as oauthBootstrap, startLoginFlow, hasTokens as hasOAuthTokens } from "@/lib/oauth-client";
 import { SettingsProvider } from "@/lib/settings";
 import { bridge } from "@/lib/shell-bridge";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
@@ -81,6 +82,12 @@ export function CatalogApp() {
   const [memoryCatalog, setMemoryCatalog] = useState<CatalogData | null>(null);
   const [logoUrl, setLogoUrl] = useState(DEFAULT_LOGO);
   const [authError, setAuthError] = useState<{ title: string; message: string } | null>(null);
+  // True only after client-side hydration. We use this to gate any render
+  // branch that depends on `window` state — without it the SSR output (no
+  // window) and the first client render (with window) diverge and React 19
+  // throws a hydration mismatch.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
 
   /** Fetch in-memory DuckDB tables via the shell worker. Returns null if shell isn't running. */
   const fetchMemoryTables = useCallback(async () => {
@@ -363,10 +370,16 @@ export function CatalogApp() {
         setRefreshing(false);
         return;
       }
-      // If we previously had auth but the token is now expired, redirect to re-auth
+      // If we previously had auth but the token is now expired, kick off
+      // a fresh SPA login flow. We reach this branch via the same tab after
+      // the OAuth tokens we stored were invalidated server-side.
       if (!getAuthToken() && hadAuthToken()) {
-        console.log("[catalog] Token expired but hadAuthToken=true, redirecting to re-auth");
-        redirectToAuth(serviceUrl);
+        console.log("[catalog] Token expired but hadAuthToken=true, starting SPA login");
+        startLoginFlow(serviceUrl).catch((err) => {
+          console.error("[catalog] startLoginFlow failed:", err);
+          setError(err instanceof Error ? err.message : "Failed to start login");
+          setLoading(false);
+        });
         return;
       }
       if (isRefresh) setRefreshing(true);
@@ -406,6 +419,23 @@ export function CatalogApp() {
     loadCatalog();
   }, [loadCatalog]);
 
+  // Bootstrap the SPA OAuth BroadcastChannel listener once. When a callback
+  // message arrives (from a completed login flow in this tab or a popup),
+  // we've already stored the tokens in sessionStorage, so just retry the
+  // catalog load. If the callback result came back with a return_to that
+  // differs from our current URL (e.g. the user was redirected here from
+  // oauth-callback.html), navigate back.
+  useEffect(() => {
+    oauthBootstrap((result) => {
+      console.log("[catalog] OAuth login complete for", result.serviceUrl);
+      if (result.returnTo && result.returnTo !== window.location.href) {
+        window.location.href = result.returnTo;
+        return;
+      }
+      loadCatalog();
+    });
+  }, [loadCatalog]);
+
   // Listen for browser back/forward
   useEffect(() => {
     function onPopState() {
@@ -417,12 +447,13 @@ export function CatalogApp() {
     return () => window.removeEventListener("popstate", onPopState);
   }, [data]);
 
-  // Auth error — redirect to sign-in, but break the loop if we already tried recently.
+  // Auth error — start the SPA login flow (full-page redirect to the IdP).
+  // Break the loop if we already tried recently so a misconfigured IdP can't
+  // trap the user in an infinite redirect.
   useEffect(() => {
     if (!error) return;
     const isAuthError = error.toLowerCase().includes("auth") || error.includes("401");
     if (isAuthError) {
-      // Break redirect loops: if we redirected within the last 10 seconds, don't redirect again
       const lastRedirect = Number(sessionStorage.getItem("_vgi_auth_redirect_ts") || "0");
       const now = Date.now();
       if (now - lastRedirect < 10_000) {
@@ -430,15 +461,24 @@ export function CatalogApp() {
         return;
       }
       sessionStorage.setItem("_vgi_auth_redirect_ts", String(now));
-      console.log("[catalog] Auth error detected, redirecting. error:", error);
-      redirectToAuth(serviceUrl);
+      console.log("[catalog] Auth error detected, starting SPA login. error:", error);
+      startLoginFlow(serviceUrl).catch((err) => {
+        console.error("[catalog] startLoginFlow failed:", err);
+        setError(err instanceof Error ? err.message : "Failed to start login");
+      });
     }
   }, [error, serviceUrl]);
 
   // No ?service= — render welcome/connect page without pretending cupola
   // itself is a VGI server. Short-circuits before the "Connecting..." flash
   // and the 404 on /__describe__ that the old code used as a signal.
-  if (!hasExplicitService()) {
+  //
+  // Gated on `mounted` to avoid a React 19 hydration mismatch: SSR can't
+  // read window.location, so hasExplicitService() is always false during
+  // SSR. On the client, ?service=... makes it true. Without the gate the
+  // SSR output (WelcomePage) and the first client render (loading spinner)
+  // disagree. After mount we're allowed to diverge from the SSR snapshot.
+  if (mounted && !hasExplicitService()) {
     return <WelcomePage logoUrl={logoUrl} />;
   }
 

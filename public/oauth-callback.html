@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Authentication</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" crossorigin="anonymous">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+  }
+  @media (prefers-color-scheme: light) {
+    body { background-color: #faf8f0; color: #2c2c1e; }
+    .card { background: white; border: 1px solid #f0ece0; }
+    .icon-circle-success { background: #e8f5e0; }
+    .icon-success { color: #4a7c23; }
+    .icon-circle-error { background: #fde8e8; }
+    .icon-error { color: #c53030; }
+    .subtitle { color: #6b6b5a; }
+    .footer-text { color: #6b6b5a; }
+    .footer-link { color: #4a7c23; }
+    .footer-link:hover { color: #2d5016; }
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background-color: #1a1a0e; color: #f5f0e0; }
+    .card { background: #252518; border: 1px solid #3a3a28; }
+    .icon-circle-success { background: #2d501640; }
+    .icon-success { color: #6ba034; }
+    .icon-circle-error { background: #c5303020; }
+    .icon-error { color: #fc8181; }
+    .subtitle { color: #b8b0a0; }
+    .footer-text { color: #b8b0a0; }
+    .footer-link { color: #6ba034; }
+    .footer-link:hover { color: #4a7c23; }
+  }
+  .card {
+    max-width: 520px;
+    width: 100%;
+    border-radius: 12px;
+    padding: 2.5rem;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  .logo { width: 96px; height: 96px; border-radius: 50%; flex-shrink: 0; }
+  .content { text-align: left; flex: 1; min-width: 0; }
+  .status-row { display: flex; align-items: center; gap: 0.625rem; margin-bottom: 0.5rem; }
+  .icon-circle {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .icon-circle svg { width: 20px; height: 20px; }
+  h1 { font-size: 1.375rem; font-weight: 600; }
+  .subtitle { font-size: 0.938rem; line-height: 1.5; word-break: break-word; }
+  .footer {
+    margin-top: 2rem;
+    font-size: 0.8125rem;
+    text-align: center;
+  }
+  .footer-link { text-decoration: none; transition: color 0.15s; }
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <img class="logo" src="/logo-hero.png" alt="VGI">
+  <div class="content" id="content">
+    <div class="status-row">
+      <div class="icon-circle icon-circle-success" id="icon-circle">
+        <svg id="icon-svg" class="icon-success" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+        </svg>
+      </div>
+      <h1 id="title">Completing authentication...</h1>
+    </div>
+    <p class="subtitle" id="message"></p>
+  </div>
+</div>
+<div class="footer">
+  <span class="footer-text">&copy; 2026 &#x1F69C; <a href="https://query.farm" class="footer-link">Query.Farm LLC</a></span>
+</div>
+
+<script>
+(function () {
+  // Entra / Google / Okta PKCE redirect lands here with ?code=... or ?error=...
+  // We forward the result to the cupola main window and to any extension
+  // worker that's waiting on a SharedArrayBuffer via BroadcastChannel.
+  //
+  // Two shipping paths, both tried:
+  //
+  //   1. BroadcastChannel("vgi-oauth") — the cupola-owned channel used by
+  //      the new SPA OAuth client (homepage flow) and by DuckDBShell.tsx's
+  //      popup handler (shell ATTACH flow).
+  //
+  //   2. window.opener.postMessage(...) — fallback for environments where
+  //      BroadcastChannel is blocked (older Safari with strict isolation)
+  //      or when the popup was opened cross-context.
+  //
+  // This file is intentionally version-free (lives at /oauth-callback.html,
+  // not under /v{version}/) so the Entra app registration can pin a stable
+  // redirect URI that survives cupola deploys.
+  var params = new URLSearchParams(window.location.search);
+  var code = params.get("code");
+  var state = params.get("state");
+  var error = params.get("error");
+  var errorDescription = params.get("error_description");
+
+  var msg = error
+    ? { type: "oauth-callback", error: error, errorDescription: errorDescription, state: state }
+    : code
+    ? { type: "oauth-callback", code: code, state: state }
+    : { type: "oauth-callback", error: "no_code", errorDescription: "No authorization code received", state: state };
+
+  // Post to the cupola main window via BroadcastChannel
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      var bc = new BroadcastChannel("vgi-oauth");
+      bc.postMessage(msg);
+      bc.close();
+    }
+  } catch (e) { /* BroadcastChannel unavailable — fall through to postMessage */ }
+
+  // Fallback: post to the opener window if this is a popup
+  try {
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage(msg, window.location.origin);
+    }
+  } catch (e) { /* opener access blocked by cross-origin policy */ }
+
+  // Update UI
+  var title = document.getElementById("title");
+  var message = document.getElementById("message");
+  var iconCircle = document.getElementById("icon-circle");
+  var iconSvg = document.getElementById("icon-svg");
+
+  if (error || !code) {
+    title.textContent = "Authentication Failed";
+    message.textContent = errorDescription || error || "No authorization code received";
+    iconCircle.className = "icon-circle icon-circle-error";
+    iconSvg.className = "icon-error";
+    iconSvg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>';
+  } else {
+    title.textContent = "Authentication Successful";
+    message.textContent = window.opener ? "You can close this window." : "Redirecting...";
+    // Popup: close after a short delay so the user sees the confirmation.
+    // Top-level redirect: the main cupola app will pick up the BroadcastChannel
+    // message and navigate away from this page.
+    if (window.opener) {
+      setTimeout(function () { window.close(); }, 1500);
+    }
+  }
+})();
+</script>
+</body>
+</html>

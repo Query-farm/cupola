@@ -922,10 +922,14 @@ function initShell(
     }
   }
 
-  /** Build the ATTACH SQL for the VGI catalog, including oauth_refresh_token if available. */
+  /** Build the ATTACH SQL for the VGI catalog, including oauth_refresh_token
+   *  if available. Pulls the refresh token from the SPA OAuth client's
+   *  sessionStorage (keyed by service origin) for SPA-flow services, or
+   *  from the legacy URL fragment for services still using the server-side
+   *  OAuth redirect. */
   function buildAttachSql(): string {
     const esc = (s: string) => s.replace(/'/g, "''");
-    const oauthMeta = getOAuthMeta();
+    const oauthMeta = getOAuthMeta(config.serviceUrl);
     let sql = `ATTACH OR REPLACE '${esc(config.catalogName)}' AS "${config.catalogName.replace(/"/g, '""')}" (TYPE vgi, LOCATION '${esc(config.serviceUrl)}'`;
     if (oauthMeta?.refreshToken) {
       sql += `, oauth_refresh_token '${esc(oauthMeta.refreshToken)}'`;
@@ -971,28 +975,94 @@ function initShell(
     const d = e.data;
 
     if (d.type === "open-auth-url") {
+      // The DuckDB vgi extension is running its PKCE flow and needs an
+      // authorization code from the IdP. Open the authorize URL in a popup,
+      // wait for oauth-callback.html to post the real code back via
+      // BroadcastChannel, then write the code into the SAB so the
+      // extension's blocking duckdb_wasm_open_auth_url() call returns it.
+      //
+      // SAB protocol (see duckdb-coi.js:11032, _duckdb_wasm_open_auth_url):
+      //   flag = 1  → byte[4..7] holds length, byte[8..] holds the code
+      //   flag = -1 → byte[4..7] holds length, byte[8..] holds the error msg
+      //   flag = 0  → extension is still waiting (Atomics.wait on this)
       const oauthSAB = (bridge as any)._oauthSAB as SharedArrayBuffer | null;
-      console.log("[shell] DuckDB requesting auth, token available:", !!config.token, "SAB available:", !!oauthSAB);
-      if (config.token && oauthSAB) {
-        // Token interception — pass cached token directly via SharedArrayBuffer
-        console.log("[shell] Passing token to DuckDB via SAB:", config.token.substring(0, 20) + "...");
+      if (!oauthSAB) {
+        console.error("[shell] No oauth SAB — can't route auth code back to extension");
+        return;
+      }
+
+      const writeSab = (flag: 1 | -1, payload: string) => {
         const int32 = new Int32Array(oauthSAB);
         const bytes = new Uint8Array(oauthSAB);
-        const encoded = new TextEncoder().encode(config.token);
-        const maxTokenBytes = oauthSAB.byteLength - 8; // 8 bytes reserved for header
-        if (encoded.length > maxTokenBytes) {
-          console.error("[shell] Token too large for SAB:", encoded.length, "bytes, max:", maxTokenBytes);
-          window.open(d.url, "_blank", "popup,width=500,height=700");
+        const encoded = new TextEncoder().encode(payload);
+        const maxBytes = oauthSAB.byteLength - 8;
+        if (encoded.length > maxBytes) {
+          // Truncate rather than deadlock. The extension will get a garbled
+          // code and fail at ExchangeCodeForTokens, which is at least a
+          // visible error rather than a hung ATTACH.
+          console.error(`[shell] SAB payload too large (${encoded.length} > ${maxBytes}), truncating`);
+          encoded.subarray(0, maxBytes).forEach((b, i) => { bytes[8 + i] = b; });
+          new DataView(oauthSAB).setInt32(4, maxBytes, true);
         } else {
           new DataView(oauthSAB).setInt32(4, encoded.length, true);
           bytes.set(encoded, 8);
-          Atomics.store(int32, 0, 1);
-          Atomics.notify(int32, 0);
         }
-      } else {
-        console.log("[shell] No token — opening auth popup:", d.url?.substring(0, 80));
-        window.open(d.url, "_blank", "popup,width=500,height=700");
+        Atomics.store(int32, 0, flag);
+        Atomics.notify(int32, 0);
+      };
+
+      const popup = window.open(d.url, "_blank", "popup,width=500,height=700");
+      if (!popup) {
+        writeSab(-1, "Popup blocked by browser");
+        return;
       }
+      console.log("[shell] Opened OAuth popup:", (d.url as string)?.slice(0, 80));
+
+      const bc = new BroadcastChannel("vgi-oauth");
+      let settled = false;
+
+      const cleanup = () => {
+        settled = true;
+        try { bc.close(); } catch { /* already closed */ }
+        clearInterval(popupPoll);
+        clearTimeout(timeoutTimer);
+      };
+
+      bc.onmessage = (ev: MessageEvent) => {
+        if (settled) return;
+        const m = ev.data;
+        if (!m || m.type !== "oauth-callback") return;
+        cleanup();
+        if (m.code) {
+          console.log("[shell] Received auth code from popup, delivering to extension");
+          writeSab(1, m.code);
+        } else {
+          const err = m.errorDescription || m.error || "Authentication failed";
+          console.warn("[shell] OAuth popup reported error:", err);
+          writeSab(-1, err);
+        }
+        try { popup.close(); } catch { /* already closed */ }
+      };
+
+      // Detect user-cancel: the popup got closed before returning a code.
+      const popupPoll = setInterval(() => {
+        if (settled) return;
+        if (popup.closed) {
+          cleanup();
+          console.warn("[shell] OAuth popup closed by user before returning a code");
+          writeSab(-1, "Authentication cancelled");
+        }
+      }, 500);
+
+      // Hard ceiling so the extension's Atomics.wait loop can't hang forever
+      // if the BroadcastChannel delivery fails for any reason.
+      const timeoutTimer = setTimeout(() => {
+        if (settled) return;
+        cleanup();
+        console.warn("[shell] OAuth popup timed out after 2 minutes");
+        writeSab(-1, "Authentication timed out");
+        try { popup.close(); } catch { /* already closed */ }
+      }, 120_000);
       return;
     }
 

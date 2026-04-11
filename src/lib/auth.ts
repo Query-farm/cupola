@@ -1,4 +1,18 @@
-/** JWT auth helper — reads token from URL fragment (#token=...) or cookie. */
+/** JWT auth helper — reads token from the SPA OAuth client (sessionStorage),
+ *  falling back to the legacy URL fragment (#token=...) or cookie for
+ *  backward compatibility with services still using the server-side flow.
+ *
+ *  Call sites pass a `serviceUrl` when they know it so we can look up
+ *  per-service tokens stored by `oauth-client.ts`. Callers that don't have a
+ *  service URL in scope still get the legacy fragment/cookie behavior. */
+
+import {
+  getAccessToken as spaGetAccessToken,
+  getOAuthMeta as spaGetOAuthMeta,
+  hasTokens as spaHasTokens,
+  clearTokens as spaClearTokens,
+  extractOrigin,
+} from "./oauth-client";
 
 const AUTH_COOKIE_NAME = "_vgi_auth";
 
@@ -84,16 +98,15 @@ function isTokenExpired(token: string): boolean {
   return nowSeconds >= payload.exp - EXPIRY_GRACE_SECONDS;
 }
 
-/** Get the raw JWT token — checks URL fragment first, then cookie. Returns null if expired. */
+/** Synchronous JWT lookup. Checks legacy URL fragment + cookie only. Prefer
+ *  `getAuthTokenForService(serviceUrl)` at call sites that know which service
+ *  they're authenticating to — that version also checks the SPA OAuth
+ *  client's sessionStorage and transparently refreshes expired tokens. */
 export function getAuthToken(): string | null {
   const fragmentToken = _extractFragmentToken();
   if (fragmentToken) {
-    const payload = decodeJwtPayload(fragmentToken);
-    const exp = payload?.exp ? new Date(payload.exp * 1000).toISOString() : "no-exp";
-    const now = new Date().toISOString();
-    console.log("[auth] getAuthToken: fragment token found, exp:", exp, "now:", now, "expired:", isTokenExpired(fragmentToken));
     if (isTokenExpired(fragmentToken)) {
-      console.warn("[auth] Fragment token is expired, clearing. exp:", exp, "now:", now);
+      console.warn("[auth] Fragment token is expired, clearing.");
       clearAuth();
       return null;
     }
@@ -105,20 +118,50 @@ export function getAuthToken(): string | null {
     new RegExp(`(^|;)\\s*${AUTH_COOKIE_NAME}=([^;]+)`)
   );
   if (match) {
-    const payload = decodeJwtPayload(match[2]);
-    const exp = payload?.exp ? new Date(payload.exp * 1000).toISOString() : "no-exp";
-    const now = new Date().toISOString();
-    console.log("[auth] getAuthToken: cookie token found, exp:", exp, "now:", now, "expired:", isTokenExpired(match[2]));
     if (isTokenExpired(match[2])) {
-      console.warn("[auth] Cookie token is expired, clearing. exp:", exp, "now:", now);
+      console.warn("[auth] Cookie token is expired, clearing.");
       clearAuth();
       return null;
     }
     _hadToken = true;
     return match[2];
   }
-  console.log("[auth] getAuthToken: no token found (no fragment, no cookie). _hadToken:", _hadToken);
+  // Last-ditch: if *any* SPA tokens exist in sessionStorage, mark _hadToken
+  // so callers know the user has authenticated in this tab before. We can't
+  // return a specific bearer here because we don't know which service.
+  if (typeof sessionStorage !== "undefined") {
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const key = sessionStorage.key(i);
+      if (key && key.startsWith("vgi.oauth.tokens.")) {
+        _hadToken = true;
+        break;
+      }
+    }
+  }
   return null;
+}
+
+/** Get a bearer token for a specific VGI service. Checks the SPA OAuth
+ *  client first (refreshing if expired), then falls back to the legacy
+ *  fragment/cookie path for backward compat. Returns null if no valid token
+ *  is available. */
+export async function getAuthTokenForService(serviceUrl: string): Promise<string | null> {
+  const spaToken = await spaGetAccessToken(serviceUrl);
+  if (spaToken) {
+    _hadToken = true;
+    return spaToken;
+  }
+  return getAuthToken();
+}
+
+/** Synchronous peek: is a SPA-issued token stored for this service? Used by
+ *  CatalogApp to decide whether to trigger a login flow. */
+export function hasAuthTokenForService(serviceUrl: string): boolean {
+  if (spaHasTokens(serviceUrl)) {
+    _hadToken = true;
+    return true;
+  }
+  return !!getAuthToken();
 }
 
 /** Returns true if we previously had a valid auth token (i.e. this service requires auth). */
@@ -136,8 +179,22 @@ export function redirectToAuth(serviceUrl: string): void {
   window.location.href = redirectUrl;
 }
 
-/** Get OAuth metadata from the fragment redirect (for DuckDB secret creation). */
-export function getOAuthMeta(): OAuthMeta | null {
+/** Get OAuth metadata for a specific service — prefers the SPA OAuth
+ *  client's sessionStorage, falls back to the legacy fragment redirect for
+ *  services still using the server-side flow. Used by DuckDBShell to
+ *  populate the `oauth_refresh_token` option on ATTACH. */
+export function getOAuthMeta(serviceUrl?: string): OAuthMeta | null {
+  if (serviceUrl) {
+    const spa = spaGetOAuthMeta(serviceUrl);
+    if (spa) {
+      return {
+        refreshToken: spa.refreshToken,
+        tokenEndpoint: spa.tokenEndpoint,
+        clientId: spa.clientId,
+        useIdToken: spa.useIdToken,
+      };
+    }
+  }
   _extractFragmentToken(); // ensure parsed
   return _cachedOAuthMeta;
 }
