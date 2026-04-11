@@ -1,17 +1,25 @@
 import { useEffect, useState } from "react";
 import { getUserInfo, clearAuth, type UserInfo as UserInfoData } from "@/lib/auth";
 
-export function UserInfo() {
+interface Props {
+  /** The VGI service URL the catalog is currently connected to. Used to
+   *  look up the SPA-stored id_token / access_token for that service so
+   *  the user widget shows the right identity even when several services
+   *  with different IdPs are involved. */
+  serviceUrl?: string;
+}
+
+export function UserInfo({ serviceUrl }: Props) {
   const [user, setUser] = useState<UserInfoData | null>(null);
 
   useEffect(() => {
-    setUser(getUserInfo());
-  }, []);
+    setUser(getUserInfo(serviceUrl));
+  }, [serviceUrl]);
 
   if (!user) return null;
 
   const handleSignOut = () => {
-    clearAuth();
+    clearAuth(serviceUrl);
     // Navigate to the frontend homepage (no ?service= param)
     window.location.href = window.location.origin + window.location.pathname;
   };

@@ -484,6 +484,26 @@ export function hasTokens(serviceUrl: string): boolean {
   return readTokens(extractOrigin(serviceUrl)) !== null;
 }
 
+/** Read the raw stored token bundle for a service. Used by auth.getUserInfo
+ *  to decode the id_token / access_token for the header user widget. */
+export function getStoredTokens(serviceUrl: string): {
+  access_token: string;
+  refresh_token?: string;
+  id_token?: string;
+  expires_at: number;
+  use_id_token: boolean;
+} | null {
+  const stored = readTokens(extractOrigin(serviceUrl));
+  if (!stored) return null;
+  return {
+    access_token: stored.access_token,
+    refresh_token: stored.refresh_token,
+    id_token: stored.id_token,
+    expires_at: stored.expires_at,
+    use_id_token: stored.use_id_token,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Bootstrap: run on every page load to catch returning OAuth callbacks
 // ---------------------------------------------------------------------------

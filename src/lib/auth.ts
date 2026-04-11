@@ -9,6 +9,7 @@
 import {
   getAccessToken as spaGetAccessToken,
   getOAuthMeta as spaGetOAuthMeta,
+  getStoredTokens as spaGetStoredTokens,
   hasTokens as spaHasTokens,
   clearTokens as spaClearTokens,
   extractOrigin,
@@ -187,26 +188,56 @@ export function getOAuthMeta(serviceUrl?: string): OAuthMeta | null {
   return _cachedOAuthMeta;
 }
 
-/** Clear all cached auth state (in-memory token and cookie). */
-export function clearAuth(): void {
-  console.log("[auth] clearAuth: clearing cached token and cookie");
+/** Clear all cached auth state. With a serviceUrl this also drops the SPA
+ *  OAuth client's stored tokens for that service so the next request
+ *  triggers a fresh login flow. Without one, only the legacy fragment +
+ *  cookie state is cleared (which is enough to log out of services that
+ *  still use the server-side OAuth flow). */
+export function clearAuth(serviceUrl?: string): void {
+  console.log("[auth] clearAuth: clearing cached token and cookie", serviceUrl ?? "");
   _cachedToken = null;
   _cachedOAuthMeta = null;
+  _hadToken = false;
   if (typeof document !== "undefined") {
     document.cookie = `${AUTH_COOKIE_NAME}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
   }
+  if (serviceUrl) {
+    spaClearTokens(serviceUrl);
+  }
 }
 
-/** Decode JWT payload to extract user info (no signature verification). */
-export function getUserInfo(): UserInfo | null {
-  const token = getAuthToken();
-  if (!token) return null;
-  const payload = decodeJwtPayload(token);
-  if (!payload) return null;
-  return {
-    email: payload.email,
-    name: payload.name,
-    picture: payload.picture,
-    sub: payload.sub,
-  };
+/** Decode JWT payload to extract user info (no signature verification).
+ *  Prefers tokens from the SPA OAuth client (which exposes both id_token
+ *  and access_token for the given service); falls back to the legacy
+ *  fragment/cookie token. With Entra and other OIDC providers, the
+ *  id_token carries the user identity claims (name, preferred_username,
+ *  oid, etc.) while the access_token is opaque to the client — we try
+ *  the id_token first and decay through. */
+export function getUserInfo(serviceUrl?: string): UserInfo | null {
+  const candidates: string[] = [];
+  if (serviceUrl) {
+    const stored = spaGetStoredTokens(serviceUrl);
+    if (stored) {
+      if (stored.id_token) candidates.push(stored.id_token);
+      candidates.push(stored.access_token);
+    }
+  }
+  const legacy = getAuthToken();
+  if (legacy) candidates.push(legacy);
+
+  for (const token of candidates) {
+    const payload = decodeJwtPayload(token);
+    if (!payload) continue;
+    // OIDC standard claims first, Entra-specific ones as fallback.
+    const email = payload.email ?? payload.preferred_username;
+    const name = payload.name;
+    if (!email && !name) continue;
+    return {
+      email,
+      name,
+      picture: payload.picture,
+      sub: payload.sub,
+    };
+  }
+  return null;
 }

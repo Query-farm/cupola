@@ -24,7 +24,7 @@ export function Header({ catalogName, catalogComment, serviceUrl, logoUrl }: Pro
         </div>
       </div>
 
-      <UserInfo />
+      <UserInfo serviceUrl={serviceUrl} />
     </header>
   );
 }
