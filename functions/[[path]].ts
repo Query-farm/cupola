@@ -120,6 +120,35 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     return Response.redirect(`${url.origin}/latest/`, 302);
   }
 
+  // Explicit Cloudflare cache lookup for GET requests. Pages Functions
+  // responses are *not* auto-cached at the edge the way static assets
+  // are — every request hits the function and therefore (eventually)
+  // R2. For big immutable assets like the 33MB spatial.wasm this turns
+  // into a measurable latency tax for every first-time visitor in a
+  // given region. Check the Workers Cache API first, and write
+  // responses back into it at the end of the request.
+  const cache = (caches as unknown as { default: Cache }).default;
+  if (context.request.method === "GET") {
+    const cached = await cache.match(context.request);
+    if (cached) return cached;
+  }
+
+  // Helper: cache a GET response before returning it. waitUntil keeps
+  // the cache write alive after the response is sent to the client, so
+  // the first request doesn't pay extra latency for the write.
+  const cacheAndReturn = (res: Response): Response => {
+    if (context.request.method === "GET" && res.status === 200) {
+      try {
+        context.waitUntil(cache.put(context.request, res.clone()));
+      } catch (e) {
+        // If cache.put fails (e.g. non-cacheable body), just return
+        // the response — serving the asset is more important than
+        // caching it.
+      }
+    }
+    return res;
+  };
+
   // ---- /npm/* → proxy to cdn.jsdelivr.net (ESM CDN transitive deps) ----
   if (path.startsWith("/npm/")) {
     const cdnUrl = `https://cdn.jsdelivr.net${path}`;
@@ -127,7 +156,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     const headers = new Headers(cdnResp.headers);
     headers.set("Access-Control-Allow-Origin", "*");
     headers.set("Cache-Control", "public, max-age=31536000, immutable");
-    return new Response(cdnResp.body, { status: cdnResp.status, headers });
+    return cacheAndReturn(new Response(cdnResp.body, { status: cdnResp.status, headers }));
   }
 
   // ---- /latest/ → /v{latest_version}/ ----
@@ -166,9 +195,9 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     // routing for unversioned fallback is dead weight for any request
     // that comes through this branch. The `/oauth-callback.html` path
     // still works via the latest-version fallback below.
-    return respond(obj, resolvedKey, {
+    return cacheAndReturn(respond(obj, resolvedKey, {
       "Cache-Control": cacheControl(r2Key, true),
-    });
+    }));
   }
 
   // ---- Absolute paths (/oauth-callback.html, legacy /_astro/*, etc.) ----
@@ -191,7 +220,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     const r2Key = `v${latestVersion}/${stripped}`;
     const obj = await fetchWithFallback(context.env.ASSETS_BUCKET, r2Key, stripped);
     if (obj) {
-      return respond(obj, stripped);
+      return cacheAndReturn(respond(obj, stripped));
     }
   }
 
