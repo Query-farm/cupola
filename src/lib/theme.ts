@@ -86,8 +86,8 @@ export const DEFAULT_TERMINAL_THEME: TerminalTheme = {
   selection: "#3a3a28",
 };
 
-/** Default logo URL. */
-export const DEFAULT_LOGO = "https://vgi-rpc-python.query.farm/assets/logo-hero.png";
+/** Default logo URL — served from our own origin so COEP require-corp lets it through. */
+export const DEFAULT_LOGO = `${import.meta.env.BASE_URL}logo-hero.png`;
 
 interface ThemeCacheEntry {
   url: string;

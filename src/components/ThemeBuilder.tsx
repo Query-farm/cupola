@@ -55,7 +55,7 @@ const DEFAULT_TERMINAL = {
   selection: "#3a3a28",
 };
 
-const DEFAULT_LOGO = "https://vgi-rpc-python.query.farm/assets/logo-hero.png";
+const DEFAULT_LOGO = `${import.meta.env.BASE_URL}logo-hero.png`;
 
 // ── Color group definitions ─────────────────────────────────────────────────
 
@@ -254,7 +254,7 @@ export function ThemeBuilder() {
       <header className="flex items-center justify-between px-4 py-3 border-b border-border bg-card shrink-0">
         <div className="flex items-center gap-3">
           <img
-            src="https://vgi-rpc-python.query.farm/assets/logo-hero.png"
+            src={DEFAULT_LOGO}
             alt="VGI"
             className="w-7 h-7 rounded-full"
           />

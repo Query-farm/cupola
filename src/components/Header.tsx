@@ -12,7 +12,7 @@ export function Header({ catalogName, catalogComment, serviceUrl, logoUrl }: Pro
     <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-card">
       <div className="flex items-center gap-3">
         <img
-          src={logoUrl || "https://vgi-rpc-python.query.farm/assets/logo-hero.png"}
+          src={logoUrl || `${import.meta.env.BASE_URL}logo-hero.png`}
           alt="VGI"
           className="w-7 h-7 rounded-full"
         />
