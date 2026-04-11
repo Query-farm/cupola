@@ -232,8 +232,11 @@ async function init() {
 
     connHdl = module.ccall('duckdb_web_connect', 'number', [], []);
 
-    await runQueryAsync("SET enable_progress_bar=true");
-    await runQueryAsync("SET enable_progress_bar_print=false");
+    // Don't enable DuckDB's built-in progress bar — it tries to call back into
+    // JS via Embind on a method our DUCKDB_RUNTIME shim doesn't implement,
+    // which throws on Safari ("toValue(handle)[getStringOrSymbol(methodName)]
+    // is not a function"). We poll duckdb_web_get_query_progress ourselves
+    // inside runQueryAsync and post {type:'progress'} messages directly.
     await runQueryAsync("SET autoinstall_known_extensions=false");
     await runQueryAsync("SET autoload_known_extensions=true");
     await runQueryAsync("SET arrow_lossless_conversion=true");
