@@ -15,6 +15,13 @@ const gitHash = execSync('git rev-parse --short HEAD').toString().trim();
 
 // https://astro.build/config
 export default defineConfig({
+  // Version-prefix every emitted asset path so each release is content-isolated
+  // in R2 and the browser cache. Without this, /_astro/*, /shell/*, and public/
+  // assets resolve at the root and a stale browser cache from a prior version
+  // can ship a broken worker.js into a fixed release.
+  base: `/v${pkg.version}/`,
+  trailingSlash: 'ignore',
+
   integrations: [react()],
 
   vite: {
@@ -37,9 +44,14 @@ export default defineConfig({
             res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
             res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
-            // Serve shell/wasm/ files directly to avoid transform pipeline hangs
-            if (req.url?.startsWith('/shell/wasm/') || req.url?.startsWith('/shell/extensions/')) {
-              const relPath = req.url.split('?')[0];
+            // Serve shell/wasm/ files directly to avoid transform pipeline hangs.
+            // With Astro's base set, dev requests are version-prefixed
+            // (/v0.3.4/shell/wasm/...) — strip the prefix to find the file
+            // under public/.
+            const base = `/v${pkg.version}`;
+            const stripped = req.url?.startsWith(base + '/') ? req.url.slice(base.length) : req.url;
+            if (stripped?.startsWith('/shell/wasm/') || stripped?.startsWith('/shell/extensions/')) {
+              const relPath = stripped.split('?')[0];
               let filePath = resolve('public' + relPath);
               try { filePath = realpathSync(filePath); } catch {}
               if (existsSync(filePath)) {

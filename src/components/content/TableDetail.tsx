@@ -73,7 +73,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
             onClick={onOpenShell}
             className="h-7 text-xs gap-1.5"
           >
-            <img src="/duckdb-icon-light.svg" alt="" className="h-3.5 w-3.5" />
+            <img src={`${import.meta.env.BASE_URL}duckdb-icon-light.svg`} alt="" className="h-3.5 w-3.5" />
             Open SQL Shell
           </Button>
         ) : undefined}

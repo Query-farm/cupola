@@ -389,7 +389,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
       >
         <div className="flex items-end gap-0.5 -mb-px">
           <button role="tab" aria-selected={activeTab === "shell"} className={tabCls("shell")} onClick={() => handleTabClick("shell")}>
-            <img src="/duckdb-icon-light.svg" alt="" className="h-4 w-4" />
+            <img src={`${import.meta.env.BASE_URL}duckdb-icon-light.svg`} alt="" className="h-4 w-4" />
             SQL Shell
           </button>
           <button role="tab" aria-selected={activeTab === "askai"} className={tabCls("askai")} onClick={() => handleTabClick("askai")}>
@@ -831,9 +831,13 @@ function initShell(
     }
   }
 
-  // Singleton worker — shared across all DuckDBShell instances
+  // Singleton worker — shared across all DuckDBShell instances.
+  // Use Astro's BASE_URL so the worker URL carries the version prefix; this
+  // makes self.location.href inside worker.js versioned, which cascades to
+  // every downstream URL the worker derives (pthread sub-workers, wasm,
+  // extension LOAD URLs).
   const isNewWorker = !bridge.worker;
-  const worker = bridge.worker || new Worker("/shell/worker.js");
+  const worker = bridge.worker || new Worker(`${import.meta.env.BASE_URL}shell/worker.js`);
   bridge.worker = worker;
   let currentWasmVersion = "";
 
@@ -1512,11 +1516,12 @@ function initShell(
 
 function getPerspectiveCDN() {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const base = import.meta.env.BASE_URL;
   return [
-    `${origin}/perspective/perspective.js`,              // Built from source — includes fromArrowIpc
-    `${origin}/perspective/perspective-viewer.js`,       // Built from source — matching WASM protocol
-    `${origin}/perspective/perspective-viewer-datagrid.js`,
-    `${origin}/perspective/perspective-viewer-d3fc.js`,
+    `${origin}${base}perspective/perspective.js`,              // Built from source — includes fromArrowIpc
+    `${origin}${base}perspective/perspective-viewer.js`,       // Built from source — matching WASM protocol
+    `${origin}${base}perspective/perspective-viewer-datagrid.js`,
+    `${origin}${base}perspective/perspective-viewer-d3fc.js`,
   ];
 }
 let perspectiveLoaded = false;
@@ -1525,7 +1530,8 @@ let perspectiveWorker: any = null;
 
 /** Load Perspective CSS and scripts (idempotent). */
 async function ensurePerspectiveLoaded(): Promise<void> {
-  for (const css of ["/perspective/themes.css", "/perspective/pro.css"]) {
+  const base = import.meta.env.BASE_URL;
+  for (const css of [`${base}perspective/themes.css`, `${base}perspective/pro.css`]) {
     if (!document.querySelector(`link[href="${css}"]`)) {
       const link = document.createElement("link");
       link.rel = "stylesheet";

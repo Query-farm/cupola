@@ -83,6 +83,10 @@ content_type() {
   esac
 }
 
+# Astro's `base: /v${VERSION}/` versions the URLs emitted in HTML/JS but does
+# NOT change the dist/ output directory layout — files still live at dist/_astro,
+# dist/shell, etc. We add the v${VERSION}/ prefix during upload.
+
 # Upload oversized files (>25MB) to root-level R2 keys (shared across versions).
 # These are typically WASM files that rarely change between versions.
 OVERSIZED=$(find dist/ -type f -size +25M 2>/dev/null || true)
