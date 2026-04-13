@@ -423,7 +423,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
           {queryHistory.length > 0 && (
             <button role="tab" aria-selected={activeTab === "queries"} className={tabCls("queries")} onClick={() => handleTabClick("queries")}>
               <History className="h-3.5 w-3.5" />
-              Queries ({queryHistory.length})
+              Query History ({queryHistory.length})
             </button>
           )}
           <button
