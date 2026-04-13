@@ -30,7 +30,7 @@ export function SettingsModal() {
         <Settings className="h-4 w-4" />
         Settings
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Settings className="h-5 w-5 text-primary" />
@@ -146,14 +146,14 @@ export function SettingsModal() {
                   </span>
                 </Label>
                 <Select
-                  value={String(settings.shellThreads)}
-                  onValueChange={(val) => updateSettings({ shellThreads: Number(val) })}
+                  value={settings.shellThreads === 0 ? "auto" : String(settings.shellThreads)}
+                  onValueChange={(val) => updateSettings({ shellThreads: val === "auto" ? 0 : Number(val) })}
                 >
                   <SelectTrigger className="w-[100px] h-8 text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="0" className="text-sm">Auto ({resolveThreadCount(0)})</SelectItem>
+                    <SelectItem value="auto" className="text-sm">Auto ({resolveThreadCount(0)})</SelectItem>
                     <SelectItem value="1" className="text-sm">1</SelectItem>
                     <SelectItem value="2" className="text-sm">2</SelectItem>
                     <SelectItem value="4" className="text-sm">4</SelectItem>
