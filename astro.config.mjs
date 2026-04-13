@@ -119,6 +119,7 @@ export default defineConfig({
     },
     optimizeDeps: {
       include: ['leaflet', 'cli-table3'],
+      exclude: ['astro'],
     },
     resolve: {
       alias: {
