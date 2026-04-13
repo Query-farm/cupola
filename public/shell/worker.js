@@ -19,6 +19,10 @@ var WORKER_T0 = performance.now();
 var T_BEFORE_IMPORT_SCRIPTS = 0;
 var T_AFTER_IMPORT_SCRIPTS = 0;
 
+// Thread count from the main thread. null = use worker default (hardwareConcurrency).
+// Main thread sends this before init() based on the user's settings and browser.
+var configuredThreadCount = null;
+
 // Bytes for duckdb-coi.wasm delivered by the main thread. The main thread
 // prefetches this 31 MB blob in parallel with catalog load, then transfers
 // it here before init() runs. If bytes === null, we fall back to letting
@@ -254,10 +258,13 @@ async function init() {
     // subsequent queries. The pthread pool is still pre-allocated at
     // pthreadPoolSize so query parallelism works after the bump.
     //
+    // Thread count: use the value from the main thread (which accounts for
+    // Safari defaulting to 1), or fall back to hardwareConcurrency.
     // Localhost dev server uses 1 thread throughout to avoid Vite middleware
     // issues with many concurrent pthread sub-worker fetches.
     const isLocal = self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1';
-    const threadCount = isLocal ? 1 : (navigator.hardwareConcurrency || 4);
+    const threadCount = isLocal ? 1 : (configuredThreadCount || navigator.hardwareConcurrency || 4);
+    console.log('[worker] Thread count:', threadCount, configuredThreadCount ? '(from settings)' : '(default)');
     const duckdbModuleConfig = {
         locateFile: (path) => wasmBase + path,
         mainScriptUrlOrBlob: pthreadWorkerUrl,
@@ -372,6 +379,10 @@ function processPendingMessages() {
 onmessage = function(e) {
     const data = e.data;
     // These can be processed before init
+    if (data.type === 'init-threads') {
+        configuredThreadCount = data.count;
+        return;
+    }
     if (data.type === 'init-cancel-sab') {
         cancelFlag = new Int32Array(data.sab);
         return;

@@ -244,6 +244,10 @@ export function CatalogApp() {
     }
     setAttachedCatalogs(additions);
   }, [data?.catalogName]);
+  // Persist shell mode to localStorage
+  useEffect(() => {
+    try { localStorage.setItem("vgi-shell-mode", shellMode); } catch {}
+  }, [shellMode]);
 
   // Expose refresh globally (navigate is exposed after it's defined below)
   if (typeof window !== "undefined") {
@@ -252,10 +256,6 @@ export function CatalogApp() {
     bridge.memoryCatalog = memoryCatalog;
   }
 
-  // Persist shell mode to localStorage
-  useEffect(() => {
-    try { localStorage.setItem("vgi-shell-mode", shellMode); } catch {}
-  }, [shellMode]);
 
   // Escape key exits fullscreen
   useEffect(() => {

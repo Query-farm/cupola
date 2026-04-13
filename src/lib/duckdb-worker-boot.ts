@@ -16,7 +16,16 @@ import { consumeDuckDBWasmBytes } from "./prefetch-duckdb";
 
 let booted = false;
 
-export function ensureDuckDBWorker(baseUrl: string): void {
+/** Resolve the effective thread count from the settings value.
+ *  0 = auto: 1 for Safari (struggles with pthread sub-workers), hardwareConcurrency for others. */
+export function resolveThreadCount(settingValue: number): number {
+  if (settingValue > 0) return settingValue;
+  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  if (isSafari) return 1;
+  return navigator.hardwareConcurrency || 4;
+}
+
+export function ensureDuckDBWorker(baseUrl: string, threadCount?: number): void {
   if (booted || bridge.worker) return;
   booted = true;
 
@@ -32,6 +41,11 @@ export function ensureDuckDBWorker(baseUrl: string): void {
   if (oauthSAB) {
     (bridge as any)._oauthSAB = oauthSAB;
     worker.postMessage({ type: "init-oauth-sab", sab: oauthSAB });
+  }
+
+  // Send thread count before init() runs so the worker can size its pthread pool.
+  if (threadCount !== undefined) {
+    worker.postMessage({ type: "init-threads", count: threadCount });
   }
 
   const cancelSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;

@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useSettings } from "@/lib/settings";
+import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
 
 export function SettingsModal() {
   const { settings, updateSettings } = useSettings();
@@ -134,6 +135,32 @@ export function SettingsModal() {
                         {size}px
                       </SelectItem>
                     ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <Label className="flex flex-col gap-1.5">
+                  <span className="font-medium">Worker threads</span>
+                  <span className="text-xs text-muted-foreground font-normal">
+                    Number of threads for DuckDB query execution. Auto uses 1 for Safari, max for other browsers. Requires shell restart.
+                  </span>
+                </Label>
+                <Select
+                  value={String(settings.shellThreads)}
+                  onValueChange={(val) => updateSettings({ shellThreads: Number(val) })}
+                >
+                  <SelectTrigger className="w-[100px] h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0" className="text-sm">Auto ({resolveThreadCount(0)})</SelectItem>
+                    <SelectItem value="1" className="text-sm">1</SelectItem>
+                    <SelectItem value="2" className="text-sm">2</SelectItem>
+                    <SelectItem value="4" className="text-sm">4</SelectItem>
+                    <SelectItem value="8" className="text-sm">8</SelectItem>
+                    {(navigator.hardwareConcurrency || 0) > 8 && (
+                      <SelectItem value={String(navigator.hardwareConcurrency)} className="text-sm">{navigator.hardwareConcurrency}</SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>

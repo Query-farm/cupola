@@ -17,7 +17,7 @@ import { handleDotCommand, type ShellState, type ShellIO } from "@/lib/shell-com
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "@/lib/shell-ai-mode";
 import { attachInputHandlers, type CompletionItem } from "@/lib/shell-input";
 import { bridge, recordQuery, notifyQueryChange } from "@/lib/shell-bridge";
-import { ensureDuckDBWorker } from "@/lib/duckdb-worker-boot";
+import { ensureDuckDBWorker, resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { getTerminalTheme } from "@/lib/theme";
 import {
   saveSession, saveAutoSave, loadSession, getAutoSave,
@@ -209,7 +209,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         console.log("[shell] Initializing DuckDB shell, token:", shellToken ? shellToken.substring(0, 20) + "..." : "NONE");
         const { cleanup, insertText } = initShell(
           containerRef.current,
-          { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, autoRestoreSession: settings.autoRestoreSession, catalogData, aiApiKey: settings.anthropicApiKey, aiModel: settings.aiModel },
+          { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, autoRestoreSession: settings.autoRestoreSession, threadCount: resolveThreadCount(settings.shellThreads), catalogData, aiApiKey: settings.anthropicApiKey, aiModel: settings.aiModel },
           { tableFromIPC, Readline },
           { onAuthError }
         );
@@ -738,7 +738,7 @@ function QueryCard({ entry, compact, onRerun }: { entry: QueryHistoryEntry; comp
 
 function initShell(
   container: HTMLElement,
-  config: { serviceUrl: string; catalogName: string; token: string | null; fontSize?: number; autoRestoreSession?: boolean; catalogData?: CatalogData; aiApiKey?: string; aiModel?: string },
+  config: { serviceUrl: string; catalogName: string; token: string | null; fontSize?: number; autoRestoreSession?: boolean; threadCount?: number; catalogData?: CatalogData; aiApiKey?: string; aiModel?: string },
   modules: { tableFromIPC: any; Readline: any },
   callbacks: { onAuthError?: (title: string, message: string) => void } = {}
 ): { cleanup: () => void; insertText: (text: string) => void } {
@@ -867,7 +867,7 @@ function initShell(
   // Worker creation + SAB wiring + wasm-bytes delivery all live in
   // ensureDuckDBWorker. It is idempotent so it's safe to call on every
   // initShell invocation.
-  ensureDuckDBWorker(import.meta.env.BASE_URL);
+  ensureDuckDBWorker(import.meta.env.BASE_URL, config.threadCount);
   const worker = bridge.worker!;
   let currentWasmVersion = "";
 
