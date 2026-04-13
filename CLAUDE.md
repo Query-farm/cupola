@@ -124,6 +124,26 @@ cd ~/Development/vgi-web-frontend && bun run dev
 http://localhost:4321/?service=http://localhost:9003
 ```
 
+## Publishing & Deployment
+
+Assets are served from Cloudflare R2 via a Pages Function (`functions/[[path]].ts`). The URL scheme is versioned:
+- `/` → 302 → `/latest/`
+- `/latest/` → 302 → `/v{current}/` (reads `_latest` marker from R2)
+- `/v0.3.25/*` → immutable versioned assets from R2
+
+**To publish a new version:**
+1. Bump `version` in `package.json`
+2. Run `./publish.sh` (or `./publish.sh --skip-commit` if already committed)
+
+`publish.sh` handles: git commit/push/tag, build, upload all assets to R2 under `v{version}/`, update the `_latest` marker, and deploy the Pages Function.
+
+**Key details:**
+- `astro.config.mjs` sets `base: /v{version}/` so all emitted asset paths are versioned
+- Oversized files (>25MB, e.g. WASM) are uploaded to R2 root (shared across versions)
+- Normal files go under the `v{version}/` prefix in R2
+- The Pages Function serves from R2 with edge caching (`caches.default`)
+- `wrangler.jsonc` binds the `cupola-assets` R2 bucket as `ASSETS_BUCKET`
+
 ## Dependencies on Sibling Repos
 
 The `package.json` references local sibling repos:
