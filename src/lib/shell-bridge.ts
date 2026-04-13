@@ -81,5 +81,15 @@ export const bridge = {
   addQueryHistoryEntry: null as ((entry: QueryHistoryEntry) => void) | null,
 };
 
+/** Subscribe to bridge.query availability changes. Fires when query is set or cleared. */
+const queryListeners = new Set<() => void>();
+export function onQueryChange(cb: () => void): () => void {
+  queryListeners.add(cb);
+  return () => { queryListeners.delete(cb); };
+}
+export function notifyQueryChange(): void {
+  for (const cb of queryListeners) cb();
+}
+
 // Expose on window for Playwright/test access (survives HMR module replacement)
 if (typeof window !== "undefined") (window as any).__bridge = bridge;

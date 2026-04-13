@@ -4,6 +4,7 @@ export interface Settings {
   showDuckDBTypes: boolean;
   hideTableBackingFunctions: boolean;
   shellFontSize: number;
+  autoRestoreSession: boolean;
   anthropicApiKey: string;
   aiModel: string;
   aiMaxToolRounds: number;
@@ -13,6 +14,7 @@ const defaultSettings: Settings = {
   showDuckDBTypes: true,
   hideTableBackingFunctions: true,
   shellFontSize: 13,
+  autoRestoreSession: false,
   anthropicApiKey: "",
   aiModel: "claude-sonnet-4-20250514",
   aiMaxToolRounds: 20,

@@ -98,6 +98,22 @@ export function SettingsModal() {
               SQL Shell
             </h3>
             <div className="rounded-lg border border-border p-4 space-y-3">
+              <div className="flex items-start justify-between gap-4">
+                <Label htmlFor="auto-restore" className="flex flex-col gap-1.5 cursor-pointer">
+                  <span className="font-medium">Auto-restore previous session</span>
+                  <span className="text-xs text-muted-foreground font-normal leading-relaxed">
+                    Automatically restore the last saved DuckDB session when opening the shell.
+                    When off, the shell always starts fresh. You can still restore manually with <code className="bg-muted px-1 rounded text-xs">.sessions</code>.
+                  </span>
+                </Label>
+                <Switch
+                  id="auto-restore"
+                  checked={settings.autoRestoreSession}
+                  onCheckedChange={(checked) =>
+                    updateSettings({ autoRestoreSession: checked })
+                  }
+                />
+              </div>
               <div className="flex items-center justify-between gap-4">
                 <Label className="flex flex-col gap-1.5">
                   <span className="font-medium">Font size</span>

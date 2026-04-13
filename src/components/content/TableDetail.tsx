@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button"
 import type { TableInfo } from "vgi/client";
 import { getColumns, getForeignKeys, fetchColumnStats, type ForeignKeyInfo, type ColumnStats } from "@/lib/service";
+import { onQueryChange } from "@/lib/shell-bridge";
 import type { Selection } from "@/lib/tree";
 import { Breadcrumb } from "./Breadcrumb";
 import { ColumnsTable } from "./ColumnsTable";
@@ -26,15 +27,37 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
   const defaultSql = `SELECT * FROM ${catalogName}.${table.schemaName}.${table.name} LIMIT 10;`;
   const displayTags = useMemo(() => filterDisplayTags(table.tags), [table.tags]);
 
-  // Lazily fetch column statistics from DuckDB WASM shell
-  // undefined = loading, Map = loaded, null = unavailable
+  // Lazily fetch column statistics from DuckDB WASM shell.
+  // undefined = loading, Map = loaded, null = unavailable.
+  // If the shell isn't ready yet, subscribes to bridge.query availability
+  // and retries once the shell initializes.
   const [columnStats, setColumnStats] = useState<Map<string, ColumnStats> | undefined | null>(undefined);
   useEffect(() => {
+    let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
+
+    function doFetch() {
+      fetchColumnStats(catalogName, table.schemaName, table.name).then(
+        (stats) => {
+          if (cancelled) return;
+          setColumnStats(stats);
+          // bridge.query was null — subscribe so we retry when the shell is ready
+          if (stats === null && !unsubscribe) {
+            unsubscribe = onQueryChange(() => {
+              if (!cancelled) doFetch();
+            });
+          }
+        },
+        () => { if (!cancelled) setColumnStats(null); },
+      );
+    }
+
     setColumnStats(undefined);
-    fetchColumnStats(catalogName, table.schemaName, table.name).then(
-      (stats) => setColumnStats(stats),
-      () => setColumnStats(null),
-    );
+    doFetch();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, [catalogName, table.schemaName, table.name]);
 
   // Build constraint lookup sets
