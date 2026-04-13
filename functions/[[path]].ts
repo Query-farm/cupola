@@ -247,7 +247,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     // that comes through this branch. The `/oauth-callback.html` path
     // still works via the latest-version fallback below.
     return cacheAndReturn(respond(obj, resolvedKey, {
-      "Cache-Control": cacheControl(r2Key, true),
+      "Cache-Control": cacheControl(resolvedKey, true),
     }));
   }
 
