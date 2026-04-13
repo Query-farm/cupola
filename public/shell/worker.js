@@ -268,6 +268,9 @@ async function init() {
     const duckdbModuleConfig = {
         locateFile: (path) => wasmBase + path,
         mainScriptUrlOrBlob: pthreadWorkerUrl,
+        // Note: pthreadPoolSize is hardcoded to 4 in the Emscripten build
+        // (duckdb-coi.js initMainThread). This config value is ignored but
+        // kept for documentation of intent.
         pthreadPoolSize: threadCount,
     };
     // If the main thread delivered bytes, skip Emscripten's own fetch via the
@@ -304,18 +307,33 @@ async function init() {
     mark('db-open');
     connHdl = module.ccall('duckdb_web_connect', 'number', [], []);
 
-    // Enable DuckDB's built-in progress tracking. This populates the
-    // counter that duckdb_web_get_query_progress reads, which we poll from
-    // runQueryAsync and post back as {type:'progress'} messages. Setting
-    // enable_progress_bar_print=false suppresses the C++ side's stderr
-    // output — we render the bar ourselves in DuckDBShell.renderProgressBar.
-    await runQueryAsync("SET enable_progress_bar=true");
-    await runQueryAsync("SET enable_progress_bar_print=false");
-    await runQueryAsync("SET autoinstall_known_extensions=false");
-    await runQueryAsync("SET autoload_known_extensions=true");
-    await runQueryAsync("SET arrow_lossless_conversion=true");
+    // Yield to the event loop before running any queries. The Emscripten
+    // build hardcodes pthreadPoolSize=4, so four pthread sub-workers are
+    // always pre-spawned. Their initialization can send proxy messages
+    // (including Embind handle operations) back to the main worker. If we
+    // start executing queries before those messages drain, Safari can hit
+    // an intermittent "toValue(handle)[...] is not a function" Embind
+    // error. A single yield lets the event loop process pending messages.
+    await yieldEventLoop();
+
+    // Configure DuckDB settings. Suppress progress bar printing BEFORE
+    // enabling progress tracking — otherwise enabling the progress bar
+    // causes DuckDB to attach a ProgressBarDisplay that may attempt to
+    // call an Embind-bound JS method for rendering. With printing
+    // disabled first, that code path is suppressed.
     const workerBase = self.location.href.replace(/\/[^/]*$/, '');
-    await runQueryAsync(`SET custom_extension_repository='${workerBase}/extensions'`);
+    const initSettings = [
+        "SET enable_progress_bar_print=false",
+        "SET enable_progress_bar=true",
+        "SET autoinstall_known_extensions=false",
+        "SET autoload_known_extensions=true",
+        "SET arrow_lossless_conversion=true",
+        `SET custom_extension_repository='${workerBase}/extensions'`,
+    ];
+    for (const sql of initSettings) {
+        const r = await runQueryAsync(sql);
+        if (!r.ok) console.warn('[worker] init setting failed:', sql, r.error);
+    }
     mark('settings');
 
     const exts = ['json', 'icu', 'autocomplete', 'spatial', 'vgi'];
@@ -512,4 +530,7 @@ async function handleMessage(data) {
     }
 };
 
-init();
+init().catch(function(err) {
+    console.error('[worker] init() failed:', err);
+    postMessage({ type: 'log', msg: 'DuckDB initialization failed: ' + (err.message || err), cls: 'err' });
+});
