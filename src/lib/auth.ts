@@ -12,6 +12,7 @@ import {
   getStoredTokens as spaGetStoredTokens,
   hasTokens as spaHasTokens,
   clearTokens as spaClearTokens,
+  clearAllTokens as spaClearAllTokens,
   extractOrigin,
 } from "./oauth-client";
 
@@ -204,6 +205,19 @@ export function clearAuth(serviceUrl?: string): void {
   if (serviceUrl) {
     spaClearTokens(serviceUrl);
   }
+}
+
+/** Clear ALL auth state across every service. Used by the sign-out page
+ *  to fully clear the Cupola session. Unlike `clearAuth(serviceUrl)` which
+ *  targets one service, this wipes everything. */
+export function clearAllAuth(): void {
+  _cachedToken = null;
+  _cachedOAuthMeta = null;
+  _hadToken = false;
+  if (typeof document !== "undefined") {
+    document.cookie = `${AUTH_COOKIE_NAME}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  }
+  spaClearAllTokens();
 }
 
 /** Decode JWT payload to extract user info (no signature verification).

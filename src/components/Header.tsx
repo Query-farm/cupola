@@ -1,4 +1,4 @@
-import { UserInfo } from "./UserInfo";
+import { ServiceSwitcher } from "./ServiceSwitcher";
 
 interface Props {
   catalogName: string;
@@ -24,7 +24,7 @@ export function Header({ catalogName, catalogComment, serviceUrl, logoUrl }: Pro
         </div>
       </div>
 
-      <UserInfo serviceUrl={serviceUrl} />
+      <ServiceSwitcher currentUrl={serviceUrl} currentCatalogName={catalogName} />
     </header>
   );
 }

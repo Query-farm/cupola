@@ -17,6 +17,7 @@ import { handleDotCommand, type ShellState, type ShellIO } from "@/lib/shell-com
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "@/lib/shell-ai-mode";
 import { attachInputHandlers, type CompletionItem } from "@/lib/shell-input";
 import { bridge, recordQuery } from "@/lib/shell-bridge";
+import { ensureDuckDBWorker } from "@/lib/duckdb-worker-boot";
 import { getTerminalTheme } from "@/lib/theme";
 import {
   saveSession, saveAutoSave, loadSession, getAutoSave,
@@ -854,25 +855,13 @@ function initShell(
   // makes self.location.href inside worker.js versioned, which cascades to
   // every downstream URL the worker derives (pthread sub-workers, wasm,
   // extension LOAD URLs).
-  const isNewWorker = !bridge.worker;
-  const worker = bridge.worker || new Worker(`${import.meta.env.BASE_URL}shell/worker.js`);
-  bridge.worker = worker;
+  // Worker creation + SAB wiring + wasm-bytes delivery all live in
+  // ensureDuckDBWorker so the same code runs whether we're booting eagerly
+  // from CatalogApp or lazily here (e.g. if DuckDBShell is mounted without
+  // CatalogApp in the tree). ensureDuckDBWorker is idempotent.
+  ensureDuckDBWorker(import.meta.env.BASE_URL);
+  const worker = bridge.worker!;
   let currentWasmVersion = "";
-
-  // Only set up SABs and init for new workers
-  let cancelInt32: Int32Array | null = null;
-  if (isNewWorker) {
-    (bridge as any)._oauthSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(8192) : null;
-    if ((bridge as any)._oauthSAB) worker.postMessage({ type: "init-oauth-sab", sab: (bridge as any)._oauthSAB });
-
-    const cancelSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;
-    if (cancelSAB) worker.postMessage({ type: "init-cancel-sab", sab: cancelSAB });
-
-    cancelInt32 = cancelSAB ? new Int32Array(cancelSAB) : null;
-    bridge.cancelQuery = () => {
-      if (cancelInt32) Atomics.store(cancelInt32, 0, 1);
-    };
-  }
 
   let queryRunning = false;
   let outputMode: "box" | "line" = "box";
@@ -979,7 +968,122 @@ function initShell(
     return "unhandled";
   }
 
-  worker.onmessage = (e: MessageEvent) => {
+  // Runs the post-ready flow (snapshot restore + ATTACH + timezone query + readLoop).
+  // Called either from the worker-message handler when 'ready' arrives, or
+  // directly from below if the eager worker boot already captured ready
+  // before DuckDBShell mounted.
+  let postReadyInvoked = false;
+  const runPostReady = (readyWasmVersion: string) => {
+    if (postReadyInvoked) return;
+    postReadyInvoked = true;
+    currentWasmVersion = readyWasmVersion;
+    (async () => {
+      // Try to restore previous session from IndexedDB
+      // Skip restore if ?noreset or ?fresh is in the URL (escape hatch for corrupted snapshots)
+      const skipRestore = new URLSearchParams(window.location.search).has("fresh");
+      let restored = false;
+      if (skipRestore && config.serviceUrl) {
+        try { await deleteSession(`${config.serviceUrl}::${AUTOSAVE_NAME}`); } catch { /* ignore */ }
+        writeln("Fresh start — cleared saved session.", "33");
+      }
+      if (config.serviceUrl && !skipRestore) {
+        try {
+          const autoSaveSession = await getAutoSave(config.serviceUrl);
+          if (autoSaveSession && autoSaveSession.wasmVersion === currentWasmVersion) {
+            const memory = await decompressMemory(autoSaveSession);
+            await restoreSnapshot(memory, memory.byteLength, autoSaveSession.connHdl);
+            const when = new Date(autoSaveSession.timestamp).toLocaleString();
+            writeln(`Restored previous session (saved ${when})`, "32");
+            restored = true;
+
+            if (config.catalogName && config.token) {
+              await runQueryAsync(`USE memory`);
+              const attachSql = buildAttachSql();
+              console.log("[shell] Re-attach SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
+              const reattach = await runQueryAsync(attachSql);
+              if (!reattach.ok) {
+                const errStr = reattach.error ?? "";
+                console.log("[shell] Re-attach failed:", errStr);
+                const handled = handleAttachError(errStr, "Re-attach failed");
+                if (handled === "redirected") return;
+                if (handled !== "surfaced") {
+                  writeln(`Re-attach failed: ${errStr}`, "31");
+                }
+              }
+            }
+
+            bridge.refreshMemoryTables?.();
+          }
+        } catch (err: any) {
+          console.warn("[session] Auto-restore failed:", err);
+          writeln("Previous session expired, starting fresh.", "33");
+          try {
+            await deleteSession(`${config.serviceUrl}::${AUTOSAVE_NAME}`);
+          } catch { /* ignore cleanup errors */ }
+        }
+      }
+
+      if (!restored && config.serviceUrl && config.catalogName) {
+        writeln(`Connecting to ${config.catalogName}...`, "33");
+        const attachSql = buildAttachSql();
+        console.log("[shell] ATTACH SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
+        const result = await runQueryAsync(attachSql);
+        if (result.ok) {
+          await runQueryAsync(`USE ${config.catalogName}`);
+          writeln(`Connected to ${config.catalogName}`, "32");
+        } else {
+          const errStr = result.error ?? "";
+          console.log("[shell] ATTACH failed:", errStr);
+          const handled = handleAttachError(errStr, "Attach failed");
+          if (handled === "redirected") return;
+          if (handled !== "surfaced") {
+            writeln(`Attach failed: ${errStr}`, "31");
+          }
+        }
+        writeln("");
+      } else if (!restored) {
+        writeln("");
+        writeln("Type SQL queries below.", "33");
+        writeln("");
+      } else {
+        writeln("");
+      }
+
+      // Set up periodic auto-save (every 5 minutes)
+      autoSaveIntervalId = setInterval(() => {
+        if (config.serviceUrl && Date.now() - lastAutoSave > 60_000) {
+          autoSave();
+        }
+      }, 300_000);
+
+      // Auto-save on page unload
+      beforeUnloadHandler = () => { autoSave(); };
+      window.addEventListener("beforeunload", beforeUnloadHandler);
+
+      // Query DuckDB's timezone setting for timestamp_tz formatting
+      try {
+        const tzResult = await runQueryAsync("SELECT current_setting('TimeZone') as tz");
+        if (tzResult.ok && tzResult.arrowBuffers?.length) {
+          const tzTable = tableFromIPC(tzResult.arrowBuffers[0]);
+          const tzVal = tzTable.getChildAt(0)?.get(0);
+          if (tzVal) {
+            const { setDuckDBTimezone } = await import("@/lib/format");
+            setDuckDBTimezone(String(tzVal));
+          }
+        }
+      } catch { /* ignore — will fall back to browser timezone */ }
+
+      // Shell is fully ready — expose runQuery for external callers
+      bridge.runQuery = runQuery;
+      // Populate the sidebar with any VGI catalogs that came back with the
+      // session snapshot (or were just freshly ATTACH'd at boot).
+      bridge.onAttachedCatalogsChanged?.();
+      window.dispatchEvent(new Event("duckdb-ready"));
+      readLoop();
+    })();
+  };
+
+  const workerMessageHandler = (e: MessageEvent) => {
     const d = e.data;
 
     if (d.type === "open-auth-url") {
@@ -1088,116 +1192,7 @@ function initShell(
     }
 
     if (d.type === "ready") {
-      currentWasmVersion = d.wasmVersion || "";
-      (async () => {
-        // Try to restore previous session from IndexedDB
-        // Skip restore if ?noreset or ?fresh is in the URL (escape hatch for corrupted snapshots)
-        const skipRestore = new URLSearchParams(window.location.search).has("fresh");
-        let restored = false;
-        if (skipRestore && config.serviceUrl) {
-          // Delete the saved snapshot so next load is clean
-          try { await deleteSession(`${config.serviceUrl}::${AUTOSAVE_NAME}`); } catch { /* ignore */ }
-          writeln("Fresh start — cleared saved session.", "33");
-        }
-        if (config.serviceUrl && !skipRestore) {
-          try {
-            const autoSaveSession = await getAutoSave(config.serviceUrl);
-            if (autoSaveSession && autoSaveSession.wasmVersion === currentWasmVersion) {
-              const memory = await decompressMemory(autoSaveSession);
-              await restoreSnapshot(memory, memory.byteLength, autoSaveSession.connHdl);
-              const when = new Date(autoSaveSession.timestamp).toLocaleString();
-              writeln(`Restored previous session (saved ${when})`, "32");
-              restored = true;
-
-              // Re-attach the catalog with a fresh token if auth is in use
-              if (config.catalogName && config.token) {
-                await runQueryAsync(`USE memory`);
-                const attachSql = buildAttachSql();
-                console.log("[shell] Re-attach SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
-                const reattach = await runQueryAsync(attachSql);
-                if (reattach.ok) {
-                  // Silent — user doesn't need to know about credential refresh
-                } else {
-                  const errStr = reattach.error ?? "";
-                  console.log("[shell] Re-attach failed:", errStr);
-                  const handled = handleAttachError(errStr, "Re-attach failed");
-                  if (handled === "redirected") return;
-                  if (handled === "surfaced") {
-                    // onAuthError shown as modal; leave the shell idle but usable
-                  } else {
-                    writeln(`Re-attach failed: ${errStr}`, "31");
-                  }
-                }
-              }
-
-              // Refresh sidebar to show in-memory tables from the restored snapshot
-              bridge.refreshMemoryTables?.();
-            }
-          } catch (err: any) {
-            console.warn("[session] Auto-restore failed:", err);
-            writeln("Previous session expired, starting fresh.", "33");
-            // Delete the bad auto-save so it doesn't fail again on next load
-            try {
-              await deleteSession(`${config.serviceUrl}::${AUTOSAVE_NAME}`);
-            } catch { /* ignore cleanup errors */ }
-          }
-        }
-
-        if (!restored && config.serviceUrl && config.catalogName) {
-          writeln(`Connecting to ${config.catalogName}...`, "33");
-          const attachSql = buildAttachSql();
-          console.log("[shell] ATTACH SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
-          const result = await runQueryAsync(attachSql);
-          if (result.ok) {
-            await runQueryAsync(`USE ${config.catalogName}`);
-            writeln(`Connected to ${config.catalogName}`, "32");
-          } else {
-            const errStr = result.error ?? "";
-            console.log("[shell] ATTACH failed:", errStr);
-            const handled = handleAttachError(errStr, "Attach failed");
-            if (handled === "redirected") return;
-            if (handled !== "surfaced") {
-              writeln(`Attach failed: ${errStr}`, "31");
-            }
-          }
-          writeln("");
-        } else if (!restored) {
-          writeln("");
-          writeln("Type SQL queries below.", "33");
-          writeln("");
-        } else {
-          writeln("");
-        }
-
-        // Set up periodic auto-save (every 5 minutes)
-        autoSaveIntervalId = setInterval(() => {
-          if (config.serviceUrl && Date.now() - lastAutoSave > 60_000) {
-            autoSave();
-          }
-        }, 300_000);
-
-        // Auto-save on page unload
-        beforeUnloadHandler = () => { autoSave(); };
-        window.addEventListener("beforeunload", beforeUnloadHandler);
-
-        // Query DuckDB's timezone setting for timestamp_tz formatting
-        try {
-          const tzResult = await runQueryAsync("SELECT current_setting('TimeZone') as tz");
-          if (tzResult.ok && tzResult.arrowBuffers?.length) {
-            const tzTable = tableFromIPC(tzResult.arrowBuffers[0]);
-            const tzVal = tzTable.getChildAt(0)?.get(0);
-            if (tzVal) {
-              const { setDuckDBTimezone } = await import("@/lib/format");
-              setDuckDBTimezone(String(tzVal));
-            }
-          }
-        } catch { /* ignore — will fall back to browser timezone */ }
-
-        // Shell is fully ready — expose runQuery for external callers
-        bridge.runQuery = runQuery;
-        window.dispatchEvent(new Event("duckdb-ready"));
-        readLoop();
-      })();
+      runPostReady(d.wasmVersion || "");
       return;
     }
 
@@ -1369,7 +1364,7 @@ function initShell(
           printTable,
           clearProgressBar,
           setQueryRunning: (running: boolean) => { queryRunning = running; },
-          resetCancelFlag: () => { if (cancelInt32) Atomics.store(cancelInt32, 0, 0); },
+          resetCancelFlag: () => { if (bridge.cancelInt32) Atomics.store(bridge.cancelInt32, 0, 0); },
         };
         await runAIMode(trimmed, aiConv, aiTerm, aiOps, { apiKey: config.aiApiKey || "", model: config.aiModel || "claude-sonnet-4-20250514" });
         continue;
@@ -1381,7 +1376,7 @@ function initShell(
       const elapsed = performance.now() - t0;
       clearProgressBar();
       queryRunning = false;
-      if (cancelInt32) Atomics.store(cancelInt32, 0, 0); // reset cancel flag for next query
+      if (bridge.cancelInt32) Atomics.store(bridge.cancelInt32, 0, 0); // reset cancel flag for next query
 
       if (!result.ok) {
         const errStr = result.error || "unknown";
@@ -1477,6 +1472,12 @@ function initShell(
       if (upper.startsWith("USE ") || upper.startsWith("ATTACH ") || upper.startsWith("SET SCHEMA") || upper.startsWith("SET SEARCH_PATH")) {
         await refreshCatalog();
       }
+      // Sync sidebar with the live set of attached VGI catalogs whenever
+      // the user ran an ATTACH or DETACH. Catches every success branch
+      // because this runs after the if/else arrow-buffer handling.
+      if (/^\s*(ATTACH|DETACH)\b/i.test(trimmed)) {
+        bridge.onAttachedCatalogsChanged?.();
+      }
     }
   }
 
@@ -1563,9 +1564,22 @@ function initShell(
   bridge.querySync = (sql: string) => runQuerySync(sql);
   bridge.catalogName = config.catalogName;
 
-  if (isNewWorker) {
-    // First shell: init worker, wait for ready, ATTACH, then start readLoop
-    worker.postMessage({ type: "init" });
+  if (isNewTerminal) {
+    // First initShell call this page load — attach the message handler and
+    // kick off the post-ready flow. ensureDuckDBWorker was already called at
+    // the top of initShell (and idempotently at CatalogApp mount), so the
+    // worker has been booting in parallel. If it already signaled ready
+    // before we mounted, bridge.workerReadyData is set and we jump straight
+    // into runPostReady; otherwise the handler picks it up when it arrives.
+    worker.addEventListener("message", workerMessageHandler);
+    if (bridge.workerReadyData) {
+      const waitedMs = Math.round(performance.now() - bridge.workerCreateStart);
+      console.log(`[shell] DuckDBShell mounted with worker already ready (booted ${waitedMs}ms ago) — running post-ready flow immediately`);
+      runPostReady(bridge.workerReadyData.wasmVersion);
+    } else {
+      const elapsedMs = Math.round(performance.now() - bridge.workerCreateStart);
+      console.log(`[shell] DuckDBShell mounted, worker still initializing (${elapsedMs}ms since boot) — waiting for ready event`);
+    }
   } else {
     // Reconnecting — readLoop is already running, re-expose runQuery
     bridge.runQuery = runQuery;

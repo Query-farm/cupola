@@ -69,6 +69,7 @@ interface AuthServerMetadata {
   issuer: string;
   authorization_endpoint: string;
   token_endpoint: string;
+  end_session_endpoint?: string;
   scopes_supported?: string[];
 }
 
@@ -79,6 +80,7 @@ export interface AuthContext {
   clientId: string;
   authorizationEndpoint: string;
   tokenEndpoint: string;
+  endSessionEndpoint?: string;
   scope: string;
   useIdTokenAsBearer: boolean;
 }
@@ -96,6 +98,9 @@ interface StoredTokens {
   /** Present on Entra/Google when scope includes `openid` — we fall back
    *  to this for services configured with `use_id_token_as_bearer`. */
   id_token?: string;
+  /** OIDC RP-Initiated Logout endpoint, captured from the IdP's discovery
+   *  document so we can redirect to it during sign-out. */
+  end_session_endpoint?: string;
 }
 
 /** Pending-flow record stashed while the user is at the IdP login page. */
@@ -106,6 +111,7 @@ interface PendingFlow {
   service_url: string;
   return_to: string;
   token_endpoint: string;
+  end_session_endpoint?: string;
   client_id: string;
   scope: string;
   use_id_token: boolean;
@@ -206,6 +212,7 @@ export async function discoverAuthContext(serviceUrl: string): Promise<AuthConte
     clientId: metadata.client_id,
     authorizationEndpoint: server.authorization_endpoint,
     tokenEndpoint: server.token_endpoint,
+    endSessionEndpoint: server.end_session_endpoint,
     scope,
     useIdTokenAsBearer: !!metadata.use_id_token_as_bearer,
   };
@@ -255,6 +262,33 @@ export function clearTokens(serviceUrl: string): void {
   sessionStorage.removeItem(tokensKey(extractOrigin(serviceUrl)));
 }
 
+/** Get the IdP logout URL for a service (OIDC RP-Initiated Logout).
+ *  Returns null if no stored tokens or no end_session_endpoint. */
+export function getLogoutInfo(serviceUrl: string): { endSessionEndpoint: string; idToken?: string } | null {
+  const stored = readTokens(extractOrigin(serviceUrl));
+  if (!stored?.end_session_endpoint) return null;
+  return {
+    endSessionEndpoint: stored.end_session_endpoint,
+    idToken: stored.id_token,
+  };
+}
+
+/** Drop ALL stored OAuth tokens and pending state across every service.
+ *  Used by the sign-out page to fully clear the Cupola session. */
+export function clearAllTokens(): void {
+  if (typeof sessionStorage === "undefined") return;
+  const toRemove: string[] = [];
+  for (let i = 0; i < sessionStorage.length; i++) {
+    const key = sessionStorage.key(i);
+    if (key && (key.startsWith(TOKENS_KEY_PREFIX) || key.startsWith(PENDING_KEY_PREFIX))) {
+      toRemove.push(key);
+    }
+  }
+  for (const key of toRemove) {
+    sessionStorage.removeItem(key);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Token exchange / refresh
 // ---------------------------------------------------------------------------
@@ -285,7 +319,7 @@ async function postTokenRequest(tokenEndpoint: string, body: URLSearchParams): P
   return parsed as TokenResponse;
 }
 
-function storeTokenResponse(ctx: AuthContext, resp: TokenResponse, fallbackRefreshToken?: string): StoredTokens {
+function storeTokenResponse(ctx: AuthContext, resp: TokenResponse, fallbackRefreshToken?: string, fallbackEndSessionEndpoint?: string): StoredTokens {
   const now = Math.floor(Date.now() / 1000);
   const expires_in = typeof resp.expires_in === "number" ? resp.expires_in : 3600;
   const stored: StoredTokens = {
@@ -297,6 +331,7 @@ function storeTokenResponse(ctx: AuthContext, resp: TokenResponse, fallbackRefre
     scope: ctx.scope,
     use_id_token: ctx.useIdTokenAsBearer,
     id_token: resp.id_token,
+    end_session_endpoint: ctx.endSessionEndpoint ?? fallbackEndSessionEndpoint,
   };
   writeTokens(ctx.serviceOrigin, stored);
   return stored;
@@ -334,6 +369,7 @@ export async function startLoginFlow(serviceUrl: string, returnTo?: string): Pro
     service_url: serviceUrl,
     return_to: returnTo ?? window.location.href,
     token_endpoint: ctx.tokenEndpoint,
+    end_session_endpoint: ctx.endSessionEndpoint,
     client_id: ctx.clientId,
     scope: ctx.scope,
     use_id_token: ctx.useIdTokenAsBearer,
@@ -387,6 +423,7 @@ export async function completeLoginFlow(code: string, state: string): Promise<{ 
       clientId: pending.client_id,
       authorizationEndpoint: "", // not needed after initial authorize
       tokenEndpoint: pending.token_endpoint,
+      endSessionEndpoint: pending.end_session_endpoint,
       scope: pending.scope,
       useIdTokenAsBearer: pending.use_id_token,
     },
@@ -417,10 +454,11 @@ async function refreshAccessToken(serviceOrigin: string): Promise<StoredTokens |
       clientId: stored.client_id,
       authorizationEndpoint: "",
       tokenEndpoint: stored.token_endpoint,
+      endSessionEndpoint: stored.end_session_endpoint,
       scope: stored.scope,
       useIdTokenAsBearer: stored.use_id_token,
     };
-    return storeTokenResponse(ctx, resp, stored.refresh_token);
+    return storeTokenResponse(ctx, resp, stored.refresh_token, stored.end_session_endpoint);
   } catch (err) {
     console.warn("[oauth] refresh failed for", serviceOrigin, err);
     // Don't clear tokens on a transient failure — the caller can decide
@@ -545,7 +583,7 @@ export function consumePendingCallback(): Promise<{ serviceUrl: string; returnTo
     if (parsed.error) {
       console.error("[oauth] consumePendingCallback: callback carried error",
                     parsed.error, parsed.errorDescription);
-      return null;
+      throw new Error(parsed.errorDescription || parsed.error);
     }
     if (!parsed.code || !parsed.state) {
       console.warn("[oauth] consumePendingCallback: stash missing code/state", parsed);

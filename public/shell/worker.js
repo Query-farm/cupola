@@ -14,6 +14,19 @@ var oauthSAB = null;
 var oauthInt32 = null;
 var oauthBytes = null;
 
+// Timing — captured from worker boot so init() can log a phase breakdown
+var WORKER_T0 = performance.now();
+var T_BEFORE_IMPORT_SCRIPTS = 0;
+var T_AFTER_IMPORT_SCRIPTS = 0;
+
+// Bytes for duckdb-coi.wasm delivered by the main thread. The main thread
+// prefetches this 31 MB blob in parallel with catalog load, then transfers
+// it here before init() runs. If bytes === null, we fall back to letting
+// Emscripten fetch the file itself.
+var preloadedWasmBytes = null;
+var resolveWasmBytes = null;
+var wasmBytesPromise = new Promise(function(r) { resolveWasmBytes = r; });
+
 // Minimal DUCKDB_RUNTIME shim — the COI Emscripten module calls through
 // globalThis.DUCKDB_RUNTIME for filesystem, feature detection, and UDFs.
 // We only need stubs since VGI tables use HTTP (not the DuckDB filesystem).
@@ -39,7 +52,9 @@ globalThis.DUCKDB_RUNTIME = {
     callScalarUDF: () => {},
 };
 
+T_BEFORE_IMPORT_SCRIPTS = performance.now();
 importScripts('./wasm/duckdb-coi.js');
+T_AFTER_IMPORT_SCRIPTS = performance.now();
 
 // Cancel signal via SharedArrayBuffer — main thread sets [0]=1 to request cancel
 var cancelFlag = null;
@@ -157,9 +172,25 @@ function postInitStatus(phase, message, done) {
 }
 
 async function init() {
-    // Loading messages logged to console only — keep terminal clean
-    console.log('[worker] Loading WASM module...');
-    postInitStatus('wasm', 'Downloading DuckDB WASM runtime…');
+    const timings = [
+        { phase: 'worker-boot', ms: Math.round(T_BEFORE_IMPORT_SCRIPTS - WORKER_T0) },
+        { phase: 'importScripts', ms: Math.round(T_AFTER_IMPORT_SCRIPTS - T_BEFORE_IMPORT_SCRIPTS) },
+    ];
+    let tPrev = T_AFTER_IMPORT_SCRIPTS;
+    const mark = (name) => {
+        const now = performance.now();
+        timings.push({ phase: name, ms: Math.round(now - tPrev) });
+        tPrev = now;
+    };
+
+    // Wait for the main thread to deliver duckdb-coi.wasm bytes. The main
+    // thread races this fetch against catalog load, so in the common case
+    // the bytes are already here by the time init() runs.
+    postInitStatus('wasm', 'Awaiting DuckDB WASM runtime…');
+    const wasmBytes = await wasmBytesPromise;
+    mark('await-wasm-bytes');
+    console.log('[worker] Loading WASM module...', wasmBytes ? `(${Math.round(wasmBytes.byteLength/(1024*1024))}MB from main thread)` : '(self-fetched)');
+    postInitStatus('wasm', wasmBytes ? 'Instantiating DuckDB WASM…' : 'Downloading DuckDB WASM runtime…');
 
     // Intercept WebAssembly.instantiate and instantiateStreaming to capture the Memory object
     // (Emscripten threads build doesn't expose it on the module)
@@ -227,11 +258,33 @@ async function init() {
     // issues with many concurrent pthread sub-worker fetches.
     const isLocal = self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1';
     const threadCount = isLocal ? 1 : (navigator.hardwareConcurrency || 4);
-    module = await DuckDB({
+    const duckdbModuleConfig = {
         locateFile: (path) => wasmBase + path,
         mainScriptUrlOrBlob: pthreadWorkerUrl,
         pthreadPoolSize: threadCount,
-    });
+    };
+    // If the main thread delivered bytes, skip Emscripten's own fetch via the
+    // instantiateWasm hook. This is especially important on localhost where
+    // the dev server doesn't set cacheable headers, so HTTP cache warming
+    // from the main thread is ineffective — bytes-via-transfer is the only
+    // reliable way to avoid the worker re-downloading 31 MB.
+    //
+    // Historical note: we investigated pre-compiling on the main thread via
+    // compileStreaming + WebAssembly.Module transfer. It worked but saved no
+    // wall-clock time — `DuckDB({...})` is dominated by Emscripten runtime
+    // init (LDSO, loadDylibs, pthread handshake), not WASM compile. Reverted.
+    if (wasmBytes) {
+        duckdbModuleConfig.instantiateWasm = function(imports, successCallback) {
+            WebAssembly.instantiate(wasmBytes, imports).then(function(result) {
+                successCallback(result.instance, result.module);
+            }).catch(function(err) {
+                console.error('[worker] instantiateWasm failed:', err);
+            });
+            return {}; // signals async to Emscripten
+        };
+    }
+    module = await DuckDB(duckdbModuleConfig);
+    mark('wasm-instantiate');
     console.log('[worker] Opening database...');
     postInitStatus('open', 'Opening database…');
     const config = JSON.stringify({ allowUnsignedExtensions: true, arrowLosslessConversion: true, maximumThreads: 1, query: { castBigIntToDouble: false } });
@@ -241,6 +294,7 @@ async function init() {
         return;
     }
 
+    mark('db-open');
     connHdl = module.ccall('duckdb_web_connect', 'number', [], []);
 
     // Enable DuckDB's built-in progress tracking. This populates the
@@ -255,15 +309,19 @@ async function init() {
     await runQueryAsync("SET arrow_lossless_conversion=true");
     const workerBase = self.location.href.replace(/\/[^/]*$/, '');
     await runQueryAsync(`SET custom_extension_repository='${workerBase}/extensions'`);
+    mark('settings');
 
     const exts = ['json', 'icu', 'autocomplete', 'spatial', 'vgi'];
     const failed = [];
     for (let i = 0; i < exts.length; i++) {
         const ext = exts[i];
         postInitStatus('ext:' + ext, `Loading extension ${i + 1}/${exts.length}: ${ext}…`);
+        const extStart = performance.now();
         const r = await runQueryAsync(`LOAD '${workerBase}/extensions/v1.5.1/wasm_threads/${ext}.duckdb_extension.wasm'`);
+        timings.push({ phase: `load:${ext}`, ms: Math.round(performance.now() - extStart) });
         if (!r.ok) { console.error(`[ext] ${ext}: ${r.error}`); failed.push(ext); }
     }
+    tPrev = performance.now();
     if (failed.length > 0) {
         postMessage({ type: 'log', msg: `Failed to load extensions: ${failed.join(', ')}`, cls: 'err' });
     }
@@ -273,6 +331,7 @@ async function init() {
         postInitStatus('threads', `Enabling ${threadCount}-thread execution…`);
         const r = await runQueryAsync(`SET threads=${threadCount}`);
         if (!r.ok) console.error(`[worker] SET threads=${threadCount} failed:`, r.error);
+        mark('threads');
     }
 
     // Log memory info for debugging
@@ -280,8 +339,12 @@ async function init() {
     const initialMB = Math.round(memBuf.byteLength / (1024*1024));
     console.log('[worker] WASM ready. Initial memory:', initialMB, 'MB, wasmMemoryRef captured:', !!wasmMemoryRef);
 
+    const totalMs = Math.round(performance.now() - WORKER_T0);
+    console.log(`[worker] DuckDB shell ready in ${totalMs}ms`);
+    console.table(timings);
+
     postInitStatus('ready', 'Ready.', true);
-    postMessage({ type: 'ready', wasmVersion: WASM_BUILD_VERSION });
+    postMessage({ type: 'ready', wasmVersion: WASM_BUILD_VERSION, totalMs: totalMs, timings: timings });
     processPendingMessages();
 }
 
@@ -317,6 +380,14 @@ onmessage = function(e) {
         oauthSAB = data.sab;
         oauthInt32 = new Int32Array(oauthSAB);
         oauthBytes = new Uint8Array(oauthSAB);
+        return;
+    }
+    if (data.type === 'wasm-bytes') {
+        preloadedWasmBytes = data.bytes; // ArrayBuffer (transferred) or null
+        if (resolveWasmBytes) {
+            resolveWasmBytes(preloadedWasmBytes);
+            resolveWasmBytes = null;
+        }
         return;
     }
     // Queue everything else until module is ready

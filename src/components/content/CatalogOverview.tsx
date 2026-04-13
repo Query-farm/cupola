@@ -8,6 +8,8 @@ import { CatalogListItem } from "./CatalogListItem";
 import { TagsTable } from "./TagsTable";
 import { filterDisplayTags, TAG_DESCRIPTION_MD } from "@/lib/tags";
 import { DescriptionSection } from "./DescriptionSection";
+import { useCatalogIdentity } from "@/lib/catalog-identity";
+import { CatalogIdentityCard } from "./CatalogIdentityCard";
 
 interface Props {
   catalog: CatalogData;
@@ -17,6 +19,7 @@ interface Props {
 
 export function CatalogOverview({ catalog, serviceUrl, onNavigate }: Props) {
   const { settings } = useSettings();
+  const { identity, loading: identityLoading } = useCatalogIdentity(catalog.catalogName, serviceUrl);
   const totalTables = catalog.schemas.reduce((sum, s) => sum + s.tables.length, 0);
   const totalViews = catalog.schemas.reduce((sum, s) => sum + s.views.length, 0);
   const totalFunctions = catalog.schemas.reduce((sum, s) => {
@@ -48,6 +51,8 @@ export function CatalogOverview({ catalog, serviceUrl, onNavigate }: Props) {
       {catalog.catalogTags?.[TAG_DESCRIPTION_MD] && (
         <DescriptionSection markdown={catalog.catalogTags[TAG_DESCRIPTION_MD]} defaultOpen />
       )}
+
+      <CatalogIdentityCard identity={identity} loading={identityLoading} />
 
       <ConnectBox catalogName={catalog.catalogName} serviceUrl={serviceUrl} />
 

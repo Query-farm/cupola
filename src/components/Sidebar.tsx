@@ -10,6 +10,9 @@ import { buildTreeData, filterTree, parseSelection, selectionToTreeId, type Sele
 interface Props {
   catalog: CatalogData;
   memoryCatalog?: CatalogData | null;
+  /** VGI catalogs the user has ATTACH'd from the shell (excludes the primary
+   *  ?service= catalog, which is passed separately via `catalog`). */
+  attachedCatalogs?: CatalogData[];
   selection: Selection | null;
   onSelect: (selection: Selection | null) => void;
   onOpenShell?: () => void;
@@ -33,7 +36,7 @@ function buildRefreshAction(onRefresh: () => void, refreshing?: boolean): React.
   }));
 }
 
-export function Sidebar({ catalog, memoryCatalog, selection, onSelect, onOpenShell, onShellInsert, onRefresh, refreshing }: Props) {
+export function Sidebar({ catalog, memoryCatalog, attachedCatalogs, selection, onSelect, onOpenShell, onShellInsert, onRefresh, refreshing }: Props) {
   const [search, setSearch] = useState("");
   const { settings } = useSettings();
   const treeData = useMemo(() => buildTreeData(catalog, {
@@ -41,6 +44,19 @@ export function Sidebar({ catalog, memoryCatalog, selection, onSelect, onOpenShe
     hideTableBackingFunctions: settings.hideTableBackingFunctions,
     onTableAction: onShellInsert ? (schema, table) => onShellInsert(`${catalog.catalogName}.${schema}.${table}`) : undefined,
   }), [catalog, settings.showDuckDBTypes, settings.hideTableBackingFunctions, onShellInsert]);
+  // Additional VGI catalogs ATTACH'd from the shell (merged as sibling roots)
+  const attachedTreeData = useMemo(() => {
+    if (!attachedCatalogs?.length) return [];
+    return attachedCatalogs.flatMap((c) =>
+      buildTreeData(c, {
+        showDuckDBTypes: settings.showDuckDBTypes,
+        hideTableBackingFunctions: settings.hideTableBackingFunctions,
+        onTableAction: onShellInsert
+          ? (schema, table) => onShellInsert(`${c.catalogName}.${schema}.${table}`)
+          : undefined,
+      })
+    );
+  }, [attachedCatalogs, settings.showDuckDBTypes, settings.hideTableBackingFunctions, onShellInsert]);
   // Memory catalog tree nodes (merged into main tree)
   const memoryTreeData = useMemo(() => {
     if (!memoryCatalog) return [];
@@ -52,13 +68,13 @@ export function Sidebar({ catalog, memoryCatalog, selection, onSelect, onOpenShe
   }, [memoryCatalog, settings.showDuckDBTypes]);
 
   const combinedData = useMemo(() => {
-    const sorted = [...treeData, ...memoryTreeData].sort((a, b) => a.name.localeCompare(b.name));
+    const sorted = [...treeData, ...attachedTreeData, ...memoryTreeData].sort((a, b) => a.name.localeCompare(b.name));
     // Attach refresh action to the first catalog node
     if (sorted.length > 0 && onRefresh) {
       sorted[0] = { ...sorted[0], actions: buildRefreshAction(onRefresh, refreshing) };
     }
     return sorted;
-  }, [treeData, memoryTreeData, onRefresh, refreshing]);
+  }, [treeData, attachedTreeData, memoryTreeData, onRefresh, refreshing]);
   const filteredData = useMemo(() => filterTree(combinedData, search), [combinedData, search]);
 
   const selectedTreeId = useMemo(

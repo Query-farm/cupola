@@ -50,6 +50,16 @@ export const bridge = {
   catalogName: null as string | null,
   worker: null as Worker | null,
 
+  // Set by the eager worker boot (duckdb-worker-boot.ts). workerCreateStart is
+  // the main-thread performance.now() at the moment `new Worker(...)` was called,
+  // so ready-time logging stays accurate whether the worker was booted eagerly
+  // at CatalogApp mount or lazily at DuckDBShell mount. workerReadyData holds
+  // the payload of the 'ready' message; DuckDBShell checks this at mount and
+  // runs its post-ready flow directly if the worker already finished init.
+  workerCreateStart: 0 as number,
+  workerReadyData: null as { wasmVersion: string; totalMs: number; timings: Array<{ phase: string; ms: number }> } | null,
+  cancelInt32: null as Int32Array | null,
+
   // Shell/terminal (set by DuckDBShell)
   shellTerm: null as any,
   shellFitAddon: null as any,
@@ -62,6 +72,7 @@ export const bridge = {
   // Navigation/catalog (set by CatalogApp)
   memoryCatalog: null as any,
   refreshMemoryTables: null as (() => Promise<void>) | null,
+  onAttachedCatalogsChanged: null as (() => Promise<void>) | null,
   navigateToSelection: null as ((sel: Selection) => void) | null,
 
   // UI tabs (set by DuckDBShell)

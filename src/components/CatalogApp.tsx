@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { fetchCatalog, getServiceUrl, hasExplicitService, type CatalogData, type ResolvedSchema } from "@/lib/service";
+import { fetchAttachedCatalog } from "@/lib/duckdb-catalog";
 import { tableFromIPC } from "apache-arrow";
 import { type Selection } from "@/lib/tree";
 import { getAuthToken, getAuthTokenForService, hadAuthToken, redirectToAuth } from "@/lib/auth";
@@ -13,6 +14,7 @@ import { SettingsProvider } from "@/lib/settings";
 import { bridge } from "@/lib/shell-bridge";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
 import { loadTheme, getLogoUrl, DEFAULT_LOGO, type ThemeConfig } from "@/lib/theme";
+import { ensureDuckDBWorker } from "@/lib/duckdb-worker-boot";
 import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Header } from "./Header";
@@ -35,40 +37,12 @@ import { TableDetail } from "./content/TableDetail";
 import { ViewDetail } from "./content/ViewDetail";
 import { FunctionDetail } from "./content/FunctionDetail";
 import { MacroDetail } from "./content/MacroDetail";
-
-/* ── Recent services (localStorage) ── */
-const RECENT_SERVICES_KEY = "vgi-recent-services";
-const MAX_RECENT = 10;
-
-interface RecentService {
-  url: string;
-  catalogName: string;
-  /** ISO timestamp of last successful connection. */
-  lastUsed: string;
-}
-
-function getRecentServices(): RecentService[] {
-  try {
-    const raw = localStorage.getItem(RECENT_SERVICES_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
-  return [];
-}
-
-function saveRecentService(url: string, catalogName: string) {
-  try {
-    const list = getRecentServices().filter((s) => s.url !== url);
-    list.unshift({ url, catalogName, lastUsed: new Date().toISOString() });
-    localStorage.setItem(RECENT_SERVICES_KEY, JSON.stringify(list.slice(0, MAX_RECENT)));
-  } catch {}
-}
-
-function removeRecentService(url: string) {
-  try {
-    const list = getRecentServices().filter((s) => s.url !== url);
-    localStorage.setItem(RECENT_SERVICES_KEY, JSON.stringify(list));
-  } catch {}
-}
+import {
+  getRecentServices,
+  saveRecentService,
+  removeRecentService,
+  type RecentService,
+} from "@/lib/recent-services";
 
 export function CatalogApp() {
   const [data, setData] = useState<CatalogData | null>(null);
@@ -85,6 +59,11 @@ export function CatalogApp() {
   });
   const shellInsertRef = useRef<((text: string) => void) | null>(null);
   const [memoryCatalog, setMemoryCatalog] = useState<CatalogData | null>(null);
+  const [attachedCatalogs, setAttachedCatalogs] = useState<CatalogData[]>([]);
+  // Keep the latest attached list in a ref so syncAttachedCatalogs can diff
+  // without depending on state and becoming a new callback on every change.
+  const attachedCatalogsRef = useRef<CatalogData[]>([]);
+  useEffect(() => { attachedCatalogsRef.current = attachedCatalogs; }, [attachedCatalogs]);
   const [logoUrl, setLogoUrl] = useState(DEFAULT_LOGO);
   const [authError, setAuthError] = useState<{ title: string; message: string } | null>(null);
   // True only after client-side hydration. We use this to gate any render
@@ -93,6 +72,12 @@ export function CatalogApp() {
   // throws a hydration mismatch.
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
+
+  // Boot the DuckDB shell worker eagerly in parallel with catalog load, so
+  // the shell is typically ready by the time the user clicks "SQL Shell".
+  // This also kicks off the duckdb-coi.wasm prefetch (consumed via the
+  // instantiateWasm hook to skip Emscripten's own fetch).
+  useEffect(() => { ensureDuckDBWorker(import.meta.env.BASE_URL); }, []);
 
   /** Fetch in-memory DuckDB tables via the shell worker. Returns null if shell isn't running. */
   const fetchMemoryTables = useCallback(async () => {
@@ -216,9 +201,60 @@ export function CatalogApp() {
     }
   }, []);
 
+  /** Diff the live set of VGI-type databases in DuckDB against our rendered
+   *  list, fetch any new ones via the TypeScript VGI client, drop any that
+   *  were detached. Called after ATTACH/DETACH in the shell and by the
+   *  refresh button. The primary (?service=) catalog is excluded — it's
+   *  rendered from `data` separately. */
+  const syncAttachedCatalogs = useCallback(async (): Promise<void> => {
+    const queryFn = bridge.query;
+    if (!queryFn) return;
+    let names: string[] = [];
+    try {
+      const result = await queryFn(
+        "SELECT database_name FROM duckdb_databases() WHERE type = 'vgi'"
+      );
+      if (!result.ok || !result.arrowBuffers?.length) return;
+      const buf = result.arrowBuffers[0];
+      const table = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+      for (let r = 0; r < table.numRows; r++) {
+        const name = String(table.getChildAt(0)?.get(r) ?? "");
+        if (name) names.push(name);
+      }
+    } catch (e) {
+      console.error("[catalog] duckdb_databases() query failed:", e);
+      return;
+    }
+
+    // Exclude the primary catalog — it's already rendered from `data`.
+    const primaryName = data?.catalogName ?? bridge.catalogName ?? null;
+    if (primaryName) names = names.filter((n) => n !== primaryName);
+
+    const current = attachedCatalogsRef.current;
+    const liveNames = new Set(names);
+
+    // Fetch the full CatalogData for every live attached catalog from
+    // DuckDB introspection, always. Cheap (four metadata queries per
+    // catalog, no HTTP round-trips) and always up-to-date, so we don't
+    // bother caching unchanged entries.
+    const fetched = await Promise.allSettled(names.map((n) => fetchAttachedCatalog(n)));
+    const additions: CatalogData[] = [];
+    fetched.forEach((res, i) => {
+      if (res.status === "fulfilled") additions.push(res.value);
+      else console.error(`[catalog] fetchAttachedCatalog(${names[i]}) failed:`, res.reason);
+    });
+
+    const dropped = current.filter((c) => !liveNames.has(c.catalogName));
+    if (dropped.length) {
+      console.log("[catalog] detached:", dropped.map((c) => c.catalogName).join(", "));
+    }
+    setAttachedCatalogs(additions);
+  }, [data?.catalogName]);
+
   // Expose refresh globally (navigate is exposed after it's defined below)
   if (typeof window !== "undefined") {
     bridge.refreshMemoryTables = fetchMemoryTables;
+    bridge.onAttachedCatalogsChanged = syncAttachedCatalogs;
     bridge.memoryCatalog = memoryCatalog;
   }
 
@@ -413,6 +449,14 @@ export function CatalogApp() {
         // Also refresh memory tables if shell is running
         if (bridge.query) {
           await fetchMemoryTables();
+          // On refresh (not initial load), force every attached VGI catalog
+          // to re-fetch by clearing the cache first — explicit user intent
+          // to resync everything.
+          if (isRefresh) {
+            setAttachedCatalogs([]);
+            attachedCatalogsRef.current = [];
+          }
+          await syncAttachedCatalogs();
         }
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Failed to connect");
@@ -421,7 +465,7 @@ export function CatalogApp() {
         setRefreshing(false);
       }
     },
-    [serviceUrl]
+    [serviceUrl, syncAttachedCatalogs]
   );
 
   // Process any pending SPA OAuth callback before the first catalog fetch.
@@ -436,7 +480,15 @@ export function CatalogApp() {
       try {
         await consumePendingCallback();
       } catch (err) {
+        // IdP returned an error (e.g. invalid_client, consent_required).
+        // Surface it as a permanent error so we don't loop back into
+        // startLoginFlow → same IdP error → redirect → loop.
         console.error("[catalog] consumePendingCallback threw", err);
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Authentication failed");
+          setLoading(false);
+          return;
+        }
       }
       if (!cancelled) loadCatalog();
     })();
@@ -570,6 +622,7 @@ export function CatalogApp() {
               <Sidebar
                 catalog={data}
                 memoryCatalog={memoryCatalog}
+                attachedCatalogs={attachedCatalogs}
                 selection={selection}
                 onSelect={(sel) => navigate(sel)}
                 onOpenShell={() => setShellMode("maximized")}
@@ -590,7 +643,7 @@ export function CatalogApp() {
           {/* Content area — hidden when shell is maximized or fullscreen */}
           <main className={`overflow-y-auto p-6 min-h-0 ${shellMode === "maximized" || shellMode === "fullscreen" ? "h-0 overflow-hidden" : "flex-1"}`}>
             <ErrorBoundary>
-              <ContentPanel data={data} memoryCatalog={memoryCatalog} selection={selection} serviceUrl={serviceUrl} onNavigate={navigate} onOpenShell={() => setShellMode((m) => m === "minimized" ? "panel" : m)} shellMode={shellMode} />
+              <ContentPanel data={data} memoryCatalog={memoryCatalog} attachedCatalogs={attachedCatalogs} selection={selection} serviceUrl={serviceUrl} onNavigate={navigate} onOpenShell={() => setShellMode((m) => m === "minimized" ? "panel" : m)} shellMode={shellMode} />
             </ErrorBoundary>
           </main>
 
@@ -631,7 +684,7 @@ export function CatalogApp() {
                   catalogName={data.catalogName}
                   mode={shellMode}
                   onModeChange={setShellMode}
-                  onShellReady={(insert) => { shellInsertRef.current = insert; fetchMemoryTables(); }}
+                  onShellReady={(insert) => { shellInsertRef.current = insert; fetchMemoryTables(); syncAttachedCatalogs(); }}
                   catalogData={data}
                   selection={selection}
                   onAuthError={(title, message) => setAuthError({ title, message })}
@@ -799,6 +852,7 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
 function ContentPanel({
   data,
   memoryCatalog,
+  attachedCatalogs,
   selection,
   serviceUrl,
   onNavigate,
@@ -807,6 +861,7 @@ function ContentPanel({
 }: {
   data: CatalogData;
   memoryCatalog?: CatalogData | null;
+  attachedCatalogs?: CatalogData[];
   selection: Selection | null;
   serviceUrl: string;
   onNavigate: (selection: Selection) => void;
@@ -817,13 +872,18 @@ function ContentPanel({
     if (selection?.catalog && memoryCatalog && selection.catalog === memoryCatalog.catalogName) {
       return <MemoryCatalogOverview catalog={memoryCatalog} onNavigate={onNavigate} />;
     }
+    const attached = selection?.catalog && attachedCatalogs?.find((c) => c.catalogName === selection.catalog);
+    if (attached) {
+      return <CatalogOverview catalog={attached} serviceUrl={serviceUrl} onNavigate={onNavigate} />;
+    }
     return <CatalogOverview catalog={data} serviceUrl={serviceUrl} onNavigate={onNavigate} />;
   }
 
   // Determine which catalog to search
   const catalog = (selection.catalog && memoryCatalog && selection.catalog === memoryCatalog.catalogName)
     ? memoryCatalog
-    : data;
+    : (selection.catalog && attachedCatalogs?.find((c) => c.catalogName === selection.catalog))
+      ?? data;
 
   const schema = catalog.schemas.find((s) => s.info.name === selection.schema);
   if (!schema) return <CatalogOverview catalog={data} serviceUrl={serviceUrl} onNavigate={onNavigate} />;
