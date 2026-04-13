@@ -113,6 +113,14 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   const [termSize, setTermSize] = useState<{ rows: number; cols: number } | null>(null);
   const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
 
+  // Defer heavy DuckDB WASM initialization until the user actually opens the
+  // shell (mode leaves "minimized"). This avoids fetching the large WASM
+  // binary and booting the worker on page load, which causes issues in Safari.
+  const [shellActivated, setShellActivated] = useState(mode !== "minimized");
+  useEffect(() => {
+    if (mode !== "minimized") setShellActivated(true);
+  }, [mode]);
+
   // Expose query history setter for the initShell closure
   bridge.addQueryHistoryEntry = (entry: QueryHistoryEntry) => {
     setQueryHistory(prev => [...prev, entry]);
@@ -166,6 +174,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   }, []);
 
   useEffect(() => {
+    if (!shellActivated) return;
     let cancelled = false;
 
     (async () => {
@@ -215,7 +224,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
       cancelled = true;
       cleanupRef.current?.();
     };
-  }, [serviceUrl, catalogName]);
+  }, [shellActivated, serviceUrl, catalogName]);
 
   // Track terminal dimensions
   const updateTermSize = useCallback(() => {
@@ -856,9 +865,8 @@ function initShell(
   // every downstream URL the worker derives (pthread sub-workers, wasm,
   // extension LOAD URLs).
   // Worker creation + SAB wiring + wasm-bytes delivery all live in
-  // ensureDuckDBWorker so the same code runs whether we're booting eagerly
-  // from CatalogApp or lazily here (e.g. if DuckDBShell is mounted without
-  // CatalogApp in the tree). ensureDuckDBWorker is idempotent.
+  // ensureDuckDBWorker. It is idempotent so it's safe to call on every
+  // initShell invocation.
   ensureDuckDBWorker(import.meta.env.BASE_URL);
   const worker = bridge.worker!;
   let currentWasmVersion = "";
@@ -1570,11 +1578,11 @@ function initShell(
 
   if (isNewTerminal) {
     // First initShell call this page load — attach the message handler and
-    // kick off the post-ready flow. ensureDuckDBWorker was already called at
-    // the top of initShell (and idempotently at CatalogApp mount), so the
-    // worker has been booting in parallel. If it already signaled ready
-    // before we mounted, bridge.workerReadyData is set and we jump straight
-    // into runPostReady; otherwise the handler picks it up when it arrives.
+    // kick off the post-ready flow. ensureDuckDBWorker was called at the top
+    // of initShell when the user first opens the shell. If the worker already
+    // signaled ready before we get here, bridge.workerReadyData is set and
+    // we jump straight into runPostReady; otherwise the handler picks it up
+    // when it arrives.
     worker.addEventListener("message", workerMessageHandler);
     if (bridge.workerReadyData) {
       const waitedMs = Math.round(performance.now() - bridge.workerCreateStart);

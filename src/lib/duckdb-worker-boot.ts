@@ -1,7 +1,7 @@
-// Eagerly boot the DuckDB shell worker at CatalogApp mount time, in parallel
-// with catalog load and sidebar render, so the shell is typically ready by
-// the time the user opens the SQL Shell pane. This cuts ~1.5s off the user's
-// click-to-shell latency on top of the wasm-bytes prefetch.
+// Boot the DuckDB shell worker. Called from initShell() when the user first
+// opens the SQL Shell pane — not at page load, to avoid fetching the large
+// WASM binary in browsers that never use the shell (and to avoid Safari
+// issues with eager WASM loading).
 //
 // DuckDBShell still owns the full ready-time flow (restore snapshot, ATTACH,
 // timezone query, terminal output) because that depends on its config + UI

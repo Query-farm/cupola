@@ -14,7 +14,6 @@ import { SettingsProvider } from "@/lib/settings";
 import { bridge } from "@/lib/shell-bridge";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
 import { loadTheme, getLogoUrl, DEFAULT_LOGO, type ThemeConfig } from "@/lib/theme";
-import { ensureDuckDBWorker } from "@/lib/duckdb-worker-boot";
 import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Header } from "./Header";
@@ -73,11 +72,6 @@ export function CatalogApp() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
-  // Boot the DuckDB shell worker eagerly in parallel with catalog load, so
-  // the shell is typically ready by the time the user clicks "SQL Shell".
-  // This also kicks off the duckdb-coi.wasm prefetch (consumed via the
-  // instantiateWasm hook to skip Emscripten's own fetch).
-  useEffect(() => { ensureDuckDBWorker(import.meta.env.BASE_URL); }, []);
 
   /** Fetch in-memory DuckDB tables via the shell worker. Returns null if shell isn't running. */
   const fetchMemoryTables = useCallback(async () => {
