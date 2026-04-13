@@ -63,6 +63,11 @@ export function CatalogApp() {
   // without depending on state and becoming a new callback on every change.
   const attachedCatalogsRef = useRef<CatalogData[]>([]);
   useEffect(() => { attachedCatalogsRef.current = attachedCatalogs; }, [attachedCatalogs]);
+  // Track catalogName in a ref so syncAttachedCatalogs doesn't depend on
+  // `data` state — otherwise setData() inside loadCatalog recreates the
+  // callback chain and the mount effect fires a second loadCatalog().
+  const catalogNameRef = useRef<string | undefined>(undefined);
+  useEffect(() => { catalogNameRef.current = data?.catalogName; }, [data?.catalogName]);
   const [logoUrl, setLogoUrl] = useState(DEFAULT_LOGO);
   const [authError, setAuthError] = useState<{ title: string; message: string } | null>(null);
   // True only after client-side hydration. We use this to gate any render
@@ -221,7 +226,7 @@ export function CatalogApp() {
     }
 
     // Exclude the primary catalog — it's already rendered from `data`.
-    const primaryName = data?.catalogName ?? bridge.catalogName ?? null;
+    const primaryName = catalogNameRef.current ?? bridge.catalogName ?? null;
     if (primaryName) names = names.filter((n) => n !== primaryName);
 
     const current = attachedCatalogsRef.current;
@@ -243,7 +248,7 @@ export function CatalogApp() {
       console.log("[catalog] detached:", dropped.map((c) => c.catalogName).join(", "));
     }
     setAttachedCatalogs(additions);
-  }, [data?.catalogName]);
+  }, []);
   // Persist shell mode to localStorage
   useEffect(() => {
     try { localStorage.setItem("vgi-shell-mode", shellMode); } catch {}
@@ -426,6 +431,7 @@ export function CatalogApp() {
       try {
         const catalog = await fetchCatalog(serviceUrl);
         setData(catalog);
+        catalogNameRef.current = catalog.catalogName;
         setError(null);
         if (hasExplicitService()) {
           saveRecentService(serviceUrl, catalog.catalogName);
