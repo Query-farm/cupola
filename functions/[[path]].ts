@@ -233,7 +233,11 @@ export const onRequest: PagesFunction<Env> = async (context) => {
       return new Response(`Not found: ${path}`, { status: 404 });
     }
 
-    const resolvedKey = remainder === "" || remainder.endsWith("/") ? "index.html" : r2Key;
+    // Extensionless paths (e.g. "sign-out", "theme-builder") are Astro page
+    // routes stored as {path}/index.html in R2. Use "index.html" for content
+    // type detection so the browser gets text/html instead of octet-stream.
+    const hasExtension = remainder.includes(".");
+    const resolvedKey = remainder === "" || remainder.endsWith("/") || !hasExtension ? "index.html" : r2Key;
     // Do NOT set a Set-Cookie header here — Cloudflare's default cache
     // rules refuse to cache any response carrying Set-Cookie, which
     // turned the 33MB spatial.wasm + 32MB duckdb-coi.wasm into
@@ -267,7 +271,8 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     const r2Key = `v${latestVersion}/${stripped}`;
     const obj = await fetchWithFallback(context.env.ASSETS_BUCKET, r2Key, stripped);
     if (obj) {
-      return cacheAndReturn(respond(obj, stripped));
+      const contentKey = stripped.includes(".") ? stripped : "index.html";
+      return cacheAndReturn(respond(obj, contentKey));
     }
   }
 
