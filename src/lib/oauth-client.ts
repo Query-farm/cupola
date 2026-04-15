@@ -197,14 +197,8 @@ export async function discoverAuthContext(serviceUrl: string): Promise<AuthConte
     throw new Error(`Authorization server ${issuer} is missing authorization_endpoint or token_endpoint`);
   }
 
-  // Join the scopes the service advertised. Always include `offline_access`
-  // so Entra/Okta/Auth0 issue a refresh_token — if the IdP doesn't recognize
-  // it (e.g. strict OAuth 2.0 servers) they ignore it per the OAuth 2.0
-  // scope-unknown rule.
   const advertised = metadata.scopes_supported ?? [];
-  const scopes = new Set<string>(advertised);
-  scopes.add("offline_access");
-  const scope = Array.from(scopes).join(" ");
+  const scope = advertised.join(" ");
 
   return {
     serviceOrigin,
