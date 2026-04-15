@@ -383,6 +383,9 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
             }
             restoreConfig.aggregates = aggregates;
             restoreConfig.columns = pkColumns;
+          } else if (cols.length > 0) {
+            // No primary key — start with just the first column to avoid overwhelming the grid
+            restoreConfig.columns = [cols[0].name.replace(/_/g, "-")];
           }
         }
 
