@@ -3,11 +3,12 @@
  * Loads xterm.js + addons from CDN to avoid SSR/bundling issues.
  * Shell logic adapted from public/shell/index.html.
  */
-import { useEffect, useRef, useState, useCallback, lazy, Suspense } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo, lazy, Suspense } from "react";
 import { Maximize2, Minimize2, ChevronDown, ChevronUp, BarChart3, Map as MapIcon, History, Table2, Sparkles } from "lucide-react";
 const AskAIChat = lazy(() => import("./AskAIChat").then(m => ({ default: m.AskAIChat })));
 import { DataPreview } from "./content/DataPreview";
 import { getColumns } from "@/lib/service";
+import { isMapCapable } from "@/lib/geo-detect";
 import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
 import { getAuthToken, getOAuthMeta, redirectToAuth } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
@@ -51,6 +52,10 @@ interface Props {
    * would just produce the same error.
    */
   onAuthError?: (title: string, message: string) => void;
+  /** In-memory DuckDB catalog (for geo-detection of Map tab). */
+  memoryCatalog?: CatalogData | null;
+  /** Attached catalogs (for geo-detection of Map tab). */
+  attachedCatalogs?: CatalogData[];
 }
 
 // CDN script URLs (matching public/shell/index.html versions)
@@ -101,7 +106,7 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShellReady, catalogData, selection, onAuthError }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShellReady, catalogData, selection, onAuthError, memoryCatalog, attachedCatalogs }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const perspectiveRef = useRef<HTMLDivElement>(null);
@@ -127,6 +132,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   };
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
   const [perspectiveHasData, setPerspectiveHasData] = useState(false);
+  const [mapHasData, setMapHasData] = useState(false);
 
   // Resolve selected table or view for Data Preview and Perspective tabs
   // Search both VGI catalog and memory catalog
@@ -143,6 +149,30 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   const selectedTable = selection?.type === "table" ? findInCatalogs("table", selection.name, selection.schema) : null;
   const selectedView = selection?.type === "view" ? findInCatalogs("view", selection.name, selection.schema) : null;
   const hasSelectedTableOrView = !!(selectedTable || selectedView || (selection && (selection.type === "table" || selection.type === "view")));
+
+  // Check if any table/view in the catalog has geometry or lat/lon columns
+  const catalogHasMapData = useMemo(() => {
+    const catalogs = [catalogData, memoryCatalog, ...(attachedCatalogs || [])].filter(Boolean) as CatalogData[];
+    for (const cat of catalogs) {
+      for (const schema of cat.schemas) {
+        for (const table of schema.tables) {
+          try { if (isMapCapable(getColumns(table))) return true; } catch {}
+        }
+        // Memory/attached catalog views have _columnInfo; VGI views return [] harmlessly
+        for (const view of schema.views) {
+          try { if (isMapCapable(getColumns(view as any))) return true; } catch {}
+        }
+      }
+    }
+    return false;
+  }, [catalogData, memoryCatalog, attachedCatalogs]);
+
+  const showMapTab = catalogHasMapData || mapHasData;
+
+  // If map tab is active but becomes hidden, fall back to shell
+  useEffect(() => {
+    if (!showMapTab && activeTab === "map") setActiveTab("shell");
+  }, [showMapTab, activeTab]);
 
   // Expose a function to switch to the shell tab and ensure it's visible
   bridge.activateShell = () => {
@@ -166,6 +196,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
     };
     bridge.showKepler = () => {
       setActiveTab("map");
+      setMapHasData(true);
     };
     return () => {
       bridge.showPerspective = null;
@@ -434,10 +465,12 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
             <BarChart3 className="h-3.5 w-3.5" />
             Perspective
           </button>
-          <button role="tab" aria-selected={activeTab === "map"} className={tabCls("map")} onClick={() => handleTabClick("map")}>
-            <MapIcon className="h-3.5 w-3.5" />
-            Map
-          </button>
+          {showMapTab && (
+            <button role="tab" aria-selected={activeTab === "map"} className={tabCls("map")} onClick={() => { setMapHasData(true); handleTabClick("map"); }}>
+              <MapIcon className="h-3.5 w-3.5" />
+              Map
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-1 pb-1">
           {mode === "minimized" && (
@@ -551,19 +584,21 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         </Suspense>
       </div>
 
-      {/* Kepler.gl map — always mounted to preserve state */}
-      <div
-        className={`flex-1 min-h-0 overflow-hidden ${mode === "minimized" ? "hidden" : ""}`}
-        style={activeTab !== "map" ? { visibility: "hidden", position: "absolute", inset: 0, zIndex: -1 } : {}}
-      >
-        <Suspense fallback={
-          <div className="flex items-center justify-center h-full text-gray-500 text-sm bg-white">
-            Loading Kepler.gl...
-          </div>
-        }>
-          <KeplerMap />
-        </Suspense>
-      </div>
+      {/* Kepler.gl map — only mounted when catalog has spatial data or user forced via .kepler */}
+      {showMapTab && (
+        <div
+          className={`flex-1 min-h-0 overflow-hidden ${mode === "minimized" ? "hidden" : ""}`}
+          style={activeTab !== "map" ? { visibility: "hidden", position: "absolute", inset: 0, zIndex: -1 } : {}}
+        >
+          <Suspense fallback={
+            <div className="flex items-center justify-center h-full text-gray-500 text-sm bg-white">
+              Loading Kepler.gl...
+            </div>
+          }>
+            <KeplerMap />
+          </Suspense>
+        </div>
+      )}
 
       {/* Query History panel */}
       {mode !== "minimized" && activeTab === "queries" && (() => {

@@ -688,6 +688,8 @@ export function CatalogApp() {
                   catalogData={data}
                   selection={selection}
                   onAuthError={(title, message) => setAuthError({ title, message })}
+                  memoryCatalog={memoryCatalog}
+                  attachedCatalogs={attachedCatalogs}
                 />
               </div>
             </Suspense>
