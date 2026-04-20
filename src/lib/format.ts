@@ -944,6 +944,24 @@ function isArrowNull(nullBitmap: Uint8Array | null | undefined, idx: number): bo
   return byteIdx < nullBitmap.length && (nullBitmap[byteIdx] & (1 << bitIdx)) === 0;
 }
 
+/** Find the Data chunk containing a given logical row and return its chunk-local index.
+ *  Arrow Vectors returned by `table.getChildAt()` can have multiple Data chunks (one per
+ *  RecordBatch). Reading from `column.data[0]` only works for rows in the first chunk. */
+function findChunk(column: any, row: number): { chunk: any; localRow: number } | null {
+  if (!column) return null;
+  const raw = column.data;
+  if (!raw) return null;
+  const chunks = Array.isArray(raw) ? raw : [raw];
+  let remaining = row;
+  for (const chunk of chunks) {
+    if (!chunk) continue;
+    const len = chunk.length ?? 0;
+    if (remaining < len) return { chunk, localRow: remaining };
+    remaining -= len;
+  }
+  return null;
+}
+
 /**
  * Safely read a value from an Arrow column, handling:
  * - BigInt overflow (Arrow throws for values outside safe integer range)
@@ -951,6 +969,7 @@ function isArrowNull(nullBitmap: Uint8Array | null | undefined, idx: number): bo
  * - Nanosecond timestamp precision (reads raw BigInt64)
  * - Dictionary/enum resolution (manual lookup when Arrow JS fails)
  * - Extension types (hugeint, uhugeint, time_tz as FixedSizeBinary)
+ * - Multi-chunk Vectors (walks chunks to locate the row)
  */
 export function safeGetArrowValue(column: any, row: number, field?: any): any {
   if (!column) return null;
@@ -959,12 +978,12 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
 
   // Interval<MONTH_DAY_NANO>: read raw 16-byte struct (4+4+8) from data buffer
   if (typeStr.includes("Interval")) {
-    const chunk = column.data?.[0] ?? column.data;
-    if (chunk?.values) {
-      const idx = row - (chunk.offset ?? 0);
-      if (isArrowNull(chunk.nullBitmap, idx)) return null;
+    const loc = findChunk(column, row);
+    if (loc?.chunk?.values) {
+      const { chunk, localRow } = loc;
+      if (isArrowNull(chunk.nullBitmap, localRow)) return null;
       // MONTH_DAY_NANO: 16 bytes per value — int32 months, int32 days, int64 nanoseconds
-      const byteOffset = idx * 16;
+      const byteOffset = localRow * 16;
       const dv = new DataView(chunk.values.buffer, chunk.values.byteOffset + byteOffset, 16);
       return {
         __interval: {
@@ -989,14 +1008,14 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
     } catch { /* ignore */ }
 
     if (extTypeName || extName) {
-      const chunk = column.data?.[0] ?? column.data;
-      if (chunk) {
+      const loc = findChunk(column, row);
+      if (loc?.chunk) {
+        const { chunk, localRow } = loc;
         const byteWidth = column.type?.byteWidth ?? (extTypeName === "time_tz" ? 8 : 16);
-        const adjustedRow = row - (chunk.offset ?? 0);
-        if (isArrowNull(chunk.nullBitmap, adjustedRow)) return null;
+        if (isArrowNull(chunk.nullBitmap, localRow)) return null;
         const values = chunk.values;
         if (values) {
-          const offset = adjustedRow * byteWidth;
+          const offset = localRow * byteWidth;
           const bytes = new Uint8Array(values.buffer, values.byteOffset + offset, byteWidth);
           if (extTypeName === "hugeint") return { __int128: readInt128(bytes, true) };
           if (extTypeName === "uhugeint") return { __uint128: readInt128(bytes, false) };
@@ -1022,12 +1041,12 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
 
   // Date32: read raw int32 days to avoid precision loss from Arrow's ms conversion
   if (typeStr.includes("Date32")) {
-    const chunk = column.data?.[0] ?? column.data;
-    if (chunk?.values instanceof Int32Array) {
-      const idx = row - (chunk.offset ?? 0);
-      if (isArrowNull(chunk.nullBitmap, idx)) return null;
+    const loc = findChunk(column, row);
+    if (loc?.chunk?.values instanceof Int32Array) {
+      const { chunk, localRow } = loc;
+      if (isArrowNull(chunk.nullBitmap, localRow)) return null;
       if (chunk.nullCount > 0 && !chunk.nullBitmap) return null;
-      return { __rawDays: chunk.values[idx] };
+      return { __rawDays: chunk.values[localRow] };
     }
   }
 
@@ -1035,12 +1054,12 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
   // (lossy for MICROSECOND/NANOSECOND, and a unit-mismatch trap for formatTimestamp).
   // Read raw BigInt64 directly so formatTimestamp can interpret values in their native unit.
   if (typeStr.startsWith("Timestamp")) {
-    const chunk = column.data?.[0] ?? column.data;
-    const values = chunk?.values;
+    const loc = findChunk(column, row);
+    const values = loc?.chunk?.values;
     if (values instanceof BigInt64Array) {
-      const idx = row - (chunk.offset ?? 0);
-      if (isArrowNull(chunk.nullBitmap, idx)) return null;
-      return values[idx];
+      const { chunk, localRow } = loc!;
+      if (isArrowNull(chunk.nullBitmap, localRow)) return null;
+      return values[localRow];
     }
   }
 
@@ -1049,18 +1068,18 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
   // Proactively extract raw BigInt values to bypass Arrow's getter entirely.
   if (typeStr.startsWith("List") || typeStr.startsWith("FixedSizeList")) {
     try {
-      const chunk = column.data?.[0] ?? column.data;
-      if (chunk) {
+      const loc = findChunk(column, row);
+      if (loc?.chunk) {
+        const { chunk, localRow } = loc;
         const childChunk = chunk.children?.[0];
         const childValues = childChunk?.values;
         if (childValues instanceof BigInt64Array || childValues instanceof BigUint64Array) {
-          const adj = row - (chunk.offset ?? 0);
-          if (isArrowNull(chunk.nullBitmap, adj)) return null;
+          if (isArrowNull(chunk.nullBitmap, localRow)) return null;
           // Get list element offsets
           const offsets = chunk.valueOffsets;
           if (offsets) {
-            const start = offsets[adj];
-            const end = offsets[adj + 1];
+            const start = offsets[localRow];
+            const end = offsets[localRow + 1];
             const items: (bigint | null)[] = [];
             for (let j = start; j < end; j++) {
               items.push(isArrowNull(childChunk.nullBitmap, j) ? null : childValues[j]);
@@ -1078,14 +1097,14 @@ export function safeGetArrowValue(column: any, row: number, field?: any): any {
   } catch {
     // BigInt overflow — read raw value from underlying typed array
     try {
-      const chunk = column.data?.[0] ?? column.data;
-      const values = chunk?.values;
+      const loc = findChunk(column, row);
+      const values = loc?.chunk?.values;
       if (values instanceof BigInt64Array || values instanceof BigUint64Array) {
-        const idx = row - (chunk?.offset ?? 0);
-        if (idx >= 0 && idx < values.length) return values[idx];
+        const { localRow } = loc!;
+        if (localRow >= 0 && localRow < values.length) return values[localRow];
       }
-      if (values instanceof Uint32Array && chunk?.type?.bitWidth === 128) {
-        const idx = (row - (chunk?.offset ?? 0)) * 4;
+      if (values instanceof Uint32Array && loc?.chunk?.type?.bitWidth === 128) {
+        const idx = loc.localRow * 4;
         if (idx >= 0 && idx + 4 <= values.length) return values.slice(idx, idx + 4);
       }
     } catch { /* ignore */ }
