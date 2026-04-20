@@ -20,7 +20,12 @@ interface Props {
 export function CatalogOverview({ catalog, serviceUrl, onNavigate }: Props) {
   const { settings } = useSettings();
   const { identity, loading: identityLoading } = useCatalogIdentity(catalog.catalogName, serviceUrl);
-  const totalTables = catalog.schemas.reduce((sum, s) => sum + s.tables.length, 0);
+  const totalTables = catalog.schemas.reduce((sum, s) => {
+    if (settings.hideDollarTables) {
+      return sum + s.tables.filter((t) => !t.name.includes("$")).length;
+    }
+    return sum + s.tables.length;
+  }, 0);
   const totalViews = catalog.schemas.reduce((sum, s) => sum + s.views.length, 0);
   const totalFunctions = catalog.schemas.reduce((sum, s) => {
     if (settings.hideTableBackingFunctions) {
@@ -63,8 +68,11 @@ export function CatalogOverview({ catalog, serviceUrl, onNavigate }: Props) {
           </h2>
           <div className="grid gap-2">
             {catalog.schemas.map((s) => {
+              const tableCount = settings.hideDollarTables
+                ? s.tables.filter((t) => !t.name.includes("$")).length
+                : s.tables.length;
               const counts = [
-                `${s.tables.length} tables`,
+                `${tableCount} tables`,
                 s.views.length > 0 ? `${s.views.length} views` : null,
               ].filter(Boolean).join(", ");
               return (

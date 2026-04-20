@@ -104,6 +104,18 @@ export function SettingsModal() {
                   onCheckedChange={(checked) => updateSettings({ hideTableBackingFunctions: checked })}
                 />
               </SettingRow>
+              <SettingRow>
+                <SettingLabel
+                  htmlFor="hide-dollar-tables"
+                  title="Hide tables with $ in name"
+                  description="Hide tables whose name contains the $ character (often internal or system tables)."
+                />
+                <Switch
+                  id="hide-dollar-tables"
+                  checked={settings.hideDollarTables}
+                  onCheckedChange={(checked) => updateSettings({ hideDollarTables: checked })}
+                />
+              </SettingRow>
             </div>
           </TabsContent>
 

@@ -42,8 +42,9 @@ export function Sidebar({ catalog, memoryCatalog, attachedCatalogs, selection, o
   const treeData = useMemo(() => buildTreeData(catalog, {
     showDuckDBTypes: settings.showDuckDBTypes,
     hideTableBackingFunctions: settings.hideTableBackingFunctions,
+    hideDollarTables: settings.hideDollarTables,
     onTableAction: onShellInsert ? (schema, table) => onShellInsert(`${catalog.catalogName}.${schema}.${table}`) : undefined,
-  }), [catalog, settings.showDuckDBTypes, settings.hideTableBackingFunctions, onShellInsert]);
+  }), [catalog, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, onShellInsert]);
   // Additional VGI catalogs ATTACH'd from the shell (merged as sibling roots)
   const attachedTreeData = useMemo(() => {
     if (!attachedCatalogs?.length) return [];
@@ -51,21 +52,23 @@ export function Sidebar({ catalog, memoryCatalog, attachedCatalogs, selection, o
       buildTreeData(c, {
         showDuckDBTypes: settings.showDuckDBTypes,
         hideTableBackingFunctions: settings.hideTableBackingFunctions,
+        hideDollarTables: settings.hideDollarTables,
         onTableAction: onShellInsert
           ? (schema, table) => onShellInsert(`${c.catalogName}.${schema}.${table}`)
           : undefined,
       })
     );
-  }, [attachedCatalogs, settings.showDuckDBTypes, settings.hideTableBackingFunctions, onShellInsert]);
+  }, [attachedCatalogs, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, onShellInsert]);
   // Memory catalog tree nodes (merged into main tree)
   const memoryTreeData = useMemo(() => {
     if (!memoryCatalog) return [];
     return buildTreeData(memoryCatalog, {
       showDuckDBTypes: settings.showDuckDBTypes,
+      hideDollarTables: settings.hideDollarTables,
       rootIcon: Cpu,
       onTableAction: onShellInsert ? (schema, table) => onShellInsert(`memory.${schema}.${table}`) : undefined,
     });
-  }, [memoryCatalog, settings.showDuckDBTypes]);
+  }, [memoryCatalog, settings.showDuckDBTypes, settings.hideDollarTables]);
 
   const combinedData = useMemo(() => {
     const sorted = [...treeData, ...attachedTreeData, ...memoryTreeData].sort((a, b) => a.name.localeCompare(b.name));

@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 export interface Settings {
   showDuckDBTypes: boolean;
   hideTableBackingFunctions: boolean;
+  hideDollarTables: boolean;
   shellFontSize: number;
   autoRestoreSession: boolean;
   /** DuckDB WASM thread count. 0 = auto (1 for Safari, hardwareConcurrency for others). */
@@ -15,6 +16,7 @@ export interface Settings {
 const defaultSettings: Settings = {
   showDuckDBTypes: true,
   hideTableBackingFunctions: true,
+  hideDollarTables: false,
   shellFontSize: 13,
   autoRestoreSession: false,
   shellThreads: 0,

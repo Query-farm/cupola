@@ -21,6 +21,10 @@ interface Props {
 export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: Props) {
   const schemaName = schema.info.name;
   const { settings } = useSettings();
+  const visibleTables = useMemo(
+    () => settings.hideDollarTables ? schema.tables.filter((t) => !t.name.includes("$")) : schema.tables,
+    [schema, settings.hideDollarTables]
+  );
   const visibleFunctions = useMemo(() => {
     if (!settings.hideTableBackingFunctions) return schema.functions;
     const tableNames = new Set(schema.tables.map((t) => t.name));
@@ -41,7 +45,7 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
 
       <div className="flex gap-6 text-sm text-muted-foreground mb-6">
         <span className="flex items-center gap-1.5">
-          <CatalogIcon type="table" className="h-4 w-4" /> {schema.tables.length} tables
+          <CatalogIcon type="table" className="h-4 w-4" /> {visibleTables.length} tables
         </span>
         {schema.views.length > 0 && (
           <span className="flex items-center gap-1.5">
@@ -55,11 +59,11 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
         )}
       </div>
 
-      {schema.tables.length > 0 && (
+      {visibleTables.length > 0 && (
         <div className="mb-6">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Tables</h2>
           <div className="grid gap-2">
-            {schema.tables.map((t) => (
+            {visibleTables.map((t) => (
               <CatalogListItem
                 key={t.name}
                 icon={getIconForType("table")}

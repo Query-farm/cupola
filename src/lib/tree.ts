@@ -69,6 +69,8 @@ export function parseSelection(id: string): Selection | null {
 export interface BuildTreeOptions {
   showDuckDBTypes?: boolean;
   hideTableBackingFunctions?: boolean;
+  /** Hide tables (and table-backing functions) whose name contains a `$`. */
+  hideDollarTables?: boolean;
   /** When provided, adds a paste action button to table nodes. */
   onTableAction?: (schema: string, table: string) => void;
   /** When provided, adds a refresh button to the catalog root node. */
@@ -80,7 +82,7 @@ export interface BuildTreeOptions {
 
 /** Build the full tree from catalog data. Root node is the catalog. */
 export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = {}): TreeDataItem[] {
-  const { showDuckDBTypes = true, hideTableBackingFunctions = true, onTableAction, onRefresh, refreshing, rootIcon } = options;
+  const { showDuckDBTypes = true, hideTableBackingFunctions = true, hideDollarTables = false, onTableAction, onRefresh, refreshing, rootIcon } = options;
   const sortedSchemas = [...catalog.schemas].sort((a, b) =>
     a.info.name.localeCompare(b.info.name)
   );
@@ -92,7 +94,7 @@ export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = 
     openIcon: rootIcon || Database,
     className: "text-primary font-bold",
     children: sortedSchemas.map((s) =>
-      buildSchemaNode(catalog.catalogName, s, showDuckDBTypes, hideTableBackingFunctions, s.info.name === catalog.defaultSchema, onTableAction)
+      buildSchemaNode(catalog.catalogName, s, showDuckDBTypes, hideTableBackingFunctions, hideDollarTables, s.info.name === catalog.defaultSchema, onTableAction)
     ),
     actions: onRefresh
       ? React.createElement("div", {
@@ -111,12 +113,14 @@ export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = 
   return [root];
 }
 
-function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDBTypes: boolean, hideTableBackingFunctions: boolean, isDefault: boolean, onTableAction?: (schema: string, table: string) => void): TreeDataItem {
+function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDBTypes: boolean, hideTableBackingFunctions: boolean, hideDollarTables: boolean, isDefault: boolean, onTableAction?: (schema: string, table: string) => void): TreeDataItem {
   const schemaId = `${catalogName}::${schema.info.name}`;
   const children: TreeDataItem[] = [];
 
+  const visibleTables = hideDollarTables ? schema.tables.filter((t) => !t.name.includes("$")) : schema.tables;
+
   // Tables with column children (sorted alphabetically)
-  const sortedTables = [...schema.tables].sort((a, b) => a.name.localeCompare(b.name));
+  const sortedTables = [...visibleTables].sort((a, b) => a.name.localeCompare(b.name));
   for (const table of sortedTables) {
     const tableId = `${schemaId}::t:${table.name}`;
     const columns = getColumns(table);
