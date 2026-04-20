@@ -4,7 +4,7 @@
  * Shell logic adapted from public/shell/index.html.
  */
 import { useEffect, useRef, useState, useCallback, useMemo, lazy, Suspense } from "react";
-import { Maximize2, Minimize2, ChevronDown, ChevronUp, BarChart3, Map as MapIcon, History, Table2, Sparkles } from "lucide-react";
+import { Maximize2, Minimize2, ChevronDown, ChevronUp, BarChart3, Map as MapIcon, History, Table2, Sparkles, Loader2 } from "lucide-react";
 const AskAIChat = lazy(() => import("./AskAIChat").then(m => ({ default: m.AskAIChat })));
 import { DataPreview } from "./content/DataPreview";
 import { getColumns } from "@/lib/service";
@@ -301,12 +301,6 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
 
   // Auto-load Perspective virtual server when tab is active and a table is selected
   const perspectiveTableRef = useRef<string | null>(null);
-  // Clear perspective state when switching away so it reloads fresh on return
-  useEffect(() => {
-    if (activeTab !== "perspective") {
-      perspectiveTableRef.current = null;
-    }
-  }, [activeTab]);
   useEffect(() => {
     if (mode === "minimized" || activeTab !== "perspective" || !selectedTable) return;
     const tableId = `${selection?.catalog || catalogName}.${selectedTable.schemaName}.${selectedTable.name}`;
@@ -340,18 +334,25 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
           perspectiveWorker = await perspectiveMod.worker();
         }
 
-        // Create handler and message port
-        const handler = new VgiDuckDBHandler(perspectiveMod);
-        const messagePort = await perspectiveMod.createMessageHandler(handler);
-
-        // Create client connected to our DuckDB virtual server
-        const client = await perspectiveMod.worker(messagePort);
+        // Reuse the persistent virtual-server client so views survive table switches
+        if (!perspectiveClient) {
+          const handler = new VgiDuckDBHandler(perspectiveMod);
+          const messagePort = await perspectiveMod.createMessageHandler(handler);
+          perspectiveClient = await perspectiveMod.worker(messagePort);
+        }
 
         if (cancelled) return;
 
         // Clean up stale viewer — must call delete() to release WASM virtual server views
         const oldViewer = container.querySelector("perspective-viewer") as any;
         if (oldViewer) {
+          // Save the current config before tearing down, keyed by previous tableId
+          if (perspectiveTableRef.current) {
+            try {
+              const savedConfig = await oldViewer.save();
+              perspectiveConfigCache.set(perspectiveTableRef.current, savedConfig);
+            } catch { /* ignore save errors — worst case we lose the config */ }
+          }
           try { await oldViewer.delete(); } catch { /* ignore cleanup errors */ }
           oldViewer.remove();
         }
@@ -361,31 +362,40 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         viewer.style.width = "100%";
         viewer.style.height = "100%";
         container.appendChild(viewer);
+        // Disable auto-pause so hiding the container doesn't trigger
+        // IntersectionObserver resume which causes "View not found" errors
+        await viewer.setAutoPause(false);
 
-        await viewer.load(client);
+        await viewer.load(perspectiveClient);
 
-        // Build initial config
-        const restoreConfig: any = { table: tableId, title: tableId };
-        if (selectedTable) {
-          const cols = getColumns(selectedTable);
-          const pkIndices = new Set(selectedTable.primaryKeyConstraints.flatMap((pk: number[]) => pk));
-          if (pkIndices.size > 0) {
-            // Set PK columns to "any_value" aggregate so they don't get summed when grouping
-            const aggregates: Record<string, string> = {};
-            // Default to showing only PK columns (user can add more from the config panel)
-            const pkColumns: string[] = [];
-            for (const idx of pkIndices) {
-              if (cols[idx]) {
-                const pspName = cols[idx].name.replace(/_/g, "-");
-                aggregates[pspName] = "any_value";
-                pkColumns.push(pspName);
+        // Restore config from cache, or build a default
+        let restoreConfig: any;
+        const cachedConfig = perspectiveConfigCache.get(tableId);
+        if (cachedConfig) {
+          restoreConfig = { ...cachedConfig, table: tableId };
+        } else {
+          restoreConfig = { table: tableId, title: tableId };
+          if (selectedTable) {
+            const cols = getColumns(selectedTable);
+            const pkIndices = new Set(selectedTable.primaryKeyConstraints.flatMap((pk: number[]) => pk));
+            if (pkIndices.size > 0) {
+              // Set PK columns to "any_value" aggregate so they don't get summed when grouping
+              const aggregates: Record<string, string> = {};
+              // Default to showing only PK columns (user can add more from the config panel)
+              const pkColumns: string[] = [];
+              for (const idx of pkIndices) {
+                if (cols[idx]) {
+                  const pspName = cols[idx].name.replace(/_/g, "-");
+                  aggregates[pspName] = "any_value";
+                  pkColumns.push(pspName);
+                }
               }
+              restoreConfig.aggregates = aggregates;
+              restoreConfig.columns = pkColumns;
+            } else if (cols.length > 0) {
+              // No primary key — start with just the first column to avoid overwhelming the grid
+              restoreConfig.columns = [cols[0].name.replace(/_/g, "-")];
             }
-            restoreConfig.aggregates = aggregates;
-            restoreConfig.columns = pkColumns;
-          } else if (cols.length > 0) {
-            // No primary key — start with just the first column to avoid overwhelming the grid
-            restoreConfig.columns = [cols[0].name.replace(/_/g, "-")];
           }
         }
 
@@ -554,7 +564,8 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         className={`flex-1 min-h-0 overflow-hidden bg-white ${mode === "minimized" || activeTab !== "perspective" ? "hidden" : ""}`}
       >
         {perspectiveLoading && (
-          <div className="flex items-center justify-center h-full text-terminal-accent text-sm">
+          <div className="flex items-center justify-center gap-2 h-full text-terminal-accent text-sm">
+            <Loader2 className="h-4 w-4 animate-spin" />
             Loading Perspective...
           </div>
         )}
@@ -1719,6 +1730,10 @@ function getPerspectiveCDN() {
 let perspectiveLoaded = false;
 let perspectiveMod: any = null;
 let perspectiveWorker: any = null;
+/** Persistent virtual-server client — reused across table switches so views stay alive. */
+let perspectiveClient: any = null;
+/** In-memory cache of Perspective viewer configs keyed by tableId (catalog.schema.table). */
+const perspectiveConfigCache = new Map<string, any>();
 
 /** Load Perspective CSS and scripts (idempotent). */
 async function ensurePerspectiveLoaded(): Promise<void> {

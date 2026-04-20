@@ -309,6 +309,9 @@ export class VgiDuckDBHandler {
   private _sqlBuilder: any = null;
   private mod: any;
   private tableOrderingCache = new Map<string, { hasRowid: boolean; primaryKey: string[] | null }>();
+  private tableSizeCache = new Map<string, number>();
+  private tableSchemaCache = new Map<string, Record<string, ColumnType>>();
+  private viewSizeCache = new Map<string, number>();
   private renameViewCache = new Set<string>();
   /** Traversals for grouped views — enables collapse/expand. */
   private traversals = new Map<string, ViewTraversal>();
@@ -390,7 +393,6 @@ export class VgiDuckDBHandler {
   }
 
   async getHostedTables(): Promise<string[]> {
-    // Use duckdb_tables() for full catalog.schema.table names
     const rows = await queryRows(
       "SELECT database_name, schema_name, table_name FROM duckdb_tables()"
     );
@@ -398,6 +400,8 @@ export class VgiDuckDBHandler {
   }
 
   async tableSchema(tableId: string): Promise<Record<string, ColumnType>> {
+    const cached = this.tableSchemaCache.get(tableId);
+    if (cached) return cached;
     const qualifiedId = tableId.includes(".") ? tableId : `memory.main."${tableId}"`;
     const fields = await getArrowSchema(qualifiedId);
     const schema: Record<string, ColumnType> = {};
@@ -408,16 +412,21 @@ export class VgiDuckDBHandler {
       const name = field.name.replace(/_/g, "-");
       schema[name] = pspType;
     }
+    this.tableSchemaCache.set(tableId, schema);
     return schema;
   }
 
   async tableSize(tableId: string): Promise<number> {
+    const cached = this.tableSizeCache.get(tableId);
+    if (cached !== undefined) return cached;
     let sql = this.sqlBuilder.tableSize(tableId);
     if (!tableId.includes(".")) {
       sql = this.qualifyViewSql(sql, tableId);
     }
     const rows = await queryRows(sql);
-    return Number(rows[0]?.["count_star()"] ?? 0);
+    const size = Number(rows[0]?.["count_star()"] ?? 0);
+    this.tableSizeCache.set(tableId, size);
+    return size;
   }
 
   /** Ensure a rename view exists for a table, mapping underscored column names to hyphenated ones. */
@@ -488,14 +497,16 @@ export class VgiDuckDBHandler {
       sql = sql.replace(/\s+ORDER BY rowid\b/gi, ` ORDER BY ${pkCols}`);
       sql = sql.replace(/CREATE TABLE\s+/i, "CREATE VIEW ");
     } else {
-      // No rowid, no PK — materialize (CREATE TABLE) for stable ordering
+      // No rowid, no PK — use CREATE VIEW without ordering (avoids materializing the entire dataset)
       sql = sql.replace(/\s+ORDER BY rowid\b/gi, "");
+      sql = sql.replace(/CREATE TABLE\s+/i, "CREATE VIEW ");
     }
 
     // VGI catalogs are read-only — create in memory.main schema
     sql = this.qualifyViewSql(sql, viewId);
     const result = await runQuery(sql);
     if (!result.ok) throw new Error(result.error || "Failed to create view");
+    this.viewSizeCache.delete(viewId);
 
     // Build traversal for grouped views to support collapse/expand.
     // Skip traversal for views with no data columns (e.g. filter dropdown views)
@@ -582,10 +593,14 @@ export class VgiDuckDBHandler {
   async viewSize(viewId: string): Promise<number> {
     const traversal = this.traversals.get(viewId);
     if (traversal) return traversal.length;
+    const cached = this.viewSizeCache.get(viewId);
+    if (cached !== undefined) return cached;
     let sql = this.sqlBuilder.viewSize(viewId);
     sql = this.qualifyViewSql(sql, viewId);
     const rows = await queryRows(sql);
-    return Number(Object.values(rows[0] ?? {})[0] ?? 0);
+    const size = Number(Object.values(rows[0] ?? {})[0] ?? 0);
+    this.viewSizeCache.set(viewId, size);
+    return size;
   }
 
   async viewSchema(viewId: string): Promise<Record<string, ColumnType>> {
