@@ -103,17 +103,25 @@ export R2_BUCKET
 
 # Upload oversized files (>25MB) to root-level R2 keys (shared across versions).
 # These are typically WASM files that rarely change between versions.
+#
+# We use GNU parallel with `--delay` to space job *starts* (not duration) so
+# bursts don't trip Cloudflare's R2 API rate limits (HTTP 429). xargs has no
+# equivalent throttle and previously caused 429 storms when several uploads
+# kicked off in the same instant.
 OVERSIZED=$(find dist/ -type f -size +25M 2>/dev/null || true)
 if [ -n "$OVERSIZED" ]; then
   echo "==> Uploading shared large assets to R2 root..."
-  printf '%s\n' "$OVERSIZED" | xargs -n 1 -P 8 -I{} bash -c 'upload_one "$1" ""' _ {}
+  printf '%s\n' "$OVERSIZED" | parallel --will-cite -j 4 --delay 0.25 \
+    bash -c 'upload_one "$1" ""' _ {}
 fi
 
-# Upload all normal-sized files to R2 under the version prefix. Parallelize
-# with xargs -P 16 so wrangler cold-start cost is amortized across workers.
+# Upload all normal-sized files to R2 under the version prefix. Concurrency
+# capped at 8 with a 0.1s start-delay between jobs to stay under Cloudflare's
+# rate limits. Wrangler cold-start (~2-3s) is still amortized across workers.
 echo "==> Uploading dist/ to R2 under ${R2_PREFIX}/..."
 find dist/ -type f -not -size +25M -print0 | \
-  xargs -0 -n 1 -P 16 -I{} bash -c 'upload_one "$1" "'"${R2_PREFIX}/"'"' _ {}
+  parallel --will-cite -0 -j 8 --delay 0.1 --halt soon,fail=1 \
+    bash -c 'upload_one "$1" "'"${R2_PREFIX}/"'"' _ {}
 echo "==> Uploaded files to R2 prefix ${R2_PREFIX}/"
 
 # Write _latest marker (temp file approach for portability)
@@ -123,16 +131,12 @@ npx wrangler r2 object put "${R2_BUCKET}/_latest" --file "$LATEST_TMP" --content
 rm -f "$LATEST_TMP"
 echo "==> Updated _latest marker to ${VERSION}"
 
-# ---- Deploy Pages (function only — all content served from R2) ----
-# We deploy an almost-empty directory so the Pages Function handles all routes.
-# Static files in dist/ would bypass the function, which we don't want.
-PAGES_DIR=$(mktemp -d)
-# Keep an empty _headers just so the deployment isn't truly empty
-touch "${PAGES_DIR}/.nojekyll"
-
-echo "==> Deploying Pages (function + R2 binding)..."
-npx wrangler pages deploy "${PAGES_DIR}" --project-name "$PROJECT" --commit-dirty=true
-rm -rf "${PAGES_DIR}"
+# ---- Deploy Worker (R2 binding routes all content) ----
+# All static content lives in R2; the Worker (worker/index.ts) handles
+# version-aware routing, redirects, and edge-cache writes. Wrangler reads
+# the bindings + entrypoint from wrangler.jsonc.
+echo "==> Deploying Worker..."
+npx wrangler deploy
 
 echo ""
 echo "==> Published v${VERSION}"
