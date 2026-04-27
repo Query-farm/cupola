@@ -62,6 +62,13 @@ interface ResourceMetadata {
   client_id?: string;
   resource_name?: string;
   use_id_token_as_bearer?: boolean;
+  /** Non-standard extension: when present, vgi-rpc is advertising its own
+   *  PKCE token-exchange proxy URL. The proxy injects the server-side
+   *  client_secret before forwarding to the IdP, which is required for
+   *  Google OAuth (where "Web application" clients can't do PKCE without
+   *  a secret). When set, we use this instead of the IdP's token_endpoint
+   *  from OIDC discovery. */
+  token_endpoint?: string;
 }
 
 /** OIDC discovery document. Subset we care about. */
@@ -200,12 +207,18 @@ export async function discoverAuthContext(serviceUrl: string): Promise<AuthConte
   const advertised = metadata.scopes_supported ?? [];
   const scope = advertised.join(" ");
 
+  // If the VGI server advertises its own PKCE token-exchange proxy, route
+  // token requests through it instead of hitting the IdP directly. The proxy
+  // injects the server-side client_secret, which Google requires even for
+  // PKCE clients registered as "Web application".
+  const tokenEndpoint = metadata.token_endpoint ?? server.token_endpoint;
+
   return {
     serviceOrigin,
     resourceUrl: metadata.resource ?? serviceOrigin,
     clientId: metadata.client_id,
     authorizationEndpoint: server.authorization_endpoint,
-    tokenEndpoint: server.token_endpoint,
+    tokenEndpoint,
     endSessionEndpoint: server.end_session_endpoint,
     scope,
     useIdTokenAsBearer: !!metadata.use_id_token_as_bearer,

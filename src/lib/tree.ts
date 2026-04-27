@@ -82,7 +82,7 @@ export interface BuildTreeOptions {
 
 /** Build the full tree from catalog data. Root node is the catalog. */
 export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = {}): TreeDataItem[] {
-  const { showDuckDBTypes = true, hideTableBackingFunctions = true, hideDollarTables = false, onTableAction, onRefresh, refreshing, rootIcon } = options;
+  const { showDuckDBTypes = true, hideTableBackingFunctions = true, hideDollarTables = true, onTableAction, onRefresh, refreshing, rootIcon } = options;
   const sortedSchemas = [...catalog.schemas].sort((a, b) =>
     a.info.name.localeCompare(b.info.name)
   );

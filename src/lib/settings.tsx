@@ -20,7 +20,7 @@ export interface Settings {
 const defaultSettings: Settings = {
   showDuckDBTypes: true,
   hideTableBackingFunctions: true,
-  hideDollarTables: false,
+  hideDollarTables: true,
   shellFontSize: 13,
   autoRestoreSession: false,
   shellThreads: 0,
