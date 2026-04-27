@@ -116,44 +116,6 @@ function respond(obj: R2ObjectBody, key: string, extraHeaders?: Record<string, s
   return new Response(obj.body, { headers });
 }
 
-/** Pick the best Content-Encoding the client accepts for a pre-compressed
- *  asset. Returns null for clients that only support identity. */
-function pickEncoding(accept: string): "zstd" | "gzip" | null {
-  const ae = accept.toLowerCase();
-  if (ae.includes("zstd")) return "zstd";
-  if (ae.includes("gzip")) return "gzip";
-  return null;
-}
-
-/** Try to fetch a pre-compressed sibling (.zst / .gz) of a wasm asset and
- *  return a Response with the matching Content-Encoding. Returns null if no
- *  sibling exists or the client doesn't advertise support, in which case the
- *  caller should fall back to the uncompressed object. */
-async function tryCompressedSibling(
-  bucket: R2Bucket,
-  request: Request,
-  versionedKey: string,
-  rootKey: string,
-  resolvedKey: string,
-  isVersioned: boolean,
-): Promise<Response | null> {
-  // Only compressible assets we ship pre-compressed: .wasm files (which
-  // includes .duckdb_extension.wasm).
-  if (!/\.wasm$/.test(resolvedKey)) return null;
-  const enc = pickEncoding(request.headers.get("Accept-Encoding") ?? "");
-  if (!enc) return null;
-
-  const suffix = enc === "zstd" ? ".zst" : ".gz";
-  const obj = await fetchWithFallback(bucket, versionedKey + suffix, rootKey + suffix);
-  if (!obj) return null;
-
-  return respond(obj, resolvedKey, {
-    "Cache-Control": cacheControl(resolvedKey, isVersioned),
-    "Content-Encoding": enc,
-    "Vary": "Accept-Encoding",
-  });
-}
-
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -240,19 +202,13 @@ export default {
       const version = versionMatch[1];
       const remainder = (versionMatch[2] ?? "/").replace(/^\//, "");
       const r2Key = `v${version}/${remainder}`;
-      const hasExtension = remainder.includes(".");
-      const resolvedKey =
-        remainder === "" || remainder.endsWith("/") || !hasExtension ? "index.html" : r2Key;
-
-      const compressed = await tryCompressedSibling(
-        env.ASSETS_BUCKET, request, r2Key, remainder, resolvedKey, true,
-      );
-      if (compressed) return cacheAndReturn(compressed);
-
       const obj = await fetchWithFallback(env.ASSETS_BUCKET, r2Key, remainder);
       if (!obj) {
         return new Response(`Not found: ${path}`, { status: 404 });
       }
+      const hasExtension = remainder.includes(".");
+      const resolvedKey =
+        remainder === "" || remainder.endsWith("/") || !hasExtension ? "index.html" : r2Key;
       return cacheAndReturn(
         respond(obj, resolvedKey, {
           "Cache-Control": cacheControl(resolvedKey, true),
@@ -266,15 +222,9 @@ export default {
     if (latestObj) {
       const latestVersion = (await latestObj.text()).trim();
       const r2Key = `v${latestVersion}/${stripped}`;
-      const contentKey = stripped.includes(".") ? stripped : "index.html";
-
-      const compressed = await tryCompressedSibling(
-        env.ASSETS_BUCKET, request, r2Key, stripped, contentKey, false,
-      );
-      if (compressed) return cacheAndReturn(compressed);
-
       const obj = await fetchWithFallback(env.ASSETS_BUCKET, r2Key, stripped);
       if (obj) {
+        const contentKey = stripped.includes(".") ? stripped : "index.html";
         return cacheAndReturn(respond(obj, contentKey));
       }
     }

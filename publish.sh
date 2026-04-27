@@ -55,18 +55,6 @@ bun run build
 
 echo "==> dist/ size: $(du -sh dist/ | cut -f1)"
 
-# ---- Pre-compress .wasm files for Content-Encoding negotiation ----
-# The Worker serves a .zst or .gz sibling when the client advertises support
-# via Accept-Encoding. Cloudflare's edge does NOT auto-compress
-# application/wasm, so we ship pre-compressed bytes alongside the originals.
-echo "==> Compressing .wasm files (zstd + gzip)..."
-find dist -name '*.wasm' -type f -print0 | xargs -0 -n1 -P8 -I{} sh -c '
-  f="$1"
-  zstd -19 -q -f "$f" -o "$f.zst"
-  gzip -9 -k -f "$f"
-' _ {}
-echo "==> Compressed $(find dist -name '*.wasm' -type f | wc -l | tr -d ' ') wasm files"
-
 # ---- Upload versioned files to R2 (S3-compatible API via aws CLI) ----
 #
 # R2 exposes an S3-compatible API. `aws s3 sync` is dramatically faster than
@@ -98,43 +86,24 @@ upload_with_ct() {
 # the dist/ output directory layout. We add v${VERSION}/ during upload.
 
 # 1) Oversized shared assets (>25MB WASMs) at the root — shared across versions.
-#    Split into per-extension passes so .wasm gets application/wasm while the
-#    .wasm.zst / .wasm.gz siblings get application/zstd / application/gzip.
-#    (R2-stored Content-Type is informational only — the Worker rewrites
-#    Content-Type to application/wasm when serving compressed variants.)
-sync_shared() {
-  local dir="$1" prefix="$2"
-  aws s3 sync "$dir" "s3://${R2_BUCKET}/${prefix}" \
+echo "==> Syncing oversized shared assets to R2 root..."
+aws s3 sync dist/shell/wasm/ "s3://${R2_BUCKET}/shell/wasm/" \
+  --endpoint-url "$R2_ENDPOINT" \
+  --content-type "application/wasm" \
+  --size-only --no-progress
+if [ -d "dist/shell/extensions" ]; then
+  aws s3 sync dist/shell/extensions/ "s3://${R2_BUCKET}/shell/extensions/" \
     --endpoint-url "$R2_ENDPOINT" \
-    --exclude "*" --include "*.wasm" \
     --content-type "application/wasm" \
     --size-only --no-progress
-  aws s3 sync "$dir" "s3://${R2_BUCKET}/${prefix}" \
-    --endpoint-url "$R2_ENDPOINT" \
-    --exclude "*" --include "*.wasm.zst" \
-    --content-type "application/zstd" \
-    --size-only --no-progress
-  aws s3 sync "$dir" "s3://${R2_BUCKET}/${prefix}" \
-    --endpoint-url "$R2_ENDPOINT" \
-    --exclude "*" --include "*.wasm.gz" \
-    --content-type "application/gzip" \
-    --size-only --no-progress
-}
-
-echo "==> Syncing oversized shared assets to R2 root..."
-sync_shared dist/shell/wasm/ shell/wasm/
-if [ -d "dist/shell/extensions" ]; then
-  sync_shared dist/shell/extensions/ shell/extensions/
 fi
 
 # 2) Versioned files: explicit content-type pre-passes for types the AWS CLI
 #    misidentifies, then a broad sync for everything else.
 echo "==> Syncing dist/ to R2 under ${R2_PREFIX}/..."
-upload_with_ct "*.wasm"     "application/wasm"                     "${R2_PREFIX}/"
-upload_with_ct "*.wasm.zst" "application/zstd"                     "${R2_PREFIX}/"
-upload_with_ct "*.wasm.gz"  "application/gzip"                     "${R2_PREFIX}/"
-upload_with_ct "*.mjs"      "application/javascript; charset=utf-8" "${R2_PREFIX}/"
-upload_with_ct "*.map"      "application/json"                     "${R2_PREFIX}/"
+upload_with_ct "*.wasm"  "application/wasm"                     "${R2_PREFIX}/"
+upload_with_ct "*.mjs"   "application/javascript; charset=utf-8" "${R2_PREFIX}/"
+upload_with_ct "*.map"   "application/json"                     "${R2_PREFIX}/"
 aws s3 sync dist/ "s3://${R2_BUCKET}/${R2_PREFIX}/" \
   --endpoint-url "$R2_ENDPOINT" \
   --exclude "shell/wasm/*" \
