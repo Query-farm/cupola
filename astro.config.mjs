@@ -132,6 +132,7 @@ export default defineConfig({
         'node:zlib': resolve('src/lib/node-stubs.ts'),
         'node:crypto': resolve('src/lib/node-stubs.ts'),
         'node:fs': resolve('src/lib/node-stubs.ts'),
+        'node:module': resolve('src/lib/node-stubs.ts'),
       },
     },
     // Node.js built-ins are handled by resolve.alias above — they point to

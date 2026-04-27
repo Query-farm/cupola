@@ -18,7 +18,7 @@ export function MacroDetail({ macro, catalogName, schemaName, onNavigate }: Prop
 
   return (
     <div>
-      <Breadcrumb catalogName={catalogName} schemaName={schemaName || macro.schemaName} itemName={macro.name} itemType="macro" onNavigate={onNavigate} />
+      <Breadcrumb catalogName={catalogName} schemaName={schemaName || macro.schema_name} itemName={macro.name} itemType="macro" onNavigate={onNavigate} />
       {macro.comment && (
         <p className="text-muted-foreground mb-4">{macro.comment}</p>
       )}

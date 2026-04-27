@@ -123,7 +123,7 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
                 icon={getIconForType("macro")}
                 title={m.name}
                 description={m.comment || undefined}
-                badge={m.macroType === "table" ? "table" : "scalar"}
+                badge={m.macro_type === "TABLE" ? "table" : "scalar"}
                 onClick={() => onNavigate({ type: "macro", name: m.name, schema: schemaName, catalog: catalogName })}
               />
             ))}

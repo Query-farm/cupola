@@ -156,14 +156,15 @@ export function CatalogApp() {
           const isView = viewDefs.has(viewKey);
           const entry = {
             name: tableName,
-            schemaName,
+            schema_name: schemaName,
+            tags: {},
             comment: commentMap.get(`${schemaName}.${tableName}`) || "",
             columns: new Uint8Array(0),
-            primaryKeyConstraints: [],
-            uniqueConstraints: [],
-            checkConstraints: [],
-            notNullConstraints: [],
-            foreignKeyConstraints: [],
+            primary_key_constraints: [],
+            unique_constraints: [],
+            check_constraints: [],
+            not_null_constraints: [],
+            foreign_key_constraints: [],
             ...(isView ? { definition: viewDefs.get(viewKey) || "" } : {}),
             _columnInfo: columns.map((c) => ({
               name: c.name,

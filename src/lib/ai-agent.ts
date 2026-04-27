@@ -271,7 +271,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
       for (const macro of schema.macros) {
         const comment = macro.comment ? ` — ${macro.comment}` : "";
         const params = macro.parameters.length > 0 ? `(${macro.parameters.join(", ")})` : "()";
-        lines.push(`* \`${cat}.${schema.info.name}.${macro.name}${params}\` (${macro.macroType} macro)${comment}`);
+        lines.push(`* \`${cat}.${schema.info.name}.${macro.name}${params}\` (${macro.macro_type} macro)${comment}`);
       }
     }
     lines.push(``);
@@ -435,7 +435,7 @@ export function executeListTables(catalog: CatalogData): string {
       if (schema.macros?.length > 0) {
         schemaInfo.macros = schema.macros.map((macro) => ({
           name: macro.name,
-          type: macro.macroType === "table" ? "table_macro" : "scalar_macro",
+          type: macro.macro_type === "TABLE" ? "table_macro" : "scalar_macro",
           parameters: macro.parameters,
           comment: macro.comment || null,
         }));
@@ -472,17 +472,17 @@ export function executeDescribeTable(catalog: CatalogData, schemaName: string, t
     }
 
     // Primary key column indices → names
-    const pkColumns = table.primaryKeyConstraints.flatMap((pk) =>
-      pk.map((idx) => cols[idx]?.name).filter(Boolean)
+    const pkColumns = (table.primary_key_constraints ?? []).flatMap((pk) =>
+      pk.map((idx: number) => cols[idx]?.name).filter(Boolean)
     );
 
     // Unique constraint column indices → names
-    const uniqueConstraints = table.uniqueConstraints.map((uq) =>
-      uq.map((idx) => cols[idx]?.name).filter(Boolean)
+    const uniqueConstraints = table.unique_constraints.map((uq) =>
+      uq.map((idx: number) => cols[idx]?.name).filter(Boolean)
     ).filter((uq) => uq.length > 0);
 
     // Not-null set
-    const notNullSet = new Set(table.notNullConstraints);
+    const notNullSet = new Set<number>(table.not_null_constraints);
 
     // FK summary at table level
     const foreignKeys = fks.map((fk) => ({
@@ -499,7 +499,7 @@ export function executeDescribeTable(catalog: CatalogData, schemaName: string, t
       primary_key: pkColumns.length > 0 ? pkColumns : null,
       foreign_keys: foreignKeys.length > 0 ? foreignKeys : null,
       unique_constraints: uniqueConstraints.length > 0 ? uniqueConstraints : null,
-      check_constraints: table.checkConstraints.length > 0 ? table.checkConstraints : null,
+      check_constraints: table.check_constraints.length > 0 ? table.check_constraints : null,
       columns: cols.map((c, i) => {
         const col: any = {
           name: c.name,

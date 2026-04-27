@@ -66,7 +66,7 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate }: Props)
 
   return (
     <div>
-      <Breadcrumb catalogName={catalogName || ""} schemaName={schemaName || view.schemaName} itemName={view.name} itemType="view" onNavigate={onNavigate} />
+      <Breadcrumb catalogName={catalogName || ""} schemaName={schemaName || view.schema_name} itemName={view.name} itemType="view" onNavigate={onNavigate} />
 
       {view.comment && (
         <p className="text-muted-foreground mb-4">{view.comment}</p>

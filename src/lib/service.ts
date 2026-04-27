@@ -95,7 +95,7 @@ export function getColumns(table: TableInfo): ColumnInfo[] {
 /** Parse foreign key constraints from a TableInfo. */
 export function getForeignKeys(table: TableInfo): ForeignKeyInfo[] {
   try {
-    return table.foreignKeyConstraints.map((bytes) => {
+    return (table.foreign_key_constraints ?? []).map((bytes) => {
       const batch = deserializeBatch(bytes);
       const rows = [...iterRows(batch)];
       const row = rows[0];
@@ -129,8 +129,8 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
     const catalogs = await client.catalogs();
     const catalogName = catalogs[0] ?? "unknown";
     const attach = await client.catalogAttach(catalogName);
-    const attachId = attach.attachId;
-    const defaultSchema = attach.defaultSchema ?? null;
+    const attachId = attach.attach_id;
+    const defaultSchema = attach.default_schema ?? null;
     const catalogComment = attach.comment ?? null;
     const catalogTags = attach.tags ?? {};
 

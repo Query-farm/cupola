@@ -167,7 +167,11 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
     return false;
   }, [catalogData, memoryCatalog, attachedCatalogs]);
 
-  const showMapTab = catalogHasMapData || mapHasData;
+  const keplerEnabled =
+    settings.enableKeplerMap ||
+    (typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("kepler") === "1");
+  const showMapTab = keplerEnabled && (catalogHasMapData || mapHasData);
 
   // If map tab is active but becomes hidden, fall back to shell
   useEffect(() => {

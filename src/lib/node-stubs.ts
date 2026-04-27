@@ -47,6 +47,21 @@ export function createGunzip() { return new PassThrough(); }
 // node:crypto stubs
 export function randomBytes(n: number): Uint8Array { return new Uint8Array(n); }
 export function createHmac() { return { update() { return this; }, digest() { return ""; } }; }
+export function createHash() { return { update() { return this; }, digest() { return ""; } }; }
+export function timingSafeEqual(_a: Uint8Array, _b: Uint8Array): boolean { return false; }
+export class X509Certificate {
+  constructor(_input?: any) {}
+}
+
+// node:module stubs — vgi-rpc-typescript's node-target dist injects
+// `createRequire(import.meta.url)` at the top of its bundle. Returning a
+// function that throws on actual call is fine: nothing on the browser code
+// path invokes it.
+export function createRequire(_url?: string | URL) {
+  const req: any = () => { throw new Error("createRequire stub: not available in browser"); };
+  req.resolve = () => { throw new Error("createRequire stub: not available in browser"); };
+  return req;
+}
 
 // node:fs stubs (must not throw — Astro SSR pipeline may call these during dev)
 export function readFileSync(): string { return ""; }
@@ -55,5 +70,6 @@ export function existsSync(): boolean { return false; }
 export function mkdirSync(): void {}
 export function readdirSync(): string[] { return []; }
 export function statSync(): null { return null; }
+export function writeSync(): number { return 0; }
 
 export default { Readable, Writable, Duplex, Transform, PassThrough };

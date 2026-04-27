@@ -24,7 +24,7 @@ interface Props {
 export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shellMode }: Props) {
   const columns = getColumns(table);
   const foreignKeys = getForeignKeys(table);
-  const defaultSql = `SELECT * FROM ${catalogName}.${table.schemaName}.${table.name} LIMIT 10;`;
+  const defaultSql = `SELECT * FROM ${catalogName}.${table.schema_name}.${table.name} LIMIT 10;`;
   const displayTags = useMemo(() => filterDisplayTags(table.tags), [table.tags]);
 
   // Lazily fetch column statistics from DuckDB WASM shell.
@@ -37,7 +37,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
     let unsubscribe: (() => void) | null = null;
 
     function doFetch() {
-      fetchColumnStats(catalogName, table.schemaName, table.name).then(
+      fetchColumnStats(catalogName, table.schema_name, table.name).then(
         (stats) => {
           if (cancelled) return;
           setColumnStats(stats);
@@ -58,11 +58,11 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
       cancelled = true;
       unsubscribe?.();
     };
-  }, [catalogName, table.schemaName, table.name]);
+  }, [catalogName, table.schema_name, table.name]);
 
   // Build constraint lookup sets
-  const notNullSet = new Set(table.notNullConstraints);
-  const pkColumns = new Set(table.primaryKeyConstraints.flatMap((pk) => pk));
+  const notNullSet = new Set<number>(table.not_null_constraints);
+  const pkColumns = new Set<number>((table.primary_key_constraints ?? []).flatMap((pk) => pk));
 
   // Build FK lookup: column name → FK info
   const fkByColumn = useMemo(() => {
@@ -77,15 +77,15 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
 
   const hasConstraints =
     foreignKeys.length > 0 ||
-    table.primaryKeyConstraints.length > 0 ||
-    table.uniqueConstraints.length > 0 ||
-    table.checkConstraints.length > 0;
+    (table.primary_key_constraints?.length ?? 0) > 0 ||
+    table.unique_constraints.length > 0 ||
+    table.check_constraints.length > 0;
 
   return (
     <div>
       <Breadcrumb
         catalogName={catalogName}
-        schemaName={table.schemaName}
+        schemaName={table.schema_name}
         itemName={table.name}
         itemType="table"
         onNavigate={onNavigate}
@@ -120,10 +120,10 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
         pkColumns={pkColumns}
         notNullSet={notNullSet}
         fkByColumn={fkByColumn}
-        checkConstraints={table.checkConstraints}
+        checkConstraints={table.check_constraints}
         columnStats={columnStats}
         catalogName={catalogName}
-        schemaName={table.schemaName}
+        schemaName={table.schema_name}
         tableName={table.name}
         onNavigate={onNavigate}
       />
@@ -149,7 +149,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
                 <span className="font-mono text-primary">{fk.referencedSchema}.{fk.referencedTable}</span>
               </button>
             ))}
-            {table.primaryKeyConstraints.map((pk, i) => (
+            {(table.primary_key_constraints ?? []).map((pk, i) => (
               <span
                 key={`pk-${i}`}
                 className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-card"
@@ -159,7 +159,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
                 <span className="font-mono text-muted-foreground">({pk.map((idx) => columns[idx]?.name ?? idx).join(", ")})</span>
               </span>
             ))}
-            {table.uniqueConstraints.map((uq, i) => (
+            {table.unique_constraints.map((uq, i) => (
               <span
                 key={`uq-${i}`}
                 className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-border bg-card"
@@ -169,7 +169,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
                 <span className="font-mono text-muted-foreground">({uq.map((idx) => columns[idx]?.name ?? idx).join(", ")})</span>
               </span>
             ))}
-            {table.checkConstraints
+            {table.check_constraints
               .filter((chk) => {
                 // Only show in References if the check references multiple columns or none
                 const matchingCols = columns.filter((c) => chk.includes(c.name));

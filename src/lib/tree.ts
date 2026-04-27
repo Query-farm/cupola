@@ -125,7 +125,7 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
     const tableId = `${schemaId}::t:${table.name}`;
     const columns = getColumns(table);
     const pkColumns = new Set(
-      table.primaryKeyConstraints?.flatMap((pk: number[]) =>
+      table.primary_key_constraints?.flatMap((pk: number[]) =>
         pk.map((idx: number) => columns[idx]?.name).filter(Boolean)
       ) ?? []
     );
