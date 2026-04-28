@@ -381,7 +381,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
           restoreConfig = { table: tableId, title: tableId };
           if (selectedTable) {
             const cols = getColumns(selectedTable);
-            const pkIndices = new Set(selectedTable.primaryKeyConstraints.flatMap((pk: number[]) => pk));
+            const pkIndices = new Set((selectedTable.primaryKeyConstraints ?? []).flatMap((pk: number[]) => pk));
             if (pkIndices.size > 0) {
               // Set PK columns to "any_value" aggregate so they don't get summed when grouping
               const aggregates: Record<string, string> = {};
