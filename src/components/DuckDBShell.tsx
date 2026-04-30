@@ -307,7 +307,13 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   const perspectiveTableRef = useRef<string | null>(null);
   useEffect(() => {
     if (mode === "minimized" || activeTab !== "perspective" || !selectedTable) return;
-    const tableId = `${selection?.catalog || catalogName}.${selectedTable.schemaName}.${selectedTable.name}`;
+    // Schema name lives on different fields depending on the catalog source:
+    // attached/memory catalogs (built in duckdb-catalog.ts) expose it as
+    // `schemaName`, while VGI primary-catalog tables come straight off the
+    // wire with `schema_name`. The active selection always has it as
+    // `schema`, so prefer that and fall back for safety.
+    const schemaName = selection?.schema ?? selectedTable.schemaName ?? selectedTable.schema_name;
+    const tableId = `${selection?.catalog || catalogName}.${schemaName}.${selectedTable.name}`;
     // Don't reload if already showing this table
     if (perspectiveTableRef.current === tableId) return;
 
