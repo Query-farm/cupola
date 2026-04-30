@@ -192,6 +192,17 @@ function postInitStatus(phase, message, done) {
     postMessage({ type: 'init-status', phase: phase, message: message, done: !!done });
 }
 
+// Wrap an init phase in a Sentry child span. Errors propagate; the span
+// auto-ends when the callback resolves. Falls through to plain execution
+// when SentryWorker isn't available.
+function initSpan(name, fn, attributes) {
+    if (!self.SentryWorker) return Promise.resolve(fn());
+    return self.SentryWorker.startSpan(
+        { name: name, op: 'shell.init', attributes: attributes },
+        async () => fn(),
+    );
+}
+
 async function init() {
     const timings = [
         { phase: 'worker-boot', ms: Math.round(T_BEFORE_IMPORT_SCRIPTS - WORKER_T0) },
@@ -208,7 +219,7 @@ async function init() {
     // thread races this fetch against catalog load, so in the common case
     // the bytes are already here by the time init() runs.
     postInitStatus('wasm', 'Awaiting DuckDB WASM runtime…');
-    const wasmBytes = await wasmBytesPromise;
+    const wasmBytes = await initSpan('await-wasm-bytes', () => wasmBytesPromise);
     mark('await-wasm-bytes');
     console.log('[worker] Loading WASM module...', wasmBytes ? `(${Math.round(wasmBytes.byteLength/(1024*1024))}MB from main thread)` : '(self-fetched)');
     postInitStatus('wasm', wasmBytes ? 'Instantiating DuckDB WASM…' : 'Downloading DuckDB WASM runtime…');
@@ -310,12 +321,19 @@ async function init() {
             return {}; // signals async to Emscripten
         };
     }
-    module = await DuckDB(duckdbModuleConfig);
+    module = await initSpan(
+        'wasm-instantiate',
+        () => DuckDB(duckdbModuleConfig),
+        { 'wasm.bytes_from_main_thread': !!wasmBytes, 'wasm.threads': threadCount },
+    );
     mark('wasm-instantiate');
     console.log('[worker] Opening database...');
     postInitStatus('open', 'Opening database…');
     const config = JSON.stringify({ allowUnsignedExtensions: true, arrowLosslessConversion: true, maximumThreads: 1, query: { castBigIntToDouble: false } });
-    const [openStatus, openData, openSize] = callSRet(module, 'duckdb_web_open', ['string'], [config]);
+    const [openStatus, openData, openSize] = await initSpan(
+        'db-open',
+        () => callSRet(module, 'duckdb_web_open', ['string'], [config]),
+    );
     if (openStatus !== 0) {
         postMessage({ type: 'log', msg: `Open failed: ${openSize > 0 ? readString(module, openData, openSize) : 'unknown'}`, cls: 'err' });
         return;
@@ -347,10 +365,12 @@ async function init() {
         "SET arrow_lossless_conversion=true",
         `SET custom_extension_repository='${workerBase}/extensions'`,
     ];
-    for (const sql of initSettings) {
-        const r = await runQueryAsync(sql);
-        if (!r.ok) console.warn('[worker] init setting failed:', sql, r.error);
-    }
+    await initSpan('settings', async () => {
+        for (const sql of initSettings) {
+            const r = await runQueryAsync(sql);
+            if (!r.ok) console.warn('[worker] init setting failed:', sql, r.error);
+        }
+    });
     mark('settings');
 
     const exts = ['json', 'icu', 'autocomplete', 'spatial', 'vgi'];
@@ -359,7 +379,13 @@ async function init() {
         const ext = exts[i];
         postInitStatus('ext:' + ext, `Loading extension ${i + 1}/${exts.length}: ${ext}…`);
         const extStart = performance.now();
-        const r = await runQueryAsync(`LOAD '${workerBase}/extensions/v1.5.1/wasm_threads/${ext}.duckdb_extension.wasm'`);
+        // Per-extension span — the LOAD triggers an XHR for the extension's
+        // .wasm, which becomes a child http.client span under load:<ext>.
+        const r = await initSpan(
+            `load:${ext}`,
+            () => runQueryAsync(`LOAD '${workerBase}/extensions/v1.5.1/wasm_threads/${ext}.duckdb_extension.wasm'`),
+            { 'duckdb.extension': ext },
+        );
         timings.push({ phase: `load:${ext}`, ms: Math.round(performance.now() - extStart) });
         if (!r.ok) { console.error(`[ext] ${ext}: ${r.error}`); failed.push(ext); }
     }
@@ -371,7 +397,7 @@ async function init() {
     // Bump thread count after extensions are loaded so queries can run in parallel.
     if (threadCount > 1) {
         postInitStatus('threads', `Enabling ${threadCount}-thread execution…`);
-        const r = await runQueryAsync(`SET threads=${threadCount}`);
+        const r = await initSpan('threads', () => runQueryAsync(`SET threads=${threadCount}`));
         if (!r.ok) console.error(`[worker] SET threads=${threadCount} failed:`, r.error);
         mark('threads');
     }
@@ -588,7 +614,18 @@ async function handleMessage(data) {
 function runInitWithSpan() {
     if (!self.SentryWorker) return init();
     return self.SentryWorker.startSpan(
-        { name: 'shell.boot', op: 'shell.boot' },
+        {
+            name: 'shell.boot',
+            op: 'shell.boot',
+            // Pre-init phases happened before this span starts, so record
+            // them as attributes — phase child spans inside init() handle
+            // the rest of the breakdown.
+            attributes: {
+                'shell.worker_boot_ms': Math.round(T_BEFORE_IMPORT_SCRIPTS - WORKER_T0),
+                'shell.import_scripts_ms': Math.round(T_AFTER_IMPORT_SCRIPTS - T_BEFORE_IMPORT_SCRIPTS),
+                'shell.release_version': RELEASE_VERSION,
+            },
+        },
         async (span) => {
             try {
                 await init();
