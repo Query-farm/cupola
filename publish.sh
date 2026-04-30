@@ -16,8 +16,24 @@ set -euo pipefail
 PROJECT="cupola"
 R2_BUCKET="cupola-assets"
 VERSION=$(node -e "console.log(require('./package.json').version)")
+GIT_HASH=$(git rev-parse --short HEAD)
 
 echo "==> Version: ${VERSION}"
+
+# ---- Sentry: source map upload ----
+# SENTRY_AUTH_TOKEN unlocks browser source map upload during `astro build`.
+# Without it, the build still succeeds but stack traces in Sentry stay minified.
+# Tokens come from .env (gitignored); load if present so callers don't need to
+# `source` it manually.
+if [ -z "${SENTRY_AUTH_TOKEN:-}" ] && [ -f ".env" ]; then
+  set -a; . ./.env; set +a
+fi
+if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
+  echo "==> SENTRY_AUTH_TOKEN not set — skipping Sentry source map upload."
+fi
+export SENTRY_AUTH_TOKEN
+export SENTRY_ORG="${SENTRY_ORG:-query-farm-llc}"
+export SENTRY_PROJECT="${SENTRY_PROJECT:-cupola}"
 
 # ---- Git: commit and push ----
 if [ "${1:-}" != "--skip-commit" ]; then
@@ -123,7 +139,36 @@ echo "==> Updated _latest marker to ${VERSION}"
 # version-aware routing, redirects, and edge-cache writes. Wrangler reads
 # the bindings + entrypoint from wrangler.jsonc.
 echo "==> Deploying Worker..."
-npx wrangler deploy
+# --define injects build-time constants used by Sentry release tagging in the
+# worker (worker/index.ts reads __APP_VERSION__ / __GIT_HASH__ via typeof so
+# unreplaced symbols stay safe under `wrangler dev`).
+# --outdir lets us hand the bundled worker + source map to sentry-cli after
+# deploy. --upload-source-maps also pushes the map to Cloudflare so their
+# dashboard symbolicates errors.
+WORKER_OUTDIR=".worker-build"
+rm -rf "$WORKER_OUTDIR"
+npx wrangler deploy \
+  --outdir "$WORKER_OUTDIR" \
+  --upload-source-maps \
+  --define "__APP_VERSION__:\"${VERSION}\"" \
+  --define "__GIT_HASH__:\"${GIT_HASH}\""
+
+# ---- Sentry: upload worker source maps under the same release as the browser ----
+# Browser maps are uploaded by @sentry/astro during `bun run build` above; this
+# block handles the worker side. The release slug must match exactly what the
+# worker's withSentry() reports at runtime (cupola@VERSION+HASH).
+RELEASE="cupola@${VERSION}+${GIT_HASH}"
+if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
+  echo "==> Uploading worker source maps to Sentry (release ${RELEASE})..."
+  npx @sentry/cli sourcemaps upload \
+    --org "$SENTRY_ORG" \
+    --project "$SENTRY_PROJECT" \
+    --release "$RELEASE" \
+    --dist "$GIT_HASH" \
+    "$WORKER_OUTDIR"
+else
+  echo "==> SENTRY_AUTH_TOKEN not set — skipping worker source map upload."
+fi
 
 echo ""
 echo "==> Published v${VERSION}"

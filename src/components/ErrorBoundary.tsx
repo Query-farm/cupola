@@ -1,5 +1,6 @@
 import { Component, type ReactNode } from "react";
 import { AlertCircle } from "lucide-react";
+import * as Sentry from "@sentry/astro";
 
 interface Props {
   children: ReactNode;
@@ -19,6 +20,10 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error("ErrorBoundary caught:", error, info.componentStack);
+    Sentry.withScope((scope) => {
+      scope.setContext("react", { componentStack: info.componentStack });
+      Sentry.captureException(error);
+    });
   }
 
   render() {

@@ -3,7 +3,8 @@ import { fetchCatalog, getServiceUrl, hasExplicitService, type CatalogData, type
 import { fetchAttachedCatalog } from "@/lib/duckdb-catalog";
 import { tableFromIPC } from "apache-arrow";
 import { type Selection } from "@/lib/tree";
-import { getAuthToken, getAuthTokenForService, hadAuthToken, redirectToAuth } from "@/lib/auth";
+import { getAuthToken, getAuthTokenForService, getUserInfo, hadAuthToken, redirectToAuth } from "@/lib/auth";
+import * as Sentry from "@sentry/astro";
 import {
   bootstrap as oauthBootstrap,
   consumePendingCallback,
@@ -335,6 +336,26 @@ export function CatalogApp() {
   }, [shellHeight]);
 
   const serviceUrl = useMemo(() => getServiceUrl(), []);
+
+  // Tag every Sentry event with the service URL and (when known) the catalog
+  // name. Lets us slice errors by tenant without putting URLs in messages.
+  useEffect(() => {
+    Sentry.setTag("service", serviceUrl);
+  }, [serviceUrl]);
+  useEffect(() => {
+    if (data?.catalogName) Sentry.setTag("catalog", data.catalogName);
+  }, [data?.catalogName]);
+
+  // Identify the signed-in user once tokens are available. JWT decode is
+  // synchronous; re-run when the service URL or catalog changes (post-login).
+  useEffect(() => {
+    const info = getUserInfo(serviceUrl);
+    if (info?.email || info?.sub) {
+      Sentry.setUser({ id: info.sub, email: info.email, username: info.name });
+    } else {
+      Sentry.setUser(null);
+    }
+  }, [serviceUrl, data?.catalogName]);
 
   // Load theme from ?theme= URL parameter
   useEffect(() => {

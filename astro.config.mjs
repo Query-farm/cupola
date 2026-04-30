@@ -6,12 +6,15 @@ import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 import react from '@astrojs/react';
+import sentry from '@sentry/astro';
 
 import tailwindcss from '@tailwindcss/vite';
 
 const require = createRequire(import.meta.url);
 const pkg = require('./package.json');
 const gitHash = execSync('git rev-parse --short HEAD').toString().trim();
+
+const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN;
 
 // https://astro.build/config
 export default defineConfig({
@@ -22,7 +25,26 @@ export default defineConfig({
   base: `/v${pkg.version}/`,
   trailingSlash: 'ignore',
 
-  integrations: [react()],
+  integrations: [
+    react(),
+    sentry({
+      // Init lives in sentry.client.config.ts so the runtime DSN/release/scrubbing
+      // stay co-located. The integration here exists to inject the SDK into the
+      // client bundle and (optionally) upload source maps.
+      sourceMapsUploadOptions: sentryAuthToken
+        ? {
+            org: process.env.SENTRY_ORG || 'query-farm-llc',
+            project: process.env.SENTRY_PROJECT || 'cupola',
+            authToken: sentryAuthToken,
+            telemetry: false,
+            release: {
+              name: `cupola@${pkg.version}+${gitHash}`,
+              dist: gitHash,
+            },
+          }
+        : { enabled: false },
+    }),
+  ],
 
   vite: {
     define: {

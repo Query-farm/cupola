@@ -17,8 +17,18 @@
  *   /oauth-callback.html  → latest-version fallback (stable Entra SPA URI)
  */
 
+import * as Sentry from "@sentry/cloudflare";
+
+// Injected by wrangler via --define at deploy time. Local `wrangler dev`
+// gets the literal placeholder, which is fine — the DSN check below skips
+// Sentry init when the version is unset.
+declare const __APP_VERSION__: string;
+declare const __GIT_HASH__: string;
+
 interface Env {
   ASSETS_BUCKET: R2Bucket;
+  SENTRY_DSN?: string;
+  ENVIRONMENT?: string;
 }
 
 // Minimal Workers-runtime type stand-ins so this file type-checks without
@@ -116,13 +126,14 @@ function respond(obj: R2ObjectBody, key: string, extraHeaders?: Record<string, s
   return new Response(obj.body, { headers });
 }
 
-export default {
+const handler = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
 
     if (path === "/" || path === "") {
-      return Response.redirect(`${url.origin}/latest/`, 302);
+      const qs = url.search ? url.search : "";
+      return Response.redirect(`${url.origin}/latest/${qs}`, 302);
     }
 
     const cache = (caches as unknown as { default: Cache }).default;
@@ -232,3 +243,45 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 };
+
+// Wrap accesses in `typeof` so unreplaced symbols (local `wrangler dev`) don't
+// throw ReferenceError. wrangler's --define replaces the entire identifier, so
+// the typeof-guarded path becomes the literal string in production builds.
+const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "";
+const GIT_HASH = typeof __GIT_HASH__ === "string" ? __GIT_HASH__ : "";
+
+export default Sentry.withSentry(
+  (env: Env) => ({
+    dsn:
+      env.SENTRY_DSN ||
+      "https://d0991fb45d2c62f5d25db86f2985cb79@o4511299556081664.ingest.us.sentry.io/4511299558637568",
+    release: APP_VERSION && GIT_HASH ? `cupola@${APP_VERSION}+${GIT_HASH}` : undefined,
+    environment: env.ENVIRONMENT || "production",
+    tracesSampleRate: 0.1,
+    sendDefaultPii: false,
+    beforeSend(event) {
+      if (event.request?.headers) {
+        for (const key of Object.keys(event.request.headers)) {
+          if (key.toLowerCase() === "authorization") {
+            event.request.headers[key] = "[Filtered]";
+          } else if (key.toLowerCase() === "cookie") {
+            event.request.headers[key] = scrubVgiAuthCookie(event.request.headers[key]);
+          }
+        }
+      }
+      return event;
+    },
+  }),
+  handler,
+);
+
+function scrubVgiAuthCookie(cookieHeader: string): string {
+  return cookieHeader
+    .split(";")
+    .map((part) => {
+      const [name] = part.split("=");
+      if (name?.trim() === "_vgi_auth") return `${name}=[Filtered]`;
+      return part;
+    })
+    .join(";");
+}
