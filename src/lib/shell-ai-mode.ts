@@ -15,6 +15,7 @@ import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 import { estimateCost, formatCost } from "@/lib/pricing";
 import { bridge, recordQuery } from "@/lib/shell-bridge";
 import type { CatalogData } from "@/lib/service";
+import * as Sentry from "@sentry/astro";
 
 /** Persistent AI conversation state — survives across .ai mode entries. */
 export interface AIConversationState {
@@ -394,6 +395,10 @@ export async function runAIMode(
           term.println("");
           term.writeln(`Error: ${err.message || err}`, "31");
           term.println("");
+          Sentry.captureException(err, {
+            tags: { component: "ai-agent", path: "shell" },
+            extra: { model, maxToolRounds },
+          });
         }
       } finally {
         cancelDisposable.dispose();

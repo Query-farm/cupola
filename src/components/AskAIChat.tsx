@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Sparkles, RotateCcw, Settings, FileText, Copy } from "lucide-react";
+import * as Sentry from "@sentry/astro";
 import { useSettings } from "@/lib/settings";
 import { bridge } from "@/lib/shell-bridge";
 import type { CatalogData } from "@/lib/service";
@@ -405,13 +406,18 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           ? { ...b, toolCall: { ...b.toolCall, isExecuting: false, error: "Cancelled" } }
           : b
       );
-      if (err.name !== "AbortError" && err.message !== "Cancelled." && err.message !== "Query cancelled") {
+      const isCancellation = err.name === "AbortError" || err.message === "Cancelled." || err.message === "Query cancelled";
+      if (!isCancellation) {
         const idx = ensureTextBlock();
         const textBlock = blocks[idx] as { type: "text"; content: string };
         blocks = blocks.map((b, i) => i === idx
           ? { ...b, content: textBlock.content + (textBlock.content ? "\n\n" : "") + `**Error:** ${err.message}` }
           : b
         );
+        Sentry.captureException(err, {
+          tags: { component: "ai-agent", path: "chat" },
+          extra: { model, maxRounds },
+        });
       } else {
         blocks = [...blocks, { type: "text", id: uid(), content: "*(Stopped)*" }];
       }

@@ -18,6 +18,7 @@ import { handleDotCommand, type ShellState, type ShellIO } from "@/lib/shell-com
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "@/lib/shell-ai-mode";
 import { attachInputHandlers, type CompletionItem } from "@/lib/shell-input";
 import { bridge, recordQuery, notifyQueryChange } from "@/lib/shell-bridge";
+import * as Sentry from "@sentry/astro";
 import { ensureDuckDBWorker, resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { getTerminalTheme } from "@/lib/theme";
 import {
@@ -194,6 +195,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         await loadPerspective(perspectiveRef.current!, arrowBuffer);
       } catch (e: any) {
         console.error("Perspective load error:", e);
+        Sentry.captureException(e, { tags: { component: "perspective", path: "showPerspective" } });
       } finally {
         setPerspectiveLoading(false);
       }
@@ -414,6 +416,10 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         perspectiveTableRef.current = tableId;
       } catch (e: any) {
         console.error("Perspective virtual server error:", e);
+        Sentry.captureException(e, {
+          tags: { component: "perspective", path: "auto-load" },
+          extra: { tableId },
+        });
       } finally {
         if (!cancelled) setPerspectiveLoading(false);
       }
