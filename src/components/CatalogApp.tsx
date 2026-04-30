@@ -12,7 +12,7 @@ import {
   hasTokens as hasOAuthTokens,
 } from "@/lib/oauth-client";
 import { SettingsProvider } from "@/lib/settings";
-import { bridge } from "@/lib/shell-bridge";
+import { bridge, setShellWorkerSentryUser } from "@/lib/shell-bridge";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
 import { loadTheme, getLogoUrl, DEFAULT_LOGO, type ThemeConfig } from "@/lib/theme";
 import { lazy, Suspense } from "react";
@@ -348,12 +348,21 @@ export function CatalogApp() {
 
   // Identify the signed-in user once tokens are available. JWT decode is
   // synchronous; re-run when the service URL or catalog changes (post-login).
+  // Also forward the identity to the shell worker so its Sentry isolate
+  // tags every query span with the same user. We deliberately do NOT push a
+  // catalog tag to the worker — a single SQL statement can join across the
+  // primary catalog and any number of ATTACHed VGI catalogs, so a single
+  // catalog tag would be misleading. The per-span db.statement attribute
+  // already lets you trace which catalogs a query touched.
   useEffect(() => {
     const info = getUserInfo(serviceUrl);
     if (info?.email || info?.sub) {
-      Sentry.setUser({ id: info.sub, email: info.email, username: info.name });
+      const user = { id: info.sub, email: info.email, username: info.name };
+      Sentry.setUser(user);
+      setShellWorkerSentryUser(user);
     } else {
       Sentry.setUser(null);
+      setShellWorkerSentryUser(null);
     }
   }, [serviceUrl, data?.catalogName]);
 

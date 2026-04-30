@@ -50,6 +50,12 @@ export function ensureDuckDBWorker(baseUrl: string, threadCount?: number): void 
 
   const cancelSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;
   if (cancelSAB) worker.postMessage({ type: "init-cancel-sab", sab: cancelSAB });
+
+  // Replay any user identity already known to the bridge — CatalogApp's user
+  // effect may have run before the worker booted (eager boot is at mount).
+  if (bridge.sentryUser) {
+    worker.postMessage({ type: "set-sentry-user", user: bridge.sentryUser });
+  }
   bridge.cancelInt32 = cancelSAB ? new Int32Array(cancelSAB) : null;
   bridge.cancelQuery = () => {
     if (bridge.cancelInt32) Atomics.store(bridge.cancelInt32, 0, 1);

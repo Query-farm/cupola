@@ -468,6 +468,10 @@ onmessage = function(e) {
         }
         return;
     }
+    if (data.type === 'set-sentry-user') {
+        if (self.SentryWorker) self.SentryWorker.setUser(data.user || null);
+        return;
+    }
     // Queue everything else until module is ready
     if (!moduleReady) {
         pendingMessages.push(data);

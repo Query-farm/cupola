@@ -79,7 +79,24 @@ export const bridge = {
   showPerspective: null as ((arrowBuf: ArrayBuffer) => void) | null,
   showKepler: null as (() => void) | null,
   addQueryHistoryEntry: null as ((entry: QueryHistoryEntry) => void) | null,
+
+  // Sentry identity for the shell worker. Stored here so duckdb-worker-boot
+  // can replay it on worker creation (worker may boot before CatalogApp's
+  // setUser effect fires, or vice-versa).
+  sentryUser: null as { id?: string; email?: string; username?: string } | null,
 };
+
+/** Update the worker's Sentry user identity. Caches the value on the bridge
+ *  so a later worker boot can pick it up, and forwards it to the worker now
+ *  if one is already running. Pass null to clear (e.g. after sign-out). */
+export function setShellWorkerSentryUser(
+  user: { id?: string; email?: string; username?: string } | null,
+): void {
+  bridge.sentryUser = user;
+  if (bridge.worker) {
+    bridge.worker.postMessage({ type: "set-sentry-user", user });
+  }
+}
 
 /** Subscribe to bridge.query availability changes. Fires when query is set or cleared. */
 const queryListeners = new Set<() => void>();
