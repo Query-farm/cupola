@@ -14,6 +14,10 @@ declare const self: DedicatedWorkerGlobalScope & {
     captureMessage: (msg: string, level?: Sentry.SeverityLevel) => void;
     setTag: (key: string, value: string) => void;
     setUser: (user: Sentry.User | null) => void;
+    startSpan: <T>(
+      opts: { name: string; op?: string; attributes?: Record<string, string | number | boolean> },
+      callback: (span: { setStatus: (s: "ok" | "error") => void }) => Promise<T> | T,
+    ) => Promise<T>;
   };
 };
 
@@ -61,17 +65,43 @@ self.SentryWorker = {
       release: opts.release,
       dist: opts.dist,
       environment: opts.environment ?? "production",
-      tracesSampleRate: opts.tracesSampleRate ?? 0,
+      tracesSampleRate: opts.tracesSampleRate ?? 1.0,
       sendDefaultPii: false,
-      // The default integrations include browserApiErrors (window-only patches
-      // that no-op in workers) and breadcrumbs, which is what we want — fetch
-      // breadcrumbs and global error/unhandledrejection capture work in workers.
+      // browserTracingIntegration patches fetch + XHR globally so requests
+      // inside any active span emit child spans. Pageload/navigation tracking
+      // is window-only (no document in a worker) so we disable it — the
+      // worker.js side starts its own root spans (boot + per-query).
+      integrations: [
+        Sentry.browserTracingIntegration({
+          instrumentPageLoad: false,
+          instrumentNavigation: false,
+          enableLongTask: false,
+          enableInp: false,
+        }),
+      ],
       beforeSend(event) {
         scrubAuth(event);
         return event;
       },
     });
     Sentry.setTag("thread", "shell-worker");
+  },
+  startSpan(opts, callback) {
+    if (!initialized) return Promise.resolve(callback({ setStatus: () => {} }));
+    return Sentry.startSpan(
+      { name: opts.name, op: opts.op, attributes: opts.attributes },
+      async (span) => {
+        try {
+          const result = await callback({
+            setStatus: (s) => span.setStatus({ code: s === "ok" ? 1 : 2, message: s }),
+          });
+          return result;
+        } catch (err) {
+          span.setStatus({ code: 2, message: "internal_error" });
+          throw err;
+        }
+      },
+    );
   },
   captureException(err, ctx) {
     if (!initialized) return;

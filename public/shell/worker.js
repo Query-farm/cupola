@@ -390,6 +390,35 @@ async function init() {
     processPendingMessages();
 }
 
+// Wrap a query handler in a Sentry span so child spans (fetch/XHR from the
+// VGI extension and any HTTP-backed scans) attach to the query and the whole
+// transaction flushes the moment the query finishes. Falls through to the
+// raw handler when Sentry isn't available so the shell still works if the
+// bootstrap import failed.
+function runWithQuerySpan(sql, queryId, op, handler) {
+    if (!self.SentryWorker) return handler();
+    // Truncate SQL for the span name + attribute. Sentry caps attribute size,
+    // and full statements can be MBs (CREATE TABLE ... VALUES (...)).
+    const preview = sql.length > 120 ? sql.slice(0, 117) + '...' : sql;
+    return self.SentryWorker.startSpan(
+        {
+            name: preview,
+            op: 'db.' + op,
+            attributes: {
+                'db.system': 'duckdb',
+                'db.statement': sql.length > 4000 ? sql.slice(0, 4000) + '...[truncated]' : sql,
+                'db.statement.length': sql.length,
+                'shell.query_id': queryId == null ? '' : String(queryId),
+            },
+        },
+        async (span) => {
+            const r = await handler();
+            span.setStatus(r && r.ok ? 'ok' : 'error');
+            return r;
+        },
+    );
+}
+
 // Queue messages that arrive before the module is ready
 var pendingMessages = [];
 var moduleReady = false;
@@ -461,7 +490,9 @@ async function handleMessage(data) {
     if (data.type === 'query') {
         const sql = data.sql;
         const qid = data.queryId;
-        const r = await runQueryAsync(sql, { reportProgress: true, allowCancel: true });
+        const r = await runWithQuerySpan(sql, qid, 'query', () =>
+            runQueryAsync(sql, { reportProgress: true, allowCancel: true })
+        );
         if (r.arrowBuffers) {
             postMessage({ type: 'result', ok: true, arrowBuffers: r.arrowBuffers, queryId: qid }, r.arrowBuffers);
         } else {
@@ -472,7 +503,7 @@ async function handleMessage(data) {
     if (data.type === 'query-sync') {
         const sql = data.sql;
         const qid = data.queryId;
-        const r = await runQueryAsync(sql);
+        const r = await runWithQuerySpan(sql, qid, 'query-sync', () => runQueryAsync(sql));
         if (r.arrowBuffers) {
             postMessage({ type: 'result', ok: true, arrowBuffers: r.arrowBuffers, queryId: qid }, r.arrowBuffers);
         } else {
@@ -550,7 +581,23 @@ async function handleMessage(data) {
     }
 };
 
-init().catch(function(err) {
+function runInitWithSpan() {
+    if (!self.SentryWorker) return init();
+    return self.SentryWorker.startSpan(
+        { name: 'shell.boot', op: 'shell.boot' },
+        async (span) => {
+            try {
+                await init();
+                span.setStatus('ok');
+            } catch (err) {
+                span.setStatus('error');
+                throw err;
+            }
+        },
+    );
+}
+
+runInitWithSpan().catch(function(err) {
     console.error('[worker] init() failed:', err);
     postMessage({ type: 'log', msg: 'DuckDB initialization failed: ' + (err.message || err), cls: 'err' });
     if (self.SentryWorker) {
