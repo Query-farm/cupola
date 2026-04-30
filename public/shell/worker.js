@@ -9,6 +9,23 @@
 var RELEASE_VERSION = self.location.pathname.match(/\/v(\d+\.\d+\.\d+)\//)?.[1] || 'unversioned';
 var WASM_BUILD_VERSION = "duckdb-1.5.1-vgi-coi-20260409-r" + RELEASE_VERSION;
 
+// Sentry — load and init before importScripts of duckdb-coi.js so WASM init
+// errors get captured. Same DSN as the main thread (the DSN is public and tied
+// to the project, not a secret). Release derived from the URL path so it
+// matches the browser's `cupola@<version>` prefix.
+try {
+    importScripts('./sentry-bootstrap.js');
+    if (self.SentryWorker) {
+        self.SentryWorker.init({
+            dsn: "https://d0991fb45d2c62f5d25db86f2985cb79@o4511299556081664.ingest.us.sentry.io/4511299558637568",
+            release: "cupola@" + RELEASE_VERSION,
+            environment: "production",
+        });
+    }
+} catch (e) {
+    console.error('[shell-worker] Sentry bootstrap failed:', e);
+}
+
 // OAuth SAB state — initialized from main thread
 var oauthSAB = null;
 var oauthInt32 = null;
@@ -383,6 +400,9 @@ var messageQueue = Promise.resolve();
 function enqueueMessage(data) {
     messageQueue = messageQueue.then(() => handleMessage(data)).catch((err) => {
         console.error('[worker] handleMessage error:', err);
+        if (self.SentryWorker) {
+            self.SentryWorker.captureException(err, { messageType: data && data.type });
+        }
     });
 }
 
@@ -533,4 +553,7 @@ async function handleMessage(data) {
 init().catch(function(err) {
     console.error('[worker] init() failed:', err);
     postMessage({ type: 'log', msg: 'DuckDB initialization failed: ' + (err.message || err), cls: 'err' });
+    if (self.SentryWorker) {
+        self.SentryWorker.captureException(err, { phase: 'init' });
+    }
 });

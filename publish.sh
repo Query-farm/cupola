@@ -66,6 +66,9 @@ if [ "${1:-}" != "--skip-commit" ]; then
 fi
 
 # ---- Build ----
+# Note: `bun run build` first runs `build:worker-sentry`, which produces
+# public/shell/sentry-bootstrap.js (importScripts'd by the classic shell
+# worker). astro build then copies it to dist/.
 echo "==> Building..."
 bun run build
 

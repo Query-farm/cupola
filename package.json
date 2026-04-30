@@ -1,13 +1,14 @@
 {
   "name": "vgi-web-frontend",
   "type": "module",
-  "version": "0.3.39",
+  "version": "0.3.40",
   "engines": {
     "node": ">=22.12.0"
   },
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
+    "build:worker-sentry": "bun build src/worker-sentry-bootstrap.ts --outfile public/shell/sentry-bootstrap.js --target browser --format=iife --minify",
+    "dev": "bun run build:worker-sentry && astro dev",
+    "build": "bun run build:worker-sentry && astro build",
     "preview": "astro preview",
     "deploy": "./deploy.sh",
     "publish": "./publish.sh",
