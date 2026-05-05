@@ -373,7 +373,8 @@ async function init() {
     });
     mark('settings');
 
-    const exts = ['json', 'icu', 'autocomplete', 'spatial', 'vgi'];
+    // TEMP: 'spatial' disabled — re-add to re-enable.
+    const exts = ['json', 'icu', 'autocomplete', /* 'spatial', */ 'vgi'];
     const failed = [];
     for (let i = 0; i < exts.length; i++) {
         const ext = exts[i];

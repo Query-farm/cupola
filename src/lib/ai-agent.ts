@@ -8,6 +8,10 @@ import type { CatalogData } from "./service";
 import { getColumns, getForeignKeys } from "./service";
 import { filterTagsForAI, TAG_DESCRIPTION_LLM, TAG_DESCRIPTION_MD, TAG_EXAMPLE_QUERIES } from "./tags";
 
+// TEMP: keep in sync with the extension list in public/shell/worker.js.
+// Flip to true to re-enable spatial-aware prompting once the extension is loaded again.
+const SPATIAL_ENABLED = false;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -192,7 +196,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `* Never perform arithmetic outside SQL.`,
     `* Never combine results from separate queries in prose — use JOINs or CTEs.`,
     `* Never use two-part or bare table names — always use \`catalog.schema.table\`.`,
-    `* Never use \`ST_Area()\`, \`ST_Distance()\`, or \`ST_Length()\` for real-world measurements (see Spatial section below).`,
+    ...(SPATIAL_ENABLED ? [`* Never use \`ST_Area()\`, \`ST_Distance()\`, or \`ST_Length()\` for real-world measurements (see Spatial section below).`] : []),
     `* Never attempt to LOAD or INSTALL extensions. Only the loaded extensions listed below are available.`,
     ``,
     `## Object naming: catalog → schema → table`,
@@ -237,7 +241,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `## Attached catalogs`,
     ``,
     `### ${cat}`,
-    `Loaded extensions: json, icu, spatial`,
+    `Loaded extensions: json, icu${SPATIAL_ENABLED ? ", spatial" : ""}`,
   ];
 
   // Catalog-level description for AI context
@@ -299,18 +303,20 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
   }
 
   // Spatial section
-  lines.push(`## Spatial data (${cat} catalog)`);
-  lines.push(``);
-  lines.push(`Geometry columns are WGS84 (EPSG:4326) in WKB format. Coordinates are longitude/latitude in degrees.`);
-  lines.push(``);
-  lines.push(`| Need | Wrong (degrees) | Right (meters) |`);
-  lines.push(`|------|----------------|----------------|`);
-  lines.push(`| Distance | \`ST_Distance\` | \`ST_Distance_Spheroid\` |`);
-  lines.push(`| Area | \`ST_Area\` | \`ST_Area_Spheroid\` |`);
-  lines.push(`| Length | \`ST_Length\` | \`ST_Length_Spheroid\` |`);
-  lines.push(``);
-  lines.push(`Alternative: transform to a projected CRS first, then use the plain functions:`);
-  lines.push(`\`ST_Transform(geom, 'EPSG:4326', 'EPSG:32617')\` — UTM zone 17N`);
+  if (SPATIAL_ENABLED) {
+    lines.push(`## Spatial data (${cat} catalog)`);
+    lines.push(``);
+    lines.push(`Geometry columns are WGS84 (EPSG:4326) in WKB format. Coordinates are longitude/latitude in degrees.`);
+    lines.push(``);
+    lines.push(`| Need | Wrong (degrees) | Right (meters) |`);
+    lines.push(`|------|----------------|----------------|`);
+    lines.push(`| Distance | \`ST_Distance\` | \`ST_Distance_Spheroid\` |`);
+    lines.push(`| Area | \`ST_Area\` | \`ST_Area_Spheroid\` |`);
+    lines.push(`| Length | \`ST_Length\` | \`ST_Length_Spheroid\` |`);
+    lines.push(``);
+    lines.push(`Alternative: transform to a projected CRS first, then use the plain functions:`);
+    lines.push(`\`ST_Transform(geom, 'EPSG:4326', 'EPSG:32617')\` — UTM zone 17N`);
+  }
 
   return lines.join("\n");
 }
