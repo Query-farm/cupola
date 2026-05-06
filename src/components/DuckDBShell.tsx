@@ -53,10 +53,19 @@ interface Props {
    * would just produce the same error.
    */
   onAuthError?: (title: string, message: string) => void;
+  /**
+   * Called when ATTACH fails for a non-auth reason — typically a malformed
+   * or unrecognized option in the user-supplied connection options. The
+   * parent surfaces this in a modal so users notice even if the shell is
+   * minimized.
+   */
+  onAttachError?: (title: string, message: string) => void;
   /** In-memory DuckDB catalog (for geo-detection of Map tab). */
   memoryCatalog?: CatalogData | null;
   /** Attached catalogs (for geo-detection of Map tab). */
   attachedCatalogs?: CatalogData[];
+  /** Free-form raw SQL fragment to splice into the ATTACH parens. */
+  attachOptions?: string;
 }
 
 // CDN script URLs (matching public/shell/index.html versions)
@@ -107,7 +116,7 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShellReady, catalogData, selection, onAuthError, memoryCatalog, attachedCatalogs }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShellReady, catalogData, selection, onAuthError, onAttachError, memoryCatalog, attachedCatalogs, attachOptions }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const perspectiveRef = useRef<HTMLDivElement>(null);
@@ -246,9 +255,9 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         console.log("[shell] Initializing DuckDB shell, token:", shellToken ? shellToken.substring(0, 20) + "..." : "NONE");
         const { cleanup, insertText } = initShell(
           containerRef.current,
-          { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, autoRestoreSession: settings.autoRestoreSession, threadCount: resolveThreadCount(settings.shellThreads), catalogData, aiApiKey: settings.anthropicApiKey, aiModel: settings.aiModel },
+          { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, autoRestoreSession: settings.autoRestoreSession, threadCount: resolveThreadCount(settings.shellThreads), catalogData, aiApiKey: settings.anthropicApiKey, aiModel: settings.aiModel, attachOptions },
           { tableFromIPC, Readline },
-          { onAuthError }
+          { onAuthError, onAttachError }
         );
         cleanupRef.current = cleanup;
         onShellReady?.(insertText);
@@ -803,11 +812,11 @@ function QueryCard({ entry, compact, onRerun }: { entry: QueryHistoryEntry; comp
 
 function initShell(
   container: HTMLElement,
-  config: { serviceUrl: string; catalogName: string; token: string | null; fontSize?: number; autoRestoreSession?: boolean; threadCount?: number; catalogData?: CatalogData; aiApiKey?: string; aiModel?: string },
+  config: { serviceUrl: string; catalogName: string; token: string | null; fontSize?: number; autoRestoreSession?: boolean; threadCount?: number; catalogData?: CatalogData; aiApiKey?: string; aiModel?: string; attachOptions?: string },
   modules: { tableFromIPC: any; Readline: any },
-  callbacks: { onAuthError?: (title: string, message: string) => void } = {}
+  callbacks: { onAuthError?: (title: string, message: string) => void; onAttachError?: (title: string, message: string) => void } = {}
 ): { cleanup: () => void; insertText: (text: string) => void } {
-  const { onAuthError } = callbacks;
+  const { onAuthError, onAttachError } = callbacks;
   const { tableFromIPC, Readline } = modules;
   const T = (window as any).Terminal;
   const FA = (window as any).FitAddon;
@@ -1004,6 +1013,10 @@ function initShell(
     if (oauthMeta?.refreshToken) {
       sql += `, oauth_refresh_token '${esc(oauthMeta.refreshToken)}'`;
     }
+    const userOpts = config.attachOptions?.trim().replace(/^,\s*/, "");
+    if (userOpts) {
+      sql += `, ${userOpts}`;
+    }
     return sql + `)`;
   }
 
@@ -1038,6 +1051,10 @@ function initShell(
       redirectToAuth(config.serviceUrl);
       return "redirected";
     }
+    // Non-auth ATTACH failure (typically a malformed user-supplied option).
+    // Surface via modal so users notice with the shell minimized; the
+    // terminal also receives the error via the caller's writeln fallback.
+    onAttachError?.(title, errStr);
     return "unhandled";
   }
 

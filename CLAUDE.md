@@ -40,6 +40,30 @@ http://localhost:4321/?service=http://localhost:9003
 
 The `?service=` parameter tells the frontend which VGI server to connect to. Without it, falls back to `window.location.origin`.
 
+## URL Parameters
+
+The app reads the following parameters from the URL. VGI servers issuing the redirect can populate any of them.
+
+### Query string (`?...`)
+
+| Parameter | Purpose | Read by |
+|-----------|---------|---------|
+| `service` | VGI server base URL. When absent, the welcome / connect page is shown instead of attempting to fetch a catalog. | `getServiceUrl()` / `hasExplicitService()` in `src/lib/service.ts` |
+| `attach_options` | Raw SQL fragment spliced into the DuckDB `ATTACH` statement after `LOCATION` (e.g. `opt_string 'hello', opt_int64 42`). Takes precedence over the localStorage value, and is persisted via `saveRecentService` so a later visit without the param keeps it. An explicit empty value clears any saved options. | `getAttachOptionsFromUrl()` in `src/lib/service.ts`, applied in `CatalogApp.tsx` |
+| `ai_key` | Anthropic API key for the AI agent. Also accepted in the URL fragment (see below — fragments aren't sent to servers, so prefer that form). Merged into `settings.anthropicApiKey`, persisted to localStorage, and **stripped from the URL via `replaceState`** on first read so it doesn't linger in browser history or get sent as a referrer. Treat it as one-shot: passing the param overwrites any previously stored key. The query-string form takes precedence if both are set. | `loadSettings()` + `SettingsProvider` in `src/lib/settings.tsx` |
+| `theme` | URL of a theme JSON file (colors + optional logo + terminal theme). Cached in localStorage so subsequent loads can apply it before first paint. | `getThemeUrl()` / `loadTheme()` in `src/lib/theme.ts`; pre-paint application in `src/layouts/Layout.astro` |
+| `fresh` | Presence (no value needed) clears any corrupted DuckDB session snapshot for this service before the worker boots. Use to recover from a bad auto-saved session. | `DuckDBShell.tsx` |
+| `kepler` | `kepler=1` force-enables the Kepler.gl map tab without toggling the setting (the setting is `enableKeplerMap`). | `DuckDBShell.tsx` |
+
+### URL fragment (`#...`)
+
+| Fragment | Purpose | Read by |
+|----------|---------|---------|
+| `#token=...&refresh_token=...&token_endpoint=...&client_id=...&client_secret=...&use_id_token=true` | OAuth tokens injected by a VGI server's auth redirect. The token is cached in memory and **only these auth keys** are stripped from the fragment — any other key=value pairs (e.g. `ai_key`) are preserved so they can be consumed by their own readers. | `src/lib/auth.ts` |
+| `#ai_key=...` | Anthropic API key. Equivalent to the `?ai_key=` query param but safer (fragments aren't sent to servers / referrer headers). Can be combined with the auth bundle in a single fragment, e.g. `#token=…&refresh_token=…&ai_key=…`. Stripped from the URL after consumption; other fragment keys are preserved. | `src/lib/settings.tsx` |
+| `#/schema/<s>/table/<t>` (and similar) | Selection routing — restores the sidebar selection on load and updates as the user navigates. Supports browser back/forward via `pushState` + `popstate`. | `hashToSelection()` / `pushSelectionToUrl()` in `src/lib/navigation.ts` |
+| `#prefill=<service-url>` | Prefills the welcome page's `ConnectForm` with a URL (and any saved `attachOptions`) without auto-connecting. Used by the "Edit connection options" button on the attach-error modal. The hash is cleared after consumption. | `ConnectForm` in `src/components/CatalogApp.tsx` |
+
 ## Stack
 
 - **Astro 6** — static site framework, outputs to Cloudflare Pages

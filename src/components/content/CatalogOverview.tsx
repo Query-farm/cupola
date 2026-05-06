@@ -14,10 +14,11 @@ import { CatalogIdentityCard } from "./CatalogIdentityCard";
 interface Props {
   catalog: CatalogData;
   serviceUrl: string;
+  attachOptions?: string;
   onNavigate: (selection: Selection) => void;
 }
 
-export function CatalogOverview({ catalog, serviceUrl, onNavigate }: Props) {
+export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate }: Props) {
   const { settings } = useSettings();
   const { identity, loading: identityLoading } = useCatalogIdentity(catalog.catalogName, serviceUrl);
   const totalTables = catalog.schemas.reduce((sum, s) => {
@@ -59,7 +60,7 @@ export function CatalogOverview({ catalog, serviceUrl, onNavigate }: Props) {
 
       <CatalogIdentityCard identity={identity} loading={identityLoading} />
 
-      <ConnectBox catalogName={catalog.catalogName} serviceUrl={serviceUrl} />
+      <ConnectBox catalogName={catalog.catalogName} serviceUrl={serviceUrl} attachOptions={attachOptions} />
 
       {catalog.schemas.length > 0 && (
         <>

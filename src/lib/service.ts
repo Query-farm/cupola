@@ -70,6 +70,17 @@ export function hasExplicitService(): boolean {
   return new URLSearchParams(window.location.search).has("service");
 }
 
+/** Read the `?attach_options=` URL parameter, if present.
+ *  Returns `undefined` when the param is absent (caller should fall back to
+ *  the localStorage value), or the (possibly empty) decoded string when set.
+ *  An explicit empty value clears any previously saved options. */
+export function getAttachOptionsFromUrl(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has("attach_options")) return undefined;
+  return params.get("attach_options") ?? "";
+}
+
 /** Extract column info from a TableInfo's serialized Arrow schema bytes.
  *  Also supports a pre-built _columnInfo override (used for in-memory tables). */
 export function getColumns(table: TableInfo): ColumnInfo[] {

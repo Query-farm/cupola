@@ -5,11 +5,18 @@ import { Button } from "@/components/ui/button";
 interface Props {
   catalogName: string;
   serviceUrl: string;
+  attachOptions?: string;
 }
 
-export function ConnectBox({ catalogName, serviceUrl }: Props) {
+function normalizeOptions(raw?: string): string {
+  return raw ? raw.trim().replace(/^,\s*/, "") : "";
+}
+
+export function ConnectBox({ catalogName, serviceUrl, attachOptions }: Props) {
   const [copied, setCopied] = useState(false);
-  const sql = `ATTACH '${catalogName}' AS ${catalogName} (TYPE vgi, LOCATION '${serviceUrl}');`;
+  const opts = normalizeOptions(attachOptions);
+  const optsFragment = opts ? `, ${opts}` : "";
+  const sql = `ATTACH '${catalogName}' AS ${catalogName} (TYPE vgi, LOCATION '${serviceUrl}'${optsFragment});`;
 
   function handleCopy() {
     navigator.clipboard.writeText(sql).then(() => {
@@ -40,6 +47,12 @@ export function ConnectBox({ catalogName, serviceUrl }: Props) {
             <span className="text-accent">'{catalogName}'</span>
             <span className="text-foreground"> AS {catalogName} (TYPE vgi, LOCATION </span>
             <span className="text-accent">'{serviceUrl}'</span>
+            {opts && (
+              <>
+                <span className="text-foreground">, </span>
+                <span className="text-accent">{opts}</span>
+              </>
+            )}
             <span className="text-foreground">);</span>
           </code>
         </pre>

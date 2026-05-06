@@ -72,8 +72,17 @@ function _extractFragmentToken(): string | null {
         });
       }
 
-      // Clean the URL — remove all auth fragment params
-      const cleanUrl = window.location.pathname + window.location.search;
+      // Clean the URL — strip just the auth keys, preserving any other
+      // fragment params (e.g. `ai_key=`) that a redirector may have bundled
+      // alongside the token.
+      params.delete("token");
+      params.delete("refresh_token");
+      params.delete("token_endpoint");
+      params.delete("client_id");
+      params.delete("client_secret");
+      params.delete("use_id_token");
+      const remaining = params.toString();
+      const cleanUrl = window.location.pathname + window.location.search + (remaining ? `#${remaining}` : "");
       history.replaceState(null, "", cleanUrl);
       return _cachedToken;
     }

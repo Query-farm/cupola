@@ -14,6 +14,8 @@ export interface RecentService {
   catalogName: string;
   /** ISO timestamp of last successful connection. */
   lastUsed: string;
+  /** Free-form raw SQL fragment spliced into the ATTACH parens after LOCATION. */
+  attachOptions?: string;
 }
 
 export function getRecentServices(): RecentService[] {
@@ -24,12 +26,39 @@ export function getRecentServices(): RecentService[] {
   return [];
 }
 
-export function saveRecentService(url: string, catalogName: string): void {
+/**
+ * Save / update a recent service entry.
+ *
+ * `attachOptions` and `catalogName` are independently preserved when the
+ * caller passes `undefined` / `""` — this lets the welcome form persist
+ * options before a catalog name is known, and lets `loadCatalog` later fill
+ * in the catalog name without clobbering the user's options.
+ */
+export function saveRecentService(
+  url: string,
+  catalogName: string,
+  attachOptions?: string,
+): void {
   try {
-    const list = getRecentServices().filter((s) => s.url !== url);
-    list.unshift({ url, catalogName, lastUsed: new Date().toISOString() });
-    localStorage.setItem(RECENT_SERVICES_KEY, JSON.stringify(list.slice(0, MAX_RECENT)));
+    const list = getRecentServices();
+    const prior = list.find((s) => s.url === url);
+    const next: RecentService = {
+      url,
+      catalogName: catalogName || prior?.catalogName || "",
+      lastUsed: new Date().toISOString(),
+      attachOptions: attachOptions !== undefined ? attachOptions : prior?.attachOptions,
+    };
+    if (next.attachOptions === "" || next.attachOptions === undefined) {
+      delete next.attachOptions;
+    }
+    const filtered = list.filter((s) => s.url !== url);
+    filtered.unshift(next);
+    localStorage.setItem(RECENT_SERVICES_KEY, JSON.stringify(filtered.slice(0, MAX_RECENT)));
   } catch {}
+}
+
+export function getAttachOptionsFor(url: string): string | undefined {
+  return getRecentServices().find((s) => s.url === url)?.attachOptions;
 }
 
 export function removeRecentService(url: string): void {

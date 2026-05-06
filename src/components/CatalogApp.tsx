@@ -1,5 +1,5 @@
-import { useEffect, useState, useMemo, useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
-import { fetchCatalog, getServiceUrl, hasExplicitService, type CatalogData, type ResolvedSchema } from "@/lib/service";
+import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
+import { fetchCatalog, getServiceUrl, getAttachOptionsFromUrl, hasExplicitService, type CatalogData, type ResolvedSchema } from "@/lib/service";
 import { fetchAttachedCatalog } from "@/lib/duckdb-catalog";
 import { tableFromIPC } from "apache-arrow";
 import { type Selection } from "@/lib/tree";
@@ -41,6 +41,7 @@ import {
   getRecentServices,
   saveRecentService,
   removeRecentService,
+  getAttachOptionsFor,
   type RecentService,
 } from "@/lib/recent-services";
 
@@ -71,6 +72,7 @@ export function CatalogApp() {
   useEffect(() => { catalogNameRef.current = data?.catalogName; }, [data?.catalogName]);
   const [logoUrl, setLogoUrl] = useState(DEFAULT_LOGO);
   const [authError, setAuthError] = useState<{ title: string; message: string } | null>(null);
+  const [attachError, setAttachError] = useState<{ title: string; message: string } | null>(null);
   // True only after client-side hydration. We use this to gate any render
   // branch that depends on `window` state — without it the SSR output (no
   // window) and the first client render (with window) diverge and React 19
@@ -336,6 +338,17 @@ export function CatalogApp() {
   }, [shellHeight]);
 
   const serviceUrl = useMemo(() => getServiceUrl(), []);
+  // `?attach_options=` URL param wins over the localStorage value and is
+  // persisted so a future visit without the param keeps the same options.
+  // An explicit empty value clears them.
+  const attachOptions = useMemo(() => {
+    const fromUrl = getAttachOptionsFromUrl();
+    if (fromUrl !== undefined && hasExplicitService()) {
+      saveRecentService(serviceUrl, "", fromUrl);
+      return fromUrl || undefined;
+    }
+    return getAttachOptionsFor(serviceUrl);
+  }, [serviceUrl]);
 
   // Tag every Sentry event with the service URL and (when known) the catalog
   // name. Lets us slice errors by tenant without putting URLs in messages.
@@ -674,7 +687,7 @@ export function CatalogApp() {
           {/* Content area — hidden when shell is maximized or fullscreen */}
           <main className={`overflow-y-auto p-6 min-h-0 ${shellMode === "maximized" || shellMode === "fullscreen" ? "h-0 overflow-hidden" : "flex-1"}`}>
             <ErrorBoundary>
-              <ContentPanel data={data} memoryCatalog={memoryCatalog} attachedCatalogs={attachedCatalogs} selection={selection} serviceUrl={serviceUrl} onNavigate={navigate} onOpenShell={() => setShellMode((m) => m === "minimized" ? "panel" : m)} shellMode={shellMode} />
+              <ContentPanel data={data} memoryCatalog={memoryCatalog} attachedCatalogs={attachedCatalogs} selection={selection} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={navigate} onOpenShell={() => setShellMode((m) => m === "minimized" ? "panel" : m)} shellMode={shellMode} />
             </ErrorBoundary>
           </main>
 
@@ -719,8 +732,10 @@ export function CatalogApp() {
                   catalogData={data}
                   selection={selection}
                   onAuthError={(title, message) => setAuthError({ title, message })}
+                  onAttachError={(title, message) => setAttachError({ title, message })}
                   memoryCatalog={memoryCatalog}
                   attachedCatalogs={attachedCatalogs}
+                  attachOptions={attachOptions}
                 />
               </div>
             </Suspense>
@@ -754,39 +769,147 @@ export function CatalogApp() {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <Dialog open={!!attachError} onOpenChange={(open) => { if (!open) setAttachError(null); }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{attachError?.title ?? "Connection failed"}</DialogTitle>
+          <DialogDescription>
+            DuckDB rejected the ATTACH statement. This is usually a malformed
+            or unrecognized entry in the connection options for this server.
+          </DialogDescription>
+        </DialogHeader>
+        {attachOptions && (
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+              Current connection options
+            </div>
+            <pre className="text-xs bg-muted p-3 rounded-md overflow-auto whitespace-pre-wrap font-mono">
+              {attachOptions}
+            </pre>
+          </div>
+        )}
+        <pre className="text-xs bg-muted p-3 rounded-md overflow-auto max-h-96 whitespace-pre-wrap font-mono">
+          {attachError?.message}
+        </pre>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => {
+              if (attachError?.message) navigator.clipboard?.writeText(attachError.message).catch(() => {});
+            }}
+          >
+            Copy
+          </Button>
+          <Button
+            onClick={() => {
+              const dest = new URL(window.location.href);
+              dest.searchParams.delete("service");
+              dest.hash = `#prefill=${encodeURIComponent(serviceUrl)}`;
+              window.location.href = dest.toString();
+            }}
+          >
+            Edit connection options
+          </Button>
+          <Button variant="ghost" onClick={() => setAttachError(null)}>Dismiss</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     </SettingsProvider>
   );
 }
 
-/** Small form to enter a service URL — used on both the welcome page and the explicit-service error page. */
-function ConnectForm() {
+/** Small form to enter a service URL — used on both the welcome page and the explicit-service error page.
+ *
+ * Imperative handle lets parents (e.g. the recent-services list on the welcome
+ * page) prefill the URL/options fields without navigating, so users coming
+ * back via the "Edit connection options" modal land on a populated form.
+ */
+export interface ConnectFormHandle {
+  prefill: (url: string) => void;
+}
+
+const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
   const [url, setUrl] = useState("");
+  const [options, setOptions] = useState("");
+
+  // Apply ?#prefill=<url> hash on mount — used by the attach-error modal's
+  // "Edit connection options" button to bring the user back to a populated
+  // form without invoking ?service= (which would auto-connect).
+  useEffect(() => {
+    const m = window.location.hash.match(/^#prefill=(.+)$/);
+    if (m) {
+      try {
+        const target = decodeURIComponent(m[1]);
+        const found = getRecentServices().find((s) => s.url === target);
+        if (found) {
+          setUrl(found.url);
+          setOptions(found.attachOptions ?? "");
+        } else {
+          setUrl(target);
+        }
+      } catch {}
+      // Clean the hash so reload doesn't keep prefilling.
+      try { history.replaceState(null, "", window.location.pathname + window.location.search); } catch {}
+    }
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    prefill: (target: string) => {
+      const found = getRecentServices().find((s) => s.url === target);
+      setUrl(target);
+      setOptions(found?.attachOptions ?? "");
+    },
+  }), []);
+
   const connect = () => {
     const trimmed = url.trim();
     if (!trimmed) return;
+    const optsTrimmed = options.trim();
+    // Persist options (and clear them when blank) before redirect so the
+    // shell can pick them up via getAttachOptionsFor on the next page load.
+    saveRecentService(trimmed, "", optsTrimmed);
     const dest = new URL(window.location.href);
     dest.searchParams.set("service", trimmed);
+    dest.hash = "";
     window.location.href = dest.toString();
   };
   return (
-    <div className="flex gap-2 max-w-md mx-auto">
-      <input
-        type="url"
-        value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && connect()}
-        placeholder="https://my-server.example.com"
-        className="flex-1 px-3 py-2 rounded-md border border-input bg-card text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-      />
-      <button
-        onClick={connect}
-        className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-accent transition-colors"
-      >
-        Connect
-      </button>
+    <div className="flex flex-col gap-2 max-w-md mx-auto">
+      <div className="flex gap-2">
+        <input
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && connect()}
+          placeholder="https://my-server.example.com"
+          className="flex-1 px-3 py-2 rounded-md border border-input bg-card text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+        <button
+          onClick={connect}
+          className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-accent transition-colors"
+        >
+          Connect
+        </button>
+      </div>
+      <details className="group">
+        <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground select-none">
+          Connection options (optional)
+        </summary>
+        <textarea
+          value={options}
+          onChange={(e) => setOptions(e.target.value)}
+          placeholder="e.g. opt_string 'hello', opt_int64 42, opt_bool true"
+          rows={3}
+          spellCheck={false}
+          className="mt-2 w-full px-3 py-2 rounded-md border border-input bg-card text-foreground text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring resize-y"
+        />
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Spliced into the DuckDB ATTACH statement after <code className="font-mono">LOCATION</code>. Comma-separate entries.
+        </p>
+      </details>
     </div>
   );
-}
+});
 
 /** Welcome page shown when no ?service= parameter is provided. */
 function WelcomePage({ logoUrl }: { logoUrl: string }) {
@@ -796,6 +919,7 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
   // hydration. Without this, React #418 fires due to SSR/client mismatch.
   const [recent, setRecent] = useState<RecentService[]>([]);
   const [origin, setOrigin] = useState("");
+  const formRef = useRef<ConnectFormHandle>(null);
   useEffect(() => {
     setRecent(getRecentServices());
     setOrigin(window.location.origin);
@@ -806,10 +930,18 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
     setRecent(getRecentServices());
   };
 
-  const connectTo = (url: string) => {
-    const dest = new URL(window.location.href);
-    dest.searchParams.set("service", url);
-    window.location.href = dest.toString();
+  // Clicking a recent server prefills the form (so the user can review or
+  // tweak its options before connecting) rather than auto-navigating.
+  // Holding shift bypasses the prefill and connects directly, preserving
+  // the previous one-click behavior.
+  const connectTo = (url: string, e?: React.MouseEvent) => {
+    if (e?.shiftKey) {
+      const dest = new URL(window.location.href);
+      dest.searchParams.set("service", url);
+      window.location.href = dest.toString();
+      return;
+    }
+    formRef.current?.prefill(url);
   };
 
   return (
@@ -833,7 +965,7 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
 
         <div className="bg-card rounded-lg border border-border p-6 mb-6">
           <h2 className="text-sm font-semibold text-foreground mb-3">Connect to a VGI service</h2>
-          <ConnectForm />
+          <ConnectForm ref={formRef} />
         </div>
 
         {recent.length > 0 && (
@@ -843,11 +975,17 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
               {recent.map((s) => (
                 <li key={s.url} className="flex items-center gap-2 group">
                   <button
-                    onClick={() => connectTo(s.url)}
+                    onClick={(e) => connectTo(s.url, e)}
+                    title={s.attachOptions ? `Has connection options · shift-click to connect immediately` : "Shift-click to connect immediately"}
                     className="flex-1 text-left px-3 py-2 rounded-md hover:bg-muted transition-colors min-w-0"
                   >
                     <span className="block text-sm font-medium text-primary truncate">{s.catalogName}</span>
                     <span className="block text-xs text-muted-foreground truncate">{s.url}</span>
+                    {s.attachOptions && (
+                      <span className="block text-[11px] text-muted-foreground/80 truncate font-mono">
+                        {s.attachOptions}
+                      </span>
+                    )}
                   </button>
                   <button
                     onClick={() => handleRemove(s.url)}
@@ -888,6 +1026,7 @@ function ContentPanel({
   attachedCatalogs,
   selection,
   serviceUrl,
+  attachOptions,
   onNavigate,
   onOpenShell,
   shellMode,
@@ -897,6 +1036,7 @@ function ContentPanel({
   attachedCatalogs?: CatalogData[];
   selection: Selection | null;
   serviceUrl: string;
+  attachOptions?: string;
   onNavigate: (selection: Selection) => void;
   onOpenShell?: () => void;
   shellMode?: string;
@@ -907,9 +1047,9 @@ function ContentPanel({
     }
     const attached = selection?.catalog && attachedCatalogs?.find((c) => c.catalogName === selection.catalog);
     if (attached) {
-      return <CatalogOverview catalog={attached} serviceUrl={serviceUrl} onNavigate={onNavigate} />;
+      return <CatalogOverview catalog={attached} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;
     }
-    return <CatalogOverview catalog={data} serviceUrl={serviceUrl} onNavigate={onNavigate} />;
+    return <CatalogOverview catalog={data} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;
   }
 
   // Determine which catalog to search
@@ -919,7 +1059,7 @@ function ContentPanel({
       ?? data;
 
   const schema = catalog.schemas.find((s) => s.info.name === selection.schema);
-  if (!schema) return <CatalogOverview catalog={data} serviceUrl={serviceUrl} onNavigate={onNavigate} />;
+  if (!schema) return <CatalogOverview catalog={data} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;
 
   if (selection.type === "schema") {
     return <SchemaDetail schema={schema} onNavigate={onNavigate} catalogName={catalog.catalogName} onOpenShell={onOpenShell} />;
@@ -945,5 +1085,5 @@ function ContentPanel({
     if (macro) return <MacroDetail macro={macro} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onNavigate} />;
   }
 
-  return <CatalogOverview catalog={data} serviceUrl={serviceUrl} onNavigate={onNavigate} />;
+  return <CatalogOverview catalog={data} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;
 }
