@@ -1152,15 +1152,23 @@ function initShell(
       beforeUnloadHandler = () => { autoSave(); };
       window.addEventListener("beforeunload", beforeUnloadHandler);
 
-      // Query DuckDB's timezone setting for timestamp_tz formatting
+      // Sync timezone: push the browser's IANA zone (e.g. "America/New_York")
+      // into DuckDB and into the format renderer. DuckDB-WASM defaults to a
+      // fixed-offset zone like "Etc/GMT+5" which doesn't observe DST, so
+      // timestamp_tz values render off by an hour during DST. The browser's
+      // Intl-resolved zone is the one users expect to see.
       try {
-        const tzResult = await runQueryAsync("SELECT current_setting('TimeZone') as tz");
-        if (tzResult.ok && tzResult.arrowBuffers?.length) {
-          const tzTable = tableFromIPC(tzResult.arrowBuffers[0]);
-          const tzVal = tzTable.getChildAt(0)?.get(0);
-          if (tzVal) {
-            const { setDuckDBTimezone } = await import("@/lib/format");
-            setDuckDBTimezone(String(tzVal));
+        const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const { setDuckDBTimezone } = await import("@/lib/format");
+        if (browserTz) {
+          await runQueryAsync(`SET TimeZone='${browserTz.replace(/'/g, "''")}'`);
+          setDuckDBTimezone(browserTz);
+        } else {
+          const tzResult = await runQueryAsync("SELECT current_setting('TimeZone') as tz");
+          if (tzResult.ok && tzResult.arrowBuffers?.length) {
+            const tzTable = tableFromIPC(tzResult.arrowBuffers[0]);
+            const tzVal = tzTable.getChildAt(0)?.get(0);
+            if (tzVal) setDuckDBTimezone(String(tzVal));
           }
         }
       } catch { /* ignore — will fall back to browser timezone */ }
