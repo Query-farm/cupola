@@ -140,7 +140,7 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
     const catalogs = await client.catalogs();
     const catalogName = catalogs[0] ?? "unknown";
     const attach = await client.catalogAttach(catalogName);
-    const attachId = attach.attach_id;
+    const attachId = attach.attach_opaque_data;
     const defaultSchema = attach.default_schema ?? null;
     const catalogComment = attach.comment ?? null;
     const catalogTags = attach.tags ?? {};

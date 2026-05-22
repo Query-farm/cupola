@@ -85,11 +85,23 @@ export function tmpdir(): string { return "/tmp"; }
 export function homedir(): string { return "/"; }
 export function platform(): string { return "browser"; }
 export const sep = "/";
+export const delimiter = ":";
 export function join(...parts: string[]): string { return parts.join("/"); }
 export function resolve(...parts: string[]): string { return parts.join("/"); }
 export function dirname(p: string): string { return p.split("/").slice(0, -1).join("/"); }
 export function basename(p: string): string { return p.split("/").pop() ?? ""; }
 export function extname(p: string): string { const i = p.lastIndexOf("."); return i >= 0 ? p.slice(i) : ""; }
+export function normalize(p: string): string { return p; }
+export function isAbsolute(p: string): boolean { return p.startsWith("/"); }
+export function relative(from: string, to: string): string { return to.startsWith(from) ? to.slice(from.length) : to; }
+export function parse(p: string): { root: string; dir: string; base: string; ext: string; name: string } {
+  const dir = dirname(p);
+  const base = basename(p);
+  const ext = extname(base);
+  return { root: p.startsWith("/") ? "/" : "", dir, base, ext, name: base.slice(0, base.length - ext.length) };
+}
+export const posix = { sep: "/", delimiter: ":", join, resolve, dirname, basename, extname, normalize, isAbsolute, relative, parse };
+export const win32 = posix;
 export function spawn() { throw new Error("child_process.spawn stub: not available in browser"); }
 export function execSync() { throw new Error("child_process.execSync stub: not available in browser"); }
 export function createServer() { throw new Error("net.createServer stub: not available in browser"); }
@@ -108,7 +120,8 @@ export default {
   writeSync, openSync, closeSync, readSync, unlinkSync, createWriteStream,
   constants,
   tmpdir, homedir, platform,
-  sep, join, resolve, dirname, basename, extname,
+  sep, delimiter, join, resolve, dirname, basename, extname, normalize, isAbsolute, relative, parse,
+  posix, win32,
   spawn, execSync,
   createServer,
 };
