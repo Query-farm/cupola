@@ -47,6 +47,12 @@ export function ensureDuckDB(opts: DuckDBBootOptions): Promise<void> {
 async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   const { baseUrl, onAuthUrl } = opts;
   const base = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
+  // The pthread worker URL is passed into the COI sub-worker, which then
+  // constructs `new Worker(pthreadUrl)` from its own context. Emscripten's
+  // worker spawner requires an absolute URL there — a relative path like
+  // `/v0.4.1/haybarn/...` fails with "is not a valid URL". Build absolute
+  // URLs for everything so the sub-worker's resolution is unambiguous.
+  const absBase = typeof window !== "undefined" ? `${window.location.origin}${base}` : base;
   const t0 = performance.now();
   bridge.workerCreateStart = t0;
   const timings: { phase: string; ms: number }[] = [];
@@ -59,17 +65,17 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
 
   const BUNDLES: duckdb.DuckDBBundles = {
     mvp: {
-      mainModule: `${base}haybarn/duckdb-mvp.wasm`,
-      mainWorker: `${base}haybarn/duckdb-browser-mvp.worker.js`,
+      mainModule: `${absBase}haybarn/duckdb-mvp.wasm`,
+      mainWorker: `${absBase}haybarn/duckdb-browser-mvp.worker.js`,
     },
     eh: {
-      mainModule: `${base}haybarn/duckdb-eh.wasm`,
-      mainWorker: `${base}haybarn/duckdb-browser-eh.worker.js`,
+      mainModule: `${absBase}haybarn/duckdb-eh.wasm`,
+      mainWorker: `${absBase}haybarn/duckdb-browser-eh.worker.js`,
     },
     coi: {
-      mainModule: `${base}haybarn/duckdb-coi.wasm`,
-      mainWorker: `${base}haybarn/duckdb-browser-coi.worker.js`,
-      pthreadWorker: `${base}haybarn/duckdb-browser-coi.pthread.worker.js`,
+      mainModule: `${absBase}haybarn/duckdb-coi.wasm`,
+      mainWorker: `${absBase}haybarn/duckdb-browser-coi.worker.js`,
+      pthreadWorker: `${absBase}haybarn/duckdb-browser-coi.pthread.worker.js`,
     },
   };
 
