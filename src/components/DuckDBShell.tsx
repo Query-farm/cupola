@@ -10,7 +10,7 @@ import { DataPreview } from "./content/DataPreview";
 import { getColumns } from "@/lib/service";
 import { isMapCapable } from "@/lib/geo-detect";
 import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
-import { getAuthToken, getOAuthMeta, redirectToAuth } from "@/lib/auth";
+import { getAuthToken, getAuthTokenForService, getOAuthMeta, redirectToAuth } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
 import { formatCellValue, safeGetArrowValue } from "@/lib/format";
 import { printBoxTable, printLineTable, type TerminalOutput } from "@/lib/shell-table-renderer";
@@ -246,7 +246,11 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
           }
         };
 
-        const shellToken = getAuthToken();
+        // Use the service-aware async path so we see SPA / sessionStorage
+        // tokens (synchronous `getAuthToken()` only checks the URL fragment
+        // and `_vgi_auth` cookie). For SPA-flow services the fragment is
+        // consumed by an earlier fetchCatalog call and never seen by us.
+        const shellToken = (await getAuthTokenForService(serviceUrl)) ?? getAuthToken();
         console.log("[shell] Initializing DuckDB shell, token:", shellToken ? shellToken.substring(0, 20) + "..." : "NONE");
         const { cleanup, insertText } = initShell(
           containerRef.current,
