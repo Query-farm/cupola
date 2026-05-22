@@ -1137,13 +1137,20 @@ function initShell(
     postReadyInvoked = true;
     currentWasmVersion = readyWasmVersion;
     (async () => {
-      // Pre-load ICU explicitly. We later do `SET TimeZone='America/...'`
-      // which would otherwise trigger ICU autoload mid-statement, and that
-      // path can deadlock the worker (an autoload-during-SET sometimes
-      // never resolves — possibly an Emscripten/sync-wait quirk against
-      // the Cloudflare-served extension fetch). Doing the install up front
-      // as its own awaited query side-steps the issue. ICU is a CORE
-      // extension so no `FROM community` clause.
+      // Disable both autoload AND autoinstall so subsequent queries can
+      // never trigger a synchronous extension fetch mid-statement. We saw
+      // `SET TimeZone='America/...'` deadlock the wasm worker when it tried
+      // to autoload ICU during the SET — an Emscripten/sync-wait quirk
+      // against Cloudflare-served extensions. With both disabled, missing
+      // extensions surface as a normal SQL error we can route through
+      // try/catch, and the only way an extension gets loaded is via our
+      // explicit INSTALL/LOAD calls below.
+      await bridge.query!("SET autoload_known_extensions = false");
+      await bridge.query!("SET autoinstall_known_extensions = false");
+
+      // Pre-load ICU explicitly so `SET TimeZone='America/...'` below has
+      // the timezone DB available. ICU is a CORE extension so no
+      // `FROM community` clause.
       writeln("Loading icu extension...", "33");
       const icuInstall = await bridge.query!("INSTALL icu");
       if (!icuInstall.ok) {
