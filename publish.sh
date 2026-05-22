@@ -118,7 +118,14 @@ for f in \
   duckdb-browser-eh.worker.js.map \
   duckdb-browser-mvp.worker.js \
   duckdb-browser-mvp.worker.js.map; do
-  cp "${HAYBARN_SRC}/${f}" "dist/haybarn/${f}"
+  # Source maps may not ship for every worker variant — tolerate missing files
+  # rather than failing the publish. The non-map worker files are required.
+  if [ -e "${HAYBARN_SRC}/${f}" ]; then
+    cp "${HAYBARN_SRC}/${f}" "dist/haybarn/${f}"
+  elif [[ "$f" != *.map ]]; then
+    echo "ERROR: required haybarn artifact missing: ${HAYBARN_SRC}/${f}" >&2
+    exit 1
+  fi
 done
 
 # Mirror the VGI extension (3 wasm variants) to our R2 so the shell stays
