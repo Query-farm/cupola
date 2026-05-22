@@ -136,18 +136,6 @@ export function SettingsModal() {
             <div className="divide-y divide-border">
               <SettingRow>
                 <SettingLabel
-                  htmlFor="auto-restore"
-                  title="Auto-restore previous session"
-                  description="Restore the last saved DuckDB session when opening the shell. You can still restore manually with .sessions."
-                />
-                <Switch
-                  id="auto-restore"
-                  checked={settings.autoRestoreSession}
-                  onCheckedChange={(checked) => updateSettings({ autoRestoreSession: checked })}
-                />
-              </SettingRow>
-              <SettingRow>
-                <SettingLabel
                   title="Font size"
                   description="Terminal font size in the SQL shell."
                 />

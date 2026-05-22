@@ -5,7 +5,6 @@ export interface Settings {
   hideTableBackingFunctions: boolean;
   hideDollarTables: boolean;
   shellFontSize: number;
-  autoRestoreSession: boolean;
   /** DuckDB WASM thread count. 0 = auto (1 for Safari, hardwareConcurrency for others). */
   shellThreads: number;
   anthropicApiKey: string;
@@ -22,7 +21,6 @@ const defaultSettings: Settings = {
   hideTableBackingFunctions: true,
   hideDollarTables: true,
   shellFontSize: 13,
-  autoRestoreSession: false,
   shellThreads: 0,
   anthropicApiKey: "",
   aiModel: "claude-sonnet-4-20250514",

@@ -71,5 +71,44 @@ export function mkdirSync(): void {}
 export function readdirSync(): string[] { return []; }
 export function statSync(): null { return null; }
 export function writeSync(): number { return 0; }
+export function openSync(): number { return 0; }
+export function closeSync(): void {}
+export function readSync(): number { return 0; }
+export function unlinkSync(): void {}
+export function createWriteStream(): Writable { return new Writable(); }
+export const constants = {} as Record<string, number>;
 
-export default { Readable, Writable, Duplex, Transform, PassThrough };
+// node:os, node:path, node:child_process stubs — required by transitively
+// pulled-in code from vgi-rpc-typescript's launcher modules that are never
+// reachable on the browser path but participate in static analysis.
+export function tmpdir(): string { return "/tmp"; }
+export function homedir(): string { return "/"; }
+export function platform(): string { return "browser"; }
+export const sep = "/";
+export function join(...parts: string[]): string { return parts.join("/"); }
+export function resolve(...parts: string[]): string { return parts.join("/"); }
+export function dirname(p: string): string { return p.split("/").slice(0, -1).join("/"); }
+export function basename(p: string): string { return p.split("/").pop() ?? ""; }
+export function extname(p: string): string { const i = p.lastIndexOf("."); return i >= 0 ? p.slice(i) : ""; }
+export function spawn() { throw new Error("child_process.spawn stub: not available in browser"); }
+export function execSync() { throw new Error("child_process.execSync stub: not available in browser"); }
+export function createServer() { throw new Error("net.createServer stub: not available in browser"); }
+export type Server = any;
+export type Socket = any;
+
+// Default export covers `import path from "node:path"` and similar default-
+// import patterns that Vite/Rollup synthesize for CJS interop. Mirror every
+// named export so `path.extname(...)` style calls work too.
+export default {
+  Readable, Writable, Duplex, Transform, PassThrough,
+  createDeflate, createInflate, createGzip, createGunzip,
+  randomBytes, createHmac, createHash, timingSafeEqual, X509Certificate,
+  createRequire,
+  readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync,
+  writeSync, openSync, closeSync, readSync, unlinkSync, createWriteStream,
+  constants,
+  tmpdir, homedir, platform,
+  sep, join, resolve, dirname, basename, extname,
+  spawn, execSync,
+  createServer,
+};

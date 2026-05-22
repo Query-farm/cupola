@@ -19,13 +19,8 @@ import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps }
 import { attachInputHandlers, type CompletionItem } from "@/lib/shell-input";
 import { bridge, recordQuery, notifyQueryChange } from "@/lib/shell-bridge";
 import * as Sentry from "@sentry/astro";
-import { ensureDuckDBWorker, resolveThreadCount } from "@/lib/duckdb-worker-boot";
+import { ensureDuckDB, resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { getTerminalTheme } from "@/lib/theme";
-import {
-  saveSession, saveAutoSave, loadSession, getAutoSave,
-  listSessions, deleteSession, decompressMemory,
-  AUTOSAVE_NAME, type SavedSession,
-} from "@/lib/session-store";
 
 const KeplerMap = lazy(() => import("./KeplerMap").then((m) => ({ default: m.KeplerMap })));
 
@@ -255,7 +250,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         console.log("[shell] Initializing DuckDB shell, token:", shellToken ? shellToken.substring(0, 20) + "..." : "NONE");
         const { cleanup, insertText } = initShell(
           containerRef.current,
-          { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, autoRestoreSession: settings.autoRestoreSession, threadCount: resolveThreadCount(settings.shellThreads), catalogData, aiApiKey: settings.anthropicApiKey, aiModel: settings.aiModel, attachOptions },
+          { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, threadCount: resolveThreadCount(settings.shellThreads), catalogData, aiApiKey: settings.anthropicApiKey, aiModel: settings.aiModel, attachOptions },
           { tableFromIPC, Readline },
           { onAuthError, onAttachError }
         );
@@ -812,7 +807,7 @@ function QueryCard({ entry, compact, onRerun }: { entry: QueryHistoryEntry; comp
 
 function initShell(
   container: HTMLElement,
-  config: { serviceUrl: string; catalogName: string; token: string | null; fontSize?: number; autoRestoreSession?: boolean; threadCount?: number; catalogData?: CatalogData; aiApiKey?: string; aiModel?: string; attachOptions?: string },
+  config: { serviceUrl: string; catalogName: string; token: string | null; fontSize?: number; threadCount?: number; catalogData?: CatalogData; aiApiKey?: string; aiModel?: string; attachOptions?: string },
   modules: { tableFromIPC: any; Readline: any },
   callbacks: { onAuthError?: (title: string, message: string) => void; onAttachError?: (title: string, message: string) => void } = {}
 ): { cleanup: () => void; insertText: (text: string) => void } {
@@ -862,9 +857,34 @@ function initShell(
       }
     };
 
-    // Tab completion + Ctrl+R reverse search (delegated to shell-input.ts)
-    shellInputHandlers = attachInputHandlers(term, rl, (text) => {
-      worker.postMessage({ type: "complete", text });
+    // Tab completion + Ctrl+R reverse search (delegated to shell-input.ts).
+    // sql_auto_complete autoloads on first call against haybarn's default
+    // repository — no explicit INSTALL/LOAD needed.
+    shellInputHandlers = attachInputHandlers(term, rl, async (text) => {
+      const q = bridge.query;
+      if (!q) {
+        shellInputHandlers?.onCompletions([]);
+        return;
+      }
+      const sql = `CALL sql_auto_complete('${text.replace(/'/g, "''")}')`;
+      const result = await q(sql);
+      const completions: CompletionItem[] = [];
+      if (result.ok && result.arrowBuffers?.length) {
+        try {
+          const table = tableFromIPC(new Uint8Array(result.arrowBuffers[0]));
+          const sugCol = table.getChild("suggestion");
+          const startCol = table.getChild("suggestion_start");
+          const scoreCol = table.getChild("suggestion_score");
+          for (let i = 0; i < table.numRows; i++) {
+            completions.push({
+              suggestion: sugCol ? String(sugCol.get(i)) : "",
+              start: startCol ? Number(startCol.get(i)) : 0,
+              score: scoreCol ? Number(scoreCol.get(i)) : 0,
+            });
+          }
+        } catch { /* ignore parse errors */ }
+      }
+      shellInputHandlers?.onCompletions(completions);
     });
 
     bridge.shellTerm = term;
@@ -933,16 +953,8 @@ function initShell(
     }
   }
 
-  // Singleton worker — shared across all DuckDBShell instances.
-  // Use Astro's BASE_URL so the worker URL carries the version prefix; this
-  // makes self.location.href inside worker.js versioned, which cascades to
-  // every downstream URL the worker derives (pthread sub-workers, wasm,
-  // extension LOAD URLs).
-  // Worker creation + SAB wiring + wasm-bytes delivery all live in
-  // ensureDuckDBWorker. It is idempotent so it's safe to call on every
-  // initShell invocation.
-  ensureDuckDBWorker(import.meta.env.BASE_URL, config.threadCount);
-  const worker = bridge.worker!;
+  // ensureDuckDB is called below inside the isNewTerminal branch (idempotent)
+  // so the boot fires lazily on first shell open, not on every initShell.
   let currentWasmVersion = "";
 
   let queryRunning = false;
@@ -950,55 +962,86 @@ function initShell(
   let maxDisplayRows = 40;
   let lastTable: any = null;
   let lastArrowBuffer: Uint8Array | null = null;
-  let lastAutoSave = 0; // timestamp of last auto-save
-  let autoSaveEnabled = true;
-  let autoSaveIntervalId: ReturnType<typeof setInterval> | null = null;
-  let beforeUnloadHandler: (() => void) | null = null;
 
-  /** Take a snapshot from the worker. */
-  function takeSnapshot(): Promise<{ memory: ArrayBuffer; size: number; connHdl: number; wasmVersion: string }> {
-    return new Promise((resolve, reject) => {
-      const handler = (e: MessageEvent) => {
-        if (e.data.type === "snapshot") {
-          worker.removeEventListener("message", handler);
-          resolve(e.data);
-        }
-      };
-      worker.addEventListener("message", handler);
-      worker.postMessage({ type: "snapshot" });
-      setTimeout(() => { worker.removeEventListener("message", handler); reject(new Error("Snapshot timed out")); }, 30000);
-    });
-  }
-
-  /** Restore a snapshot to the worker. */
-  function restoreSnapshot(memory: ArrayBuffer, size: number, snapConnHdl: number): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const handler = (e: MessageEvent) => {
-        if (e.data.type === "restored") {
-          worker.removeEventListener("message", handler);
-          resolve();
-        } else if (e.data.type === "log" && e.data.cls === "err") {
-          worker.removeEventListener("message", handler);
-          reject(new Error(e.data.msg));
-        }
-      };
-      worker.addEventListener("message", handler);
-      worker.postMessage({ type: "restore", memory, size, connHdl: snapConnHdl }, [memory]);
-      setTimeout(() => { worker.removeEventListener("message", handler); reject(new Error("Restore timed out")); }, 30000);
-    });
-  }
-
-  /** Auto-save the current session to IndexedDB. */
-  async function autoSave() {
-    if (!config.serviceUrl || !autoSaveEnabled) return;
-    try {
-      const snap = await takeSnapshot();
-      await saveAutoSave(config.serviceUrl, snap.wasmVersion, snap.memory, snap.connHdl);
-      lastAutoSave = Date.now();
-      console.log("[session] Auto-saved");
-    } catch (err) {
-      console.warn("[session] Auto-save failed:", err);
+  /** Handle the VGI extension's interactive OAuth popup request. Opens a
+   *  popup window, waits for oauth-callback.html to post the real code back
+   *  via BroadcastChannel, then writes it into the shared SAB so the
+   *  extension's blocking _duckdb_wasm_open_auth_url() returns it.
+   *
+   *  SAB protocol (see duckdb-coi.js, _duckdb_wasm_open_auth_url):
+   *    flag = 1   → byte[4..7] holds length, byte[8..] holds the code
+   *    flag = -1  → byte[4..7] holds length, byte[8..] holds the error msg
+   *    flag = 0   → extension is still waiting (Atomics.wait on this) */
+  function handleAuthUrl(url: string): void {
+    const oauthSAB = (bridge as unknown as { _oauthSAB?: SharedArrayBuffer })._oauthSAB ?? null;
+    if (!oauthSAB) {
+      console.error("[shell] No oauth SAB — can't route auth code back to extension");
+      return;
     }
+
+    const writeSab = (flag: 1 | -1, payload: string) => {
+      const int32 = new Int32Array(oauthSAB);
+      const bytes = new Uint8Array(oauthSAB);
+      const encoded = new TextEncoder().encode(payload);
+      const maxBytes = oauthSAB.byteLength - 8;
+      if (encoded.length > maxBytes) {
+        console.error(`[shell] SAB payload too large (${encoded.length} > ${maxBytes}), truncating`);
+        encoded.subarray(0, maxBytes).forEach((b, i) => { bytes[8 + i] = b; });
+        new DataView(oauthSAB).setInt32(4, maxBytes, true);
+      } else {
+        new DataView(oauthSAB).setInt32(4, encoded.length, true);
+        bytes.set(encoded, 8);
+      }
+      Atomics.store(int32, 0, flag);
+      Atomics.notify(int32, 0);
+    };
+
+    const popup = window.open(url, "_blank", "popup,width=500,height=700");
+    if (!popup) {
+      writeSab(-1, "Popup blocked by browser");
+      return;
+    }
+    console.log("[shell] Opened OAuth popup:", url.slice(0, 80));
+
+    const bc = new BroadcastChannel("vgi-oauth");
+    let settled = false;
+
+    const cleanup = () => {
+      settled = true;
+      try { bc.close(); } catch { /* already closed */ }
+      clearTimeout(timeoutTimer);
+    };
+
+    bc.onmessage = (ev: MessageEvent) => {
+      if (settled) return;
+      const m = ev.data;
+      if (!m || m.type !== "oauth-callback") return;
+      cleanup();
+      if (m.code) {
+        console.log("[shell] Received auth code from popup, delivering to extension");
+        writeSab(1, m.code);
+      } else {
+        const err = m.errorDescription || m.error || "Authentication failed";
+        console.warn("[shell] OAuth popup reported error:", err);
+        writeSab(-1, err);
+      }
+      try { popup.close(); } catch { /* already closed */ }
+    };
+
+    // We intentionally do NOT poll `popup.closed`. With COOP: same-origin
+    // (required for SharedArrayBuffer / DuckDB-WASM threads), navigating the
+    // popup cross-origin severs the browsing context group, and the
+    // disconnected WindowProxy reports `closed === true` immediately — even
+    // while the user is still mid-login. The BroadcastChannel message from
+    // oauth-callback.html (same-origin) is the only reliable signal. The
+    // timeout below bounds the worker's Atomics.wait if no callback arrives.
+    const timeoutTimer = setTimeout(() => {
+      if (settled) return;
+      cleanup();
+      console.warn("[shell] OAuth popup timed out after 60s");
+      writeSab(-1, "Authentication timed out");
+      try { popup.close(); } catch { /* already closed */ }
+    }, 60_000);
   }
 
   /** Build the ATTACH SQL for the VGI catalog, including oauth_refresh_token
@@ -1058,70 +1101,56 @@ function initShell(
     return "unhandled";
   }
 
-  // Runs the post-ready flow (snapshot restore + ATTACH + timezone query + readLoop).
-  // Called either from the worker-message handler when 'ready' arrives, or
-  // directly from below if the eager worker boot already captured ready
-  // before DuckDBShell mounted.
+  // Runs the post-ready flow (INSTALL vgi + ATTACH + timezone + readLoop).
+  // Invoked once AsyncDuckDB.instantiate has resolved and bridge.query is live.
   let postReadyInvoked = false;
   const runPostReady = (readyWasmVersion: string) => {
     if (postReadyInvoked) return;
     postReadyInvoked = true;
     currentWasmVersion = readyWasmVersion;
     (async () => {
-      // Try to restore previous session from IndexedDB
-      // ?fresh explicitly clears the saved session (escape hatch for corrupted snapshots)
-      const freshParam = new URLSearchParams(window.location.search).has("fresh");
-      if (freshParam && config.serviceUrl) {
-        try { await deleteSession(`${config.serviceUrl}::${AUTOSAVE_NAME}`); } catch { /* ignore */ }
-        writeln("Fresh start — cleared saved session.", "33");
+      // Point INSTALL FROM community at our R2-mirrored extension repository
+      // so the shell stays bootable if haybarn-extensions.query.farm has an
+      // outage. publish.sh mirrors the VGI extension wasm × 3 variants into
+      // dist/haybarn/extensions/, which the versioned R2 sync exposes at
+      // `${BASE_URL}haybarn/extensions/`. DuckDB appends the haybarn version
+      // and platform to the URL, e.g.
+      //   {extRepo}/v1.5.3/wasm_threads/vgi.duckdb_extension.wasm
+      const origin = window.location.origin;
+      const base = import.meta.env.BASE_URL;
+      const extRepo = `${origin}${base.endsWith("/") ? base.slice(0, -1) : base}/haybarn/extensions`;
+      try {
+        await bridge.query!(`SET custom_extension_repository = '${extRepo}'`);
+      } catch { /* non-fatal; falls back to default */ }
+
+      // VGI is a community extension and must be explicitly installed.
+      // Other extensions today's worker statically linked (json, icu,
+      // autocomplete, parquet) autoload on first use against the default
+      // repository; no INSTALL/LOAD needed for them.
+      writeln("Loading vgi extension...", "33");
+      const installResult = await bridge.query!("INSTALL vgi FROM community");
+      if (!installResult.ok) {
+        const errStr = installResult.error ?? "";
+        console.error("[shell] INSTALL vgi failed:", errStr);
+        writeln(`Failed to install vgi extension: ${errStr}`, "31");
+        writeln("The haybarn extension repository may be unreachable.", "31");
+        return;
       }
-      // Only auto-restore if the setting is enabled and ?fresh wasn't used
-      const shouldRestore = config.autoRestoreSession && !freshParam;
-      let restored = false;
-      if (config.serviceUrl && shouldRestore) {
-        try {
-          const autoSaveSession = await getAutoSave(config.serviceUrl);
-          if (autoSaveSession && autoSaveSession.wasmVersion === currentWasmVersion) {
-            const memory = await decompressMemory(autoSaveSession);
-            await restoreSnapshot(memory, memory.byteLength, autoSaveSession.connHdl);
-            const when = new Date(autoSaveSession.timestamp).toLocaleString();
-            writeln(`Restored previous session (saved ${when})`, "32");
-            restored = true;
-
-            if (config.catalogName && config.token) {
-              await runQueryAsync(`USE memory`);
-              const attachSql = buildAttachSql();
-              console.log("[shell] Re-attach SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
-              const reattach = await runQueryAsync(attachSql);
-              if (!reattach.ok) {
-                const errStr = reattach.error ?? "";
-                console.log("[shell] Re-attach failed:", errStr);
-                const handled = handleAttachError(errStr, "Re-attach failed");
-                if (handled === "redirected") return;
-                if (handled !== "surfaced") {
-                  writeln(`Re-attach failed: ${errStr}`, "31");
-                }
-              }
-            }
-
-            bridge.refreshMemoryTables?.();
-          }
-        } catch (err: any) {
-          console.warn("[session] Auto-restore failed:", err);
-          writeln("Previous session expired, starting fresh.", "33");
-          try {
-            await deleteSession(`${config.serviceUrl}::${AUTOSAVE_NAME}`);
-          } catch { /* ignore cleanup errors */ }
-        }
+      const loadResult = await bridge.query!("LOAD vgi");
+      if (!loadResult.ok) {
+        const errStr = loadResult.error ?? "";
+        console.error("[shell] LOAD vgi failed:", errStr);
+        writeln(`Failed to load vgi extension: ${errStr}`, "31");
+        return;
       }
 
-      if (!restored && config.serviceUrl && config.catalogName) {
+      if (config.serviceUrl && config.catalogName) {
         writeln(`Connecting to ${config.catalogName}...`, "33");
         const attachSql = buildAttachSql();
         console.log("[shell] ATTACH SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
-        const result = await runQueryAsync(attachSql);
+        const result = await bridge.query!(attachSql);
         if (result.ok) {
-          await runQueryAsync(`USE ${config.catalogName}`);
+          await bridge.query!(`USE ${config.catalogName}`);
           writeln(`Connected to ${config.catalogName}`, "32");
         } else {
           const errStr = result.error ?? "";
@@ -1133,24 +1162,11 @@ function initShell(
           }
         }
         writeln("");
-      } else if (!restored) {
+      } else {
         writeln("");
         writeln("Type SQL queries below.", "33");
         writeln("");
-      } else {
-        writeln("");
       }
-
-      // Set up periodic auto-save (every 5 minutes)
-      autoSaveIntervalId = setInterval(() => {
-        if (config.serviceUrl && Date.now() - lastAutoSave > 60_000) {
-          autoSave();
-        }
-      }, 300_000);
-
-      // Auto-save on page unload
-      beforeUnloadHandler = () => { autoSave(); };
-      window.addEventListener("beforeunload", beforeUnloadHandler);
 
       // Sync timezone: push the browser's IANA zone (e.g. "America/New_York")
       // into DuckDB and into the format renderer. DuckDB-WASM defaults to a
@@ -1161,10 +1177,10 @@ function initShell(
         const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
         const { setDuckDBTimezone } = await import("@/lib/format");
         if (browserTz) {
-          await runQueryAsync(`SET TimeZone='${browserTz.replace(/'/g, "''")}'`);
+          await bridge.query!(`SET TimeZone='${browserTz.replace(/'/g, "''")}'`);
           setDuckDBTimezone(browserTz);
         } else {
-          const tzResult = await runQueryAsync("SELECT current_setting('TimeZone') as tz");
+          const tzResult = await bridge.query!("SELECT current_setting('TimeZone') as tz");
           if (tzResult.ok && tzResult.arrowBuffers?.length) {
             const tzTable = tableFromIPC(tzResult.arrowBuffers[0]);
             const tzVal = tzTable.getChildAt(0)?.get(0);
@@ -1177,190 +1193,22 @@ function initShell(
       bridge.runQuery = runQuery;
       // Notify subscribers that bridge.query is now usable (catalog is attached)
       notifyQueryChange();
-      // Populate the sidebar with any VGI catalogs that came back with the
-      // session snapshot (or were just freshly ATTACH'd at boot).
       bridge.onAttachedCatalogsChanged?.();
       window.dispatchEvent(new Event("duckdb-ready"));
       readLoop();
     })();
   };
 
-  const workerMessageHandler = (e: MessageEvent) => {
-    const d = e.data;
-
-    if (d.type === "open-auth-url") {
-      // The DuckDB vgi extension is running its PKCE flow and needs an
-      // authorization code from the IdP. Open the authorize URL in a popup,
-      // wait for oauth-callback.html to post the real code back via
-      // BroadcastChannel, then write the code into the SAB so the
-      // extension's blocking duckdb_wasm_open_auth_url() call returns it.
-      //
-      // SAB protocol (see duckdb-coi.js:11032, _duckdb_wasm_open_auth_url):
-      //   flag = 1  → byte[4..7] holds length, byte[8..] holds the code
-      //   flag = -1 → byte[4..7] holds length, byte[8..] holds the error msg
-      //   flag = 0  → extension is still waiting (Atomics.wait on this)
-      const oauthSAB = (bridge as any)._oauthSAB as SharedArrayBuffer | null;
-      if (!oauthSAB) {
-        console.error("[shell] No oauth SAB — can't route auth code back to extension");
-        return;
-      }
-
-      const writeSab = (flag: 1 | -1, payload: string) => {
-        const int32 = new Int32Array(oauthSAB);
-        const bytes = new Uint8Array(oauthSAB);
-        const encoded = new TextEncoder().encode(payload);
-        const maxBytes = oauthSAB.byteLength - 8;
-        if (encoded.length > maxBytes) {
-          // Truncate rather than deadlock. The extension will get a garbled
-          // code and fail at ExchangeCodeForTokens, which is at least a
-          // visible error rather than a hung ATTACH.
-          console.error(`[shell] SAB payload too large (${encoded.length} > ${maxBytes}), truncating`);
-          encoded.subarray(0, maxBytes).forEach((b, i) => { bytes[8 + i] = b; });
-          new DataView(oauthSAB).setInt32(4, maxBytes, true);
-        } else {
-          new DataView(oauthSAB).setInt32(4, encoded.length, true);
-          bytes.set(encoded, 8);
-        }
-        Atomics.store(int32, 0, flag);
-        Atomics.notify(int32, 0);
-      };
-
-      const popup = window.open(d.url, "_blank", "popup,width=500,height=700");
-      if (!popup) {
-        writeSab(-1, "Popup blocked by browser");
-        return;
-      }
-      console.log("[shell] Opened OAuth popup:", (d.url as string)?.slice(0, 80));
-
-      const bc = new BroadcastChannel("vgi-oauth");
-      let settled = false;
-
-      const cleanup = () => {
-        settled = true;
-        try { bc.close(); } catch { /* already closed */ }
-        clearTimeout(timeoutTimer);
-      };
-
-      bc.onmessage = (ev: MessageEvent) => {
-        if (settled) return;
-        const m = ev.data;
-        if (!m || m.type !== "oauth-callback") return;
-        cleanup();
-        if (m.code) {
-          console.log("[shell] Received auth code from popup, delivering to extension");
-          writeSab(1, m.code);
-        } else {
-          const err = m.errorDescription || m.error || "Authentication failed";
-          console.warn("[shell] OAuth popup reported error:", err);
-          writeSab(-1, err);
-        }
-        try { popup.close(); } catch { /* already closed */ }
-      };
-
-      // We intentionally do NOT poll `popup.closed`. With COOP: same-origin
-      // (required for SharedArrayBuffer / DuckDB-WASM threads), navigating the
-      // popup cross-origin severs the browsing context group, and the
-      // disconnected WindowProxy reports `closed === true` immediately — even
-      // while the user is still mid-login. The BroadcastChannel message from
-      // oauth-callback.html (same-origin) is the only reliable signal. The
-      // timeout below bounds the worker's Atomics.wait if no callback arrives.
-      const timeoutTimer = setTimeout(() => {
-        if (settled) return;
-        cleanup();
-        console.warn("[shell] OAuth popup timed out after 60s");
-        writeSab(-1, "Authentication timed out");
-        try { popup.close(); } catch { /* already closed */ }
-      }, 60_000);
-      return;
-    }
-
-    if (d.type === "log") {
-      const colorMap: Record<string, string> = { ok: "32", err: "31", info: "33" };
-      if (d.msg) writeln(d.msg, colorMap[d.cls]);
-      return;
-    }
-
-    if (d.type === "init-status") {
-      // Render a self-updating status line while the worker warms up.
-      // Each new message overwrites the previous one via \r; on `done`
-      // we advance to a fresh line so subsequent writeln calls don't
-      // overwrite the status line.
-      const text = String(d.message ?? "");
-      term.write(`\r\x1b[36m${text}\x1b[0m\x1b[K`);
-      if (d.done) {
-        term.write("\r\x1b[K"); // clear the status line entirely
-      }
-      return;
-    }
-
-    if (d.type === "ready") {
-      runPostReady(d.wasmVersion || "");
-      return;
-    }
-
-    if (d.type === "completions") {
-      const completions: CompletionItem[] = [];
-      if (d.arrowBuffers) {
-        try {
-          for (const buf of d.arrowBuffers) {
-            const table = tableFromIPC(new Uint8Array(buf));
-            const sugCol = table.getChild("suggestion");
-            const startCol = table.getChild("suggestion_start");
-            const scoreCol = table.getChild("suggestion_score");
-            for (let i = 0; i < table.numRows; i++) {
-              completions.push({
-                suggestion: sugCol ? String(sugCol.get(i)) : "",
-                start: startCol ? Number(startCol.get(i)) : 0,
-                score: scoreCol ? Number(scoreCol.get(i)) : 0,
-              });
-            }
-          }
-        } catch { /* ignore parse errors */ }
-      }
-      shellInputHandlers?.onCompletions(completions);
-      return;
-    }
-
-    if (d.type === "progress") {
-      if (queryRunning) renderProgressBar(d.percentage);
-      // Also notify external listeners (e.g., KeplerMap loading overlay)
-      const progressCb = bridge.progress;
-      if (progressCb) progressCb(d.percentage);
-      return;
-    }
-  };
-
-  // Query execution
-  let nextQueryId = 1;
-  function runQueryAsync(sql: string): Promise<any> {
-    const queryId = nextQueryId++;
-    return new Promise((resolve) => {
-      const handler = (e: MessageEvent) => {
-        if (e.data.type === "result" && e.data.queryId === queryId) {
-          worker.removeEventListener("message", handler);
-          resolve(e.data);
-        }
-      };
-      worker.addEventListener("message", handler);
-      worker.postMessage({ type: "query", sql, queryId });
-    });
+  // Query execution. Both async (streaming-shape) and sync (single-buffer for
+  // Perspective) collapse to AsyncDuckDB.runQuery, which always returns a
+  // single File-format Arrow IPC buffer. The bridge.query path is set up by
+  // duckdb-worker-boot.ts during ensureDuckDB.
+  function runQueryAsync(sql: string): Promise<{ ok: boolean; arrowBuffers?: ArrayBuffer[]; error?: string }> {
+    const q = bridge.query;
+    if (!q) return Promise.resolve({ ok: false, error: "duckdb not ready" });
+    return q(sql);
   }
-
-  // Synchronous query — uses duckdb_web_query_run (single Arrow IPC buffer, no streaming chunks)
-  // Required by Perspective's dataSlice.fromArrowIpc() which expects the non-streaming format
-  function runQuerySync(sql: string): Promise<any> {
-    const queryId = nextQueryId++;
-    return new Promise((resolve) => {
-      const handler = (e: MessageEvent) => {
-        if (e.data.type === "result" && e.data.queryId === queryId) {
-          worker.removeEventListener("message", handler);
-          resolve(e.data);
-        }
-      };
-      worker.addEventListener("message", handler);
-      worker.postMessage({ type: "query-sync", sql, queryId });
-    });
-  }
+  const runQuerySync = runQueryAsync;
 
   // Current catalog/schema for prompt
   let currentCatalog = "";
@@ -1436,13 +1284,11 @@ function initShell(
           set maxDisplayRows(n) { maxDisplayRows = n; },
           get outputMode() { return outputMode; },
           set outputMode(m) { outputMode = m; },
-          get autoSaveEnabled() { return autoSaveEnabled; },
-          set autoSaveEnabled(v) { autoSaveEnabled = v; },
           lastTable,
           lastArrowBuffer,
           currentWasmVersion,
         };
-        const shellIO: ShellIO = { writeln, serviceUrl: config.serviceUrl, runQueryAsync, tableFromIPC, takeSnapshot, downloadFile };
+        const shellIO: ShellIO = { writeln, serviceUrl: config.serviceUrl, runQueryAsync, tableFromIPC, downloadFile };
         if (await handleDotCommand(trimmed, shellState, shellIO)) continue;
       }
 
@@ -1517,8 +1363,7 @@ function initShell(
           if (fields.length === 1 && fieldNames[0] === "Count" && table.numRows <= 1) {
             const elapsedStr = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(1)}s` : `${Math.round(elapsed)}ms`;
             writeln(`OK (${elapsedStr})`, "32");
-            // DDL — refresh sidebar, handle navigation, and auto-save
-            autoSave();
+            // DDL — refresh sidebar and handle navigation
             bridge.refreshMemoryTables?.().then?.(() => {
               const createMatch = trimmed.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
               if (createMatch) {
@@ -1661,27 +1506,29 @@ function initShell(
     }
   }
 
-  // Expose query function and catalog name for kepler.gl's DuckDB adapter
-  bridge.query = (sql: string) => runQueryAsync(sql);
-  bridge.querySync = (sql: string) => runQuerySync(sql);
+  // bridge.query and bridge.querySync are set by ensureDuckDB once AsyncDuckDB
+  // has instantiated. Only catalogName is shell-config-specific.
   bridge.catalogName = config.catalogName;
 
   if (isNewTerminal) {
-    // First initShell call this page load — attach the message handler and
-    // kick off the post-ready flow. ensureDuckDBWorker was called at the top
-    // of initShell when the user first opens the shell. If the worker already
-    // signaled ready before we get here, bridge.workerReadyData is set and
-    // we jump straight into runPostReady; otherwise the handler picks it up
-    // when it arrives.
-    worker.addEventListener("message", workerMessageHandler);
-    if (bridge.workerReadyData) {
-      const waitedMs = Math.round(performance.now() - bridge.workerCreateStart);
-      console.log(`[shell] DuckDBShell mounted with worker already ready (booted ${waitedMs}ms ago) — running post-ready flow immediately`);
-      runPostReady(bridge.workerReadyData.wasmVersion);
-    } else {
-      const elapsedMs = Math.round(performance.now() - bridge.workerCreateStart);
-      console.log(`[shell] DuckDBShell mounted, worker still initializing (${elapsedMs}ms since boot) — waiting for ready event`);
-    }
+    // First initShell call this page load — wait for ensureDuckDB to resolve
+    // (it kicked off when the shell first mounted) then run the post-ready
+    // flow once. AsyncDuckDB's instantiate is the new "ready" signal.
+    void (async () => {
+      try {
+        await ensureDuckDB({
+          baseUrl: import.meta.env.BASE_URL,
+          onAuthUrl: handleAuthUrl,
+        });
+        const elapsedMs = Math.round(performance.now() - bridge.workerCreateStart);
+        const ready = bridge.workerReadyData;
+        console.log(`[shell] DuckDBShell ready in ${elapsedMs}ms (haybarn ${ready?.wasmVersion ?? "?"})`);
+        runPostReady(ready?.wasmVersion ?? "");
+      } catch (err) {
+        console.error("[shell] ensureDuckDB failed:", err);
+        writeln(`Failed to initialize DuckDB: ${err instanceof Error ? err.message : String(err)}`, "31");
+      }
+    })();
   } else {
     // Reconnecting — readLoop is already running, re-expose runQuery
     bridge.runQuery = runQuery;
@@ -1740,13 +1587,13 @@ function initShell(
     cleanup: () => {
       resizeObserver.disconnect();
       inputTracker.dispose();
-      if (autoSaveIntervalId) clearInterval(autoSaveIntervalId);
-      if (beforeUnloadHandler) window.removeEventListener("beforeunload", beforeUnloadHandler);
       // Don't terminate shared worker or dispose shared terminal
       bridge.shellFitAddon = null;
       bridge.insertText = null;
       bridge.runQuery = null;
-      bridge.query = null;
+      // bridge.query stays set — it's owned by ensureDuckDB now, not by the
+      // shell, and other components (DataPreview, fetchColumnStats, etc.)
+      // depend on it remaining available even when the shell tab is closed.
       bridge.catalogName = null;
       notifyQueryChange();
     },

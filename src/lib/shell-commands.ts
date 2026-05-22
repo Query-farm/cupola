@@ -4,15 +4,11 @@
  */
 import { formatCellValue, safeGetArrowValue } from "@/lib/format";
 import { bridge } from "@/lib/shell-bridge";
-import {
-  saveAutoSave, deleteSession, listSessions, AUTOSAVE_NAME,
-} from "@/lib/session-store";
 
 /** Mutable shell state exposed to commands via getters/setters. */
 export interface ShellState {
   maxDisplayRows: number;
   outputMode: "box" | "line";
-  autoSaveEnabled: boolean;
   lastTable: any;
   lastArrowBuffer: Uint8Array | null;
   currentWasmVersion: string;
@@ -24,7 +20,6 @@ export interface ShellIO {
   serviceUrl: string;
   runQueryAsync: (sql: string) => Promise<any>;
   tableFromIPC: (buf: any) => any;
-  takeSnapshot: () => Promise<{ memory: ArrayBuffer; wasmVersion: string; connHdl: number }>;
   downloadFile: (table: any, format: "csv" | "excel") => Promise<void>;
 }
 
@@ -47,14 +42,12 @@ export async function handleDotCommand(trimmed: string, state: ShellState, io: S
     writeln(".ai                Enter AI mode (resumes last conversation)");
     writeln(".ai new            Start a new AI conversation");
     writeln(".ai name <text>    Name the AI conversation");
-    writeln(".save <name>       Download DuckDB snapshot as file");
-    writeln(".load              Restore DuckDB from a snapshot file");
     writeln(".mode box          Table output with box drawing (default)");
     writeln(".mode line         One field per line, vertical display");
     writeln(`.maxrows [n]       Set max display rows (current: ${state.maxDisplayRows})`);
     writeln(".download csv      Download last result as CSV");
     writeln(".download excel    Download last result as Excel (.xlsx)");
-    writeln(".reset             Clear saved session and reload with fresh database");
+    writeln(".reset             Reload with a fresh database");
     writeln(".perspective       Open last result in Perspective viewer");
     writeln(".kepler            Switch to Map tab");
     return true;
@@ -91,12 +84,7 @@ export async function handleDotCommand(trimmed: string, state: ShellState, io: S
 
   // .reset
   if (trimmed === ".reset") {
-    writeln("Clearing saved session...", "33");
-    state.autoSaveEnabled = false;
-    if (io.serviceUrl) {
-      try { await deleteSession(`${io.serviceUrl}::${AUTOSAVE_NAME}`); } catch { /* ignore */ }
-    }
-    writeln("Reloading with fresh database.", "33");
+    writeln("Reloading with a fresh database.", "33");
     window.location.reload();
     return true;
   }
@@ -131,101 +119,6 @@ export async function handleDotCommand(trimmed: string, state: ShellState, io: S
   if (trimmed === ".kepler") {
     bridge.showKepler?.();
     writeln("Switched to Map tab", "32");
-    return true;
-  }
-
-  // .save <name>
-  if (trimmed === ".save" || trimmed.startsWith(".save ")) {
-    const name = trimmed.slice(5).trim();
-    if (!name) { writeln("Usage: .save <filename>", "33"); return true; }
-    writeln("Saving snapshot...", "33");
-    try {
-      const snap = await io.takeSnapshot();
-      const compressed = await new Response(
-        new Blob([snap.memory]).stream().pipeThrough(new CompressionStream("gzip"))
-      ).arrayBuffer();
-      const header = JSON.stringify({
-        version: 1, wasmVersion: snap.wasmVersion, connHdl: snap.connHdl,
-        memorySize: snap.memory.byteLength, timestamp: new Date().toISOString(),
-      });
-      const headerBytes = new TextEncoder().encode(header + "\n");
-      const file = new Uint8Array(headerBytes.length + compressed.byteLength);
-      file.set(headerBytes, 0);
-      file.set(new Uint8Array(compressed), headerBytes.length);
-      const filename = name.endsWith(".duckdb-snap") ? name : name + ".duckdb-snap";
-      const blob = new Blob([file], { type: "application/octet-stream" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = filename; a.click();
-      URL.revokeObjectURL(url);
-      writeln(`Downloaded ${filename} (${(file.byteLength / (1024 * 1024)).toFixed(1)} MB compressed)`, "32");
-    } catch (err: any) {
-      writeln(`Save failed: ${err.message}`, "31");
-    }
-    return true;
-  }
-
-  // .load
-  if (trimmed === ".load") {
-    writeln("Select a .duckdb-snap file to restore...", "33");
-    try {
-      const file = await new Promise<File>((resolve, reject) => {
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = ".duckdb-snap";
-        input.onchange = () => input.files?.[0] ? resolve(input.files[0]) : reject(new Error("No file selected"));
-        input.oncancel = () => reject(new Error("Cancelled"));
-        input.click();
-      });
-      writeln(`Loading ${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`, "33");
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const newlineIdx = bytes.indexOf(10);
-      if (newlineIdx < 0) { writeln("Invalid snapshot file — no header found.", "31"); return true; }
-      const header = JSON.parse(new TextDecoder().decode(bytes.slice(0, newlineIdx)));
-      if (header.wasmVersion !== state.currentWasmVersion) {
-        writeln(`Snapshot was saved with a different WASM build (${header.wasmVersion}) and cannot be restored.`, "31");
-        return true;
-      }
-      if (!io.serviceUrl) { writeln("No service URL — cannot restore.", "31"); return true; }
-      const compressedData = bytes.slice(newlineIdx + 1);
-      const memory = await new Response(
-        new Blob([compressedData]).stream().pipeThrough(new DecompressionStream("gzip"))
-      ).arrayBuffer();
-      await saveAutoSave(io.serviceUrl, header.wasmVersion, memory, header.connHdl);
-      state.autoSaveEnabled = false;
-      writeln("Snapshot loaded. Reloading to restore...", "32");
-      window.location.reload();
-    } catch (err: any) {
-      if (err.message !== "Cancelled") {
-        writeln(`Load failed: ${err.message}`, "31");
-      }
-    }
-    return true;
-  }
-
-  // .sessions [delete <name>]
-  if (trimmed === ".sessions" || trimmed.startsWith(".sessions ")) {
-    const sub = trimmed.slice(9).trim();
-    if (!io.serviceUrl) { writeln("No service URL.", "31"); return true; }
-    if (sub.startsWith("delete ")) {
-      const delName = sub.slice(7).trim();
-      try {
-        await deleteSession(`${io.serviceUrl}::${delName}`);
-        writeln(`Deleted "${delName}".`, "32");
-      } catch (err: any) {
-        writeln(`Delete failed: ${err.message}`, "31");
-      }
-    } else {
-      const sessions = await listSessions(io.serviceUrl);
-      if (sessions.length === 0) { writeln("No saved sessions.", "33"); return true; }
-      writeln("Sessions:", "33");
-      for (const s of sessions) {
-        const label = s.name === AUTOSAVE_NAME ? "(auto-save)" : s.name;
-        const when = new Date(s.timestamp).toLocaleString();
-        const size = (s.sizeBytes / (1024 * 1024)).toFixed(1);
-        writeln(`  ${label}  (${when}, ${size} MB)`);
-      }
-    }
     return true;
   }
 

@@ -1,14 +1,13 @@
 {
   "name": "vgi-web-frontend",
   "type": "module",
-  "version": "0.3.48",
+  "version": "0.4.0",
   "engines": {
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build:worker-sentry": "bun build src/worker-sentry-bootstrap.ts --outfile public/shell/sentry-bootstrap.js --target browser --format=iife --minify",
-    "dev": "bun run build:worker-sentry && astro dev",
-    "build": "bun run build:worker-sentry && astro build",
+    "dev": "astro dev",
+    "build": "astro build",
     "preview": "astro preview",
     "deploy": "./deploy.sh",
     "publish": "./publish.sh",
@@ -17,6 +16,7 @@
   "dependencies": {
     "@astrojs/react": "^5.0.4",
     "@base-ui/react": "^1.3.0",
+    "@haybarn/haybarn-wasm": "^1.5.3-rc7",
     "@kepler.gl/actions": "^3.2.6",
     "@kepler.gl/components": "file:../kepler.gl/src/components/kepler.gl-components-3.2.6.tgz",
     "@kepler.gl/deckgl-arrow-layers": "file:../kepler.gl/src/deckgl-arrow-layers/kepler.gl-deckgl-arrow-layers-3.2.6.tgz",
@@ -65,7 +65,9 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@astrojs/check": "^0.9.9",
     "@playwright/test": "^1.59.1",
-    "@types/leaflet": "^1.9.21"
+    "@types/leaflet": "^1.9.21",
+    "typescript": "^6.0.3"
   }
 }

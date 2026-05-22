@@ -66,9 +66,6 @@ if [ "${1:-}" != "--skip-commit" ]; then
 fi
 
 # ---- Build ----
-# Note: `bun run build` first runs `build:worker-sentry`, which produces
-# public/shell/sentry-bootstrap.js (importScripts'd by the classic shell
-# worker). astro build then copies it to dist/.
 echo "==> Building..."
 bun run build
 
@@ -104,29 +101,50 @@ upload_with_ct() {
 # Astro's `base: /v${VERSION}/` versions URLs in HTML/JS but does NOT change
 # the dist/ output directory layout. We add v${VERSION}/ during upload.
 
-# 1) Oversized shared assets (>25MB WASMs) at the root — shared across versions.
-echo "==> Syncing oversized shared assets to R2 root..."
-aws s3 sync dist/shell/wasm/ "s3://${R2_BUCKET}/shell/wasm/" \
-  --endpoint-url "$R2_ENDPOINT" \
-  --content-type "application/wasm" \
-  --size-only --no-progress
-if [ -d "dist/shell/extensions" ]; then
-  aws s3 sync dist/shell/extensions/ "s3://${R2_BUCKET}/shell/extensions/" \
-    --endpoint-url "$R2_ENDPOINT" \
-    --content-type "application/wasm" \
-    --size-only --no-progress
-fi
+# 1) Haybarn-wasm artifacts at /haybarn/ — shared across versions. The
+#    AsyncDuckDB sub-worker fetches duckdb-{coi,eh,mvp}.wasm + the worker.js
+#    bundles from these URLs. Sourced from the installed npm package so the
+#    versions match what the frontend was built against.
+HAYBARN_SRC="node_modules/@haybarn/haybarn-wasm/dist"
+echo "==> Staging haybarn artifacts from ${HAYBARN_SRC}..."
+mkdir -p dist/haybarn
+for f in \
+  duckdb-coi.wasm duckdb-eh.wasm duckdb-mvp.wasm \
+  duckdb-browser-coi.worker.js \
+  duckdb-browser-coi.pthread.worker.js \
+  duckdb-browser-eh.worker.js \
+  duckdb-browser-mvp.worker.js; do
+  cp "${HAYBARN_SRC}/${f}" "dist/haybarn/${f}"
+done
+
+# Mirror the VGI extension (3 wasm variants) to our R2 so the shell stays
+# bootable if haybarn-extensions.query.farm has an outage. The frontend sets
+# `SET custom_extension_repository = '${origin}/haybarn/extensions'` before
+# `INSTALL vgi FROM community;` so DuckDB fetches from our mirror.
+HAYBARN_EXT_VERSION="v1.5.3"
+mkdir -p "dist/haybarn/extensions/${HAYBARN_EXT_VERSION}"
+for variant in wasm_mvp wasm_eh wasm_threads; do
+  mkdir -p "dist/haybarn/extensions/${HAYBARN_EXT_VERSION}/${variant}"
+  echo "==> Fetching vgi extension for ${variant}..."
+  curl -fsSL \
+    -o "dist/haybarn/extensions/${HAYBARN_EXT_VERSION}/${variant}/vgi.duckdb_extension.wasm" \
+    "https://haybarn-extensions.query.farm/community/${HAYBARN_EXT_VERSION}/${variant}/vgi.duckdb_extension.wasm"
+done
+
+# The dist/haybarn/ directory is staged above and picked up by the versioned
+# sync below — the worker fetches `${BASE_URL}haybarn/...` which resolves to
+# the per-version R2 prefix, so no separate shared-path upload is needed.
 
 # 2) Versioned files: explicit content-type pre-passes for types the AWS CLI
-#    misidentifies, then a broad sync for everything else.
+#    misidentifies, then a broad sync for everything else. The haybarn
+#    artifacts staged in dist/haybarn above ride along with this sync so a
+#    pinned URL serves a consistent set.
 echo "==> Syncing dist/ to R2 under ${R2_PREFIX}/..."
 upload_with_ct "*.wasm"  "application/wasm"                     "${R2_PREFIX}/"
 upload_with_ct "*.mjs"   "application/javascript; charset=utf-8" "${R2_PREFIX}/"
 upload_with_ct "*.map"   "application/json"                     "${R2_PREFIX}/"
 aws s3 sync dist/ "s3://${R2_BUCKET}/${R2_PREFIX}/" \
   --endpoint-url "$R2_ENDPOINT" \
-  --exclude "shell/wasm/*" \
-  --exclude "shell/extensions/*" \
   --size-only --no-progress
 echo "==> Synced files to R2 prefix ${R2_PREFIX}/"
 

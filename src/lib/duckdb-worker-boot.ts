@@ -1,20 +1,21 @@
-// Boot the DuckDB shell worker. Called from initShell() when the user first
-// opens the SQL Shell pane — not at page load, to avoid fetching the large
-// WASM binary in browsers that never use the shell (and to avoid Safari
-// issues with eager WASM loading).
+// Boot DuckDB on the main thread via @haybarn/haybarn-wasm's AsyncDuckDB.
 //
-// DuckDBShell still owns the full ready-time flow (restore snapshot, ATTACH,
-// timezone query, terminal output) because that depends on its config + UI
-// state. This module's only job is:
-//   1. Create the worker and wire SABs.
-//   2. Deliver the prefetched duckdb-coi.wasm bytes via transfer.
-//   3. Stash the 'ready' payload on the bridge so DuckDBShell can invoke its
-//      post-ready flow immediately if init completed before mount.
+// AsyncDuckDB runs its own sub-worker (COI/EH/MVP variant selected by
+// selectBundle). This module owns the lifecycle of that sub-worker and adapts
+// it to the project's existing `bridge.query` / `bridge.cancelQuery` contract
+// — no second worker layer, no custom wire protocol. The dependency surface
+// for the rest of the app is unchanged: consumers keep calling
+// `bridge.query(sql)` and get back `{ ok, arrowBuffers, error }`.
+//
+// Boot is invoked from CatalogApp at mount (eager) so the wasm download
+// overlaps with catalog fetch + React hydration; the shell can run as soon
+// as the user opens it.
 
-import { bridge } from "./shell-bridge";
-import { consumeDuckDBWasmBytes } from "./prefetch-duckdb";
+import * as duckdb from "@haybarn/haybarn-wasm";
 
-let booted = false;
+import { bridge, notifyQueryChange } from "./shell-bridge";
+
+let bootPromise: Promise<void> | null = null;
 
 /** Resolve the effective thread count from the settings value.
  *  0 = auto: 1 for Safari (struggles with pthread sub-workers), hardwareConcurrency for others. */
@@ -25,70 +26,141 @@ export function resolveThreadCount(settingValue: number): number {
   return navigator.hardwareConcurrency || 4;
 }
 
-export function ensureDuckDBWorker(baseUrl: string, threadCount?: number): void {
-  if (booted || bridge.worker) return;
-  booted = true;
+export interface DuckDBBootOptions {
+  /** Origin + base path for haybarn artifacts. E.g. "/v0.3.48/". */
+  baseUrl: string;
+  /** Optional: forward VGI extension's interactive OAuth popup request. */
+  onAuthUrl?: (url: string) => void;
+}
 
-  const workerCreateStart = performance.now();
-  bridge.workerCreateStart = workerCreateStart;
-  const worker = new Worker(`${baseUrl}shell/worker.js`);
-  bridge.worker = worker;
+/** Idempotent boot. Resolves when AsyncDuckDB is instantiated, a connection
+ *  is open, the cancel SAB is registered, and `bridge.query` is live. */
+export function ensureDuckDB(opts: DuckDBBootOptions): Promise<void> {
+  if (bootPromise) return bootPromise;
+  bootPromise = doBoot(opts).catch((e) => {
+    bootPromise = null; // allow retry
+    throw e;
+  });
+  return bootPromise;
+}
 
-  // SharedArrayBuffer setup — same shape as the previous inline block in
-  // DuckDBShell.initShell. The worker's onmessage checks for these message
-  // types before init() runs, so it's safe to send them at any time.
+async function doBoot(opts: DuckDBBootOptions): Promise<void> {
+  const { baseUrl, onAuthUrl } = opts;
+  const base = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
+  const t0 = performance.now();
+  bridge.workerCreateStart = t0;
+  const timings: { phase: string; ms: number }[] = [];
+  let phaseT = t0;
+  const mark = (phase: string) => {
+    const now = performance.now();
+    timings.push({ phase, ms: Math.round(now - phaseT) });
+    phaseT = now;
+  };
+
+  const BUNDLES: duckdb.DuckDBBundles = {
+    mvp: {
+      mainModule: `${base}haybarn/duckdb-mvp.wasm`,
+      mainWorker: `${base}haybarn/duckdb-browser-mvp.worker.js`,
+    },
+    eh: {
+      mainModule: `${base}haybarn/duckdb-eh.wasm`,
+      mainWorker: `${base}haybarn/duckdb-browser-eh.worker.js`,
+    },
+    coi: {
+      mainModule: `${base}haybarn/duckdb-coi.wasm`,
+      mainWorker: `${base}haybarn/duckdb-browser-coi.worker.js`,
+      pthreadWorker: `${base}haybarn/duckdb-browser-coi.pthread.worker.js`,
+    },
+  };
+
+  const bundle = await duckdb.selectBundle(BUNDLES);
+  mark("select-bundle");
+
+  const subWorker = await duckdb.createWorker(bundle.mainWorker!);
+  bridge.worker = subWorker;
+
+  // SABs go directly to the sub-worker pre-instantiate. handlePreInitMessage
+  // (shipped in @haybarn/haybarn-wasm@1.5.3-rc7) consumes both 'init-oauth-sab'
+  // and 'init-cancel-sab' before the AsyncDuckDB dispatcher sees them.
   const oauthSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(8192) : null;
   if (oauthSAB) {
-    (bridge as any)._oauthSAB = oauthSAB;
-    worker.postMessage({ type: "init-oauth-sab", sab: oauthSAB });
-  }
-
-  // Send thread count before init() runs so the worker can size its pthread pool.
-  if (threadCount !== undefined) {
-    worker.postMessage({ type: "init-threads", count: threadCount });
+    (bridge as unknown as { _oauthSAB: SharedArrayBuffer })._oauthSAB = oauthSAB;
+    subWorker.postMessage({ type: "init-oauth-sab", sab: oauthSAB });
   }
 
   const cancelSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;
-  if (cancelSAB) worker.postMessage({ type: "init-cancel-sab", sab: cancelSAB });
-
-  // Replay any user identity already known to the bridge — CatalogApp's user
-  // effect may have run before the worker booted (eager boot is at mount).
-  if (bridge.sentryUser) {
-    worker.postMessage({ type: "set-sentry-user", user: bridge.sentryUser });
-  }
-  bridge.cancelInt32 = cancelSAB ? new Int32Array(cancelSAB) : null;
+  const cancelInt32 = cancelSAB ? new Int32Array(cancelSAB) : null;
+  bridge.cancelInt32 = cancelInt32;
   bridge.cancelQuery = () => {
-    if (bridge.cancelInt32) Atomics.store(bridge.cancelInt32, 0, 1);
+    if (cancelInt32) Atomics.store(cancelInt32, 0, 1);
   };
 
-  // Deliver duckdb-coi.wasm bytes via transfer (or null to let the worker
-  // fetch it directly as a fallback).
-  void consumeDuckDBWasmBytes(baseUrl).then((bytes) => {
-    if (bytes) {
-      worker.postMessage({ type: "wasm-bytes", bytes }, [bytes]);
-    } else {
-      worker.postMessage({ type: "wasm-bytes", bytes: null });
-    }
+  // VGI extension's interactive OAuth popup fires postMessage({type:'open-auth-url',url})
+  // straight from inside the wasm via globalThis.postMessage — it bypasses
+  // AsyncDuckDBDispatcher entirely. Whitelist this specific type rather than
+  // blind-forwarding unknown messages (which would risk duplicating legit
+  // dispatcher responses).
+  if (onAuthUrl) {
+    subWorker.addEventListener("message", (e: MessageEvent) => {
+      const d = e.data as { type?: string; url?: string } | undefined;
+      if (d?.type === "open-auth-url" && typeof d.url === "string") {
+        onAuthUrl(d.url);
+      }
+    });
+  }
+
+  // Map AsyncDuckDB log entries to the existing console channel. WARNING+
+  // levels are surfaced; verbose levels are dropped to avoid spam.
+  const logger: duckdb.Logger = {
+    log(entry) {
+      if (entry.level < duckdb.LogLevel.WARNING) return;
+      const value = (entry as { value?: unknown }).value;
+      console.warn(`[haybarn ${entry.origin}/${entry.topic}]`, value ?? "");
+    },
+  };
+
+  const db = new duckdb.AsyncDuckDB(logger, subWorker);
+
+  await db.instantiate(bundle.mainModule, bundle.pthreadWorker, (p) => {
+    // Surface init progress as percentage for UX overlays (e.g. KeplerMap).
+    const pct = Number(p.percentage);
+    if (Number.isFinite(pct)) bridge.progress?.(pct);
   });
+  mark("instantiate");
 
-  // Listen for 'ready' so DuckDBShell can find out the worker finished init
-  // even if that happened before it mounted. This listener is intentionally
-  // passive — it only captures state. DuckDBShell attaches its own listener
-  // when it mounts, and the two coexist via addEventListener.
-  const readyListener = (e: MessageEvent) => {
-    const d = e.data;
-    if (d?.type !== "ready") return;
-    const mainThreadMs = Math.round(performance.now() - workerCreateStart);
-    console.log(`[shell] Worker ready in ${mainThreadMs}ms (main-thread wall clock, worker-internal: ${d.totalMs ?? "?"}ms)`);
-    if (d.timings) {
-      console.log(`[shell] phase breakdown: ${JSON.stringify(d.timings)}`);
+  const conn = await db.connect();
+  const connId = conn.useUnsafe((_db, id) => id);
+  mark("connect");
+
+  // SAB cancel — must be after instantiate. Null-checked because Safari w/o
+  // crossOriginIsolated has no SharedArrayBuffer at all; non-SAB contexts can
+  // still cancel via the message-based connection.cancelSent() path.
+  if (cancelSAB) db.registerCancelSAB(cancelSAB);
+
+  // Preserve the existing { ok, arrowBuffers, error } contract. AsyncDuckDB's
+  // runQuery returns a single Uint8Array of File-format Arrow IPC bytes —
+  // exactly what every consumer's tableFromIPC() call expects.
+  const runQueryWrapped = async (sql: string) => {
+    try {
+      const bytes = await db.runQuery(connId, sql);
+      // Detach the underlying buffer so tableFromIPC's Uint8Array view is
+      // safe even if runQuery returns a subarray of a larger arena.
+      const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      return { ok: true, arrowBuffers: [ab] };
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { ok: false, error: msg };
     }
-    bridge.workerReadyData = {
-      wasmVersion: d.wasmVersion || "",
-      totalMs: d.totalMs || 0,
-      timings: d.timings || [],
-    };
-    worker.removeEventListener("message", readyListener);
   };
-  worker.addEventListener("message", readyListener);
+  bridge.query = runQueryWrapped;
+  // Pending vs non-streaming distinction (today's `query-sync`) is moot under
+  // AsyncDuckDB.runQuery, which always returns a single File-format buffer.
+  bridge.querySync = runQueryWrapped;
+  notifyQueryChange();
+
+  const version = await db.getVersion();
+  const totalMs = Math.round(performance.now() - t0);
+  bridge.workerReadyData = { wasmVersion: version, totalMs, timings };
+  console.log(`[shell] worker ready in ${totalMs}ms (haybarn ${version})`);
+  console.log(`[shell] phase breakdown: ${JSON.stringify(timings)}`);
 }

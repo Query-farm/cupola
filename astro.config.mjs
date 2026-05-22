@@ -85,6 +85,22 @@ export default defineConfig({
                 return;
               }
             }
+            // Serve /haybarn/* in dev from node_modules so the AsyncDuckDB
+            // sub-worker can fetch the wasm/worker bundles. In production
+            // these come from R2 (publish.sh syncs them there). Same direct
+            // pipeline as /shell/wasm/ to avoid Vite transform hangs.
+            if (stripped?.startsWith('/haybarn/')) {
+              const relPath = stripped.split('?')[0].slice('/haybarn/'.length);
+              let filePath = resolve('node_modules/@haybarn/haybarn-wasm/dist/' + relPath);
+              try { filePath = realpathSync(filePath); } catch {}
+              if (existsSync(filePath)) {
+                const ext = filePath.split('.').pop();
+                const types = { js: 'application/javascript', wasm: 'application/wasm' };
+                res.setHeader('Content-Type', types[ext] || 'application/octet-stream');
+                res.end(readFileSync(filePath));
+                return;
+              }
+            }
 
             // Serve version-free public files at their root path. In production
             // these live at dist/ root (outside the version prefix), so OAuth
@@ -140,7 +156,7 @@ export default defineConfig({
       },
     },
     optimizeDeps: {
-      include: ['leaflet', 'cli-table3'],
+      include: ['leaflet', 'cli-table3', '@haybarn/haybarn-wasm'],
       exclude: ['astro'],
     },
     resolve: {
@@ -155,6 +171,10 @@ export default defineConfig({
         'node:crypto': resolve('src/lib/node-stubs.ts'),
         'node:fs': resolve('src/lib/node-stubs.ts'),
         'node:module': resolve('src/lib/node-stubs.ts'),
+        'node:os': resolve('src/lib/node-stubs.ts'),
+        'node:path': resolve('src/lib/node-stubs.ts'),
+        'node:child_process': resolve('src/lib/node-stubs.ts'),
+        'node:net': resolve('src/lib/node-stubs.ts'),
       },
     },
     // Node.js built-ins are handled by resolve.alias above — they point to
