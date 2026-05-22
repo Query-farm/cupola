@@ -111,9 +111,13 @@ mkdir -p dist/haybarn
 for f in \
   duckdb-coi.wasm duckdb-eh.wasm duckdb-mvp.wasm \
   duckdb-browser-coi.worker.js \
+  duckdb-browser-coi.worker.js.map \
   duckdb-browser-coi.pthread.worker.js \
+  duckdb-browser-coi.pthread.worker.js.map \
   duckdb-browser-eh.worker.js \
-  duckdb-browser-mvp.worker.js; do
+  duckdb-browser-eh.worker.js.map \
+  duckdb-browser-mvp.worker.js \
+  duckdb-browser-mvp.worker.js.map; do
   cp "${HAYBARN_SRC}/${f}" "dist/haybarn/${f}"
 done
 

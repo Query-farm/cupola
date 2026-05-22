@@ -82,7 +82,14 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   const bundle = await duckdb.selectBundle(BUNDLES);
   mark("select-bundle");
 
-  const subWorker = await duckdb.createWorker(bundle.mainWorker!);
+  // Bypass haybarn's `createWorker(url)` which fetches the worker.js and
+  // wraps it as a Blob URL. The Blob form has a null origin in WebKit, so
+  // the worker script's `//# sourceMappingURL=duckdb-browser-coi.worker.js.map`
+  // comment resolves to a `blob://null...` URL that Safari refuses with
+  // "Not allowed to load local resource". Our worker is served same-origin
+  // from /haybarn/ (R2 via the Cloudflare Worker), so plain `new Worker(url)`
+  // works without the Blob indirection and preserves source-map URLs.
+  const subWorker = new Worker(bundle.mainWorker!);
   bridge.worker = subWorker;
 
   // SABs go directly to the sub-worker pre-instantiate. handlePreInitMessage
