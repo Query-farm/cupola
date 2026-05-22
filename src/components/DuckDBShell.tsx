@@ -1109,21 +1109,18 @@ function initShell(
     postReadyInvoked = true;
     currentWasmVersion = readyWasmVersion;
     (async () => {
-      // Point INSTALL FROM community at our R2-mirrored extension repository
-      // so the shell stays bootable if haybarn-extensions.query.farm has an
-      // outage. publish.sh mirrors the VGI extension wasm × 3 variants into
-      // dist/haybarn/extensions/, which the versioned R2 sync exposes at
-      // `${BASE_URL}haybarn/extensions/`. DuckDB appends the haybarn version
-      // and platform to the URL, e.g.
-      //   {extRepo}/v1.5.3/wasm_threads/vgi.duckdb_extension.wasm
-      const origin = window.location.origin;
-      const base = import.meta.env.BASE_URL;
-      const extRepo = `${origin}${base.endsWith("/") ? base.slice(0, -1) : base}/haybarn/extensions`;
-      try {
-        await bridge.query!(`SET custom_extension_repository = '${extRepo}'`);
-      } catch { /* non-fatal; falls back to default */ }
-
       // VGI is a community extension and must be explicitly installed.
+      // We use the default haybarn community registry — earlier versions
+      // also set `custom_extension_repository` to a mirror under
+      // `/haybarn/extensions/`, but that mirror only carries `vgi` and
+      // redirected ALL autoinstall attempts (icu, json, parquet, etc.) to
+      // a registry that returned 404 for everything else. The default
+      // haybarn-extensions.query.farm registry covers all community
+      // extensions, including the ones DuckDB autoloads on first use.
+      // The R2 mirror (publish.sh still uploads `dist/haybarn/extensions/`)
+      // is retained as a future fallback we'd activate only by installing
+      // vgi via the explicit-URL form, not by overriding the default repo
+      // for the whole session.
       // Other extensions today's worker statically linked (json, icu,
       // autocomplete, parquet) autoload on first use against the default
       // repository; no INSTALL/LOAD needed for them.
