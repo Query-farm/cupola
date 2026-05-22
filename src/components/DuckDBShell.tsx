@@ -1044,22 +1044,46 @@ function initShell(
     }, 60_000);
   }
 
-  /** Build the ATTACH SQL for the VGI catalog, including oauth_refresh_token
-   *  if available. Pulls the refresh token from the SPA OAuth client's
-   *  sessionStorage (keyed by service origin) for SPA-flow services, or
-   *  from the legacy URL fragment for services still using the server-side
-   *  OAuth redirect. */
+  /** Build the ATTACH SQL for the VGI catalog, forwarding whichever token
+   *  the catalog fetch was already using.
+   *
+   *  Two auth shapes the frontend supports:
+   *  - SPA / PKCE popup: tokens (incl. refresh) live in sessionStorage.
+   *    `getOAuthMeta` returns {refreshToken, tokenEndpoint, clientId, ...}
+   *    which we forward as `oauth_refresh_token` so the VGI extension can
+   *    refresh on 401 without prompting again.
+   *  - Server-side redirect + cookie / URL fragment: refresh token isn't
+   *    exposed to JS — only the access token is (via the `_vgi_auth` cookie
+   *    or `#token=` fragment). Forward it as `bearer_token` so the extension
+   *    uses it as-is; once the token expires the extension falls back to
+   *    its own PKCE popup, but at least the FIRST ATTACH after sign-in
+   *    doesn't double-prompt the user.
+   *
+   *  `bearer_token` and `oauth_refresh_token` are mutually exclusive per
+   *  the VGI extension (vgi_extension.cpp:701) — refresh wins.
+   */
   function buildAttachSql(): string {
     const esc = (s: string) => s.replace(/'/g, "''");
     const oauthMeta = getOAuthMeta(config.serviceUrl);
+    // config.token is whichever bearer the catalog fetch ended up using
+    // (SPA access token, cookie, or fragment) — captured by CatalogApp
+    // when it constructed the shell config.
+    const accessToken = config.token;
     let sql = `ATTACH OR REPLACE '${esc(config.catalogName)}' AS "${config.catalogName.replace(/"/g, '""')}" (TYPE vgi, LOCATION '${esc(config.serviceUrl)}'`;
     if (oauthMeta?.refreshToken) {
       sql += `, oauth_refresh_token '${esc(oauthMeta.refreshToken)}'`;
+    } else if (accessToken) {
+      sql += `, bearer_token '${esc(accessToken)}'`;
     }
     const userOpts = config.attachOptions?.trim().replace(/^,\s*/, "");
     if (userOpts) {
       sql += `, ${userOpts}`;
     }
+    console.log("[shell] ATTACH auth:", {
+      refreshToken: oauthMeta?.refreshToken ? "<present>" : "missing",
+      bearerToken: accessToken && !oauthMeta?.refreshToken ? `<present (${accessToken.length} chars)>` : "skipped",
+      tokenEndpoint: oauthMeta?.tokenEndpoint ?? "n/a",
+    });
     return sql + `)`;
   }
 
