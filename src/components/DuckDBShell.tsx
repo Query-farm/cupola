@@ -1137,6 +1137,22 @@ function initShell(
     postReadyInvoked = true;
     currentWasmVersion = readyWasmVersion;
     (async () => {
+      // Pre-load ICU explicitly. We later do `SET TimeZone='America/...'`
+      // which would otherwise trigger ICU autoload mid-statement, and that
+      // path can deadlock the worker (an autoload-during-SET sometimes
+      // never resolves — possibly an Emscripten/sync-wait quirk against
+      // the Cloudflare-served extension fetch). Doing the install up front
+      // as its own awaited query side-steps the issue. ICU is a CORE
+      // extension so no `FROM community` clause.
+      writeln("Loading icu extension...", "33");
+      const icuInstall = await bridge.query!("INSTALL icu");
+      if (!icuInstall.ok) {
+        console.warn("[shell] INSTALL icu failed (proceeding without):", icuInstall.error);
+      } else {
+        const icuLoad = await bridge.query!("LOAD icu");
+        if (!icuLoad.ok) console.warn("[shell] LOAD icu failed (proceeding without):", icuLoad.error);
+      }
+
       // VGI is a community extension and must be explicitly installed.
       // We use the default haybarn community registry — earlier versions
       // also set `custom_extension_repository` to a mirror under
