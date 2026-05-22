@@ -1198,23 +1198,47 @@ function initShell(
       // fixed-offset zone like "Etc/GMT+5" which doesn't observe DST, so
       // timestamp_tz values render off by an hour during DST. The browser's
       // Intl-resolved zone is the one users expect to see.
-      try {
-        const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        const { setDuckDBTimezone } = await import("@/lib/format");
-        if (browserTz) {
-          await bridge.query!(`SET TimeZone='${browserTz.replace(/'/g, "''")}'`);
-          setDuckDBTimezone(browserTz);
-        } else {
-          const tzResult = await bridge.query!("SELECT current_setting('TimeZone') as tz");
-          if (tzResult.ok && tzResult.arrowBuffers?.length) {
-            const tzTable = tableFromIPC(tzResult.arrowBuffers[0]);
-            const tzVal = tzTable.getChildAt(0)?.get(0);
-            if (tzVal) setDuckDBTimezone(String(tzVal));
+      //
+      // `SET TimeZone='America/...'` autoloads the ICU community extension on
+      // first call. If that autoload hangs (bad network, repo outage), the
+      // `await` would block the post-ready flow indefinitely. Race against a
+      // 5-second timeout so the shell still comes up — worst case is
+      // timestamp display in UTC instead of the user's local zone, which is
+      // a strictly cosmetic regression.
+      console.log("[shell] syncing timezone…");
+      const tzSync = (async () => {
+        try {
+          const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          const { setDuckDBTimezone } = await import("@/lib/format");
+          if (browserTz) {
+            const r = await bridge.query!(`SET TimeZone='${browserTz.replace(/'/g, "''")}'`);
+            if (!r.ok) console.warn("[shell] SET TimeZone failed:", r.error);
+            setDuckDBTimezone(browserTz);
+            console.log("[shell] timezone set to", browserTz);
+          } else {
+            const tzResult = await bridge.query!("SELECT current_setting('TimeZone') as tz");
+            if (tzResult.ok && tzResult.arrowBuffers?.length) {
+              const tzTable = tableFromIPC(tzResult.arrowBuffers[0]);
+              const tzVal = tzTable.getChildAt(0)?.get(0);
+              if (tzVal) setDuckDBTimezone(String(tzVal));
+            }
           }
+        } catch (err) {
+          console.warn("[shell] timezone sync error:", err);
         }
-      } catch { /* ignore — will fall back to browser timezone */ }
+      })();
+      await Promise.race([
+        tzSync,
+        new Promise<void>((resolve) =>
+          setTimeout(() => {
+            console.warn("[shell] timezone sync did not complete within 5s; continuing");
+            resolve();
+          }, 5000),
+        ),
+      ]);
 
       // Shell is fully ready — expose runQuery for external callers
+      console.log("[shell] post-ready: handing off to readLoop");
       bridge.runQuery = runQuery;
       // Notify subscribers that bridge.query is now usable (catalog is attached)
       notifyQueryChange();
