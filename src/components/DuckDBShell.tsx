@@ -1163,6 +1163,7 @@ function initShell(
       // - vgi      (community) — required for the ATTACH below.
       // - iceberg  (community) — for reading Iceberg tables.
       // - spatial  (community) — for GEOMETRY columns + spatial functions.
+      // - ducklake (community) — for reading DuckLake catalogs.
       //
       // The haybarn community registry covers all these. The R2 mirror
       // (publish.sh still uploads `dist/haybarn/extensions/`) is retained
@@ -1174,6 +1175,7 @@ function initShell(
         { name: "vgi", source: "community", required: true },
         { name: "iceberg", source: "community" },
         { name: "spatial", source: "community" },
+        { name: "ducklake", source: "community" },
       ];
       for (const ext of extensions) {
         writeln(`Loading ${ext.name} extension...`, "33");
