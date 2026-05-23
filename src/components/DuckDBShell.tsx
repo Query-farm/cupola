@@ -1148,48 +1148,58 @@ function initShell(
       await bridge.query!("SET autoload_known_extensions = false");
       await bridge.query!("SET autoinstall_known_extensions = false");
 
-      // Pre-load ICU explicitly so `SET TimeZone='America/...'` below has
-      // the timezone DB available. ICU is a CORE extension so no
-      // `FROM community` clause.
-      writeln("Loading icu extension...", "33");
-      const icuInstall = await bridge.query!("INSTALL icu");
-      if (!icuInstall.ok) {
-        console.warn("[shell] INSTALL icu failed (proceeding without):", icuInstall.error);
-      } else {
-        const icuLoad = await bridge.query!("LOAD icu");
-        if (!icuLoad.ok) console.warn("[shell] LOAD icu failed (proceeding without):", icuLoad.error);
-      }
-
-      // VGI is a community extension and must be explicitly installed.
-      // We use the default haybarn community registry — earlier versions
-      // also set `custom_extension_repository` to a mirror under
-      // `/haybarn/extensions/`, but that mirror only carries `vgi` and
-      // redirected ALL autoinstall attempts (icu, json, parquet, etc.) to
-      // a registry that returned 404 for everything else. The default
-      // haybarn-extensions.query.farm registry covers all community
-      // extensions, including the ones DuckDB autoloads on first use.
-      // The R2 mirror (publish.sh still uploads `dist/haybarn/extensions/`)
-      // is retained as a future fallback we'd activate only by installing
-      // vgi via the explicit-URL form, not by overriding the default repo
-      // for the whole session.
-      // Other extensions today's worker statically linked (json, icu,
-      // autocomplete, parquet) autoload on first use against the default
-      // repository; no INSTALL/LOAD needed for them.
-      writeln("Loading vgi extension...", "33");
-      const installResult = await bridge.query!("INSTALL vgi FROM community");
-      if (!installResult.ok) {
-        const errStr = installResult.error ?? "";
-        console.error("[shell] INSTALL vgi failed:", errStr);
-        writeln(`Failed to install vgi extension: ${errStr}`, "31");
-        writeln("The haybarn extension repository may be unreachable.", "31");
-        return;
-      }
-      const loadResult = await bridge.query!("LOAD vgi");
-      if (!loadResult.ok) {
-        const errStr = loadResult.error ?? "";
-        console.error("[shell] LOAD vgi failed:", errStr);
-        writeln(`Failed to load vgi extension: ${errStr}`, "31");
-        return;
+      // Extensions to pre-load at shell startup. Each gets an explicit
+      // INSTALL + LOAD pair so no user query triggers a sync autoload.
+      // `source` is the FROM clause for the INSTALL — omitted for core
+      // extensions, `community` for community ones. `required: true` means
+      // the shell can't function without it (currently just VGI).
+      //
+      // - icu      (core)      — needed for `SET TimeZone='America/...'`
+      //                          below; otherwise it'd autoload mid-SET
+      //                          and deadlock the worker (sync wait
+      //                          against the network fetch).
+      // - json     (core)      — common in user queries; DuckDB autoloads
+      //                          it for JSON reads.
+      // - vgi      (community) — required for the ATTACH below.
+      // - iceberg  (community) — for reading Iceberg tables.
+      // - spatial  (community) — for GEOMETRY columns + spatial functions.
+      //
+      // The haybarn community registry covers all these. The R2 mirror
+      // (publish.sh still uploads `dist/haybarn/extensions/`) is retained
+      // as a future fallback we'd activate via the explicit-URL INSTALL
+      // form, not by overriding the default repo for the whole session.
+      const extensions: Array<{ name: string; source?: string; required?: boolean }> = [
+        { name: "icu" },
+        { name: "json" },
+        { name: "vgi", source: "community", required: true },
+        { name: "iceberg", source: "community" },
+        { name: "spatial", source: "community" },
+      ];
+      for (const ext of extensions) {
+        writeln(`Loading ${ext.name} extension...`, "33");
+        const fromClause = ext.source ? ` FROM ${ext.source}` : "";
+        const install = await bridge.query!(`INSTALL ${ext.name}${fromClause}`);
+        if (!install.ok) {
+          const msg = `INSTALL ${ext.name} failed: ${install.error ?? ""}`;
+          if (ext.required) {
+            console.error("[shell]", msg);
+            writeln(msg, "31");
+            writeln("The haybarn extension repository may be unreachable.", "31");
+            return;
+          }
+          console.warn("[shell]", msg, "(continuing)");
+          continue;
+        }
+        const load = await bridge.query!(`LOAD ${ext.name}`);
+        if (!load.ok) {
+          const msg = `LOAD ${ext.name} failed: ${load.error ?? ""}`;
+          if (ext.required) {
+            console.error("[shell]", msg);
+            writeln(msg, "31");
+            return;
+          }
+          console.warn("[shell]", msg, "(continuing)");
+        }
       }
 
       if (config.serviceUrl && config.catalogName) {
