@@ -1173,9 +1173,9 @@ function initShell(
         { name: "icu" },
         { name: "json" },
         { name: "vgi", source: "community", required: true },
-        { name: "iceberg", source: "community" },
-        { name: "spatial", source: "community" },
-        { name: "ducklake", source: "community" },
+        { name: "iceberg" },
+        { name: "spatial" },
+        { name: "ducklake" },
       ];
       for (const ext of extensions) {
         writeln(`Loading ${ext.name} extension...`, "33");
