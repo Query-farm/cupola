@@ -12,7 +12,25 @@ import { DataGrid } from "./DataGrid";
 import type { ColumnInfo } from "@/lib/service";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 import { safeGetArrowValue } from "@/lib/format";
-import { bridge } from "@/lib/shell-bridge";
+import { bridge, onQueryChange } from "@/lib/shell-bridge";
+
+/**
+ * Wait for `bridge.query` to be set by DuckDBShell. Resolves immediately if
+ * the bridge is already ready. Used so DataPreview doesn't fire a query
+ * (and erroneously cache a fallback ORDER BY) before the shell has finished
+ * its async boot.
+ */
+function waitForBridgeQuery(): Promise<void> {
+  if (bridge.query) return Promise.resolve();
+  return new Promise((resolve) => {
+    const unsubscribe = onQueryChange(() => {
+      if (bridge.query) {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
+}
 
 const PAGE_SIZES = [25, 50, 100, 200];
 const DEFAULT_PAGE_SIZE = 50;
@@ -59,10 +77,13 @@ async function resolveOrderBy(tablePath: string): Promise<string> {
   // the words "ORDER BY"), including ASC NULLS LAST modifiers, so the
   // caller can splice it without per-rung knowledge.
 
-  // Rung 1: rowid.
-  const probe = bridge.query
-    ? await bridge.query(`SELECT rowid FROM ${tablePath} LIMIT 1`)
-    : null;
+  // Rung 1: rowid. The caller is responsible for ensuring bridge.query is
+  // set before invoking us — otherwise the probe can't actually run and the
+  // ladder will cascade to ALL incorrectly.
+  if (!bridge.query) {
+    throw new Error("resolveOrderBy called before bridge.query was ready");
+  }
+  const probe = await bridge.query(`SELECT rowid FROM ${tablePath} LIMIT 1`);
   if (probe?.ok) {
     console.log("[preview] orderBy resolved to rowid for", tablePath);
     return "rowid ASC NULLS LAST";
@@ -144,6 +165,13 @@ export function DataPreview({ tablePath }: Props) {
     setLoading(true);
     setError(null);
     try {
+      // Wait for the DuckDB shell to finish initializing. The Preview tab
+      // can mount before bridge.query is set (shell boot is async), and we
+      // must NOT run the orderBy probe with a null bridge — it would
+      // cascade to the ALL fallback and cache that wrong choice.
+      await waitForBridgeQuery();
+      if (thisRequest !== requestIdRef.current) return; // stale, tablePath changed while waiting
+
       // Resolve ORDER BY (cached after first call per tablePath). This is
       // required for deterministic LIMIT/OFFSET; without it pages can
       // overlap or skip rows between navigations.

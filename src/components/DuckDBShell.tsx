@@ -1262,14 +1262,19 @@ function initShell(
           console.warn("[shell] timezone sync error:", err);
         }
       })();
+      // Race tzSync against a timeout. Cancel the timer when tzSync wins so
+      // the warning doesn't fire spuriously after a successful sync. A bare
+      // Promise.race + setTimeout leaks the timer and logs the warning even
+      // on success.
+      let tzTimer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
-        tzSync,
-        new Promise<void>((resolve) =>
-          setTimeout(() => {
+        tzSync.finally(() => { if (tzTimer) clearTimeout(tzTimer); }),
+        new Promise<void>((resolve) => {
+          tzTimer = setTimeout(() => {
             console.warn("[shell] timezone sync did not complete within 5s; continuing");
             resolve();
-          }, 5000),
-        ),
+          }, 5000);
+        }),
       ]);
 
       // Shell is fully ready — expose runQuery for external callers
