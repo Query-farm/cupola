@@ -20,11 +20,17 @@ export function Header({ catalogName, catalogComment, serviceUrl, logoUrl }: Pro
       <div className="flex items-center gap-3 min-w-0">
         <a
           href="https://query.farm"
-          className="font-heading font-semibold text-sm text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+          className="flex items-baseline gap-1.5 whitespace-nowrap group/brand"
           target="_blank"
           rel="noopener noreferrer"
+          title="Cupola — a Query.Farm tool"
         >
-          Query.Farm
+          <span className="font-heading font-bold text-base text-foreground group-hover/brand:text-earth-700 transition-colors">
+            <span aria-hidden="true">🚜&nbsp;</span>Cupola
+          </span>
+          <span className="hidden md:inline text-[11px] text-muted-foreground group-hover/brand:text-foreground transition-colors">
+            by Query.Farm
+          </span>
         </a>
         <span className="h-5 w-px bg-border select-none" aria-hidden="true" />
         <img

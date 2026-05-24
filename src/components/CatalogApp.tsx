@@ -901,11 +901,17 @@ function BrandShell({ children }: { children: React.ReactNode }) {
       <header className="sticky top-0 z-40 flex items-center px-4 h-14 border-b border-border bg-card/95 backdrop-blur-sm shadow-sm">
         <a
           href="https://query.farm"
-          className="font-heading font-semibold text-sm text-muted-foreground hover:text-foreground transition-colors"
+          className="flex items-baseline gap-1.5 group/brand"
           target="_blank"
           rel="noopener noreferrer"
+          title="Cupola — a Query.Farm tool"
         >
-          Query.Farm
+          <span className="font-heading font-bold text-base text-foreground group-hover/brand:text-earth-700 transition-colors">
+            <span aria-hidden="true">🚜&nbsp;</span>Cupola
+          </span>
+          <span className="hidden md:inline text-[11px] text-muted-foreground group-hover/brand:text-foreground transition-colors">
+            by Query.Farm
+          </span>
         </a>
       </header>
       {children}
@@ -1119,8 +1125,8 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
             alt="VGI logo"
             className="w-20 h-20 rounded-full shadow-lg ring-1 ring-soil-200 dark:ring-soil-700 mb-5"
           />
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-soil-400 dark:text-soil-500 mb-3">
-            VGI · Vector Gateway Interface
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-soil-500 dark:text-soil-400 mb-3">
+            <span aria-hidden="true">🚜&nbsp;</span>Cupola · A Query.Farm tool
           </div>
           <h1 className="font-heading text-4xl md:text-5xl font-bold text-soil-900 dark:text-soil-100 leading-[1.05] tracking-tight mb-3">
             Browse any VGI catalog.
