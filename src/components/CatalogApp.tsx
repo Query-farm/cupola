@@ -950,12 +950,16 @@ function ConnectingScreen({
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 text-center">
         {/* Logo + animated halo. The logo gets a slow scale pulse; the ring
             (Tailwind animate-spin) sits one layer above as a 3/4 arc in
-            harvest green so it reads clearly as motion. */}
+            harvest green so it reads clearly as motion. The image needs
+            explicit width/height because `<img>` (a replaced element)
+            doesn't stretch to fill all four insets — Chrome anchors to
+            top/left and uses intrinsic dimensions for size. So we center
+            the logo manually via top/left + transform. */}
         <div className="relative w-32 h-32 mb-6">
           <img
             src={logoUrl}
             alt="VGI"
-            className="absolute inset-2 rounded-full shadow-lg animate-cs-pulse"
+            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-28 h-28 rounded-full shadow-lg animate-cs-pulse"
           />
           <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-harvest-500 border-r-harvest-500/40 animate-spin" />
         </div>
