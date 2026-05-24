@@ -599,13 +599,10 @@ export function CatalogApp() {
     return <WelcomePage logoUrl={logoUrl} />;
   }
 
-  // Loading state
+  // Loading state — animated connect screen with brand chrome so the user
+  // sees the page is alive while the catalog round-trip is in flight.
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen text-muted-foreground">
-        Connecting to service...
-      </div>
-    );
+    return <ConnectingScreen logoUrl={logoUrl} serviceUrl={serviceUrl} />;
   }
 
   // Error state
@@ -615,11 +612,7 @@ export function CatalogApp() {
 
     // Auth redirect is in progress
     if (isAuthError) {
-      return (
-        <div className="flex items-center justify-center h-screen text-muted-foreground">
-          Redirecting to sign in...
-        </div>
-      );
+      return <ConnectingScreen logoUrl={logoUrl} serviceUrl={serviceUrl} message="Redirecting to sign in" />;
     }
 
     // No ?service= param — show a welcome / connect page
@@ -910,6 +903,96 @@ const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
     </div>
   );
 });
+
+/**
+ * Connecting / redirecting screen. Shown during the initial catalog fetch
+ * and during OAuth redirect prep. Keeps the Query.Farm header chrome,
+ * pulses the VGI logo behind a rotating harvest spinner ring, and shows
+ * the destination service URL + animated ellipsis so the user knows
+ * something is in flight (rather than a frozen blank page).
+ */
+function ConnectingScreen({
+  logoUrl,
+  serviceUrl,
+  message = "Connecting to",
+}: { logoUrl: string; serviceUrl: string; message?: string }) {
+  // The destination URL label is mounted as a portal-into-target later
+  // via useEffect — Astro hydrates against the SSR DOM, and React doesn't
+  // replace empty children at a node after hydration unless we own that
+  // subtree client-side. Setting `display` via a state flip that flushes
+  // to "mounted" after first paint sidesteps the issue.
+  const [ready, setReady] = useState(false);
+  useEffect(() => { setReady(true); }, []);
+
+  // Compute on every render (cheap). Falls back to reading window directly
+  // if the prop is empty (happens during SSR/initial hydration tick).
+  let displayUrl = serviceUrl?.replace(/^https?:\/\//, "") || "";
+  if (!displayUrl && typeof window !== "undefined") {
+    const p = new URLSearchParams(window.location.search).get("service");
+    const u = p || window.location.origin;
+    displayUrl = u.replace(/^https?:\/\//, "");
+  }
+
+  return (
+    <div className="flex flex-col min-h-screen bg-gradient-to-b from-soil-50 via-earth-50 to-soil-100 dark:from-background dark:via-background dark:to-soil-900/30">
+      {/* Slim header so we don't lose brand chrome mid-connect */}
+      <header className="sticky top-0 z-40 flex items-center px-4 h-14 border-b border-border bg-card/95 backdrop-blur-sm shadow-sm">
+        <a
+          href="https://query.farm"
+          className="font-heading font-bold text-base text-foreground hover:text-earth-700 transition-colors"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          🚜 Query.Farm
+        </a>
+      </header>
+
+      <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 text-center">
+        {/* Logo + animated halo. The logo gets a slow scale pulse; the ring
+            (Tailwind animate-spin) sits one layer above as a 3/4 arc in
+            harvest green so it reads clearly as motion. */}
+        <div className="relative w-32 h-32 mb-6">
+          <img
+            src={logoUrl}
+            alt="VGI"
+            className="absolute inset-2 rounded-full shadow-lg animate-cs-pulse"
+          />
+          <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-harvest-500 border-r-harvest-500/40 animate-spin" />
+        </div>
+
+        <div className="text-xs font-semibold uppercase tracking-[0.15em] text-soil-500 mb-2">
+          🚜 Query.Farm · VGI
+        </div>
+        <h1 className="font-heading text-2xl md:text-3xl font-bold text-soil-900 dark:text-soil-100 mb-2">
+          {message}
+          <span className="inline-block ml-0.5 align-baseline text-harvest-600 dark:text-harvest-400 animate-cs-ellipsis" aria-hidden="true">…</span>
+        </h1>
+        {ready && (
+          <p className="font-mono text-sm text-soil-600 dark:text-soil-400 break-all max-w-md">
+            {displayUrl}
+          </p>
+        )}
+      </div>
+
+      {/* Local keyframes — kept inline so this screen is self-contained and
+          doesn't rely on any other file. */}
+      <style>{`
+        @keyframes cs-pulse {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(0.96); opacity: 0.88; }
+        }
+        .animate-cs-pulse { animation: cs-pulse 2.4s ease-in-out infinite; }
+
+        @keyframes cs-ellipsis {
+          0%, 20%  { opacity: 0; }
+          40%      { opacity: 0.5; }
+          60%, 100% { opacity: 1; }
+        }
+        .animate-cs-ellipsis { animation: cs-ellipsis 1.2s ease-in-out infinite; }
+      `}</style>
+    </div>
+  );
+}
 
 /** Welcome page shown when no ?service= parameter is provided. */
 function WelcomePage({ logoUrl }: { logoUrl: string }) {
