@@ -253,48 +253,53 @@ function filterNode(node: TreeDataItem, query: string): TreeDataItem | null {
   return null;
 }
 
-/** Map a DuckDB/Arrow type name to a background + text color class for type badges. */
+/**
+ * Map a DuckDB/Arrow type name to a background + text color class for type
+ * badges. Semantic clusters (with explicit dark-mode pairs):
+ *
+ *   numeric  → blue   (integer + float + decimal — one family)
+ *   string   → slate  (cool neutral; reserves harvest for action colors)
+ *   boolean  → duck   (DuckDB-nod yellow)
+ *   temporal → violet (all DATE/TIME/TIMESTAMP/INTERVAL — one family)
+ *   uuid     → teal
+ *   spatial  → orange (GEOMETRY/WKB/BLOB)
+ *   complex  → rose   (STRUCT/LIST/MAP/UNION/ARRAY)
+ *   other    → soil   (warm neutral; matches the rest of the palette)
+ */
 export function typeColorClass(type: string): string {
   const t = type.toUpperCase();
-  // Integer types
+  // Numeric — integer + float + decimal collapsed to one blue family
   if (t === "INTEGER" || t === "INT" || t === "BIGINT" || t === "SMALLINT" || t === "TINYINT" ||
       t === "HUGEINT" || t === "UHUGEINT" || t === "UBIGINT" || t === "UINTEGER" || t === "USMALLINT" || t === "UTINYINT" ||
       t === "INT8" || t === "INT16" || t === "INT32" || t === "INT64" || t === "UINT8" || t === "UINT16" || t === "UINT32" || t === "UINT64" ||
-      t === "BIGNUM" || t === "VARINT")
-    return "bg-blue-100 text-blue-700";
-  // Float / decimal types
-  if (t === "FLOAT" || t === "DOUBLE" || t === "REAL" || t === "DECIMAL" || t.startsWith("DECIMAL("))
-    return "bg-sky-100 text-sky-700";
-  // String types — harvest green to family-align with the brand accent
+      t === "BIGNUM" || t === "VARINT" ||
+      t === "FLOAT" || t === "DOUBLE" || t === "REAL" || t === "DECIMAL" || t.startsWith("DECIMAL("))
+    return "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300";
+  // String — slate (cool neutral). Was harvest; moved to free harvest as a true accent.
   if (t === "VARCHAR" || t === "TEXT" || t === "STRING" || t === "UTF8" || t === "CHAR" || t.startsWith("VARCHAR(") || t === "JSON")
-    return "bg-harvest-100 text-harvest-800";
+    return "bg-slate-100 text-slate-700 dark:bg-slate-800/70 dark:text-slate-300";
   // Boolean — duck yellow (DuckDB nod)
   if (t === "BOOLEAN" || t === "BOOL")
-    return "bg-duck-100 text-duck-800";
-  // Date
-  if (t === "DATE" || t === "DATE32" || t === "DATE64")
-    return "bg-purple-100 text-purple-700";
-  // Timestamp (TIMESTAMP, TIMESTAMP_S/MS/NS, TIMESTAMP WITH TIME ZONE, TIMESTAMPTZ, DATETIME)
-  if (t === "DATETIME" || t.startsWith("TIMESTAMP"))
-    return "bg-violet-100 text-violet-700";
-  // Time (TIME, TIME_NS, TIME WITH TIME ZONE, TIMETZ, INTERVAL)
-  if (t === "INTERVAL" || t.startsWith("TIME"))
-    return "bg-fuchsia-100 text-fuchsia-700";
+    return "bg-duck-100 text-duck-800 dark:bg-duck-500/20 dark:text-duck-100";
+  // Temporal — DATE / TIMESTAMP / TIME / INTERVAL / DATETIME all collapse to violet
+  if (t === "DATE" || t === "DATE32" || t === "DATE64" || t === "DATETIME" || t === "INTERVAL" ||
+      t.startsWith("TIMESTAMP") || t.startsWith("TIME"))
+    return "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300";
   // UUID
   if (t === "UUID")
-    return "bg-teal-100 text-teal-700";
+    return "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300";
   // Enum
   if (t.startsWith("ENUM"))
-    return "bg-amber-100 text-amber-700";
+    return "bg-duck-100 text-duck-800 dark:bg-duck-500/20 dark:text-duck-100";
   // Bit
   if (t === "BIT")
-    return "bg-gray-200 text-gray-700";
-  // Geometry / spatial / blob
+    return "bg-soil-200 text-soil-700 dark:bg-soil-800 dark:text-soil-300";
+  // Spatial — geometry / blob
   if (t === "GEOMETRY" || t === "WKB" || t === "BLOB" || t.startsWith("GEOARROW"))
-    return "bg-orange-100 text-orange-700";
-  // Struct / list / map / union / array types (includes fixed-size arrays like INTEGER[3])
+    return "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300";
+  // Complex — struct / list / map / union / array (incl. fixed-size like INTEGER[3])
   if (t.startsWith("STRUCT") || t.startsWith("LIST") || t.startsWith("MAP") || t.startsWith("UNION") || t.includes("["))
-    return "bg-rose-100 text-rose-700";
-  // Default
-  return "bg-gray-100 text-gray-600";
+    return "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300";
+  // Default — warm soil neutral
+  return "bg-soil-100 text-soil-600 dark:bg-soil-800 dark:text-soil-300";
 }

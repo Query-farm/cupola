@@ -620,23 +620,7 @@ export function CatalogApp() {
       return <WelcomePage logoUrl={logoUrl} />;
     }
 
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center max-w-md">
-          <img
-            src={logoUrl}
-            alt="VGI logo"
-            className="w-16 h-16 rounded-full shadow-lg mx-auto mb-6"
-          />
-          <h1 className="text-2xl font-bold text-primary mb-4">Connection Error</h1>
-          <p className="text-muted-foreground mb-6">{error}</p>
-          <p className="text-sm text-muted-foreground mb-4">
-            Service URL: <code className="bg-muted px-2 py-0.5 rounded">{serviceUrl}</code>
-          </p>
-          <ConnectForm />
-        </div>
-      </div>
-    );
+    return <ErrorScreen logoUrl={logoUrl} serviceUrl={serviceUrl} error={error} />;
   }
 
   if (!data) return null;
@@ -897,7 +881,7 @@ const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
           className="mt-2 w-full px-3 py-2 rounded-md border border-input bg-card text-foreground text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring resize-y"
         />
         <p className="mt-1 text-[11px] text-muted-foreground">
-          Spliced into the DuckDB ATTACH statement after <code className="font-mono">LOCATION</code>. Comma-separate entries.
+          Spliced into the <code className="font-mono">ATTACH</code> statement after <code className="font-mono">LOCATION</code>. Comma-separate entries.
         </p>
       </details>
     </div>
@@ -905,11 +889,35 @@ const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
 });
 
 /**
+ * Shared chrome for full-page non-app screens (welcome, connecting,
+ * error). Slim sticky header with the Query.Farm wordmark + soft earth
+ * gradient backdrop. Per the brand review: no tractor emoji in the
+ * chrome (the wordmark alone carries it); muted color so the
+ * per-deployment VGI logo remains the visual focus.
+ */
+function BrandShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col min-h-screen bg-gradient-to-b from-soil-50 via-earth-50 to-soil-100 dark:from-background dark:via-background dark:to-soil-900/30">
+      <header className="sticky top-0 z-40 flex items-center px-4 h-14 border-b border-border bg-card/95 backdrop-blur-sm shadow-sm">
+        <a
+          href="https://query.farm"
+          className="font-heading font-semibold text-sm text-muted-foreground hover:text-foreground transition-colors"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Query.Farm
+        </a>
+      </header>
+      {children}
+    </div>
+  );
+}
+
+/**
  * Connecting / redirecting screen. Shown during the initial catalog fetch
- * and during OAuth redirect prep. Keeps the Query.Farm header chrome,
- * pulses the VGI logo behind a rotating harvest spinner ring, and shows
- * the destination service URL + animated ellipsis so the user knows
- * something is in flight (rather than a frozen blank page).
+ * and during OAuth redirect prep. Pulses the VGI logo behind a rotating
+ * harvest spinner ring with the destination service URL + animated
+ * ellipsis so the user knows something is in flight.
  */
 function ConnectingScreen({
   logoUrl,
@@ -934,19 +942,7 @@ function ConnectingScreen({
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-gradient-to-b from-soil-50 via-earth-50 to-soil-100 dark:from-background dark:via-background dark:to-soil-900/30">
-      {/* Slim header so we don't lose brand chrome mid-connect */}
-      <header className="sticky top-0 z-40 flex items-center px-4 h-14 border-b border-border bg-card/95 backdrop-blur-sm shadow-sm">
-        <a
-          href="https://query.farm"
-          className="font-heading font-bold text-base text-foreground hover:text-earth-700 transition-colors"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          🚜 Query.Farm
-        </a>
-      </header>
-
+    <BrandShell>
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 text-center">
         {/* Logo + animated halo. The logo gets a slow scale pulse; the ring
             (Tailwind animate-spin) sits one layer above as a 3/4 arc in
@@ -964,9 +960,6 @@ function ConnectingScreen({
           <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-harvest-500 border-r-harvest-500/40 animate-spin" />
         </div>
 
-        <div className="text-xs font-semibold uppercase tracking-[0.15em] text-soil-500 mb-2">
-          🚜 Query.Farm · VGI
-        </div>
         <h1 className="font-heading text-2xl md:text-3xl font-bold text-soil-900 dark:text-soil-100 mb-2">
           {message}
           <span className="inline-block ml-0.5 align-baseline text-harvest-600 dark:text-harvest-400 animate-cs-ellipsis" aria-hidden="true">…</span>
@@ -994,7 +987,93 @@ function ConnectingScreen({
         }
         .animate-cs-ellipsis { animation: cs-ellipsis 1.2s ease-in-out infinite; }
       `}</style>
-    </div>
+    </BrandShell>
+  );
+}
+
+/**
+ * Connection error screen. Wears the same Query.Farm chrome as the
+ * connecting/welcome surfaces (sticky header + earth gradient bg), shows
+ * the failed URL + error message in a destructive callout, and lists
+ * recent servers so the user can recover quickly if it was a typo. Each
+ * recent entry connects directly on click (no prefill); to edit options
+ * first, the user can land on the welcome page via the wordmark.
+ */
+function ErrorScreen({
+  logoUrl,
+  serviceUrl,
+  error,
+}: { logoUrl: string; serviceUrl: string; error: string }) {
+  const [recent, setRecent] = useState<RecentService[]>([]);
+  useEffect(() => {
+    // Don't include the currently-failing URL in the suggestions.
+    setRecent(getRecentServices().filter((s) => s.url !== serviceUrl));
+  }, [serviceUrl]);
+
+  const connectTo = (url: string) => {
+    const dest = new URL(window.location.href);
+    dest.searchParams.set("service", url);
+    dest.hash = "";
+    window.location.href = dest.toString();
+  };
+
+  return (
+    <BrandShell>
+      <div className="flex-1 flex items-start justify-center px-6 py-12">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-8">
+            <img
+              src={logoUrl}
+              alt="VGI logo"
+              className="w-20 h-20 rounded-full shadow-lg ring-2 ring-earth-200 dark:ring-earth-700 mx-auto mb-6"
+            />
+            <h1 className="font-heading text-2xl font-bold text-soil-900 dark:text-soil-100 mb-3">
+              Connection Error
+            </h1>
+            <p className="font-mono text-sm text-soil-600 dark:text-soil-400 break-all mb-4">
+              {serviceUrl}
+            </p>
+            <div className="rounded-lg bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive dark:text-red-300 text-left">
+              {error}
+            </div>
+          </div>
+
+          {/* Retry / try a different URL */}
+          <div className="bg-card rounded-xl ring-1 ring-foreground/10 p-5 mb-6">
+            <h2 className="font-heading text-sm font-semibold text-foreground mb-3">
+              Try a different server
+            </h2>
+            <ConnectForm />
+          </div>
+
+          {/* Recent servers — if it was a typo, the right one is probably here */}
+          {recent.length > 0 && (
+            <div className="bg-card rounded-xl ring-1 ring-foreground/10 p-5">
+              <h2 className="font-heading text-sm font-semibold text-foreground mb-3">
+                Or pick a recent server
+              </h2>
+              <ul className="space-y-1">
+                {recent.map((s) => (
+                  <li key={s.url}>
+                    <button
+                      onClick={() => connectTo(s.url)}
+                      className="w-full text-left px-3 py-2 rounded-md hover:bg-muted transition-colors group"
+                    >
+                      <span className="block text-sm font-medium text-earth-700 dark:text-earth-300 truncate">
+                        {s.catalogName}
+                      </span>
+                      <span className="block text-xs text-muted-foreground truncate font-mono">
+                        {s.url}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </div>
+    </BrandShell>
   );
 }
 
@@ -1032,26 +1111,26 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-soil-50 via-earth-50 to-soil-100 dark:from-background dark:via-background dark:to-soil-900/30">
-      <div className="max-w-xl w-full mx-auto px-6 py-16 lg:py-24">
-        <div className="flex flex-col items-center text-center mb-10">
+    <BrandShell>
+      <div className="max-w-xl w-full mx-auto px-6 py-12 lg:py-16">
+        <div className="flex flex-col items-center text-center mb-8">
           <img
             src={logoUrl}
             alt="VGI logo"
-            className="w-32 h-32 rounded-full shadow-lg ring-2 ring-earth-200 dark:ring-earth-700 mb-6"
+            className="w-20 h-20 rounded-full shadow-lg ring-1 ring-soil-200 dark:ring-soil-700 mb-5"
           />
-          <div className="text-xs font-semibold uppercase tracking-[0.15em] text-soil-500 mb-3">
-            🚜 Query.Farm · VGI
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-soil-400 dark:text-soil-500 mb-3">
+            VGI · Vector Gateway Interface
           </div>
-          <h1 className="font-heading text-4xl md:text-5xl font-bold text-soil-900 dark:text-soil-100 leading-tight tracking-tight mb-3">
+          <h1 className="font-heading text-4xl md:text-5xl font-bold text-soil-900 dark:text-soil-100 leading-[1.05] tracking-tight mb-3">
             Browse any VGI catalog.
           </h1>
           <p className="text-soil-700 dark:text-soil-300 text-lg max-w-md leading-relaxed">
-            Connect to a VGI server to explore schemas, tables, views, and functions — with an embedded DuckDB shell and AI analyst.
+            Connect to a VGI server to explore schemas, tables, views, and functions — with an embedded SQL shell and AI analyst.
           </p>
         </div>
 
-        <div className="bg-earth-50 dark:bg-earth-900/30 rounded-xl ring-2 ring-earth-300 dark:ring-earth-700 shadow-md p-6 mb-6">
+        <div className="bg-card rounded-xl ring-1 ring-foreground/10 p-5 mb-6">
           <h2 className="font-heading text-sm font-semibold text-foreground mb-3">Connect to a VGI service</h2>
           <ConnectForm ref={formRef} />
         </div>
@@ -1100,11 +1179,11 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
         </div>
 
         <div className="text-center text-xs text-muted-foreground mt-8 space-y-1">
-          <p>&copy; 2026 &#x1F69C; <a href="https://query.farm" className="hover:text-primary transition-colors">Query.Farm LLC</a></p>
+          <p>&copy; 2026 &#x1F69C; <a href="https://query.farm" className="hover:text-foreground transition-colors">Query.Farm LLC</a></p>
           <p>v{__APP_VERSION__} ({__GIT_HASH__})</p>
         </div>
       </div>
-    </div>
+    </BrandShell>
   );
 }
 

@@ -1,7 +1,6 @@
 import { ChevronRight } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import type { Selection } from "@/lib/tree";
-import { CatalogIcon, getBadgeColorForType, type CatalogObjectType } from "./CatalogIcons";
+import { CatalogIcon, type CatalogObjectType } from "./CatalogIcons";
 
 interface Crumb {
   type: Selection["type"];
@@ -53,12 +52,9 @@ export function Breadcrumb({ catalogName, schemaName, itemName, itemType, onNavi
                 {crumb.label}
               </a>
             ) : (
-              <span className={`inline-flex items-center gap-1.5 ${isLast && itemType ? "text-xl font-bold font-mono text-earth-700 dark:text-earth-300" : "text-foreground font-medium"}`}>
+              <span className={`inline-flex items-center gap-1.5 ${isLast && itemType ? "font-heading text-xl font-bold text-foreground" : "text-foreground font-medium"}`}>
                 <CatalogIcon type={crumb.type as CatalogObjectType} className={isLast && itemType ? "h-5 w-5" : "h-3.5 w-3.5"} />
                 {crumb.label}
-                {isLast && itemType && (
-                  <Badge variant="secondary" className={`text-xs ml-1 ${getBadgeColorForType(itemType)}`}>{itemType}</Badge>
-                )}
               </span>
             )}
           </span>
