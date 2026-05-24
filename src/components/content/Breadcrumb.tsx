@@ -53,7 +53,7 @@ export function Breadcrumb({ catalogName, schemaName, itemName, itemType, onNavi
                 {crumb.label}
               </a>
             ) : (
-              <span className={`inline-flex items-center gap-1.5 ${isLast && itemType ? "text-xl font-bold font-mono text-primary" : "text-foreground font-medium"}`}>
+              <span className={`inline-flex items-center gap-1.5 ${isLast && itemType ? "text-xl font-bold font-mono text-earth-700 dark:text-earth-300" : "text-foreground font-medium"}`}>
                 <CatalogIcon type={crumb.type as CatalogObjectType} className={isLast && itemType ? "h-5 w-5" : "h-3.5 w-3.5"} />
                 {crumb.label}
                 {isLast && itemType && (

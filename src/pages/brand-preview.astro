@@ -1,0 +1,746 @@
+---
+// Brand-preview mockup for the proposed Query.Farm-aligned visual identity.
+// This page is self-contained — it does NOT modify global.css. The new palette
+// is scoped under `.bp` so the rest of the app is unaffected.
+//
+// Open at /brand-preview to compare:
+//   - new earth/soil/harvest palette vs current cream + forest green
+//   - Outfit display font for headings vs Inter
+//   - sticky frosted header + 🚜 wordmark + VGI separator
+//   - hero treatment for the welcome / connect surface
+//   - retoned tree selection (harvest-100 + harvest-500 left border)
+//   - default vs featured card variants
+//   - retoned type badges (strings → harvest, booleans → duck yellow)
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VGI Brand Preview — Query.Farm alignment</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <style is:global>
+      /*
+        Scope the proposed palette under `.bp` so this preview can sit next to
+        the existing app without changing global tokens. Every named scale is
+        listed (earth/soil/harvest/grain/duck) plus the ShadCN semantic
+        retargets — the same shape we'd ship to global.css after sign-off.
+      */
+      .bp {
+        /* Earth — primary brand chrome (browns) */
+        --earth-50:  #f9f7f4;
+        --earth-100: #f0ebe3;
+        --earth-200: #e1d5c4;
+        --earth-300: #cab89d;
+        --earth-400: #b39777;
+        --earth-500: #9d7f5e;
+        --earth-600: #8a6d4f;
+        --earth-700: #725843;
+        --earth-800: #5e4939;
+        --earth-900: #4d3c2f;
+
+        /* Soil — neutral browns (page bg, body text) */
+        --soil-50:  #f7f6f4;
+        --soil-100: #e8e4df;
+        --soil-200: #d3cab9;
+        --soil-300: #baab8e;
+        --soil-400: #a18c68;
+        --soil-500: #8a754f;
+        --soil-600: #705e41;
+        --soil-700: #5a4a36;
+        --soil-800: #4a3e2f;
+        --soil-900: #3d342a;
+
+        /* Harvest — bright green CTA + selection */
+        --harvest-50:  #f0fdf4;
+        --harvest-100: #dcfce7;
+        --harvest-200: #bbf7d0;
+        --harvest-300: #86efac;
+        --harvest-400: #4ade80;
+        --harvest-500: #22c55e;
+        --harvest-600: #16a34a;
+        --harvest-700: #15803d;
+        --harvest-800: #166534;
+        --harvest-900: #14532d;
+
+        /* Duck — yellow accent (booleans, DuckDB nod) */
+        --duck-50:  #fffbeb;
+        --duck-100: #fef3c7;
+        --duck-500: #f59e0b;
+        --duck-800: #92400e;
+
+        /* ShadCN semantic re-pointing — the part that would replace :root */
+        --background: var(--soil-50);
+        --foreground: var(--soil-900);
+        --card: #ffffff;
+        --card-foreground: var(--soil-900);
+        --primary: var(--earth-600);
+        --primary-foreground: #ffffff;
+        --accent: var(--harvest-500);
+        --accent-foreground: #ffffff;
+        --muted: var(--soil-100);
+        --muted-foreground: var(--soil-500);
+        --border: var(--soil-200);
+        --ring: var(--harvest-500);
+
+        background: var(--background);
+        color: var(--foreground);
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        min-height: 100vh;
+        transition: background-color 200ms, color 200ms;
+      }
+
+      /*
+        Dark mode — warm-dark inversion. Background drops to a deep cocoa
+        (soil-900 base, slightly deeper than the scale's 900 step so cards
+        can sit at soil-900 with visible separation). Foreground takes
+        soil-100 for the body, soil-200 for headings. Primary chrome moves
+        up the earth scale to earth-300 so it stays readable on dark; the
+        harvest accent shifts one step brighter (harvest-400) for the same
+        reason. Borders get a low-alpha earth wash so they read as warm
+        rather than gray.
+      */
+      .bp.dark {
+        --background: #1a1612;
+        --foreground: #e8e4df;          /* soil-100 */
+        --card: #251f18;
+        --card-foreground: #e8e4df;
+        --primary: var(--earth-300);     /* readable on dark */
+        --primary-foreground: #1a1612;
+        --accent: var(--harvest-400);    /* one step brighter than light mode */
+        --accent-foreground: #14532d;
+        --muted: #2a221b;
+        --muted-foreground: #a18c68;     /* soil-400 */
+        --border: #3d342a;               /* soil-900 — visible as a hairline */
+        --ring: var(--harvest-400);
+      }
+
+      /* Tweaks to per-element styles for dark mode */
+      .bp.dark .section { border-bottom-color: #3d342a; }
+      .bp.dark .section h2 { color: #e8e4df; }
+      .bp.dark .section .desc { color: #baab8e; }
+      .bp.dark .bp-scale-label .title { color: #e8e4df; }
+      .bp.dark .bp-scale-label .desc { color: #a18c68; }
+      .bp.dark .bp-card {
+        background: #251f18;
+        box-shadow: 0 0 0 1px rgba(255,255,255,0.06);
+      }
+      .bp.dark .bp-card.featured {
+        background: rgba(139, 109, 79, 0.18);
+        box-shadow: 0 0 0 2px rgba(202, 184, 157, 0.4), 0 4px 8px rgba(0,0,0,0.4);
+      }
+      .bp.dark .bp-card h3 { color: #e8e4df; }
+      .bp.dark .bp-card p { color: #baab8e; }
+      .bp.dark .bp-tree {
+        background: #251f18;
+        border-color: #3d342a;
+      }
+      .bp.dark .bp-tree .row { color: #baab8e; }
+      .bp.dark .bp-tree .row:hover { background: #2a221b; }
+      .bp.dark .bp-tree .row.selected {
+        background: rgba(34, 197, 94, 0.18);
+        color: #86efac;
+        border-left-color: var(--harvest-400);
+      }
+      .bp.dark .bp-tree .row .icon { color: var(--earth-400); }
+      .bp.dark .bp-tree .row.selected .icon { color: var(--harvest-300); }
+      .bp.dark .bp-header {
+        background: rgba(26, 22, 18, 0.92);
+        border-bottom-color: #3d342a;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+      }
+      .bp.dark .bp-header .wordmark { color: #f0ebe3; }
+      .bp.dark .bp-header .catalog { color: var(--earth-300); }
+      .bp.dark .bp-header .comment { color: var(--soil-400); }
+      .bp.dark .bp-header .sep { color: var(--soil-500); }
+      .bp.dark .bp-header .avatar { background: var(--earth-700); color: var(--earth-100); }
+      .bp.dark .bp-header .vgi-mark { box-shadow: 0 0 0 1px #3d342a; border-color: #251f18; }
+      .bp.dark .bp-hero {
+        background: linear-gradient(180deg, #1a1612 0%, #221c16 50%, #2a221b 100%);
+        border-bottom-color: #3d342a;
+      }
+      .bp.dark .bp-hero h1 { color: #f0ebe3; }
+      .bp.dark .bp-hero .lead { color: var(--soil-300); }
+      .bp.dark .btn-outline {
+        background: transparent;
+        color: var(--earth-200);
+        border-color: #3d342a;
+      }
+      .bp.dark .btn-outline:hover {
+        background: #2a221b;
+        border-color: var(--earth-500);
+      }
+      .bp.dark .btn-ghost { color: var(--soil-300); }
+      .bp.dark .btn-ghost:hover { background: #2a221b; color: #e8e4df; }
+      .bp.dark code.font-mono {
+        background: #251f18 !important;
+        border-color: #3d342a !important;
+        color: var(--soil-200) !important;
+      }
+      .bp.dark .bp-compare-col .label { color: var(--soil-400); }
+      .bp.dark .bp-old-card {
+        background: #251f18;
+        box-shadow: 0 0 0 1px rgba(255,255,255,0.06);
+        color: #e8e4df;
+      }
+      .bp.dark .bp-old-card h3 { color: #e8e4df; }
+      .bp.dark .bp-old-card p { color: #baab8e !important; }
+      .bp.dark .bp-old-btn {
+        background: #4a7c23;
+        color: #fff;
+      }
+      .bp.dark .bp-old-row.selected {
+        background: rgba(74, 124, 35, 0.25) !important;
+        color: #86efac !important;
+        border-left-color: #4a7c23 !important;
+      }
+      .bp.dark .bp-old-row .icon { color: #4a7c23 !important; }
+      .bp.dark footer {
+        background: #0e0b08 !important;
+        color: var(--soil-300) !important;
+      }
+
+      /* Theme toggle */
+      .bp-theme-toggle {
+        position: fixed;
+        top: 0.875rem;
+        right: 5rem;
+        z-index: 50;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        height: 36px;
+        padding: 0 0.875rem;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.95);
+        backdrop-filter: blur(8px);
+        border: 1px solid var(--soil-200);
+        color: var(--soil-700);
+        font-family: 'Inter', sans-serif;
+        font-size: 0.8125rem;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      }
+      .bp-theme-toggle:hover { color: var(--earth-700); border-color: var(--earth-300); }
+      .bp.dark .bp-theme-toggle {
+        background: rgba(37, 31, 24, 0.95);
+        border-color: #3d342a;
+        color: #e8e4df;
+      }
+      .bp.dark .bp-theme-toggle:hover { color: var(--harvest-300); border-color: var(--harvest-700); }
+
+      .bp .font-heading { font-family: 'Outfit', 'Inter', sans-serif; }
+      .bp .font-mono    { font-family: 'JetBrains Mono', monospace; }
+
+      /* Section helper */
+      .bp .section {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 3rem 1.5rem;
+        border-bottom: 1px solid var(--soil-200);
+      }
+      .bp .section:last-child { border-bottom: none; }
+      .bp .section h2 {
+        font-family: 'Outfit', sans-serif;
+        font-weight: 700;
+        font-size: 2rem;
+        letter-spacing: -0.02em;
+        color: var(--soil-900);
+        margin-bottom: 0.25rem;
+      }
+      .bp .section .eyebrow {
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--soil-500);
+        margin-bottom: 0.5rem;
+      }
+      .bp .section .desc { color: var(--soil-700); margin-bottom: 1.75rem; max-width: 60ch; }
+
+      /* Header mockup */
+      .bp-header {
+        position: sticky; top: 0; z-index: 40;
+        height: 64px;
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--soil-200);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 0 1.5rem;
+      }
+      .bp-header .left { display: flex; align-items: center; gap: 0.75rem; }
+      .bp-header .wordmark {
+        font-family: 'Outfit', sans-serif;
+        font-weight: 700;
+        font-size: 1.125rem;
+        color: var(--soil-900);
+        text-decoration: none;
+      }
+      .bp-header .sep {
+        color: var(--soil-400);
+        font-weight: 300;
+        font-size: 1.25rem;
+        margin: 0 0.25rem;
+      }
+      .bp-header .vgi-mark {
+        width: 28px; height: 28px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #c8a43a 0%, #8a6d4f 100%);
+        border: 2px solid #fff;
+        box-shadow: 0 0 0 1px var(--soil-200);
+      }
+      .bp-header .catalog {
+        font-family: 'Outfit', sans-serif;
+        font-weight: 600;
+        color: var(--earth-700);
+      }
+      .bp-header .comment { color: var(--soil-500); font-size: 0.875rem; margin-left: 0.5rem; }
+      .bp-header .avatar {
+        width: 32px; height: 32px; border-radius: 50%;
+        background: var(--earth-200);
+        display: flex; align-items: center; justify-content: center;
+        color: var(--earth-800); font-weight: 600; font-size: 0.875rem;
+      }
+
+      /* Hero */
+      .bp-hero {
+        background: linear-gradient(180deg, var(--soil-50) 0%, var(--earth-50, #f9f7f4) 50%, var(--soil-100) 100%);
+        padding: 5rem 1.5rem;
+        text-align: center;
+        border-bottom: 1px solid var(--soil-200);
+      }
+      .bp-hero h1 {
+        font-family: 'Outfit', sans-serif;
+        font-weight: 700;
+        font-size: clamp(2rem, 5vw, 3.75rem);
+        line-height: 1.05;
+        letter-spacing: -0.02em;
+        color: var(--soil-900);
+        margin: 0 auto 1rem;
+        max-width: 18ch;
+      }
+      .bp-hero .lead {
+        color: var(--soil-700);
+        font-size: 1.125rem;
+        max-width: 56ch;
+        margin: 0 auto 2rem;
+        line-height: 1.6;
+      }
+      .bp-hero .cta-row { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+
+      /* Buttons */
+      .bp .btn {
+        display: inline-flex; align-items: center; gap: 0.5rem;
+        height: 40px;
+        padding: 0 1.25rem;
+        border-radius: 0.5rem;
+        font-weight: 600;
+        font-size: 0.9375rem;
+        cursor: pointer;
+        transition: all 150ms;
+        border: 1px solid transparent;
+      }
+      .bp .btn-primary {
+        background: var(--harvest-500);
+        color: #fff;
+      }
+      .bp .btn-primary:hover { background: var(--harvest-600); }
+      .bp .btn-earth {
+        background: var(--earth-600);
+        color: #fff;
+      }
+      .bp .btn-earth:hover { background: var(--earth-700); }
+      .bp .btn-outline {
+        background: #fff;
+        color: var(--earth-700);
+        border-color: var(--soil-200);
+      }
+      .bp .btn-outline:hover { border-color: var(--earth-300); background: var(--earth-50, #f9f7f4); }
+      .bp .btn-ghost {
+        background: transparent;
+        color: var(--soil-700);
+      }
+      .bp .btn-ghost:hover { background: var(--soil-100); color: var(--soil-900); }
+
+      /* Swatch grid */
+      .bp-swatch-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 0; border-radius: 0.5rem; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.06); margin-bottom: 1.5rem; }
+      .bp-swatch { aspect-ratio: 1; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; padding: 0.5rem; font-size: 0.6875rem; font-family: 'JetBrains Mono', monospace; }
+      .bp-swatch .name { font-weight: 600; }
+      .bp-swatch .hex { opacity: 0.7; }
+      .bp-scale-label { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.5rem; }
+      .bp-scale-label .title { font-family: 'Outfit', sans-serif; font-weight: 600; color: var(--soil-900); }
+      .bp-scale-label .desc { font-size: 0.875rem; color: var(--soil-600); }
+
+      /* Cards */
+      .bp-card {
+        background: #fff;
+        border-radius: 0.75rem;
+        padding: 1.25rem 1.5rem;
+        box-shadow: 0 0 0 1px rgba(61, 52, 42, 0.10);
+      }
+      .bp-card.featured {
+        background: var(--earth-50, #f9f7f4);
+        box-shadow: 0 0 0 2px var(--earth-300), 0 4px 6px -1px rgba(0,0,0,0.06);
+      }
+      .bp-card h3 {
+        font-family: 'Outfit', sans-serif;
+        font-weight: 600;
+        font-size: 1.0625rem;
+        color: var(--soil-900);
+        margin: 0 0 0.5rem;
+      }
+      .bp-card p { color: var(--soil-700); margin: 0; line-height: 1.55; }
+
+      /* Tree mock */
+      .bp-tree {
+        background: #fff;
+        border: 1px solid var(--soil-200);
+        border-radius: 0.75rem;
+        padding: 0.5rem;
+        font-size: 0.875rem;
+        max-width: 320px;
+      }
+      .bp-tree .row {
+        display: flex; align-items: center; gap: 0.5rem;
+        padding: 0.375rem 0.625rem;
+        border-radius: 0.375rem;
+        color: var(--soil-700);
+        cursor: pointer;
+      }
+      .bp-tree .row:hover { background: var(--soil-100); }
+      .bp-tree .row.selected {
+        background: var(--harvest-100);
+        color: var(--harvest-900);
+        font-weight: 600;
+        border-left: 2px solid var(--harvest-500);
+        padding-left: 0.5rem;
+      }
+      .bp-tree .row .icon { color: var(--earth-600); }
+      .bp-tree .row.selected .icon { color: var(--harvest-700); }
+      .bp-tree .row .badge {
+        margin-left: auto;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.625rem;
+        padding: 0.0625rem 0.375rem;
+        border-radius: 0.25rem;
+      }
+
+      /* Type badges */
+      .bp-badge {
+        display: inline-block;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.6875rem;
+        font-weight: 500;
+        padding: 0.125rem 0.5rem;
+        border-radius: 0.25rem;
+        margin: 0.125rem;
+      }
+      .bp-b-string  { background: var(--harvest-100); color: var(--harvest-800); }
+      .bp-b-int     { background: #dbeafe; color: #1d4ed8; }
+      .bp-b-float   { background: #e0f2fe; color: #0369a1; }
+      .bp-b-bool    { background: var(--duck-100); color: var(--duck-800); }
+      .bp-b-date    { background: #f3e8ff; color: #7e22ce; }
+      .bp-b-ts      { background: #ede9fe; color: #6d28d9; }
+      .bp-b-geom    { background: #ffedd5; color: #c2410c; }
+      .bp-b-struct  { background: #ffe4e6; color: #be123c; }
+      .bp-b-uuid    { background: #ccfbf1; color: #0f766e; }
+
+      /* Side-by-side comparison */
+      .bp-compare {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.5rem;
+      }
+      .bp-compare-col { display: flex; flex-direction: column; gap: 0.75rem; }
+      .bp-compare-col .label {
+        font-size: 0.6875rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--soil-500);
+      }
+      .bp-compare-col.before { /* before: current VGI palette */ }
+      .bp-compare-col.after  { /* after: query-farm aligned */ }
+      .bp-old-card {
+        background: #fff;
+        border-radius: 0.75rem;
+        padding: 1rem 1.25rem;
+        box-shadow: 0 0 0 1px rgba(44, 44, 30, 0.10);
+        color: #2c2c1e;
+      }
+      .bp-old-card h3 { font-family: 'Inter', sans-serif; font-weight: 600; color: #2c2c1e; margin: 0 0 0.5rem; }
+      .bp-old-btn {
+        display: inline-flex; align-items: center;
+        height: 36px; padding: 0 1rem;
+        background: #2d5016; color: #fff;
+        border-radius: 0.5rem;
+        font-family: 'Inter', sans-serif; font-weight: 600;
+      }
+      .bp-old-row.selected {
+        background: rgba(45, 80, 22, 0.15);
+        color: #2d5016;
+        font-weight: 600;
+        border-left: 2px solid #2d5016;
+      }
+    </style>
+  </head>
+  <body class="bp" style="margin: 0;">
+
+    <!-- Theme toggle (persisted to localStorage) -->
+    <button class="bp-theme-toggle" id="bp-theme-toggle" type="button" aria-label="Toggle theme">
+      <span id="bp-theme-icon">🌙</span>
+      <span id="bp-theme-label">Dark</span>
+    </button>
+    <script is:inline>
+      (function () {
+        var KEY = 'bp-theme';
+        var body = document.body;
+        var icon = document.getElementById('bp-theme-icon');
+        var label = document.getElementById('bp-theme-label');
+        function apply(mode) {
+          if (mode === 'dark') {
+            body.classList.add('dark');
+            icon.textContent = '☀️';
+            label.textContent = 'Light';
+          } else {
+            body.classList.remove('dark');
+            icon.textContent = '🌙';
+            label.textContent = 'Dark';
+          }
+        }
+        var initial = localStorage.getItem(KEY) || 'light';
+        apply(initial);
+        document.getElementById('bp-theme-toggle').addEventListener('click', function () {
+          var next = body.classList.contains('dark') ? 'light' : 'dark';
+          localStorage.setItem(KEY, next);
+          apply(next);
+        });
+      })();
+    </script>
+
+    <!-- 1. Header mockup (sticky) -->
+    <div class="bp-header">
+      <div class="left">
+        <a href="#" class="wordmark">🚜 Query.Farm</a>
+        <span class="sep">⌁</span>
+        <div class="vgi-mark" aria-label="VGI logo"></div>
+        <span class="catalog">albemarle_gis</span>
+        <span class="comment">· property</span>
+      </div>
+      <div class="avatar">A</div>
+    </div>
+
+    <!-- 2. Hero -->
+    <section class="bp-hero">
+      <div class="eyebrow" style="margin-bottom: 1rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--soil-500);">VGI · Vector Gateway Interface</div>
+      <h1>Browse any VGI catalog.</h1>
+      <p class="lead">Connect to a VGI server and explore schemas, tables, views, and functions — with an embedded DuckDB shell, AI analyst, and pivot tables.</p>
+      <div class="cta-row">
+        <button class="btn btn-primary">Connect to a server →</button>
+        <button class="btn btn-outline">Learn about VGI</button>
+      </div>
+    </section>
+
+    <!-- 3. Palette -->
+    <section class="section">
+      <div class="eyebrow">PALETTE</div>
+      <h2 class="font-heading">Earth, soil, harvest, duck</h2>
+      <p class="desc">Five named scales replace the current cream-plus-forest-green defaults. Earth carries brand chrome; soil sets background and body text; harvest is the action color; duck-yellow brings the DuckDB nod into the boolean badge.</p>
+
+      <div class="bp-scale-label"><span class="title font-heading">Earth</span><span class="desc">brand chrome · primary buttons · breadcrumb · catalog name</span></div>
+      <div class="bp-swatch-grid">
+        <div class="bp-swatch" style="background:#f9f7f4;color:#3d342a"><span class="name">50</span><span class="hex">#f9f7f4</span></div>
+        <div class="bp-swatch" style="background:#f0ebe3;color:#3d342a"><span class="name">100</span><span class="hex">#f0ebe3</span></div>
+        <div class="bp-swatch" style="background:#e1d5c4;color:#3d342a"><span class="name">200</span><span class="hex">#e1d5c4</span></div>
+        <div class="bp-swatch" style="background:#cab89d;color:#3d342a"><span class="name">300</span><span class="hex">#cab89d</span></div>
+        <div class="bp-swatch" style="background:#b39777;color:#fff"><span class="name">400</span><span class="hex">#b39777</span></div>
+        <div class="bp-swatch" style="background:#9d7f5e;color:#fff"><span class="name">500</span><span class="hex">#9d7f5e</span></div>
+        <div class="bp-swatch" style="background:#8a6d4f;color:#fff"><span class="name">600</span><span class="hex">#8a6d4f</span></div>
+        <div class="bp-swatch" style="background:#725843;color:#fff"><span class="name">700</span><span class="hex">#725843</span></div>
+        <div class="bp-swatch" style="background:#5e4939;color:#fff"><span class="name">800</span><span class="hex">#5e4939</span></div>
+        <div class="bp-swatch" style="background:#4d3c2f;color:#fff"><span class="name">900</span><span class="hex">#4d3c2f</span></div>
+      </div>
+
+      <div class="bp-scale-label"><span class="title font-heading">Soil</span><span class="desc">page bg · borders · body text · footer</span></div>
+      <div class="bp-swatch-grid">
+        <div class="bp-swatch" style="background:#f7f6f4;color:#3d342a"><span class="name">50</span><span class="hex">#f7f6f4</span></div>
+        <div class="bp-swatch" style="background:#e8e4df;color:#3d342a"><span class="name">100</span><span class="hex">#e8e4df</span></div>
+        <div class="bp-swatch" style="background:#d3cab9;color:#3d342a"><span class="name">200</span><span class="hex">#d3cab9</span></div>
+        <div class="bp-swatch" style="background:#baab8e;color:#3d342a"><span class="name">300</span><span class="hex">#baab8e</span></div>
+        <div class="bp-swatch" style="background:#a18c68;color:#fff"><span class="name">400</span><span class="hex">#a18c68</span></div>
+        <div class="bp-swatch" style="background:#8a754f;color:#fff"><span class="name">500</span><span class="hex">#8a754f</span></div>
+        <div class="bp-swatch" style="background:#705e41;color:#fff"><span class="name">600</span><span class="hex">#705e41</span></div>
+        <div class="bp-swatch" style="background:#5a4a36;color:#fff"><span class="name">700</span><span class="hex">#5a4a36</span></div>
+        <div class="bp-swatch" style="background:#4a3e2f;color:#fff"><span class="name">800</span><span class="hex">#4a3e2f</span></div>
+        <div class="bp-swatch" style="background:#3d342a;color:#fff"><span class="name">900</span><span class="hex">#3d342a</span></div>
+      </div>
+
+      <div class="bp-scale-label"><span class="title font-heading">Harvest</span><span class="desc">primary CTA · sidebar selection · focus rings</span></div>
+      <div class="bp-swatch-grid">
+        <div class="bp-swatch" style="background:#f0fdf4;color:#14532d"><span class="name">50</span><span class="hex">#f0fdf4</span></div>
+        <div class="bp-swatch" style="background:#dcfce7;color:#14532d"><span class="name">100</span><span class="hex">#dcfce7</span></div>
+        <div class="bp-swatch" style="background:#bbf7d0;color:#14532d"><span class="name">200</span><span class="hex">#bbf7d0</span></div>
+        <div class="bp-swatch" style="background:#86efac;color:#14532d"><span class="name">300</span><span class="hex">#86efac</span></div>
+        <div class="bp-swatch" style="background:#4ade80;color:#14532d"><span class="name">400</span><span class="hex">#4ade80</span></div>
+        <div class="bp-swatch" style="background:#22c55e;color:#fff"><span class="name">500</span><span class="hex">#22c55e</span></div>
+        <div class="bp-swatch" style="background:#16a34a;color:#fff"><span class="name">600</span><span class="hex">#16a34a</span></div>
+        <div class="bp-swatch" style="background:#15803d;color:#fff"><span class="name">700</span><span class="hex">#15803d</span></div>
+        <div class="bp-swatch" style="background:#166534;color:#fff"><span class="name">800</span><span class="hex">#166534</span></div>
+        <div class="bp-swatch" style="background:#14532d;color:#fff"><span class="name">900</span><span class="hex">#14532d</span></div>
+      </div>
+
+      <div class="bp-scale-label"><span class="title font-heading">Duck</span><span class="desc">DuckDB nod · boolean badges · small accents</span></div>
+      <div class="bp-swatch-grid" style="grid-template-columns: repeat(4, 1fr); max-width: 480px;">
+        <div class="bp-swatch" style="background:#fffbeb;color:#78350f"><span class="name">50</span><span class="hex">#fffbeb</span></div>
+        <div class="bp-swatch" style="background:#fef3c7;color:#78350f"><span class="name">100</span><span class="hex">#fef3c7</span></div>
+        <div class="bp-swatch" style="background:#f59e0b;color:#fff"><span class="name">500</span><span class="hex">#f59e0b</span></div>
+        <div class="bp-swatch" style="background:#92400e;color:#fff"><span class="name">800</span><span class="hex">#92400e</span></div>
+      </div>
+    </section>
+
+    <!-- 4. Typography -->
+    <section class="section">
+      <div class="eyebrow">TYPOGRAPHY</div>
+      <h2 class="font-heading">Outfit display + Inter body + JetBrains Mono</h2>
+      <p class="desc">Outfit (700/800) carries headings and the wordmark; Inter (400/500/600) handles body and UI; JetBrains Mono stays for code and type badges. Tight letter-spacing (<code class="font-mono">-0.02em</code>) on display sizes.</p>
+      <div style="display: flex; flex-direction: column; gap: 1rem;">
+        <div>
+          <div class="eyebrow" style="margin-bottom: 0.25rem;">DISPLAY · OUTFIT 700</div>
+          <div class="font-heading" style="font-size: 3rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1; color: var(--soil-900);">Browse any VGI catalog.</div>
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom: 0.25rem;">H2 · OUTFIT 600</div>
+          <div class="font-heading" style="font-size: 1.875rem; font-weight: 600; letter-spacing: -0.01em; color: var(--soil-900);">Schemas in albemarle_gis</div>
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom: 0.25rem;">BODY · INTER 400</div>
+          <div style="font-size: 1rem; color: var(--soil-700); max-width: 60ch; line-height: 1.6;">Connect to a VGI server, drill into tables and views, run SQL via the embedded DuckDB shell, or hand the schema to the AI analyst to draft a query.</div>
+        </div>
+        <div>
+          <div class="eyebrow" style="margin-bottom: 0.25rem;">MONO · JETBRAINS 400</div>
+          <code class="font-mono" style="display:inline-block; padding: 0.5rem 0.75rem; background:#fff; border:1px solid var(--soil-200); border-radius: 0.375rem; font-size: 0.875rem; color: var(--soil-800);">SELECT * FROM property.parcels ORDER BY rowid LIMIT 50;</code>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. Buttons -->
+    <section class="section">
+      <div class="eyebrow">BUTTONS</div>
+      <h2 class="font-heading">Harvest for action, earth for chrome</h2>
+      <p class="desc">Primary actions (Connect, Run, Retry) take harvest-500; chrome buttons like "Open SQL Shell" use earth-600. Outline + ghost handle secondary affordances. Focus rings shift to harvest-500.</p>
+      <div style="display:flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
+        <button class="btn btn-primary">Primary · harvest-500</button>
+        <button class="btn btn-earth">Earth chrome</button>
+        <button class="btn btn-outline">Outline</button>
+        <button class="btn btn-ghost">Ghost</button>
+      </div>
+    </section>
+
+    <!-- 6. Cards -->
+    <section class="section">
+      <div class="eyebrow">CARDS</div>
+      <h2 class="font-heading">Default + featured variants</h2>
+      <p class="desc">Default cards keep VGI's subtle ring border. The featured variant (used on the ConnectBox and empty states) gains an earth-50 wash with a 2px earth-300 ring + soft shadow — echoes the marketing site's hero cards.</p>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+        <div class="bp-card">
+          <h3>Schema · property</h3>
+          <p>6 tables · 1 view. Updated 4 hours ago. Current county property parcels and improvements.</p>
+        </div>
+        <div class="bp-card featured">
+          <h3>Connect to a VGI server</h3>
+          <p>Paste a server URL to begin. Recently used: <span class="font-mono" style="font-size:0.875rem; color: var(--earth-700);">http://localhost:9003</span></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. Sidebar tree -->
+    <section class="section">
+      <div class="eyebrow">SIDEBAR · SELECTION</div>
+      <h2 class="font-heading">Selected items go harvest</h2>
+      <p class="desc">Tree selection moves from forest-green at 15% to harvest-100 with a harvest-500 left rail — brighter, more clearly "active", and family-aligned. Hover stays the same neutral soil-100 wash.</p>
+      <div class="bp-tree">
+        <div class="row"><span class="icon">📁</span> districts</div>
+        <div class="row"><span class="icon">📁</span> environment</div>
+        <div class="row" style="font-weight: 600; color: var(--soil-900);"><span class="icon">📂</span> property</div>
+        <div style="padding-left: 1.5rem;">
+          <div class="row"><span class="icon">▦</span> card_level_data</div>
+          <div class="row"><span class="icon">▦</span> county_parcels</div>
+          <div class="row selected"><span class="icon">▦</span> parcels <span class="badge bp-b-string">VARCHAR</span></div>
+          <div class="row"><span class="icon">▦</span> parcel_info</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8. Type badges -->
+    <section class="section">
+      <div class="eyebrow">TYPE BADGES</div>
+      <h2 class="font-heading">Retoned strings + booleans</h2>
+      <p class="desc">String types adopt the harvest scale; booleans take the new duck yellow. Integer/float blues, date purples, and the geometry orange stay — those colors carry information rather than branding and stay legible against the new defaults.</p>
+      <div>
+        <span class="bp-badge bp-b-string">VARCHAR</span>
+        <span class="bp-badge bp-b-string">TEXT</span>
+        <span class="bp-badge bp-b-string">JSON</span>
+        <span class="bp-badge bp-b-int">INTEGER</span>
+        <span class="bp-badge bp-b-int">BIGINT</span>
+        <span class="bp-badge bp-b-float">DOUBLE</span>
+        <span class="bp-badge bp-b-float">DECIMAL</span>
+        <span class="bp-badge bp-b-bool">BOOLEAN</span>
+        <span class="bp-badge bp-b-date">DATE</span>
+        <span class="bp-badge bp-b-ts">TIMESTAMP</span>
+        <span class="bp-badge bp-b-uuid">UUID</span>
+        <span class="bp-badge bp-b-geom">GEOMETRY</span>
+        <span class="bp-badge bp-b-geom">WKB</span>
+        <span class="bp-badge bp-b-struct">STRUCT</span>
+        <span class="bp-badge bp-b-struct">LIST</span>
+      </div>
+    </section>
+
+    <!-- 9. Before / After comparison -->
+    <section class="section">
+      <div class="eyebrow">SIDE BY SIDE</div>
+      <h2 class="font-heading">Before vs after</h2>
+      <p class="desc">A direct comparison so you can decide whether the warm-earth direction reads better against the existing app. Same content, different palette.</p>
+      <div class="bp-compare">
+        <div class="bp-compare-col before">
+          <div class="label">CURRENT · VGI green</div>
+          <div class="bp-old-card">
+            <h3 style="font-family: Inter, sans-serif;">Schema · property</h3>
+            <p style="color:#2c2c1e; margin:0;">6 tables · 1 view.</p>
+          </div>
+          <div class="bp-old-btn">Open SQL Shell</div>
+          <div class="bp-tree" style="border-color:#f0ece0; background:#fff;">
+            <div class="row" style="color:#2c2c1e;"><span class="icon" style="color:#2d5016;">📂</span> property</div>
+            <div class="row bp-old-row selected" style="padding-left:0.5rem;"><span class="icon" style="color:#2d5016;">▦</span> parcels</div>
+          </div>
+        </div>
+        <div class="bp-compare-col after">
+          <div class="label">PROPOSED · Query.Farm aligned</div>
+          <div class="bp-card">
+            <h3>Schema · property</h3>
+            <p style="margin:0;">6 tables · 1 view.</p>
+          </div>
+          <button class="btn btn-earth">Open SQL Shell</button>
+          <div class="bp-tree">
+            <div class="row" style="font-weight: 600; color: var(--soil-900);"><span class="icon">📂</span> property</div>
+            <div class="row selected"><span class="icon">▦</span> parcels</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer style="background: var(--soil-900); color: var(--soil-200); padding: 2rem 1.5rem; text-align: center; font-size: 0.875rem;">
+      <div style="font-family: 'Outfit', sans-serif; font-weight: 700; color: #fff; margin-bottom: 0.25rem;">🚜 Query.Farm</div>
+      <div style="color: var(--soil-400);">Brand preview · not a live mockup of the catalog browser</div>
+    </footer>
+
+  </body>
+</html>

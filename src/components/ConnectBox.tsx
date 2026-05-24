@@ -26,7 +26,7 @@ export function ConnectBox({ catalogName, serviceUrl, attachOptions }: Props) {
   }
 
   return (
-    <Card className="mb-8">
+    <Card variant="featured" className="mb-8">
       <CardContent className="pt-4 pb-4">
         <div className="flex items-center gap-2 mb-2">
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">

@@ -265,12 +265,12 @@ export function typeColorClass(type: string): string {
   // Float / decimal types
   if (t === "FLOAT" || t === "DOUBLE" || t === "REAL" || t === "DECIMAL" || t.startsWith("DECIMAL("))
     return "bg-sky-100 text-sky-700";
-  // String types
+  // String types — harvest green to family-align with the brand accent
   if (t === "VARCHAR" || t === "TEXT" || t === "STRING" || t === "UTF8" || t === "CHAR" || t.startsWith("VARCHAR(") || t === "JSON")
-    return "bg-green-100 text-green-700";
-  // Boolean
+    return "bg-harvest-100 text-harvest-800";
+  // Boolean — duck yellow (DuckDB nod)
   if (t === "BOOLEAN" || t === "BOOL")
-    return "bg-amber-100 text-amber-700";
+    return "bg-duck-100 text-duck-800";
   // Date
   if (t === "DATE" || t === "DATE32" || t === "DATE64")
     return "bg-purple-100 text-purple-700";

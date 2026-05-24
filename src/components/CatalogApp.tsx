@@ -886,7 +886,7 @@ const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
         />
         <button
           onClick={connect}
-          className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-accent transition-colors"
+          className="px-4 py-2 rounded-md bg-harvest-500 text-white text-sm font-semibold hover:bg-harvest-600 transition-colors"
         >
           Connect
         </button>
@@ -945,26 +945,27 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen py-12">
-      <div className="max-w-xl w-full px-6">
-        <div className="flex items-center gap-8 mb-8">
+    <div className="min-h-screen bg-gradient-to-b from-soil-50 via-earth-50 to-soil-100 dark:from-background dark:via-background dark:to-soil-900/30">
+      <div className="max-w-xl w-full mx-auto px-6 py-16 lg:py-24">
+        <div className="flex flex-col items-center text-center mb-10">
           <img
             src={logoUrl}
             alt="VGI logo"
-            className="w-40 h-40 rounded-full shadow-lg shrink-0"
+            className="w-32 h-32 rounded-full shadow-lg ring-2 ring-earth-200 dark:ring-earth-700 mb-6"
           />
-          <div>
-            <h1 className="text-3xl font-bold text-primary mb-2">
-              Cupola
-            </h1>
-            <p className="text-muted-foreground">
-              Connect to a VGI server to browse schemas, tables, views, and functions.
-            </p>
+          <div className="text-xs font-semibold uppercase tracking-[0.15em] text-soil-500 mb-3">
+            🚜 Query.Farm · VGI
           </div>
+          <h1 className="font-heading text-4xl md:text-5xl font-bold text-soil-900 dark:text-soil-100 leading-tight tracking-tight mb-3">
+            Browse any VGI catalog.
+          </h1>
+          <p className="text-soil-700 dark:text-soil-300 text-lg max-w-md leading-relaxed">
+            Connect to a VGI server to explore schemas, tables, views, and functions — with an embedded DuckDB shell and AI analyst.
+          </p>
         </div>
 
-        <div className="bg-card rounded-lg border border-border p-6 mb-6">
-          <h2 className="text-sm font-semibold text-foreground mb-3">Connect to a VGI service</h2>
+        <div className="bg-earth-50 dark:bg-earth-900/30 rounded-xl ring-2 ring-earth-300 dark:ring-earth-700 shadow-md p-6 mb-6">
+          <h2 className="font-heading text-sm font-semibold text-foreground mb-3">Connect to a VGI service</h2>
           <ConnectForm ref={formRef} />
         </div>
 

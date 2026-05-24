@@ -9,7 +9,7 @@ const treeVariants = cva(
 )
 
 const selectedTreeVariants = cva(
-    'bg-primary/15 text-primary font-semibold hover:bg-primary/20 border-l-2 border-primary'
+    'bg-harvest-100 text-harvest-900 font-semibold hover:bg-harvest-200 border-l-2 border-harvest-500'
 )
 
 const dragOverVariants = cva(
