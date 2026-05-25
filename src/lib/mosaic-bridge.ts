@@ -95,11 +95,11 @@ export async function getMosaicAPI(): Promise<MosaicAPI> {
  * really wants a persistent table somewhere writable).
  */
 function injectTempData(spec: any): any {
-  if (!spec || typeof spec !== "object" || !spec.data || typeof spec.data !== "object") {
-    return spec;
-  }
+  if (!spec || typeof spec !== "object") return spec;
+  const out: any = { ...spec };
+  if (!out.data || typeof out.data !== "object") return out;
   const data: Record<string, any> = {};
-  for (const [key, value] of Object.entries(spec.data)) {
+  for (const [key, value] of Object.entries(out.data)) {
     if (typeof value === "string") {
       data[key] = { type: "table", query: value, temp: true };
     } else if (Array.isArray(value)) {
@@ -111,7 +111,28 @@ function injectTempData(spec: any): any {
       data[key] = value;
     }
   }
-  return { ...spec, data };
+  out.data = data;
+  return out;
+}
+
+/**
+ * Strip Mosaic-parser-incompatible top-level keys from a spec without
+ * complaining. The documented format encourages `$schema` for editor
+ * autocompletion, but Mosaic's parseSpec doesn't actually allow it (the
+ * destructure in ParseContext.parse() leaves `$schema` in `...root`, which
+ * then fails attribute validation). We strip it here so user-authored
+ * specs that follow the doc verbatim still render.
+ */
+function stripUnsupportedKeys(spec: any): any {
+  if (!spec || typeof spec !== "object") return spec;
+  // Spread first, then delete — keeps the original object untouched.
+  const out: any = { ...spec };
+  delete out["$schema"];
+  return out;
+}
+
+function normalizeSpec(spec: any): any {
+  return injectTempData(stripUnsupportedKeys(spec));
 }
 
 /**
@@ -121,7 +142,7 @@ function injectTempData(spec: any): any {
  */
 export async function parseChartSpec(spec: any): Promise<any> {
   const { parseSpec } = await getMosaicAPI();
-  return parseSpec(injectTempData(spec));
+  return parseSpec(normalizeSpec(spec));
 }
 
 /**
@@ -130,7 +151,7 @@ export async function parseChartSpec(spec: any): Promise<any> {
  */
 export async function renderChartSpec(spec: any): Promise<HTMLElement> {
   const { api, parseSpec, astToDOM } = await getMosaicAPI();
-  const ast = parseSpec(injectTempData(spec));
+  const ast = parseSpec(normalizeSpec(spec));
   const result = await astToDOM(ast, { api });
   return result.element;
 }

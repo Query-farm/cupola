@@ -343,16 +343,37 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         if (!title || typeof title !== "string") {
           return JSON.stringify({ ok: false, error: "title must be a non-empty string" });
         }
-        // Dry-validate by parsing the spec. We catch sync errors here so the
-        // model gets actionable feedback fast; runtime SELECT errors still
-        // surface in MosaicChartBlock's error state at mount time.
+        // Full pre-render. We run parse + astToDOM + data queries here so
+        // every failure mode the AI can introduce (bad SQL, unknown column,
+        // type mismatch, missing extension, …) surfaces as a tool error the
+        // model can read and fix on the next turn — instead of silently
+        // breaking inside the React block after the model has moved on.
+        //
+        // The DOM element is discarded; the chat block re-renders on mount.
+        // We pay the ~200-2000ms cost in exchange for a tight error loop.
         try {
-          const { parseChartSpec } = await import("@/lib/mosaic-bridge");
-          await parseChartSpec(spec);
+          const { renderChartSpec } = await import("@/lib/mosaic-bridge");
+          const el = await renderChartSpec(spec);
+          // Give Observable Plot's async rendering one tick to settle so
+          // post-mount errors (e.g. zero-row data → empty domain) bubble up.
+          await new Promise(r => setTimeout(r, 50));
+          // Clean up the throwaway element.
+          try { (el as any)?.remove?.(); } catch {}
         } catch (e: any) {
+          const msg = e?.message || String(e);
+          // Surface common error categories with hints so the model knows
+          // which doc section to consult.
+          let hint = "";
+          if (/parse|format|invalid/i.test(msg)) {
+            hint = " Call read_chart_docs to verify the spec shape.";
+          } else if (/column|binder|not found|unrecognized|reference/i.test(msg)) {
+            hint = " The SQL inside the spec references a column or table that doesn't exist — call describe_table on the table you're plotting to verify columns, then retry.";
+          } else if (/no data|empty|domain/i.test(msg)) {
+            hint = " The query returned no rows. Try a less restrictive filter or run the SQL via run_sql first to confirm it produces rows.";
+          }
           return JSON.stringify({
             ok: false,
-            error: `Spec failed to parse: ${e?.message || String(e)}. Call read_chart_docs (see 'Authoring checklist & pitfalls') and retry with a corrected spec.`,
+            error: `Chart failed to render: ${msg}${hint}`,
           });
         }
         // Stash on the tool-call entry so the renderer picks it up via onToolResult.

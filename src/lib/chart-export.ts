@@ -16,20 +16,34 @@ function triggerDownload(blob: Blob, filename: string): void {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  // `rel="noopener"` keeps the anchor honest with strict-origin sites; some
+  // browsers refuse the `download` attribute otherwise.
+  a.rel = "noopener";
+  a.style.display = "none";
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
-  // Revoke after a tick so Safari has time to start the download.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  // Detach on next tick so the click fully dispatches first.
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 1000);
 }
 
-/** Slugify a free-form title into a safe filename stem. */
-function slugify(title: string): string {
-  return title
+/**
+ * Build a complete filename for a chart export. Slugifies the title, then
+ * appends a short timestamp so successive downloads of the same chart don't
+ * collide in the user's Downloads folder, then forces the correct
+ * extension regardless of what the title contained.
+ */
+function buildFilename(title: string, ext: "svg" | "png"): string {
+  const stem = title
     .toLowerCase()
+    .replace(/\.(svg|png|jpe?g|gif|webp)$/i, "")  // strip user-supplied ext
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 60) || "chart";
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+  return `${stem}-${stamp}.${ext}`;
 }
 
 /**
@@ -77,8 +91,11 @@ export function downloadChartSVG(svg: SVGElement, title: string): void {
   const xml = new XMLSerializer().serializeToString(clone);
   // Prepend an XML declaration so the file opens correctly when saved.
   const data = `<?xml version="1.0" encoding="UTF-8"?>\n${xml}`;
-  const blob = new Blob([data], { type: "image/svg+xml;charset=utf-8" });
-  triggerDownload(blob, `${slugify(title)}.svg`);
+  // Plain "image/svg+xml" — without ";charset=utf-8", which some browsers
+  // strip the +xml part from when picking an extension hint, resulting in
+  // .xml downloads instead of .svg.
+  const blob = new Blob([data], { type: "image/svg+xml" });
+  triggerDownload(blob, buildFilename(title, "svg"));
 }
 
 /**
@@ -105,7 +122,8 @@ export async function downloadChartPNG(
     : (vb && vb.length === 4 ? vb[3] : svg.getBoundingClientRect().height);
 
   const xml = new XMLSerializer().serializeToString(clone);
-  const svgBlob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });
+  // Same "image/svg+xml" without charset — see downloadChartSVG comment.
+  const svgBlob = new Blob([xml], { type: "image/svg+xml" });
   const svgUrl = URL.createObjectURL(svgBlob);
 
   try {
@@ -123,7 +141,7 @@ export async function downloadChartPNG(
     await new Promise<void>((resolve, reject) => {
       canvas.toBlob((pngBlob) => {
         if (!pngBlob) { reject(new Error("PNG encoding failed")); return; }
-        triggerDownload(pngBlob, `${slugify(title)}.png`);
+        triggerDownload(pngBlob, buildFilename(title, "png"));
         resolve();
       }, "image/png");
     });

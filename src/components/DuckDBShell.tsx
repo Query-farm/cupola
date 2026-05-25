@@ -4,7 +4,7 @@
  * Shell logic adapted from public/shell/index.html.
  */
 import { useEffect, useRef, useState, useCallback, useMemo, lazy, Suspense } from "react";
-import { Maximize2, Minimize2, ChevronDown, ChevronUp, BarChart3, Map as MapIcon, History, Table2, Sparkles, Loader2 } from "lucide-react";
+import { Maximize2, Minimize2, ChevronDown, ChevronUp, BarChart3, Map as MapIcon, History, Table2, Sparkles, Loader2, LineChart } from "lucide-react";
 const AskAIChat = lazy(() => import("./AskAIChat").then(m => ({ default: m.AskAIChat })));
 import { DataPreview } from "./content/DataPreview";
 import { getColumns } from "@/lib/service";
@@ -23,6 +23,7 @@ import { ensureDuckDB, resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { getTerminalTheme } from "@/lib/theme";
 
 const KeplerMap = lazy(() => import("./KeplerMap").then((m) => ({ default: m.KeplerMap })));
+const MosaicEditor = lazy(() => import("./MosaicEditor").then((m) => ({ default: m.MosaicEditor })));
 
 import type { CatalogData } from "@/lib/service";
 
@@ -119,7 +120,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
-  const [activeTab, setActiveTab] = useState<"shell" | "askai" | "preview" | "perspective" | "map" | "queries">("shell");
+  const [activeTab, setActiveTab] = useState<"shell" | "askai" | "preview" | "perspective" | "mosaic" | "map" | "queries">("shell");
   const [termSize, setTermSize] = useState<{ rows: number; cols: number } | null>(null);
   const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
 
@@ -502,6 +503,10 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
             <BarChart3 className="h-3.5 w-3.5" />
             Perspective
           </button>
+          <button role="tab" aria-selected={activeTab === "mosaic"} className={tabCls("mosaic")} onClick={() => handleTabClick("mosaic")}>
+            <LineChart className="h-3.5 w-3.5" />
+            Mosaic
+          </button>
           {showMapTab && (
             <button role="tab" aria-selected={activeTab === "map"} className={tabCls("map")} onClick={() => { setMapHasData(true); handleTabClick("map"); }}>
               <MapIcon className="h-3.5 w-3.5" />
@@ -619,6 +624,20 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
             catalogName={catalogName}
             isActive={activeTab === "askai"}
           />
+        </Suspense>
+      </div>
+
+      {/* Mosaic editor — always mounted to preserve editor state across tab switches */}
+      <div
+        className={`flex-1 min-h-0 overflow-hidden ${mode === "minimized" ? "hidden" : ""}`}
+        style={activeTab !== "mosaic" ? { visibility: "hidden", position: "absolute", inset: 0, zIndex: -1 } : {}}
+      >
+        <Suspense fallback={
+          <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+            Loading Mosaic editor…
+          </div>
+        }>
+          <MosaicEditor isActive={activeTab === "mosaic"} />
         </Suspense>
       </div>
 
