@@ -67,9 +67,44 @@ fi
 
 # ---- Build ----
 echo "==> Building..."
-bun run build
+# 8 GiB of old-space heap. With source maps enabled, the kepler.gl +
+# perspective + duckdb-wasm chunks push past Node's 4 GiB default and
+# crash with "Ineffective mark-compacts near heap limit".
+NODE_OPTIONS="--max-old-space-size=8192" bun run build
 
 echo "==> dist/ size: $(du -sh dist/ | cut -f1)"
+
+# ---- Source-map sanity check ----
+# Before the Sentry upload runs (during the Astro build) the .map files must
+# exist on disk. If SENTRY_AUTH_TOKEN is set but no .map files made it into
+# dist/_astro/, source-map upload silently produced nothing and Sentry will
+# show minified stack traces. Fail loudly here so we catch it at publish time
+# instead of waiting for the next production error. After sentry-cli has
+# uploaded, the @sentry/astro `filesToDeleteAfterUpload` glob removes the
+# .map files so they're not shipped to R2 — that's why this check runs
+# AFTER build (so the count reflects what the integration produced) but BEFORE
+# we sync to R2.
+MAP_COUNT=$(find dist/_astro -name "*.js.map" 2>/dev/null | wc -l | tr -d ' ')
+JS_COUNT=$(find dist/_astro -name "*.js" 2>/dev/null | wc -l | tr -d ' ')
+echo "==> Client maps post-build: ${MAP_COUNT} maps remain for ${JS_COUNT} JS files (deleted-after-upload is fine)"
+if [ -n "${SENTRY_AUTH_TOKEN:-}" ] && [ "$JS_COUNT" -gt 0 ]; then
+  # Inspect the Astro build log for Sentry's "Successfully uploaded" line. If
+  # no maps existed at upload time, sentry-vite-plugin emits a warning we
+  # want to bubble up. The Astro/Vite integration prints `[sentry-vite-plugin]
+  # info Successfully uploaded N artifacts` on success; the absence of that
+  # phrase plus zero remaining maps means the integration ran but found
+  # nothing to upload — usually because the build never emitted them.
+  # `bun run build` exits before we can re-grep its output, so we just warn
+  # if the JS count is high but no map ever existed pre-deletion. As a
+  # heuristic: look for at least ONE `.map` in any subdirectory of dist.
+  ANY_MAP=$(find dist -name "*.js.map" 2>/dev/null | head -1)
+  if [ -z "$ANY_MAP" ]; then
+    echo "ERROR: SENTRY_AUTH_TOKEN is set but no .js.map files exist anywhere in dist/." >&2
+    echo "       Check vite.build.sourcemap='hidden' in astro.config.mjs." >&2
+    echo "       Sentry will show minified stack traces if you continue." >&2
+    exit 1
+  fi
+fi
 
 # ---- Upload versioned files to R2 (S3-compatible API via aws CLI) ----
 #

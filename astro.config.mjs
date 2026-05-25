@@ -41,12 +41,43 @@ export default defineConfig({
               name: `cupola@${pkg.version}+${gitHash}`,
               dist: gitHash,
             },
+            // Pin the upload + cleanup globs to this project's dist layout.
+            // The @sentry/astro default auto-delete glob is `dist/**/client/**/*.map`
+            // which doesn't match our `dist/_astro/` Cloudflare adapter layout,
+            // so without these the maps would either not get uploaded or would
+            // ship to R2 alongside the JS (we want them stripped after upload).
+            sourcemaps: {
+              assets: ['dist/_astro/**/*.js', 'dist/_astro/**/*.js.map'],
+              filesToDeleteAfterUpload: ['dist/_astro/**/*.map'],
+            },
           }
         : { enabled: false },
     }),
   ],
 
   vite: {
+    // Emit `.js.map` files alongside every bundled chunk so Sentry can
+    // symbolicate production stack traces. `'hidden'` omits the
+    // `//# sourceMappingURL=` trailer from the JS — the browser never
+    // fetches the maps, and they're uploaded to Sentry then deleted
+    // from dist by `sourcemaps.filesToDeleteAfterUpload`.
+    //
+    // CRITICAL: Astro 6 uses Vite 6's environments API. The top-level
+    // `vite.build.sourcemap` does NOT propagate to the client build —
+    // Astro's static-build reads `vite.environments.client.build.sourcemap`
+    // explicitly and defaults it to `false`. Without this nested setting,
+    // dist/_astro/*.js.map files are never emitted regardless of what
+    // Sentry's integration tries to set.
+    build: {
+      sourcemap: 'hidden',
+    },
+    environments: {
+      client: {
+        build: {
+          sourcemap: 'hidden',
+        },
+      },
+    },
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
       __GIT_HASH__: JSON.stringify(gitHash),
