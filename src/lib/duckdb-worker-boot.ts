@@ -135,12 +135,12 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
 
   const db = new duckdb.AsyncDuckDB(logger, subWorker);
 
-  setBootPhase("Downloading DuckDB", 0);
+  setBootPhase("Downloading Haybarn", 0);
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker, (p) => {
     const pct = Number(p.percentage);
     if (!Number.isFinite(pct)) return;
     bridge.progress?.(pct);
-    setBootPhase("Downloading DuckDB", Math.round(pct));
+    setBootPhase("Downloading Haybarn", Math.round(pct));
   });
   mark("instantiate");
 
