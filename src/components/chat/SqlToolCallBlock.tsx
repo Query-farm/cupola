@@ -1,5 +1,31 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ChevronRight, Database, Copy, AlertCircle, Loader2, X } from "lucide-react";
+
+/**
+ * Show seconds since the tool started executing. Resets when the tool
+ * stops being in-flight. Uses a per-second tick rather than a real-time
+ * clock so we don't re-render the whole tree every animation frame.
+ */
+function useElapsed(active: boolean): number {
+  const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => {
+    if (!active) { setElapsedSec(0); return; }
+    const start = Date.now();
+    setElapsedSec(0);
+    const id = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [active]);
+  return elapsedSec;
+}
+
+function formatElapsed(s: number): string {
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}m${r.toString().padStart(2, "0")}s`;
+}
 import { SqlCodeBlock } from "../content/SqlCodeBlock";
 import { QueryResultTable } from "./QueryResultTable";
 import type { ToolCallEntry } from "./ChatMessageAssistant";
@@ -14,12 +40,13 @@ interface Props {
 
 export function SqlToolCallBlock({ toolCall, onCancel }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const elapsed = useElapsed(!!toolCall.isExecuting);
 
   const dr = toolCall.displayResult;
   const isError = !!toolCall.error;
 
   const summary = toolCall.isExecuting
-    ? "Running query..."
+    ? `Running query — ${formatElapsed(elapsed)}`
     : isError
     ? "Query failed"
     : dr?.message
