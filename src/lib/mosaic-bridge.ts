@@ -211,8 +211,64 @@ function stripUnsupportedKeys(spec: any): any {
   return out;
 }
 
+/**
+ * Suffix every top-level data name with a per-render UID, and rewrite all
+ * `{ from: name }` references to match. Required because the Mosaic
+ * Coordinator caches MosaicClient query results by SQL signature: two
+ * charts that both use `data: { d: "..." }` would generate identical
+ * SELECTs and the second chart would receive the first chart's cached
+ * data, even after the underlying temp table has been replaced.
+ *
+ * By giving each render unique table names we sidestep the cache entirely.
+ * The temp table for chart N lives at `d__abc123` not `d`, so its queries
+ * are uniquely keyed and never collide.
+ *
+ * Catalog tables referenced inside SQL strings (`SELECT ... FROM cat.s.t`)
+ * are unaffected — we only rename top-level data definitions and their
+ * `from:` references. Catalog table names in SQL text are preserved.
+ */
+function uniquifyDataNames(spec: any): any {
+  if (!spec || typeof spec !== "object" || !spec.data || typeof spec.data !== "object") return spec;
+  const uid = Math.random().toString(36).slice(2, 10);
+  const names = Object.keys(spec.data);
+  if (names.length === 0) return spec;
+  const renames: Record<string, string> = {};
+  for (const n of names) renames[n] = `${n}__${uid}`;
+
+  // Walk every node in the spec replacing `from: "X"` where X is one of
+  // our renamed names. Also walks `for: "<plotName>"` (legend references
+  // to plots — not data, but conservatively renamed since plot names can
+  // alias data names).
+  function walk(node: any): any {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === "object") {
+      const out: any = {};
+      for (const [k, v] of Object.entries(node)) {
+        if (k === "from" && typeof v === "string" && renames[v]) {
+          out[k] = renames[v];
+        } else {
+          out[k] = walk(v);
+        }
+      }
+      return out;
+    }
+    return node;
+  }
+
+  // Rename top-level data keys (each definition itself stays unchanged).
+  const newData: Record<string, any> = {};
+  for (const [name, def] of Object.entries(spec.data)) {
+    newData[renames[name]] = def;
+  }
+
+  // Rebuild the spec: walk everything except `.data` (whose keys we just
+  // renamed) and substitute the renamed data block.
+  const { data: _origData, ...rest } = spec;
+  return { ...walk(rest), data: newData };
+}
+
 function normalizeSpec(spec: any): any {
-  return injectTempData(stripUnsupportedKeys(spec));
+  return uniquifyDataNames(injectTempData(stripUnsupportedKeys(spec)));
 }
 
 /**
