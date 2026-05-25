@@ -400,34 +400,46 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         //
         // The DOM element is discarded; the chat block re-renders on mount.
         // We pay the ~500-2000ms cost in exchange for a tight error loop.
-        let renderError: string | null = null;
+        let renderErrors: string[] = [];
         try {
           const { renderChartSpec } = await import("@/lib/mosaic-bridge");
           const result = await renderChartSpec(spec);
           if (result.errors.length > 0) {
-            renderError = result.errors[0].message;
+            // Surface every distinct error verbatim. The raw engine / Mosaic /
+            // Observable Plot message is the signal the model needs; don't
+            // paraphrase or guess a diagnosis. (A keyword-matching regex used
+            // to live here and routinely mislabeled unrelated failures — e.g.
+            // any message containing the substring "type" was reported as a
+            // "column type doesn't match" error, sending the model down the
+            // wrong path. Emit the truth instead.)
+            const seen = new Set<string>();
+            for (const e of result.errors) {
+              const msg = (e?.message || String(e)).trim();
+              if (msg && !seen.has(msg)) {
+                seen.add(msg);
+                renderErrors.push(msg);
+              }
+            }
           }
           // Clean up the throwaway element.
           try { result.element?.remove?.(); } catch {}
         } catch (e: any) {
-          renderError = e?.message || String(e);
+          renderErrors = [(e?.message || String(e)).trim()];
         }
-        if (renderError) {
-          // Surface common error categories with hints so the model knows
-          // which doc section to consult.
-          let hint = "";
-          if (/parse|format|invalid|unrecognized attribute|invalid specification/i.test(renderError)) {
-            hint = " Call read_chart_docs to verify the spec shape.";
-          } else if (/column|binder|not found|reference|catalog|table.*does not exist/i.test(renderError)) {
-            hint = " The SQL inside the spec references a column or table that doesn't exist — call describe_table on the table you're plotting to verify columns, then retry.";
-          } else if (/no data|empty|domain|extent|nan/i.test(renderError)) {
-            hint = " The query returned no rows or produced an empty domain. Try a less restrictive filter or run the SQL via run_sql first to confirm it produces rows.";
-          } else if (/type|cast|conversion/i.test(renderError)) {
-            hint = " A column type doesn't match what the mark expects — temporal marks need date/timestamp columns, numeric scales need numeric columns. Use CAST or pick a compatible column.";
-          }
+        if (renderErrors.length > 0) {
+          const detail =
+            renderErrors.length === 1
+              ? renderErrors[0]
+              : renderErrors.map((m, i) => `${i + 1}. ${m}`).join("\n");
+          // One static, always-true pointer to the verification tools — no
+          // brittle per-error guessing. The model reads the raw message(s)
+          // above and picks the right tool itself.
           return JSON.stringify({
             ok: false,
-            error: `Chart failed to render: ${renderError}${hint}`,
+            error: `Chart failed to render:\n${detail}`,
+            errors: renderErrors,
+            hint:
+              "Diagnose against the actual data before retrying: run_sql to confirm the query returns rows, describe_table to verify column names/types, and read_chart_docs for the spec shape.",
           });
         }
         // Stash on the tool-call entry so the renderer picks it up via onToolResult.
