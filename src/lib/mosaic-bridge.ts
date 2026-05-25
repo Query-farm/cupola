@@ -25,25 +25,46 @@ import { bridge } from "./shell-bridge";
 interface RenderSession {
   pending: number;
   errors: Error[];
-  /** Resolves once `pending` hits zero AND no further query starts within
-   *  the settle window. */
-  settled: Promise<void>;
-  resolveSettled: () => void;
+  /** Wall-clock time of the most recent query completion (or session start).
+   *  Used by the quiet-period settle algorithm: we consider the render
+   *  "settled" when no query has fired for `quietMs`. */
+  lastActivityAt: number;
 }
 
 let activeSession: RenderSession | null = null;
+let unhandledRejectionHandler: ((e: PromiseRejectionEvent) => void) | null = null;
 
 function startSession(): RenderSession {
-  let resolveSettled: () => void = () => {};
-  const settled = new Promise<void>((r) => { resolveSettled = r; });
-  const s: RenderSession = { pending: 0, errors: [], settled, resolveSettled };
+  const s: RenderSession = {
+    pending: 0,
+    errors: [],
+    lastActivityAt: performance.now(),
+  };
   activeSession = s;
+  // Capture unhandled promise rejections during this render — Mosaic and
+  // Observable Plot can throw inside async chart-render code paths that
+  // aren't connected to any await we control. Hook the global event so
+  // those errors flow into the session bag too.
+  unhandledRejectionHandler = (e: PromiseRejectionEvent) => {
+    const reason = e.reason;
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    // Don't swallow — but suppress the console noise by preventing default.
+    s.errors.push(err);
+    e.preventDefault();
+  };
+  window.addEventListener("unhandledrejection", unhandledRejectionHandler);
   return s;
 }
 
 function endSession(s: RenderSession): void {
   if (activeSession === s) activeSession = null;
+  if (unhandledRejectionHandler) {
+    window.removeEventListener("unhandledrejection", unhandledRejectionHandler);
+    unhandledRejectionHandler = null;
+  }
 }
+
+function touchSession(s: RenderSession) { s.lastActivityAt = performance.now(); }
 
 /**
  * Adapter from Mosaic's Connector interface to our shell bridge.
@@ -58,7 +79,7 @@ class HaybarnConnector implements Connector {
       throw new Error("DuckDB shell not initialized — open the SQL Shell tab first");
     }
     const session = activeSession;
-    if (session) session.pending++;
+    if (session) { session.pending++; touchSession(session); }
     try {
       const r = await bridge.query(req.sql);
       if (!r.ok) {
@@ -76,22 +97,12 @@ class HaybarnConnector implements Connector {
       const table = tableFromIPC(bytes, { useDate: true });
       return req.type === "json" ? table.toArray() : table;
     } catch (e: any) {
-      // Capture errors that didn't come through r.ok (e.g. fetch failure).
       if (session && !session.errors.includes(e)) {
         session.errors.push(e instanceof Error ? e : new Error(String(e)));
       }
       throw e;
     } finally {
-      if (session) {
-        session.pending--;
-        if (session.pending <= 0) {
-          // Defer resolution one microtask so chained queries (a query that
-          // queues another in its `then` handler) still hold the session open.
-          queueMicrotask(() => {
-            if (session.pending <= 0) session.resolveSettled();
-          });
-        }
-      }
+      if (session) { session.pending--; touchSession(session); }
     }
   }
 }
@@ -145,16 +156,41 @@ function injectTempData(spec: any): any {
   if (!out.data || typeof out.data !== "object") return out;
   const data: Record<string, any> = {};
   for (const [key, value] of Object.entries(out.data)) {
-    // temp + replace are both injected. The docs claim these default to true
-    // but CreateQuery's JS defaults are both false, so a second render with
-    // the same data name fails ("table already exists") or silently reuses
-    // stale rows. User-provided values take precedence.
+    // Three input forms we handle:
+    //   1. Bare string                       → table from query (inject temp+replace)
+    //   2. Bare array                        → JSON inline literal (leave alone)
+    //   3. Object with file/query/url        → table-y forms (inject temp+replace)
+    //   4. Object with data: [...]           → JSON inline literal (leave alone,
+    //                                          but ensure type:"json" so the
+    //                                          parser doesn't guess "table")
+    //   5. Anything else                     → pass through unchanged
+    //
+    // (3) is where temp+replace matter: without them, a second render with
+    // the same data name fails ("already exists") or silently reuses stale
+    // rows. User-provided temp/replace win.
+    // All these forms call CREATE TABLE under the hood (string → table from
+    // query; array → JSON literal; object with file/url/data → file/JSON
+    // loader). We inject temp+replace into every one so the table lands in
+    // the writable temp schema and survives re-renders. The bare-array form
+    // is special: the parser converts it to { type:"json", data:[...] } in
+    // resolveDataSpec, but only AFTER it sees an array. We pre-convert to
+    // give it the option-bag form so our temp/replace flags stick.
     if (typeof value === "string") {
       data[key] = { type: "table", query: value, temp: true, replace: true };
     } else if (Array.isArray(value)) {
-      data[key] = value;
+      data[key] = { type: "json", data: value, temp: true, replace: true };
     } else if (value && typeof value === "object") {
-      data[key] = { temp: true, replace: true, ...(value as object) };
+      const v = value as Record<string, any>;
+      const isInlineLiteral = Array.isArray(v.data) && !v.query && !v.file && !v.url;
+      if (isInlineLiteral) {
+        // Wrapped inline JSON literal — ensure type:"json" so the parser
+        // doesn't default to "table" (which would silently no-op).
+        data[key] = { temp: true, replace: true, type: "json", ...v };
+      } else if (v.query || v.file || v.url) {
+        data[key] = { temp: true, replace: true, ...v };
+      } else {
+        data[key] = v;
+      }
     } else {
       data[key] = value;
     }
@@ -213,8 +249,9 @@ export interface RenderResult {
  */
 export async function renderChartSpec(
   spec: any,
-  settleMs: number = 500,
+  options: { quietMs?: number; maxMs?: number } = {},
 ): Promise<RenderResult> {
+  const { quietMs = 250, maxMs = 3000 } = options;
   const { api, parseSpec, astToDOM } = await getMosaicAPI();
   const session = startSession();
   try {
@@ -224,8 +261,6 @@ export async function renderChartSpec(
       const out = await astToDOM(ast, { api });
       element = out.element;
     } catch (e: any) {
-      // astToDOM's await covers data-load queries; if that throws, it's a
-      // hard fail — there's no element to return.
       throw e instanceof Error ? e : new Error(String(e));
     }
 
@@ -241,9 +276,8 @@ export async function renderChartSpec(
     hidden.appendChild(element);
 
     try {
-      await waitForSessionSettle(session, settleMs);
+      await waitForSessionSettle(session, quietMs, maxMs);
     } finally {
-      // Detach but leave the element intact so the caller can mount it.
       hidden.removeChild(element);
       hidden.remove();
     }
@@ -270,27 +304,37 @@ export async function renderChartSpecOrThrow(spec: any): Promise<HTMLElement> {
 }
 
 /**
- * Wait for the session to settle: pending hits zero AND no new queries
- * fire during the settle window. Resolves either way after settleMs even
- * if queries are still pending (so we don't hang on a runaway widget).
+ * Wait for the session to settle using a quiet-period algorithm. We
+ * resolve only when:
+ *   - `pending` has been zero for at least `quietMs`, AND
+ *   - the last query completed at least `quietMs` ago.
+ *
+ * The plot widget's MosaicClients fire queries asynchronously *after*
+ * astToDOM resolves (during widget mount / client registration), so a
+ * naive "wait until pending hits zero once" returns too early. The
+ * quiet-period algorithm catches these late queries by waiting for an
+ * activity gap.
+ *
+ * Capped at `maxMs` so we never hang indefinitely on a runaway widget.
  */
-async function waitForSessionSettle(session: RenderSession, settleMs: number): Promise<void> {
-  // Race the session-settled signal against a fixed deadline. We also
-  // need to handle the case where queries haven't even started yet — give
-  // them a chance to register before the deadline.
-  await new Promise<void>((resolve) => {
-    let resolved = false;
-    const done = () => {
-      if (resolved) return;
-      resolved = true;
-      resolve();
-    };
-    const timeout = setTimeout(done, settleMs);
-    session.settled.then(() => {
-      clearTimeout(timeout);
-      // Short additional wait — a settled session can re-fire if a widget
-      // schedules a follow-up query in a microtask. Give that one chance.
-      setTimeout(done, 50);
-    });
-  });
+async function waitForSessionSettle(
+  session: RenderSession,
+  quietMs: number = 250,
+  maxMs: number = 3000,
+): Promise<void> {
+  const deadline = performance.now() + maxMs;
+  // Always wait at least `quietMs` from the time we entered the wait —
+  // this gives chart widgets a moment to register their MosaicClients
+  // and fire their first query, in case astToDOM completed before any
+  // client query started.
+  touchSession(session);
+  while (true) {
+    const now = performance.now();
+    if (now >= deadline) return;
+    const sinceActivity = now - session.lastActivityAt;
+    if (session.pending === 0 && sinceActivity >= quietMs) return;
+    // Sleep a small slice and re-check.
+    const wait = Math.min(50, Math.max(10, quietMs - sinceActivity));
+    await new Promise((r) => setTimeout(r, wait));
+  }
 }
