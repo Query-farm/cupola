@@ -2,7 +2,8 @@
  * AI Agent — Claude-powered data analyst for the DuckDB shell.
  * Uses raw fetch + SSE parsing (no SDK dependency).
  * Provides tools: run_sql, read_query_results, list_tables, describe_table,
- * ask_user, read_chart_docs, generate_chart.
+ * ask_user, read_chart_docs, list_chart_examples, read_chart_example,
+ * generate_chart.
  */
 
 import type { CatalogData } from "./service";
@@ -158,6 +159,41 @@ const TOOLS: Tool[] = [
     input_schema: { type: "object", properties: {} },
   },
   {
+    name: "list_chart_examples",
+    description: [
+      "List the 54 bundled Mosaic example specs from the official docs site.",
+      "Each entry has a short name (the lookup key), an optional human-readable",
+      "title, and an optional description. Use this BEFORE generate_chart when",
+      "you need to see how a specific chart type is composed — pick the example",
+      "most similar to what you're building and then call read_chart_example.",
+      "",
+      "These are reference material, not executable specs. They load data from",
+      "files like 'data/stocks.parquet' that don't exist in our app. Use them",
+      "to learn the spec format, then substitute your own data source:",
+      "  { \"sql\": \"SELECT ...\" }  or  { \"type\": \"table\", \"query\": \"SELECT ...\" }",
+    ].join("\n"),
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "read_chart_example",
+    description: [
+      "Read one of the bundled Mosaic example specs by name. Returns the raw",
+      "JSON. Call list_chart_examples first to see the index. Useful when you",
+      "need to see exactly how a particular chart type, mark combination, or",
+      "interactor is structured.",
+    ].join("\n"),
+    input_schema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Example name from list_chart_examples (e.g. 'line', 'flights-200k', 'us-state-map').",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
     name: "generate_chart",
     description: [
       "Render a Mosaic vgplot chart in the chat using a JSON spec. Use this after",
@@ -215,6 +251,8 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `* **run_sql** — Execute a DuckDB SQL query.`,
     `* **ask_user** — Ask the user to choose between specific options.`,
     `* **read_chart_docs** — Read the Mosaic chart spec authoring guide. Call once per conversation before generating charts, or after a chart spec fails.`,
+    `* **list_chart_examples** — Browse 54 worked Mosaic example specs by title. Use when picking a chart pattern to model your spec after.`,
+    `* **read_chart_example** — Read one bundled example spec by name (after list_chart_examples). Useful for copying a chart pattern then substituting your data.`,
     `* **generate_chart** — Render a Mosaic visualization inline in the chat. Use when a chart conveys the answer better than a table (counts, distributions, trends, comparisons, geo overlays).`,
     ``,
     `## Rules`,

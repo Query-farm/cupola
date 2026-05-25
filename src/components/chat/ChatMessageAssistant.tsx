@@ -89,13 +89,21 @@ export function ChatMessageAssistant({
               }
               return <MosaicChartBlock key={block.id} spec={chart.spec} title={chart.title} />;
             }
-            if (tc.name === "list_tables" || tc.name === "describe_table" || tc.name === "read_query_results" || tc.name === "read_chart_docs") {
+            if (
+              tc.name === "list_tables" || tc.name === "describe_table" ||
+              tc.name === "read_query_results" || tc.name === "read_chart_docs" ||
+              tc.name === "list_chart_examples" || tc.name === "read_chart_example"
+            ) {
               const label = tc.name === "describe_table"
                 ? `Looking up ${tc.input?.schema}.${tc.input?.table}`
                 : tc.name === "list_tables"
                 ? "Looking up tables"
                 : tc.name === "read_chart_docs"
                 ? "Reading chart docs"
+                : tc.name === "list_chart_examples"
+                ? "Browsing chart examples"
+                : tc.name === "read_chart_example"
+                ? `Reading chart example: ${tc.input?.name || "(unknown)"}`
                 : "Reading more results";
               return (
                 <div key={block.id} className="text-xs text-muted-foreground/60 flex items-center gap-1.5 py-0.5">

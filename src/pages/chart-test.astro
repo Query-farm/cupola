@@ -1,0 +1,306 @@
+---
+// Chart render-error regression test page.
+//
+// A battery of named Mosaic spec test cases, each with an expected
+// outcome (renders cleanly or fails with an error containing certain
+// substrings). Drives renderChartSpec from src/lib/mosaic-bridge directly
+// so we can iterate on the error-capture logic without going through the
+// AI tool or React component machinery.
+//
+// Open at /chart-test in a browser tab where the SQL Shell is already
+// initialized (the connector reuses bridge.query). Click Run All to
+// execute every case; results show pass/fail + the actual error message.
+//
+// Programmatic API: window.runChartTests() returns a Promise resolving
+// to an array of { name, status, expectedError, actualError } so
+// Playwright can drive it.
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cupola — Chart Render Tests</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      body { font-family: 'Inter', sans-serif; background: #faf8f0; color: #2c2c1e; max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+      h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+      .lede { color: #6b6b5a; margin: 0 0 1.5rem; font-size: 0.9rem; }
+      .controls { display: flex; gap: 0.5rem; margin-bottom: 1rem; align-items: center; }
+      button { background: #22c55e; color: #fff; border: 0; padding: 0.5rem 1rem; border-radius: 0.5rem; font: 600 0.875rem 'Inter'; cursor: pointer; }
+      button:hover { background: #16a34a; }
+      button.secondary { background: #fff; color: #5a4a36; border: 1px solid #d3cab9; }
+      button.secondary:hover { background: #e8e4df; }
+      .summary { font-family: 'JetBrains Mono', monospace; font-size: 0.875rem; padding: 0.5rem 0.875rem; border-radius: 0.375rem; background: #fff; border: 1px solid #d3cab9; }
+      .case { margin: 0.5rem 0; padding: 0.75rem 1rem; border-radius: 0.5rem; border: 1px solid #d3cab9; background: #fff; }
+      .case-header { display: flex; align-items: baseline; gap: 0.75rem; }
+      .case-name { font-weight: 600; }
+      .status { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; padding: 0.125rem 0.5rem; border-radius: 999px; flex-shrink: 0; }
+      .status.pending { background: #e8e4df; color: #5a4a36; }
+      .status.pass { background: #dcfce7; color: #166534; }
+      .status.fail { background: #fee2e2; color: #991b1b; }
+      .status.running { background: #fef3c7; color: #92400e; }
+      .case-desc { color: #6b6b5a; font-size: 0.875rem; margin-top: 0.25rem; }
+      .case-detail { margin-top: 0.5rem; padding: 0.5rem 0.75rem; background: #f7f6f4; border-radius: 0.25rem; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; white-space: pre-wrap; word-break: break-word; }
+      .case-detail .label { color: #8a754f; font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.08em; }
+      details summary { cursor: pointer; color: #6b6b5a; font-size: 0.8125rem; }
+      pre { background: #f7f6f4; padding: 0.5rem 0.75rem; border-radius: 0.25rem; font-size: 0.75rem; overflow-x: auto; margin: 0.25rem 0 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Chart Render Tests</h1>
+    <p class="lede">
+      Exercise renderChartSpec against a battery of valid + intentionally-broken specs.
+      <strong>Note</strong>: this page assumes you've initialized the SQL Shell in another tab so
+      <code>bridge.query</code> is available. If queries fail with "DuckDB shell not initialized,"
+      open Cupola in another tab, connect to a service, then re-run here.
+    </p>
+
+    <div class="controls">
+      <button id="run-all">Run All</button>
+      <button id="run-failing" class="secondary">Re-run Failing</button>
+      <div class="summary" id="summary">Click Run All to begin</div>
+    </div>
+
+    <div id="cases"></div>
+
+    <script type="module">
+      // We can't import @/lib/mosaic-bridge directly because this is a
+      // pure-HTML Astro page (no /src alias). Use a relative URL.
+      const mosaicMod = "/src/lib/mosaic-bridge.ts";
+      const shellMod = "/src/lib/shell-bridge.ts";
+
+      // ---- Test cases ----
+      // Each case is { name, description, spec, expect }
+      // - expect.ok = true     → must render with no errors
+      // - expect.errorMatches  → regex(es) the error message must contain
+      const CASES = [
+        {
+          name: "valid:bar",
+          description: "Valid bar chart with embedded SQL data — happy path.",
+          spec: {
+            data: { d: "SELECT 'a' AS k, 1 AS v UNION ALL SELECT 'b', 2 UNION ALL SELECT 'c', 3" },
+            plot: [{ mark: "barY", data: { from: "d" }, x: "k", y: "v" }],
+            width: 320, height: 200
+          },
+          expect: { ok: true },
+        },
+        {
+          name: "valid:histogram",
+          description: "Histogram via random samples.",
+          spec: {
+            data: { d: "SELECT random() AS x FROM range(500)" },
+            plot: [{ mark: "rectY", data: { from: "d" }, x: { bin: "x" }, y: { count: null } }],
+            width: 320, height: 200
+          },
+          expect: { ok: true },
+        },
+        {
+          name: "valid:scatter",
+          description: "Dot mark over random x,y.",
+          spec: {
+            data: { d: "SELECT random() AS x, random() AS y FROM range(100)" },
+            plot: [{ mark: "dot", data: { from: "d" }, x: "x", y: "y" }],
+            width: 320, height: 200
+          },
+          expect: { ok: true },
+        },
+        {
+          name: "valid:line",
+          description: "Time series line chart.",
+          spec: {
+            data: { d: "SELECT range AS t, sin(range / 5.0) AS y FROM range(50) r(range)" },
+            plot: [{ mark: "lineY", data: { from: "d" }, x: "t", y: "y" }],
+            width: 320, height: 200
+          },
+          expect: { ok: true },
+        },
+        {
+          name: "error:bad-sql-in-data",
+          description: "Data SQL references a nonexistent table.",
+          spec: {
+            data: { d: "SELECT k, v FROM nonexistent_table_xyz" },
+            plot: [{ mark: "barY", data: { from: "d" }, x: "k", y: "v" }],
+            width: 320, height: 200
+          },
+          expect: { errorMatches: [/nonexistent_table_xyz|does not exist|not found|catalog/i] },
+        },
+        {
+          name: "error:unknown-column-in-encoding",
+          description: "Channel references a column the source SQL doesn't produce.",
+          spec: {
+            data: { d: "SELECT 'a' AS k, 1 AS v" },
+            plot: [{ mark: "barY", data: { from: "d" }, x: "k", y: "missing_column_xyz" }],
+            width: 320, height: 200
+          },
+          expect: { errorMatches: [/missing_column_xyz|column|not found|binder/i] },
+        },
+        {
+          name: "error:unknown-mark",
+          description: "Spec uses a mark type Mosaic doesn't know.",
+          spec: {
+            data: { d: "SELECT 'a' AS k, 1 AS v" },
+            plot: [{ mark: "thisIsNotAMark", data: { from: "d" }, x: "k", y: "v" }],
+            width: 320, height: 200
+          },
+          expect: { errorMatches: [/mark|unknown|unrecognized|invalid/i] },
+        },
+        {
+          name: "error:syntactic-junk",
+          description: "Spec has no root component (no plot/vconcat/hconcat).",
+          spec: {
+            data: { d: "SELECT 1 AS v" },
+            justSomeKey: "with no real root"
+          },
+          expect: { errorMatches: [/specification|component|invalid/i] },
+        },
+        {
+          name: "ok-or-error:empty-data",
+          description: "Data SQL returns 0 rows — may render an empty plot or error.",
+          spec: {
+            data: { d: "SELECT 'a' AS k, 1 AS v WHERE 1 = 0" },
+            plot: [{ mark: "barY", data: { from: "d" }, x: "k", y: "v" }],
+            width: 320, height: 200
+          },
+          // Either outcome is acceptable; we just want to know which.
+          expect: { allowEither: true },
+        },
+      ];
+
+      function el(html) {
+        const t = document.createElement("template");
+        t.innerHTML = html.trim();
+        return t.content.firstElementChild;
+      }
+
+      function renderCase(c) {
+        return el(`
+          <div class="case" data-name="${c.name}">
+            <div class="case-header">
+              <span class="status pending">PENDING</span>
+              <span class="case-name">${c.name}</span>
+            </div>
+            <div class="case-desc">${c.description}</div>
+            <details>
+              <summary>spec</summary>
+              <pre>${JSON.stringify(c.spec, null, 2)}</pre>
+            </details>
+            <div class="case-detail" style="display:none"></div>
+          </div>
+        `);
+      }
+
+      function setStatus(caseEl, kind, text) {
+        const s = caseEl.querySelector(".status");
+        s.className = "status " + kind;
+        s.textContent = text;
+      }
+      function setDetail(caseEl, label, body) {
+        const d = caseEl.querySelector(".case-detail");
+        d.style.display = "block";
+        d.innerHTML = `<span class="label">${label}</span><br>${body}`;
+      }
+
+      async function runOne(caseObj, mosaic) {
+        const t0 = performance.now();
+        let result, threw;
+        try {
+          result = await mosaic.renderChartSpec(caseObj.spec, 600);
+        } catch (e) {
+          threw = e;
+        }
+        const ms = Math.round(performance.now() - t0);
+
+        const actualErrors = threw
+          ? [threw.message || String(threw)]
+          : (result?.errors || []).map(e => e.message || String(e));
+        const ok = !threw && actualErrors.length === 0;
+
+        // Evaluate against expectations.
+        let status, reason;
+        if (caseObj.expect.ok) {
+          if (ok) { status = "pass"; reason = "rendered cleanly in " + ms + "ms"; }
+          else { status = "fail"; reason = "expected clean render, got error: " + actualErrors.join(" | "); }
+        } else if (caseObj.expect.errorMatches) {
+          if (actualErrors.length === 0) {
+            status = "fail";
+            reason = "expected error, but render succeeded in " + ms + "ms";
+          } else {
+            const text = actualErrors.join(" | ");
+            const allMatch = caseObj.expect.errorMatches.every(re => re.test(text));
+            if (allMatch) { status = "pass"; reason = "got expected error: " + text; }
+            else { status = "fail"; reason = "error didn't match expectations: " + text; }
+          }
+        } else if (caseObj.expect.allowEither) {
+          status = "pass";
+          reason = ok
+            ? "rendered cleanly in " + ms + "ms (accepted)"
+            : "errored, also accepted: " + actualErrors.join(" | ");
+        } else {
+          status = "fail";
+          reason = "case has no expectation defined";
+        }
+
+        return { name: caseObj.name, status, reason, ms, actualErrors };
+      }
+
+      let RESULTS = [];
+
+      async function runAll(filter) {
+        const mosaic = await import(mosaicMod);
+        const cases = filter
+          ? CASES.filter(c => filter(c))
+          : CASES;
+
+        const summary = document.getElementById("summary");
+        let pass = 0, fail = 0;
+
+        for (const c of cases) {
+          let caseEl = document.querySelector(`.case[data-name="${c.name}"]`);
+          if (!caseEl) {
+            caseEl = renderCase(c);
+            document.getElementById("cases").appendChild(caseEl);
+          }
+          setStatus(caseEl, "running", "RUNNING");
+          summary.textContent = `running ${c.name} ...`;
+          const r = await runOne(c, mosaic);
+          setStatus(caseEl, r.status, r.status.toUpperCase());
+          setDetail(caseEl, r.status === "pass" ? "OK" : "DETAIL", r.reason);
+          RESULTS.push(r);
+          if (r.status === "pass") pass++;
+          else fail++;
+          summary.textContent = `${pass} passed, ${fail} failed, ${cases.length - pass - fail} remaining`;
+        }
+        summary.textContent = `${pass} passed, ${fail} failed of ${cases.length}`;
+      }
+
+      // Pre-render the case shells so the user sees what's planned.
+      for (const c of CASES) {
+        document.getElementById("cases").appendChild(renderCase(c));
+      }
+
+      document.getElementById("run-all").addEventListener("click", () => {
+        RESULTS = [];
+        runAll(null);
+      });
+      document.getElementById("run-failing").addEventListener("click", () => {
+        const failingNames = new Set(RESULTS.filter(r => r.status === "fail").map(r => r.name));
+        RESULTS = RESULTS.filter(r => !failingNames.has(r.name));
+        runAll(c => failingNames.has(c.name));
+      });
+
+      // Programmatic API for Playwright.
+      window.runChartTests = async () => {
+        RESULTS = [];
+        await runAll(null);
+        return RESULTS;
+      };
+    </script>
+  </body>
+</html>

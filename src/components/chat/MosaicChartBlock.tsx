@@ -175,9 +175,14 @@ function ChartCanvas({
     setError(null);
     (async () => {
       try {
-        const el = await renderChartSpec(spec);
+        const result = await renderChartSpec(spec);
         if (cancelled) return;
-        viewEl = el;
+        if (result.errors.length > 0) {
+          setError(result.errors[0].message);
+          setStatus("error");
+          return;
+        }
+        viewEl = result.element;
         if (containerRef.current && viewEl) {
           containerRef.current.innerHTML = "";
           containerRef.current.appendChild(viewEl as Node);

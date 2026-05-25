@@ -335,6 +335,29 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         const { getChartDocs } = await import("@/lib/mosaic-docs");
         return getChartDocs();
       }
+      if (name === "list_chart_examples") {
+        const { listChartExamples } = await import("@/lib/mosaic-examples");
+        const idx = listChartExamples();
+        // Compact text rendering is cheaper than JSON for the model to scan
+        // and easier on token budgets — one line per example.
+        const lines = idx.map((e) => {
+          const title = e.title ? ` — ${e.title}` : "";
+          const desc = e.description ? ` (${e.description.slice(0, 120)})` : "";
+          return `${e.name}${title}${desc}`;
+        });
+        return JSON.stringify({ count: idx.length, examples: lines });
+      }
+      if (name === "read_chart_example") {
+        const { getChartExample } = await import("@/lib/mosaic-examples");
+        const text = getChartExample(input?.name);
+        if (!text) {
+          return JSON.stringify({
+            ok: false,
+            error: `No example named "${input?.name}". Call list_chart_examples to see available names.`,
+          });
+        }
+        return text;
+      }
       if (name === "generate_chart") {
         const { spec, title } = input as { spec: any; title: string };
         if (!spec || typeof spec !== "object") {
@@ -343,37 +366,42 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         if (!title || typeof title !== "string") {
           return JSON.stringify({ ok: false, error: "title must be a non-empty string" });
         }
-        // Full pre-render. We run parse + astToDOM + data queries here so
-        // every failure mode the AI can introduce (bad SQL, unknown column,
-        // type mismatch, missing extension, …) surfaces as a tool error the
-        // model can read and fix on the next turn — instead of silently
-        // breaking inside the React block after the model has moved on.
+        // Full pre-render. We run parse + astToDOM + data queries here AND
+        // wait for the plot widget's async chart-data SELECTs to fire via
+        // our connector-level error capture, so every failure mode the AI
+        // can introduce (bad SQL, unknown column, type mismatch, missing
+        // extension, …) surfaces as a tool error the model can read.
         //
         // The DOM element is discarded; the chat block re-renders on mount.
-        // We pay the ~200-2000ms cost in exchange for a tight error loop.
+        // We pay the ~500-2000ms cost in exchange for a tight error loop.
+        let renderError: string | null = null;
         try {
           const { renderChartSpec } = await import("@/lib/mosaic-bridge");
-          const el = await renderChartSpec(spec);
-          // Give Observable Plot's async rendering one tick to settle so
-          // post-mount errors (e.g. zero-row data → empty domain) bubble up.
-          await new Promise(r => setTimeout(r, 50));
+          const result = await renderChartSpec(spec);
+          if (result.errors.length > 0) {
+            renderError = result.errors[0].message;
+          }
           // Clean up the throwaway element.
-          try { (el as any)?.remove?.(); } catch {}
+          try { result.element?.remove?.(); } catch {}
         } catch (e: any) {
-          const msg = e?.message || String(e);
+          renderError = e?.message || String(e);
+        }
+        if (renderError) {
           // Surface common error categories with hints so the model knows
           // which doc section to consult.
           let hint = "";
-          if (/parse|format|invalid/i.test(msg)) {
+          if (/parse|format|invalid|unrecognized attribute|invalid specification/i.test(renderError)) {
             hint = " Call read_chart_docs to verify the spec shape.";
-          } else if (/column|binder|not found|unrecognized|reference/i.test(msg)) {
+          } else if (/column|binder|not found|reference|catalog|table.*does not exist/i.test(renderError)) {
             hint = " The SQL inside the spec references a column or table that doesn't exist — call describe_table on the table you're plotting to verify columns, then retry.";
-          } else if (/no data|empty|domain/i.test(msg)) {
-            hint = " The query returned no rows. Try a less restrictive filter or run the SQL via run_sql first to confirm it produces rows.";
+          } else if (/no data|empty|domain|extent|nan/i.test(renderError)) {
+            hint = " The query returned no rows or produced an empty domain. Try a less restrictive filter or run the SQL via run_sql first to confirm it produces rows.";
+          } else if (/type|cast|conversion/i.test(renderError)) {
+            hint = " A column type doesn't match what the mark expects — temporal marks need date/timestamp columns, numeric scales need numeric columns. Use CAST or pick a compatible column.";
           }
           return JSON.stringify({
             ok: false,
-            error: `Chart failed to render: ${msg}${hint}`,
+            error: `Chart failed to render: ${renderError}${hint}`,
           });
         }
         // Stash on the tool-call entry so the renderer picks it up via onToolResult.
