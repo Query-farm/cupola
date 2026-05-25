@@ -279,7 +279,7 @@ function ChartCanvas({
           </div>
         </div>
       )}
-      <div ref={containerRef} className={status === "ready" ? "" : "hidden"} />
+      <div ref={containerRef} className={`mosaic-host ${status === "ready" ? "" : "hidden"}`} />
     </>
   );
 }
@@ -305,16 +305,16 @@ function FullscreenChart({
     };
   }, [onClose]);
 
-  // Compute fullscreen dimensions. Reserve room for the header + padding.
-  const [dims, setDims] = useState(() => ({
-    width: Math.min(1400, window.innerWidth - 80),
-    height: Math.max(400, window.innerHeight - 160),
-  }));
+  // Compute fullscreen dimensions. Reserve room for the header (48px) and
+  // some breathing-room padding (48px each side). No hard cap on width —
+  // the chart should fill whatever viewport the user has.
+  const computeDims = () => ({
+    width: Math.max(320, window.innerWidth - 48),
+    height: Math.max(400, window.innerHeight - 48 - 48),
+  });
+  const [dims, setDims] = useState(computeDims);
   useEffect(() => {
-    const onResize = () => setDims({
-      width: Math.min(1400, window.innerWidth - 80),
-      height: Math.max(400, window.innerHeight - 160),
-    });
+    const onResize = () => setDims(computeDims());
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -356,14 +356,47 @@ function FullscreenChart({
 }
 
 /**
- * Override width/height inside a spec for fullscreen rendering. Mosaic
- * accepts dimensions at the top level for single-plot specs, so we set
- * those. Specs with `vconcat` / `hconcat` will keep their per-plot sizes
- * unless they read top-level dims — out of scope to deeply rewrite here.
+ * Override width/height in a spec for fullscreen rendering.
+ *
+ * Single-plot specs honor top-level `width`/`height`, so setting those is
+ * enough. Composite layouts (`vconcat`/`hconcat`) need per-child overrides
+ * because each plot inside the array reads its own dimensions, not the
+ * parent's. We push dimensions into each direct child plot, dividing the
+ * available space across siblings on the layout axis. Inputs and other
+ * non-plot children get the full width with a small fixed height.
  */
 function scaleSpecForFullscreen(spec: any, dims: { width: number; height: number }): any {
   if (!spec || typeof spec !== "object") return spec;
-  return { ...spec, width: dims.width, height: dims.height };
+  const out: any = { ...spec, width: dims.width, height: dims.height };
+
+  // Estimate "non-plot row" cost: each input row consumes ~52px. We
+  // subtract that from the available height so plots get the rest.
+  const countNonPlots = (arr: any[]) =>
+    arr.filter((c) => c && typeof c === "object" && c.input).length;
+  const ROW_COST = 52;
+
+  if (Array.isArray(spec.vconcat)) {
+    const nonPlots = countNonPlots(spec.vconcat);
+    const plotCount = spec.vconcat.length - nonPlots || 1;
+    const remainH = Math.max(200, dims.height - nonPlots * ROW_COST - 24);
+    const perPlotH = Math.floor(remainH / plotCount);
+    out.vconcat = spec.vconcat.map((c: any) => {
+      if (!c || typeof c !== "object") return c;
+      if (c.input || c.legend) return c;  // leave inputs/legends alone
+      return { ...c, width: dims.width, height: perPlotH };
+    });
+  } else if (Array.isArray(spec.hconcat)) {
+    const nonPlots = countNonPlots(spec.hconcat);
+    const plotCount = spec.hconcat.length - nonPlots || 1;
+    const remainW = Math.max(200, dims.width - 24);
+    const perPlotW = Math.floor(remainW / plotCount);
+    out.hconcat = spec.hconcat.map((c: any) => {
+      if (!c || typeof c !== "object") return c;
+      if (c.input || c.legend) return c;
+      return { ...c, width: perPlotW, height: dims.height };
+    });
+  }
+  return out;
 }
 
 function runDownload(

@@ -406,24 +406,22 @@ function ChartPreview({
           </div>
         </div>
       )}
-      <div ref={containerRef} className={status === "ready" ? "" : "hidden"} />
+      <div ref={containerRef} className={`mosaic-host ${status === "ready" ? "" : "hidden"}`} />
     </div>
   );
 }
 
 function FullscreenSpec({ spec, onClose }: { spec: any; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [dims, setDims] = useState(() => ({
-    width: Math.min(1400, window.innerWidth - 80),
-    height: Math.max(400, window.innerHeight - 160),
-  }));
+  const computeDims = () => ({
+    width: Math.max(320, window.innerWidth - 48),
+    height: Math.max(400, window.innerHeight - 48 - 48),
+  });
+  const [dims, setDims] = useState(computeDims);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    const onResize = () => setDims({
-      width: Math.min(1400, window.innerWidth - 80),
-      height: Math.max(400, window.innerHeight - 160),
-    });
+    const onResize = () => setDims(computeDims());
     window.addEventListener("keydown", onKey);
     window.addEventListener("resize", onResize);
     document.body.style.overflow = "hidden";
@@ -434,7 +432,7 @@ function FullscreenSpec({ spec, onClose }: { spec: any; onClose: () => void }) {
     };
   }, [onClose]);
 
-  const scaled = { ...spec, width: dims.width, height: dims.height };
+  const scaled = scaleFullscreenSpec(spec, dims);
 
   const download = (format: "svg" | "png") => {
     const svg = findChartSvg(ref.current);
@@ -468,4 +466,36 @@ function FullscreenSpec({ spec, onClose }: { spec: any; onClose: () => void }) {
 /** Best-effort: pull a title out of meta.title / params.title / first plot name. */
 function inferTitle(spec: any): string | null {
   return spec?.meta?.title || spec?.title || null;
+}
+
+/**
+ * Push dimensions into a spec for fullscreen rendering. Composite layouts
+ * (vconcat/hconcat) need per-child overrides because each plot inside
+ * reads its own dimensions, not the parent's. Inputs/legends keep their
+ * natural size and consume an estimated fixed row cost.
+ */
+function scaleFullscreenSpec(spec: any, dims: { width: number; height: number }): any {
+  if (!spec || typeof spec !== "object") return spec;
+  const out: any = { ...spec, width: dims.width, height: dims.height };
+  const ROW_COST = 52;
+  const countNonPlots = (arr: any[]) =>
+    arr.filter((c) => c && typeof c === "object" && (c.input || c.legend)).length;
+  if (Array.isArray(spec.vconcat)) {
+    const nonPlots = countNonPlots(spec.vconcat);
+    const plotCount = Math.max(1, spec.vconcat.length - nonPlots);
+    const perPlotH = Math.floor((Math.max(200, dims.height - nonPlots * ROW_COST - 24)) / plotCount);
+    out.vconcat = spec.vconcat.map((c: any) => {
+      if (!c || typeof c !== "object" || c.input || c.legend) return c;
+      return { ...c, width: dims.width, height: perPlotH };
+    });
+  } else if (Array.isArray(spec.hconcat)) {
+    const nonPlots = countNonPlots(spec.hconcat);
+    const plotCount = Math.max(1, spec.hconcat.length - nonPlots);
+    const perPlotW = Math.floor((Math.max(200, dims.width - 24)) / plotCount);
+    out.hconcat = spec.hconcat.map((c: any) => {
+      if (!c || typeof c !== "object" || c.input || c.legend) return c;
+      return { ...c, width: perPlotW, height: dims.height };
+    });
+  }
+  return out;
 }
