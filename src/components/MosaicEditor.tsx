@@ -8,11 +8,19 @@
  * Reuses chart-export.ts and FullscreenChart from the chat block.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, AlertCircle, Play, Download, Maximize2, X, FilePlus, RotateCcw } from "lucide-react";
+import { Loader2, AlertCircle, Play, Download, Maximize2, X, FilePlus, RotateCcw, RotateCw, Eye, EyeOff } from "lucide-react";
 import { renderChartSpec } from "@/lib/mosaic-bridge";
 import { findChartSvg, downloadChartSVG, downloadChartPNG } from "@/lib/chart-export";
 
 const STORAGE_KEY = "mosaic-editor-spec";
+
+/** Watch interval options (ms). 0 = off. */
+const WATCH_INTERVALS_MS: Array<{ label: string; ms: number }> = [
+  { label: "Off", ms: 0 },
+  { label: "5s", ms: 5_000 },
+  { label: "30s", ms: 30_000 },
+  { label: "1m", ms: 60_000 },
+];
 const DEFAULT_SPEC = `{
   "$schema": "https://uwdata.github.io/mosaic/schema/latest.json",
   "data": {
@@ -99,7 +107,17 @@ export function MosaicEditor({ isActive }: Props) {
   const [renderedSpec, setRenderedSpec] = useState<any>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [watchIdx, setWatchIdx] = useState(0);
   const chartRef = useRef<HTMLDivElement>(null);
+
+  // Auto-refresh tick when Watch is on.
+  useEffect(() => {
+    const ms = WATCH_INTERVALS_MS[watchIdx].ms;
+    if (!ms || !renderedSpec) return;
+    const id = setInterval(() => setRefreshKey((k) => k + 1), ms);
+    return () => clearInterval(id);
+  }, [watchIdx, renderedSpec]);
 
   // Debounced auto-save to localStorage.
   useEffect(() => {
@@ -171,6 +189,29 @@ export function MosaicEditor({ isActive }: Props) {
           </button>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => setRefreshKey((k) => k + 1)}
+            disabled={!renderedSpec}
+            title="Refresh — re-run the spec's queries"
+            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <RotateCw className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => setWatchIdx((i) => (i + 1) % WATCH_INTERVALS_MS.length)}
+            disabled={!renderedSpec}
+            title={watchIdx > 0 ? `Watching every ${WATCH_INTERVALS_MS[watchIdx].label} — click to cycle` : "Watch — auto-refresh"}
+            className="flex items-center gap-1 px-1.5 py-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {watchIdx > 0
+              ? <Eye className="h-3.5 w-3.5 text-harvest-600 dark:text-harvest-400" />
+              : <EyeOff className="h-3.5 w-3.5" />}
+            {watchIdx > 0 && (
+              <span className="text-[10px] font-mono text-harvest-700 dark:text-harvest-400">
+                {WATCH_INTERVALS_MS[watchIdx].label}
+              </span>
+            )}
+          </button>
           <DownloadMenu onDownload={download} disabled={!renderedSpec} />
           <button
             onClick={() => setFullscreen(true)}
@@ -216,7 +257,7 @@ export function MosaicEditor({ isActive }: Props) {
 
         {/* Preview */}
         <div className="flex-1 min-w-0 overflow-auto bg-card">
-          <ChartPreview spec={renderedSpec} containerRef={chartRef} />
+          <ChartPreview spec={renderedSpec} containerRef={chartRef} refreshKey={refreshKey} />
         </div>
       </div>
 
@@ -301,8 +342,12 @@ function DownloadMenu({
 }
 
 function ChartPreview({
-  spec, containerRef,
-}: { spec: any; containerRef: React.RefObject<HTMLDivElement | null> }) {
+  spec, containerRef, refreshKey = 0,
+}: {
+  spec: any;
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  refreshKey?: number;
+}) {
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -310,7 +355,9 @@ function ChartPreview({
     if (!spec) { setStatus("idle"); return; }
     let cancelled = false;
     let viewEl: any = null;
-    setStatus("loading");
+    // Preserve previous chart during refresh ticks so the user doesn't see
+    // a "Rendering…" flash for every Watch interval.
+    if (!containerRef.current?.firstChild) setStatus("loading");
     setError(null);
     (async () => {
       try {
@@ -337,7 +384,7 @@ function ChartPreview({
       cancelled = true;
       try { viewEl?.destroy?.() ?? viewEl?.dispose?.(); } catch {}
     };
-  }, [spec, containerRef]);
+  }, [spec, containerRef, refreshKey]);
 
   return (
     <div className="h-full flex items-center justify-center p-6">

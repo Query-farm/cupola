@@ -12,6 +12,87 @@ field names and value types to use.
 
 ---
 
+## 0. Cupola deployment guidance (READ FIRST)
+
+You are authoring specs that will run inside Cupola, a browser-based catalog
+browser with a live DuckDB-WASM instance and the user's VGI catalog already
+attached. **Three rules override anything else in this guide that conflicts:**
+
+### Rule 1 — Always use SQL for data, never inline literals
+
+Cupola has a live DuckDB instance. Reference real catalog tables via SQL — do
+NOT dump rows as `{ "data": [{...}, {...}] }` inline JSON arrays. Inline data
+blows up the spec size, makes the chat unreadable, and can't be re-queried
+when the underlying data changes.
+
+```json
+// ✅ Correct — SQL query as the data source:
+"data": {
+  "by_district": "SELECT district, COUNT(*) AS cnt FROM albemarle_gis.property.parcels GROUP BY 1"
+}
+
+// ✅ Also correct — wrapped table form for advanced options:
+"data": {
+  "by_district": {
+    "type": "table",
+    "query": "SELECT district, COUNT(*) AS cnt FROM albemarle_gis.property.parcels GROUP BY 1"
+  }
+}
+
+// ❌ Wrong — don't paste rows inline. The user already has the data in DuckDB;
+//    fetch it via SQL instead. Inline form should only be used when there
+//    truly is no SQL alternative (e.g. a tiny static lookup the AI invented).
+"data": {
+  "cities": { "data": [{ "name": "Amsterdam", "lat": 52.3, "lng": 4.9 }, ...] }
+}
+```
+
+For overlays (e.g. plotting "major cities" alongside computed data), check if
+the catalog has a table for it before falling back to inline literals. If you
+must use inline data, keep it under 20 rows.
+
+### Rule 2 — Cupola injects `temp: true` and `replace: true` for you
+
+You don't need to set `temp` or `replace` on data definitions. Cupola wraps
+every spec before rendering and adds those flags automatically so tables land
+in `temp.main` and survive re-renders. Don't waste tokens on them.
+
+### Rule 3 — Don't include `$schema`
+
+The `$schema` URL is documented elsewhere in this guide but Cupola strips it
+before parsing. Omit it from your spec.
+
+### Rule 4 — `filterBy` requires a Selection, not a SQL string
+
+A common mistake when adding widgets:
+
+```json
+// ❌ Wrong — filterBy expects a Selection reference, not a SQL fragment:
+"data": { "from": "d", "filterBy": { "sql": "x < $cutoff" } }
+
+// ✅ Correct — embed the param in a channel's SQL expression instead:
+"data": { "from": "d" },
+"opacity": { "sql": "CASE WHEN x < $cutoff THEN 1.0 ELSE 0.2 END" }
+
+// ✅ Or — for true cross-filtering, define a selection and use a brush interactor:
+"params": {
+  "brush": { "select": "intersect" }
+}
+// ... then in a plot:
+"data": { "from": "d", "filterBy": "$brush" },
+"plot": [
+  { "mark": "dot", "data": { "from": "d" }, "x": "x", "y": "y" },
+  { "select": "intervalXY", "as": "$brush" }
+]
+```
+
+### Rule 5 — Refer to catalog tables by full path
+
+Use `catalog.schema.table` (three-part) in SQL, just like the user does in
+the SQL Shell. The default catalog/schema may not be what you expect.
+
+---
+
 ## Table of contents
 
 1. [How to use this guide](#1-how-to-use-this-guide)

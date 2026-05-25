@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Loader2, AlertCircle, ChevronDown, Code2,
-  Maximize2, X, Download,
+  Maximize2, X, Download, RotateCw, Eye, EyeOff,
 } from "lucide-react";
 import { renderChartSpec } from "@/lib/mosaic-bridge";
 import { findChartSvg, downloadChartSVG, downloadChartPNG } from "@/lib/chart-export";
+
+/** Watch interval options (ms). 0 = off. */
+const WATCH_INTERVALS_MS: Array<{ label: string; ms: number }> = [
+  { label: "Off", ms: 0 },
+  { label: "5s", ms: 5_000 },
+  { label: "30s", ms: 30_000 },
+  { label: "1m", ms: 60_000 },
+];
 
 /**
  * Renders a Mosaic vgplot spec inline in the chat. The first chart per
@@ -12,11 +20,12 @@ import { findChartSvg, downloadChartSVG, downloadChartPNG } from "@/lib/chart-ex
  * charts mount immediately because `getMosaicAPI()` caches the context.
  *
  * Controls on the chart header:
+ *   - Refresh: re-runs the spec's data queries. Useful when the underlying
+ *     catalog data has changed (e.g. an Iceberg snapshot was advanced).
+ *   - Watch: cycles an auto-refresh interval (Off → 5s → 30s → 1m → Off).
  *   - Maximize: opens a viewport-scaled fullscreen overlay re-rendering
- *     the chart at modal dimensions (clean re-render rather than CSS scale
- *     so axes/marks stay crisp).
- *   - Download: dropdown with SVG (vector, lossless) and PNG (rasterized
- *     via canvas, white background, 2x density).
+ *     the chart at modal dimensions.
+ *   - Download: dropdown with SVG (vector, lossless) and PNG (2× rasterized).
  *   - Spec: toggle to show the raw JSON spec the AI emitted.
  */
 export function MosaicChartBlock({
@@ -24,11 +33,21 @@ export function MosaicChartBlock({
 }: { spec: any; title?: string }) {
   const [showSpec, setShowSpec] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [watchIdx, setWatchIdx] = useState(0); // index into WATCH_INTERVALS_MS
   const inlineRef = useRef<HTMLDivElement>(null);
 
   const downloadInline = (format: "svg" | "png") => {
     runDownload(format, title, inlineRef.current);
   };
+
+  // Auto-refresh tick when Watch is on.
+  useEffect(() => {
+    const ms = WATCH_INTERVALS_MS[watchIdx].ms;
+    if (!ms) return;
+    const id = setInterval(() => setRefreshKey((k) => k + 1), ms);
+    return () => clearInterval(id);
+  }, [watchIdx]);
 
   return (
     <>
@@ -36,9 +55,13 @@ export function MosaicChartBlock({
         <ChartHeader
           title={title}
           showSpec={showSpec}
+          watchLabel={WATCH_INTERVALS_MS[watchIdx].label}
+          watching={watchIdx > 0}
           onToggleSpec={() => setShowSpec((v) => !v)}
           onMaximize={() => setFullscreen(true)}
           onDownload={downloadInline}
+          onRefresh={() => setRefreshKey((k) => k + 1)}
+          onCycleWatch={() => setWatchIdx((i) => (i + 1) % WATCH_INTERVALS_MS.length)}
         />
 
         {showSpec && (
@@ -48,7 +71,7 @@ export function MosaicChartBlock({
         )}
 
         <div className="p-3">
-          <ChartCanvas spec={spec} containerRef={inlineRef} />
+          <ChartCanvas spec={spec} containerRef={inlineRef} refreshKey={refreshKey} />
         </div>
       </div>
 
@@ -68,18 +91,44 @@ export function MosaicChartBlock({
 interface HeaderProps {
   title?: string;
   showSpec: boolean;
+  watchLabel: string;
+  watching: boolean;
   onToggleSpec: () => void;
   onMaximize: () => void;
   onDownload: (format: "svg" | "png") => void;
+  onRefresh: () => void;
+  onCycleWatch: () => void;
 }
 
-function ChartHeader({ title, showSpec, onToggleSpec, onMaximize, onDownload }: HeaderProps) {
+function ChartHeader({
+  title, showSpec, watchLabel, watching,
+  onToggleSpec, onMaximize, onDownload, onRefresh, onCycleWatch,
+}: HeaderProps) {
   return (
     <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/30">
-      <div className="font-heading text-sm font-semibold truncate">
-        {title || "Chart"}
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="font-heading text-sm font-semibold truncate">
+          {title || "Chart"}
+        </div>
+        {watching && (
+          <span className="flex items-center gap-1 text-[10px] font-mono text-harvest-700 dark:text-harvest-400" title={`Auto-refresh every ${watchLabel}`}>
+            <span className="w-1.5 h-1.5 rounded-full bg-harvest-500 animate-pulse" />
+            {watchLabel}
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-0.5 shrink-0">
+        <IconButton title="Refresh chart" onClick={(e) => { e.stopPropagation(); onRefresh(); }}>
+          <RotateCw className="h-3.5 w-3.5" />
+        </IconButton>
+        <IconButton
+          title={watching ? `Watching: ${watchLabel} (click to cycle)` : "Watch — auto-refresh"}
+          onClick={(e) => { e.stopPropagation(); onCycleWatch(); }}
+        >
+          {watching
+            ? <Eye className="h-3.5 w-3.5 text-harvest-600 dark:text-harvest-400" />
+            : <EyeOff className="h-3.5 w-3.5" />}
+        </IconButton>
         <IconButton title="Fullscreen" onClick={onMaximize}>
           <Maximize2 className="h-3.5 w-3.5" />
         </IconButton>
@@ -163,15 +212,25 @@ function DownloadMenu({
  * SVG out of the DOM for export.
  */
 function ChartCanvas({
-  spec, containerRef,
-}: { spec: any; containerRef: React.RefObject<HTMLDivElement | null> }) {
+  spec, containerRef, refreshKey = 0,
+}: {
+  spec: any;
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  /** Bumping this forces a re-render — used by the Refresh button and the
+   *  Watch interval. The spec itself doesn't change, but DuckDB may have
+   *  fresher data now. */
+  refreshKey?: number;
+}) {
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let viewEl: any = null;
-    setStatus("loading");
+    // Preserve the previous chart while re-rendering on a refresh so the
+    // user doesn't see a "Rendering chart…" flash for every tick of a
+    // Watch interval. Only show the loading state on the initial render.
+    if (!containerRef.current?.firstChild) setStatus("loading");
     setError(null);
     (async () => {
       try {
@@ -201,7 +260,7 @@ function ChartCanvas({
         else if (viewEl?.dispose) viewEl.dispose();
       } catch {}
     };
-  }, [spec, containerRef]);
+  }, [spec, containerRef, refreshKey]);
 
   return (
     <>
