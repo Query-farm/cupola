@@ -13,7 +13,7 @@
 
 import * as duckdb from "@haybarn/haybarn-wasm";
 
-import { bridge, notifyQueryChange } from "./shell-bridge";
+import { bridge, notifyQueryChange, setBootPhase } from "./shell-bridge";
 
 let bootPromise: Promise<void> | null = null;
 
@@ -79,6 +79,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
     },
   };
 
+  setBootPhase("Selecting DuckDB bundle");
   const bundle = await duckdb.selectBundle(BUNDLES);
   mark("select-bundle");
 
@@ -134,16 +135,20 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
 
   const db = new duckdb.AsyncDuckDB(logger, subWorker);
 
+  setBootPhase("Downloading DuckDB", 0);
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker, (p) => {
-    // Surface init progress as percentage for UX overlays (e.g. KeplerMap).
     const pct = Number(p.percentage);
-    if (Number.isFinite(pct)) bridge.progress?.(pct);
+    if (!Number.isFinite(pct)) return;
+    bridge.progress?.(pct);
+    setBootPhase("Downloading DuckDB", Math.round(pct));
   });
   mark("instantiate");
 
+  setBootPhase("Connecting to DuckDB");
   const conn = await db.connect();
   const connId = conn.useUnsafe((_db, id) => id);
   mark("connect");
+  setBootPhase("DuckDB ready", 100);
 
   // SAB cancel — must be after instantiate. Null-checked because Safari w/o
   // crossOriginIsolated has no SharedArrayBuffer at all; non-SAB contexts can

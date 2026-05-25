@@ -60,6 +60,14 @@ export const bridge = {
   workerReadyData: null as { wasmVersion: string; totalMs: number; timings: Array<{ phase: string; ms: number }> } | null,
   cancelInt32: null as Int32Array | null,
 
+  // Live boot state for the animated loading screen. `bootPhase` is the
+  // current human-readable step (e.g. "Downloading DuckDB", "Loading vgi
+  // extension"); `bootProgress` is 0-100 for the WASM instantiate phase
+  // only (other phases are indeterminate). Updated by duckdb-worker-boot
+  // and DuckDBShell as they progress; subscribed by the loading panel.
+  bootPhase: null as string | null,
+  bootProgress: null as number | null,
+
   // Shell/terminal (set by DuckDBShell)
   shellTerm: null as any,
   shellFitAddon: null as any,
@@ -106,6 +114,21 @@ export function onQueryChange(cb: () => void): () => void {
 }
 export function notifyQueryChange(): void {
   for (const cb of queryListeners) cb();
+}
+
+/** Subscribe to boot phase/progress changes. The loading screen uses this
+ *  to re-render when duckdb-worker-boot and DuckDBShell announce new
+ *  phases. Callers should pull the current values off `bridge` directly
+ *  after each fire. */
+const bootListeners = new Set<() => void>();
+export function onBootChange(cb: () => void): () => void {
+  bootListeners.add(cb);
+  return () => { bootListeners.delete(cb); };
+}
+export function setBootPhase(phase: string | null, progress: number | null = null): void {
+  bridge.bootPhase = phase;
+  bridge.bootProgress = progress;
+  for (const cb of bootListeners) cb();
 }
 
 // Expose on window for Playwright/test access (survives HMR module replacement)

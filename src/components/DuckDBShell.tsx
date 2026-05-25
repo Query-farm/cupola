@@ -17,7 +17,8 @@ import { printBoxTable, printLineTable, type TerminalOutput } from "@/lib/shell-
 import { handleDotCommand, type ShellState, type ShellIO } from "@/lib/shell-commands";
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "@/lib/shell-ai-mode";
 import { attachInputHandlers, type CompletionItem } from "@/lib/shell-input";
-import { bridge, recordQuery, notifyQueryChange } from "@/lib/shell-bridge";
+import { bridge, recordQuery, notifyQueryChange, setBootPhase } from "@/lib/shell-bridge";
+import { ShellBootScreen } from "./ShellBootScreen";
 import * as Sentry from "@sentry/astro";
 import { ensureDuckDB, resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { getTerminalTheme } from "@/lib/theme";
@@ -548,9 +549,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
 
       {/* Terminal container */}
       {mode !== "minimized" && loading && !error && activeTab === "shell" && (
-        <div className="flex-1 flex items-center justify-center text-terminal-accent text-sm">
-          Loading DuckDB-WASM...
-        </div>
+        <ShellBootScreen />
       )}
       {mode !== "minimized" && error && activeTab === "shell" && (
         <div className="flex-1 flex items-center justify-center text-red-400 text-sm">
@@ -1198,6 +1197,7 @@ function initShell(
       ];
       for (const ext of extensions) {
         writeln(`Loading ${ext.name} extension...`, "33");
+        setBootPhase(`Loading ${ext.name} extension`);
         const fromClause = ext.source ? ` FROM ${ext.source}` : "";
         const install = await bridge.query!(`INSTALL ${ext.name}${fromClause}`);
         if (!install.ok) {
@@ -1225,6 +1225,7 @@ function initShell(
 
       if (config.serviceUrl && config.catalogName) {
         writeln(`Connecting to ${config.catalogName}...`, "33");
+        setBootPhase(`Connecting to ${config.catalogName}`);
         const attachSql = buildAttachSql();
         console.log("[shell] ATTACH SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
         const result = await bridge.query!(attachSql);
@@ -1260,6 +1261,7 @@ function initShell(
       // timestamp display in UTC instead of the user's local zone, which is
       // a strictly cosmetic regression.
       console.log("[shell] syncing timezone…");
+      setBootPhase("Syncing timezone");
       const tzSync = (async () => {
         try {
           const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -1298,6 +1300,7 @@ function initShell(
 
       // Shell is fully ready — expose runQuery for external callers
       console.log("[shell] post-ready: handing off to readLoop");
+      setBootPhase(null);  // signals the loading overlay to hide
       bridge.runQuery = runQuery;
       // Notify subscribers that bridge.query is now usable (catalog is attached)
       notifyQueryChange();
