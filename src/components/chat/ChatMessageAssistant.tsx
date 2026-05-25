@@ -1,4 +1,4 @@
-import { Sparkles } from "lucide-react";
+import { Sparkles, X } from "lucide-react";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { SqlToolCallBlock } from "./SqlToolCallBlock";
 import { AskUserBlock } from "./AskUserBlock";
@@ -44,12 +44,27 @@ interface Props {
   blocks: ContentBlock[];
   isStreaming?: boolean;
   onAskUserSelect?: (option: string, index: number) => void;
+  onCancel?: () => void;
   usage?: { inputTokens: number; outputTokens: number };
   model?: string;
 }
 
+/** Small inline cancel button shown next to a running tool indicator. */
+function CancelChip({ onCancel }: { onCancel: () => void }) {
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onCancel(); }}
+      className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-destructive bg-destructive/10 hover:bg-destructive/20 transition-colors"
+      title="Cancel (Escape)"
+    >
+      <X className="h-3 w-3" />
+      Cancel
+    </button>
+  );
+}
+
 export function ChatMessageAssistant({
-  blocks, isStreaming, onAskUserSelect, usage, model,
+  blocks, isStreaming, onAskUserSelect, onCancel, usage, model,
 }: Props) {
   return (
     <div className="flex gap-2.5">
@@ -65,7 +80,7 @@ export function ChatMessageAssistant({
           if (block.type === "tool_call") {
             const tc = block.toolCall;
             if (tc.name === "run_sql") {
-              return <SqlToolCallBlock key={block.id} toolCall={tc} />;
+              return <SqlToolCallBlock key={block.id} toolCall={tc} onCancel={onCancel} />;
             }
             if (tc.name === "generate_chart") {
               const chart = tc.displayResult?.chart;
@@ -83,7 +98,8 @@ export function ChatMessageAssistant({
                 return (
                   <div key={block.id} className="text-xs text-muted-foreground/60 flex items-center gap-1.5 py-0.5">
                     <span className={`w-1.5 h-1.5 rounded-full ${tc.isExecuting ? "bg-primary/40 animate-pulse" : "bg-muted-foreground/30"}`} />
-                    {tc.isExecuting ? `Preparing chart${title ? `: ${title}` : ""}…` : `Chart${title ? `: ${title}` : ""}`}
+                    <span className="flex-1">{tc.isExecuting ? `Preparing chart${title ? `: ${title}` : ""}…` : `Chart${title ? `: ${title}` : ""}`}</span>
+                    {tc.isExecuting && onCancel && <CancelChip onCancel={onCancel} />}
                   </div>
                 );
               }
@@ -108,7 +124,8 @@ export function ChatMessageAssistant({
               return (
                 <div key={block.id} className="text-xs text-muted-foreground/60 flex items-center gap-1.5 py-0.5">
                   <span className={`w-1.5 h-1.5 rounded-full ${tc.isExecuting ? "bg-primary/40 animate-pulse" : "bg-muted-foreground/30"}`} />
-                  {tc.isExecuting ? `${label}...` : label}
+                  <span className="flex-1">{tc.isExecuting ? `${label}...` : label}</span>
+                  {tc.isExecuting && onCancel && <CancelChip onCancel={onCancel} />}
                 </div>
               );
             }

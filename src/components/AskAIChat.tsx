@@ -600,6 +600,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
                   blocks={msg.blocks || []}
                   isStreaming={msg.isStreaming}
                   onAskUserSelect={handleAskUserSelect}
+                  onCancel={msg.isStreaming ? handleStop : undefined}
                   usage={msg.usage}
                   model={model}
                 />

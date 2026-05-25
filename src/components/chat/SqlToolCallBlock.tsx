@@ -1,14 +1,18 @@
 import { useState } from "react";
-import { ChevronRight, Database, Copy, AlertCircle, Loader2 } from "lucide-react";
+import { ChevronRight, Database, Copy, AlertCircle, Loader2, X } from "lucide-react";
 import { SqlCodeBlock } from "../content/SqlCodeBlock";
 import { QueryResultTable } from "./QueryResultTable";
 import type { ToolCallEntry } from "./ChatMessageAssistant";
 
 interface Props {
   toolCall: ToolCallEntry;
+  /** Called when the user clicks the inline cancel button while the
+   *  query is executing. Aborts the agent + cancels the in-flight DuckDB
+   *  query via bridge.cancelQuery. */
+  onCancel?: () => void;
 }
 
-export function SqlToolCallBlock({ toolCall }: Props) {
+export function SqlToolCallBlock({ toolCall, onCancel }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   const dr = toolCall.displayResult;
@@ -27,25 +31,43 @@ export function SqlToolCallBlock({ toolCall }: Props) {
   return (
     <div className="border border-border rounded-lg overflow-hidden bg-card">
       {/* Summary bar */}
-      <button
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:bg-muted/40 transition-colors"
-        onClick={() => setExpanded(!expanded)}
-      >
-        {toolCall.isExecuting ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
-        ) : isError ? (
-          <AlertCircle className="h-3.5 w-3.5 text-destructive" />
-        ) : (
-          <Database className="h-3.5 w-3.5 text-primary/60" />
-        )}
-        <span className={`flex-1 ${isError ? "text-destructive" : ""}`}>{summary}</span>
+      <div className="w-full flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+        <button
+          className="flex items-center gap-2 flex-1 min-w-0 text-left hover:text-foreground transition-colors"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {toolCall.isExecuting ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
+          ) : isError ? (
+            <AlertCircle className="h-3.5 w-3.5 text-destructive" />
+          ) : (
+            <Database className="h-3.5 w-3.5 text-primary/60" />
+          )}
+          <span className={`flex-1 truncate ${isError ? "text-destructive" : ""}`}>{summary}</span>
+        </button>
         {toolCall.isExecuting && toolCall.progress != null && toolCall.progress > 0 && (
           <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden shrink-0">
             <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${toolCall.progress}%` }} />
           </div>
         )}
-        <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
-      </button>
+        {toolCall.isExecuting && onCancel && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onCancel(); }}
+            className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] text-destructive bg-destructive/10 hover:bg-destructive/20 transition-colors"
+            title="Cancel this query (Escape)"
+          >
+            <X className="h-3 w-3" />
+            Cancel
+          </button>
+        )}
+        <button
+          className="shrink-0 hover:text-foreground transition-colors"
+          onClick={() => setExpanded(!expanded)}
+          aria-label={expanded ? "Collapse" : "Expand"}
+        >
+          <ChevronRight className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`} />
+        </button>
+      </div>
 
       {/* Expanded content */}
       {expanded && (
