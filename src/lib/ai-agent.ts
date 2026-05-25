@@ -1,7 +1,8 @@
 /**
  * AI Agent — Claude-powered data analyst for the DuckDB shell.
  * Uses raw fetch + SSE parsing (no SDK dependency).
- * Provides tools: run_sql, read_query_results, list_tables, describe_table, ask_user.
+ * Provides tools: run_sql, read_query_results, list_tables, describe_table,
+ * ask_user, read_chart_docs, generate_chart.
  */
 
 import type { CatalogData } from "./service";
@@ -143,6 +144,57 @@ const TOOLS: Tool[] = [
       required: ["question", "options"],
     },
   },
+  {
+    name: "read_chart_docs",
+    description: [
+      "Read the full Mosaic vgplot spec authoring guide (~10K tokens). Call this",
+      "ONCE per conversation before writing any non-trivial chart spec, or AFTER",
+      "generate_chart fails with a parse error. The guide covers the complete",
+      "spec format: top-level structure, data sources, params, layouts, all",
+      "marks, channels, scales, interactors, transforms, and worked examples.",
+      "Idempotent — returns the same bytes each call — so prompt caching",
+      "makes repeat calls free.",
+    ].join("\n"),
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "generate_chart",
+    description: [
+      "Render a Mosaic vgplot chart in the chat using a JSON spec. Use this after",
+      "run_sql when a visualization conveys the answer better than a table.",
+      "",
+      "Minimal example — counts by group from a SQL query:",
+      "  {",
+      "    \"plot\": [",
+      "      { \"mark\": \"barY\",",
+      "        \"data\": { \"from\": \"counts\" },",
+      "        \"x\": \"district\", \"y\": \"cnt\" }",
+      "    ],",
+      "    \"width\": 640, \"height\": 320,",
+      "    \"data\": { \"counts\": { \"type\": \"query\",",
+      "      \"query\": \"SELECT district, COUNT(*) AS cnt FROM albemarle_gis.property.parcels GROUP BY 1\" } }",
+      "  }",
+      "",
+      "If you're not sure of the exact syntax, call read_chart_docs first.",
+      "If the spec fails to render, the error returned here will name the",
+      "problem — read read_chart_docs (the 'Authoring checklist & pitfalls'",
+      "section in particular) and retry.",
+    ].join("\n"),
+    input_schema: {
+      type: "object",
+      properties: {
+        spec: {
+          type: "object",
+          description: "A Mosaic vgplot spec — the JSON object passed to vg.parseSpec().",
+        },
+        title: {
+          type: "string",
+          description: "Short human-readable title shown above the chart in the chat (e.g. 'Parcels by district').",
+        },
+      },
+      required: ["spec", "title"],
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -162,6 +214,8 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `* **describe_table** — Get column names, types, and descriptions for a table.`,
     `* **run_sql** — Execute a DuckDB SQL query.`,
     `* **ask_user** — Ask the user to choose between specific options.`,
+    `* **read_chart_docs** — Read the Mosaic chart spec authoring guide. Call once per conversation before generating charts, or after a chart spec fails.`,
+    `* **generate_chart** — Render a Mosaic visualization inline in the chat. Use when a chart conveys the answer better than a table (counts, distributions, trends, comparisons, geo overlays).`,
     ``,
     `## Rules`,
     ``,

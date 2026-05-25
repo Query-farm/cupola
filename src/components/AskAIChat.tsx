@@ -330,6 +330,35 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           updateBlocks(blocks);
         });
       }
+      if (name === "read_chart_docs") {
+        // Bundled at build time via Vite ?raw — no network round-trip.
+        const { getChartDocs } = await import("@/lib/mosaic-docs");
+        return getChartDocs();
+      }
+      if (name === "generate_chart") {
+        const { spec, title } = input as { spec: any; title: string };
+        if (!spec || typeof spec !== "object") {
+          return JSON.stringify({ ok: false, error: "spec must be a JSON object" });
+        }
+        if (!title || typeof title !== "string") {
+          return JSON.stringify({ ok: false, error: "title must be a non-empty string" });
+        }
+        // Dry-validate by parsing the spec. We catch sync errors here so the
+        // model gets actionable feedback fast; runtime SELECT errors still
+        // surface in MosaicChartBlock's error state at mount time.
+        try {
+          const { parseChartSpec } = await import("@/lib/mosaic-bridge");
+          await parseChartSpec(spec);
+        } catch (e: any) {
+          return JSON.stringify({
+            ok: false,
+            error: `Spec failed to parse: ${e?.message || String(e)}. Call read_chart_docs (see 'Authoring checklist & pitfalls') and retry with a corrected spec.`,
+          });
+        }
+        // Stash on the tool-call entry so the renderer picks it up via onToolResult.
+        pendingDisplayResult = { chart: { spec, title } };
+        return JSON.stringify({ ok: true, title, message: "Chart rendered in chat." });
+      }
       return JSON.stringify({ error: `Unknown tool: ${name}` });
     };
 

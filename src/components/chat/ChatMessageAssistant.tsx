@@ -3,14 +3,18 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { SqlToolCallBlock } from "./SqlToolCallBlock";
 import { AskUserBlock } from "./AskUserBlock";
 import { ThinkingIndicator } from "./ThinkingIndicator";
+import { MosaicChartBlock } from "./MosaicChartBlock";
 import { estimateCost, formatCost } from "@/lib/pricing";
 
 export interface ToolCallDisplayResult {
-  columns: string[];
-  rows: Record<string, any>[];
-  rowCount: number;
-  showing: number;
+  /** SQL result shape (used by run_sql). */
+  columns?: string[];
+  rows?: Record<string, any>[];
+  rowCount?: number;
+  showing?: number;
   message?: string;
+  /** Chart shape (used by generate_chart). Spec is a Mosaic vgplot JSON spec. */
+  chart?: { spec: any; title: string };
 }
 
 export interface ToolCallEntry {
@@ -63,11 +67,35 @@ export function ChatMessageAssistant({
             if (tc.name === "run_sql") {
               return <SqlToolCallBlock key={block.id} toolCall={tc} />;
             }
-            if (tc.name === "list_tables" || tc.name === "describe_table" || tc.name === "read_query_results") {
+            if (tc.name === "generate_chart") {
+              const chart = tc.displayResult?.chart;
+              const title = chart?.title || tc.input?.title;
+              // Status indicator until the spec is ready, then the chart itself.
+              if (tc.error) {
+                return (
+                  <div key={block.id} className="text-xs text-destructive/80 flex items-start gap-1.5 py-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-destructive/60 mt-1.5" />
+                    <div>Chart failed{title ? `: ${title}` : ""} — {tc.error}</div>
+                  </div>
+                );
+              }
+              if (!chart) {
+                return (
+                  <div key={block.id} className="text-xs text-muted-foreground/60 flex items-center gap-1.5 py-0.5">
+                    <span className={`w-1.5 h-1.5 rounded-full ${tc.isExecuting ? "bg-primary/40 animate-pulse" : "bg-muted-foreground/30"}`} />
+                    {tc.isExecuting ? `Preparing chart${title ? `: ${title}` : ""}…` : `Chart${title ? `: ${title}` : ""}`}
+                  </div>
+                );
+              }
+              return <MosaicChartBlock key={block.id} spec={chart.spec} title={chart.title} />;
+            }
+            if (tc.name === "list_tables" || tc.name === "describe_table" || tc.name === "read_query_results" || tc.name === "read_chart_docs") {
               const label = tc.name === "describe_table"
                 ? `Looking up ${tc.input?.schema}.${tc.input?.table}`
                 : tc.name === "list_tables"
                 ? "Looking up tables"
+                : tc.name === "read_chart_docs"
+                ? "Reading chart docs"
                 : "Reading more results";
               return (
                 <div key={block.id} className="text-xs text-muted-foreground/60 flex items-center gap-1.5 py-0.5">
