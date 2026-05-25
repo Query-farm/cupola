@@ -854,7 +854,7 @@ export async function runAgentTurn(
   model: string,
   messages: MessageParam[],
   systemPrompt: string,
-  executeTool: (name: string, input: any) => Promise<string>,
+  executeTool: (name: string, input: any, signal?: AbortSignal) => Promise<string>,
   callbacks: AgentCallbacks,
   signal?: AbortSignal,
   maxToolRounds = 20
@@ -912,13 +912,16 @@ export async function runAgentTurn(
       return;
     }
 
-    // Execute tool calls
+    // Execute tool calls. Check signal between tools so a user-initiated
+    // cancel takes effect promptly even if some tool finished naturally.
     const toolResults: ToolResultBlock[] = [];
     for (const block of content) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       if (block.type === "tool_use" && block.id && block.name) {
         callbacks.onToolCall(block.name, block.input);
         try {
-          const result = await executeTool(block.name, block.input);
+          const result = await executeTool(block.name, block.input, signal);
+          if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
           callbacks.onToolResult(block.name, result.length > 200 ? result.slice(0, 200) + "…" : result);
           toolResults.push({
             type: "tool_result",

@@ -132,7 +132,7 @@ export function ChatMessageAssistant({
             return null;
           }
           if (block.type === "thinking") {
-            return <ThinkingIndicator key={block.id} label={block.label} />;
+            return <ThinkingIndicator key={block.id} label={block.label} onCancel={onCancel} />;
           }
           if (block.type === "ask_user") {
             return (

@@ -156,8 +156,34 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
       blocks = blocks.filter(b => b.type !== "thinking");
     };
 
+    /**
+     * Race a promise against an AbortSignal. When the signal aborts we
+     * fire bridge.cancelQuery to interrupt the haybarn worker (best-effort)
+     * and reject with AbortError so the agent loop bails out — even if the
+     * underlying bridge.query promise hasn't settled yet.
+     */
+    function withAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+      if (!signal) return p;
+      return new Promise<T>((resolve, reject) => {
+        if (signal.aborted) {
+          bridge.cancelQuery?.();
+          reject(new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        const onAbort = () => {
+          bridge.cancelQuery?.();
+          reject(new DOMException("Aborted", "AbortError"));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        p.then(
+          (v) => { signal.removeEventListener("abort", onAbort); resolve(v); },
+          (e) => { signal.removeEventListener("abort", onAbort); reject(e); },
+        );
+      });
+    }
+
     // Tool executor
-    const executeTool = async (name: string, input: any): Promise<string> => {
+    const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<string> => {
       if (name === "run_sql") {
         // Subscribe to progress
         const prevProgress = bridge.progress;
@@ -174,7 +200,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         const queryFn = bridge.query;
         if (!queryFn) throw new Error("DuckDB shell not initialized — open SQL Shell first");
         const t0 = performance.now();
-        const result = await queryFn(input.sql);
+        const result = await withAbort(queryFn(input.sql), signal);
         const elapsed = performance.now() - t0;
 
         bridge.progress = prevProgress;
