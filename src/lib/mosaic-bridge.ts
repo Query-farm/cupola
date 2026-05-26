@@ -109,6 +109,7 @@ class HaybarnConnector implements Connector {
 
 interface MosaicAPI {
   api: any;
+  coordinator: any;
   parseSpec: (spec: any) => any;
   astToDOM: (ast: any, opts: any) => Promise<{ element: HTMLElement; coordinator: any }>;
 }
@@ -134,6 +135,7 @@ export async function getMosaicAPI(): Promise<MosaicAPI> {
     const api = (vg as any).createAPIContext({ coordinator });
     _api = {
       api,
+      coordinator,
       parseSpec: (spec as any).parseSpec,
       astToDOM: (spec as any).astToDOM,
     };
@@ -211,64 +213,8 @@ function stripUnsupportedKeys(spec: any): any {
   return out;
 }
 
-/**
- * Suffix every top-level data name with a per-render UID, and rewrite all
- * `{ from: name }` references to match. Required because the Mosaic
- * Coordinator caches MosaicClient query results by SQL signature: two
- * charts that both use `data: { d: "..." }` would generate identical
- * SELECTs and the second chart would receive the first chart's cached
- * data, even after the underlying temp table has been replaced.
- *
- * By giving each render unique table names we sidestep the cache entirely.
- * The temp table for chart N lives at `d__abc123` not `d`, so its queries
- * are uniquely keyed and never collide.
- *
- * Catalog tables referenced inside SQL strings (`SELECT ... FROM cat.s.t`)
- * are unaffected — we only rename top-level data definitions and their
- * `from:` references. Catalog table names in SQL text are preserved.
- */
-function uniquifyDataNames(spec: any): any {
-  if (!spec || typeof spec !== "object" || !spec.data || typeof spec.data !== "object") return spec;
-  const uid = Math.random().toString(36).slice(2, 10);
-  const names = Object.keys(spec.data);
-  if (names.length === 0) return spec;
-  const renames: Record<string, string> = {};
-  for (const n of names) renames[n] = `${n}__${uid}`;
-
-  // Walk every node in the spec replacing `from: "X"` where X is one of
-  // our renamed names. Also walks `for: "<plotName>"` (legend references
-  // to plots — not data, but conservatively renamed since plot names can
-  // alias data names).
-  function walk(node: any): any {
-    if (Array.isArray(node)) return node.map(walk);
-    if (node && typeof node === "object") {
-      const out: any = {};
-      for (const [k, v] of Object.entries(node)) {
-        if (k === "from" && typeof v === "string" && renames[v]) {
-          out[k] = renames[v];
-        } else {
-          out[k] = walk(v);
-        }
-      }
-      return out;
-    }
-    return node;
-  }
-
-  // Rename top-level data keys (each definition itself stays unchanged).
-  const newData: Record<string, any> = {};
-  for (const [name, def] of Object.entries(spec.data)) {
-    newData[renames[name]] = def;
-  }
-
-  // Rebuild the spec: walk everything except `.data` (whose keys we just
-  // renamed) and substitute the renamed data block.
-  const { data: _origData, ...rest } = spec;
-  return { ...walk(rest), data: newData };
-}
-
 function normalizeSpec(spec: any): any {
-  return uniquifyDataNames(injectTempData(stripUnsupportedKeys(spec)));
+  return injectTempData(stripUnsupportedKeys(spec));
 }
 
 /**
@@ -308,7 +254,18 @@ export async function renderChartSpec(
   options: { quietMs?: number; maxMs?: number } = {},
 ): Promise<RenderResult> {
   const { quietMs = 250, maxMs = 3000 } = options;
-  const { api, parseSpec, astToDOM } = await getMosaicAPI();
+  const { api, coordinator, parseSpec, astToDOM } = await getMosaicAPI();
+  // Reset the Coordinator between renders. Without this, MosaicClient
+  // query results get cached by SQL signature; two charts with the same
+  // data name + same plot shape would have the second see the first's
+  // cached data. `clear({ clients: true, cache: true })` disconnects all
+  // prior clients and drops the cache so each render starts fresh.
+  //
+  // This replaces an earlier hack that suffixed data names with a random
+  // UID — that broke SQL-string references like
+  //   `{ sql: "FROM hierarchy h1" }`
+  // because the walker couldn't see into SQL text to rewrite the name.
+  try { coordinator.clear({ clients: true, cache: true }); } catch {}
   const session = startSession();
   try {
     const ast = parseSpec(normalizeSpec(spec));
