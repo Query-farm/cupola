@@ -2,8 +2,7 @@
  * AI Agent — Claude-powered data analyst for the DuckDB shell.
  * Uses raw fetch + SSE parsing (no SDK dependency).
  * Provides tools: run_sql, read_query_results, list_tables, describe_table,
- * ask_user, read_chart_docs, list_chart_examples, read_chart_example,
- * generate_chart.
+ * ask_user.
  */
 
 import type { CatalogData } from "./service";
@@ -125,160 +124,6 @@ const TOOLS: Tool[] = [
       required: ["question", "options"],
     },
   },
-  {
-    name: "read_chart_docs",
-    description: [
-      "Read the full Mosaic vgplot spec authoring guide (~10K tokens). Call this",
-      "ONCE per conversation before writing any non-trivial chart spec, or AFTER",
-      "generate_chart fails with a parse error. The guide covers the complete",
-      "spec format: top-level structure, data sources, params, layouts, all",
-      "marks, channels, scales, interactors, transforms, and worked examples.",
-      "Idempotent — returns the same bytes each call — so prompt caching",
-      "makes repeat calls free.",
-    ].join("\n"),
-    input_schema: { type: "object", properties: {} },
-  },
-  {
-    name: "list_chart_examples",
-    description: [
-      "List the 54 bundled Mosaic example specs from the official docs site.",
-      "Each entry has a short name (the lookup key), an optional human-readable",
-      "title, and an optional description. Use this BEFORE generate_chart when",
-      "you need to see how a specific chart type is composed — pick the example",
-      "most similar to what you're building and then call read_chart_example.",
-      "",
-      "These are reference material, not executable specs. They load data from",
-      "files like 'data/stocks.parquet' that don't exist in our app. Use them",
-      "to learn the spec format, then substitute your own data source:",
-      "  { \"sql\": \"SELECT ...\" }  or  { \"type\": \"table\", \"query\": \"SELECT ...\" }",
-    ].join("\n"),
-    input_schema: { type: "object", properties: {} },
-  },
-  {
-    name: "read_chart_example",
-    description: [
-      "Read one of the bundled Mosaic example specs by name. Returns the raw",
-      "JSON. Call list_chart_examples first to see the index. Useful when you",
-      "need to see exactly how a particular chart type, mark combination, or",
-      "interactor is structured.",
-    ].join("\n"),
-    input_schema: {
-      type: "object",
-      properties: {
-        name: {
-          type: "string",
-          description: "Example name from list_chart_examples (e.g. 'line', 'flights-200k', 'us-state-map').",
-        },
-      },
-      required: ["name"],
-    },
-  },
-  {
-    name: "list_chart_schema_definitions",
-    description: [
-      "List the 216 named definitions in the Mosaic JSON schema. Each entry",
-      "has a name (the lookup key for read_chart_schema), a coarse kind",
-      "('mark' / 'transform' / 'selection' / 'layout' / 'plot' / 'data' /",
-      "'scale' / 'param' / 'input' / 'channel' / 'other'), a byte size, and",
-      "an optional one-line hint pulled from the definition's own description.",
-      "",
-      "Use this when you don't already have a hint from a validation error",
-      "(generate_chart's error response includes definition names to read).",
-      "",
-      "When picking the right definition: filter by 'kind' to narrow down,",
-      "then call read_chart_schema for the specific name.",
-    ].join("\n"),
-    input_schema: { type: "object", properties: {} },
-  },
-  {
-    name: "read_chart_schema",
-    description: [
-      "Read one definition from the Mosaic JSON schema. Returns the raw schema",
-      "JSON for the named definition (e.g. 'Plot', 'BarY', 'Dot', 'Line',",
-      "'Selection', 'HConcat'). Tells you exactly which properties are required,",
-      "which are optional, allowed enum values, and the shape of nested attributes.",
-      "",
-      "When to use:",
-      "  - generate_chart returned validation errors mentioning a definition",
-      "    name — read that definition to see the exact shape required.",
-      "  - You're writing a chart type you haven't used before and want the",
-      "    formal contract (which marks need 'channels'? what does a Selection",
-      "    actually accept?).",
-      "  - read_chart_docs (prose) didn't have enough detail.",
-      "",
-      "Median definition is ~400 tokens. The 'Spec' definition is special-cased",
-      "and rejected because it inlines every alternative (2.3 MB) — browse",
-      "specific shapes instead. If a name isn't found, list_chart_schema_definitions",
-      "shows all available names.",
-    ].join("\n"),
-    input_schema: {
-      type: "object",
-      properties: {
-        name: {
-          type: "string",
-          description:
-            "Definition name (case-sensitive, e.g. 'Plot', 'BarY', 'Dot'). Look up via list_chart_schema_definitions if you don't have one from a validation error.",
-        },
-      },
-      required: ["name"],
-    },
-  },
-  {
-    name: "generate_chart",
-    description: [
-      "Render a Mosaic vgplot chart in the chat using a JSON spec. Use this after",
-      "run_sql when a visualization conveys the answer better than a table.",
-      "",
-      "Minimal example — counts by group from a SQL query:",
-      "  {",
-      "    \"plot\": [",
-      "      { \"mark\": \"barY\",",
-      "        \"data\": { \"from\": \"counts\" },",
-      "        \"x\": \"district\", \"y\": \"cnt\" }",
-      "    ],",
-      "    \"width\": 640, \"height\": 320,",
-      "    \"data\": { \"counts\": { \"type\": \"query\",",
-      "      \"query\": \"SELECT district, COUNT(*) AS cnt FROM albemarle_gis.property.parcels GROUP BY 1\" } }",
-      "  }",
-      "",
-      "IMPORTANT — Data sources:",
-      "* Always use SQL queries against the user's live DuckDB, NOT inline arrays.",
-      "  Wrong: \"data\": { \"cities\": { \"data\": [{...}, {...}] } }",
-      "  Right: \"data\": { \"cities\": \"SELECT name, lat, lng FROM catalog.schema.tbl\" }",
-      "  Inline literals are only acceptable for tiny (<20 row) static lookups.",
-      "* Reference catalog tables with the full 3-part path (catalog.schema.table).",
-      "* Don't set temp/replace or $schema — Cupola handles those.",
-      "",
-      "For widget specs, see section 0 (Cupola deployment guidance) of",
-      "read_chart_docs — common mistake is using filterBy with a SQL fragment;",
-      "filterBy needs a Selection reference or you embed the param in a",
-      "channel's SQL expression instead.",
-      "",
-      "If you're not sure of the exact syntax, call read_chart_docs first.",
-      "If the spec fails to render, the error returned here will name the",
-      "problem — read read_chart_docs (sections 0 + 17) and retry.",
-      "",
-      "The spec is JSON-schema validated against the Mosaic spec schema BEFORE",
-      "rendering, so unknown attribute names, type mismatches, missing required",
-      "keys, and similar structural errors are caught early and returned as a",
-      "list of (path, message) entries. A failed validation is a fast retry —",
-      "fix the named paths and call again; no DuckDB queries were issued.",
-    ].join("\n"),
-    input_schema: {
-      type: "object",
-      properties: {
-        spec: {
-          type: "object",
-          description: "A Mosaic vgplot spec — the JSON object passed to vg.parseSpec().",
-        },
-        title: {
-          type: "string",
-          description: "Short human-readable title shown above the chart in the chat (e.g. 'Parcels by district').",
-        },
-      },
-      required: ["spec", "title"],
-    },
-  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -298,12 +143,6 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `* **describe_table** — Get column names, types, and descriptions for a table.`,
     `* **run_sql** — Execute a DuckDB SQL query.`,
     `* **ask_user** — Ask the user to choose between specific options.`,
-    `* **read_chart_docs** — Read the Mosaic chart spec authoring guide. Call once per conversation before generating charts, or after a chart spec fails.`,
-    `* **list_chart_examples** — Browse 54 worked Mosaic example specs by title. Use when picking a chart pattern to model your spec after.`,
-    `* **read_chart_example** — Read one bundled example spec by name (after list_chart_examples). Useful for copying a chart pattern then substituting your data.`,
-    `* **list_chart_schema_definitions** — List 216 named definitions in the Mosaic JSON schema (name + kind + size). Use when you need the formal contract for a shape (e.g. "what does a Selection actually accept?").`,
-    `* **read_chart_schema** — Read one Mosaic JSON-schema definition. Call this when generate_chart returns validation errors that reference a definition name — the error response tells you which name(s) to read.`,
-    `* **generate_chart** — Render a Mosaic visualization inline in the chat. Use when a chart conveys the answer better than a table (counts, distributions, trends, comparisons, geo overlays).`,
     ``,
     `## Rules`,
     ``,
