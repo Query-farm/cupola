@@ -17,7 +17,7 @@ import { printBoxTable, printLineTable, type TerminalOutput } from "@/lib/shell-
 import { handleDotCommand, type ShellState, type ShellIO } from "@/lib/shell-commands";
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "@/lib/shell-ai-mode";
 import { attachInputHandlers, type CompletionItem } from "@/lib/shell-input";
-import { bridge, recordQuery, notifyQueryChange, setBootPhase } from "@/lib/shell-bridge";
+import { bridge, recordQuery, notifyQueryChange, setBootPhase, onBootChange } from "@/lib/shell-bridge";
 import { ShellBootScreen } from "./ShellBootScreen";
 import * as Sentry from "@sentry/astro";
 import { ensureDuckDB, resolveThreadCount } from "@/lib/duckdb-worker-boot";
@@ -117,7 +117,15 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   const containerRef = useRef<HTMLDivElement>(null);
   const perspectiveRef = useRef<HTMLDivElement>(null);
   const { settings } = useSettings();
-  const [loading, setLoading] = useState(true);
+  // Overlay visibility is driven by bridge.bootPhase, not by external-script
+  // loading. The DuckDB worker boot (downloading WASM, spinning up pthreads,
+  // loading extensions, attaching) is the slow part — especially on Safari —
+  // and the bridge already signals true readiness with setBootPhase(null).
+  const [bootActive, setBootActive] = useState(() => bridge.bootPhase !== null);
+  useEffect(() => {
+    const unsub = onBootChange(() => setBootActive(bridge.bootPhase !== null));
+    return () => unsub();
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const [activeTab, setActiveTab] = useState<"shell" | "askai" | "preview" | "perspective" | "map" | "queries">("shell");
@@ -230,8 +238,6 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
           import(/* @vite-ignore */ READLINE_CDN),
         ]);
         if (cancelled || !containerRef.current) return;
-
-        setLoading(false);
 
         // Use RecordBatchFileReader for proper dictionary batch handling.
         // tableFromIPC doesn't populate dictionary data from IPC file format.
@@ -543,7 +549,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
       </div>
 
       {/* Terminal container */}
-      {mode !== "minimized" && loading && !error && activeTab === "shell" && (
+      {mode !== "minimized" && bootActive && !error && activeTab === "shell" && (
         <ShellBootScreen />
       )}
       {mode !== "minimized" && error && activeTab === "shell" && (
@@ -552,7 +558,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         </div>
       )}
       <div
-        className={`flex-1 min-h-0 overflow-hidden relative ${mode === "minimized" || loading ? "hidden" : ""}`}
+        className={`flex-1 min-h-0 overflow-hidden relative ${mode === "minimized" || bootActive ? "hidden" : ""}`}
         style={{
           padding: "8px 12px 0 12px",
           ...(activeTab !== "shell" ? { visibility: "hidden" as const, position: "absolute" as const, inset: 0, zIndex: -1 } : {}),

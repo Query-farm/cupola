@@ -37,6 +37,11 @@ export interface DuckDBBootOptions {
  *  is open, the cancel SAB is registered, and `bridge.query` is live. */
 export function ensureDuckDB(opts: DuckDBBootOptions): Promise<void> {
   if (bootPromise) return bootPromise;
+  // Seed a phase synchronously so the overlay has copy from the first frame
+  // — before any awaits land. The microtask before doBoot runs is enough of
+  // a gap on Safari to flicker the fallback otherwise.
+  setBootPhase("Starting Haybarn");
+  bridge.workerCreateStart = performance.now();
   bootPromise = doBoot(opts).catch((e) => {
     bootPromise = null; // allow retry
     throw e;
@@ -45,6 +50,7 @@ export function ensureDuckDB(opts: DuckDBBootOptions): Promise<void> {
 }
 
 async function doBoot(opts: DuckDBBootOptions): Promise<void> {
+  setBootPhase("Starting Haybarn");
   const { baseUrl, onAuthUrl } = opts;
   const base = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
   // The pthread worker URL is passed into the COI sub-worker, which then
@@ -79,7 +85,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
     },
   };
 
-  setBootPhase("Selecting DuckDB bundle");
+  setBootPhase("Choosing Haybarn build");
   const bundle = await duckdb.selectBundle(BUNDLES);
   mark("select-bundle");
 
@@ -144,11 +150,11 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   });
   mark("instantiate");
 
-  setBootPhase("Connecting to DuckDB");
+  setBootPhase("Connecting to Haybarn");
   const conn = await db.connect();
   const connId = conn.useUnsafe((_db, id) => id);
   mark("connect");
-  setBootPhase("DuckDB ready", 100);
+  setBootPhase("Haybarn ready", 100);
 
   // SAB cancel — must be after instantiate. Null-checked because Safari w/o
   // crossOriginIsolated has no SharedArrayBuffer at all; non-SAB contexts can
