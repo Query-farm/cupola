@@ -26,7 +26,7 @@ export function Header({ catalogName, catalogComment, serviceUrl, logoUrl }: Pro
           title="Cupola — a Query.Farm tool"
         >
           <img
-            src={`${import.meta.env.BASE_URL}cupola-icon.svg`}
+            src={`${import.meta.env.BASE_URL}cupola-icon.png`}
             alt=""
             aria-hidden="true"
             className="w-5 h-5 self-center text-foreground group-hover/brand:text-earth-700 transition-colors"

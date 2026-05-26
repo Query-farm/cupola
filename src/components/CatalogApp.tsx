@@ -907,7 +907,7 @@ function BrandShell({ children }: { children: React.ReactNode }) {
           title="Cupola — a Query.Farm tool"
         >
           <img
-            src={`${import.meta.env.BASE_URL}cupola-icon.svg`}
+            src={`${import.meta.env.BASE_URL}cupola-icon.png`}
             alt=""
             aria-hidden="true"
             className="w-5 h-5 self-center text-foreground group-hover/brand:text-earth-700 transition-colors"
@@ -1133,7 +1133,7 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
           />
           <div className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-soil-500 dark:text-soil-400 mb-3">
             <img
-              src={`${import.meta.env.BASE_URL}cupola-icon.svg`}
+              src={`${import.meta.env.BASE_URL}cupola-icon.png`}
               alt=""
               aria-hidden="true"
               className="w-3.5 h-3.5"
