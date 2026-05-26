@@ -633,7 +633,6 @@ export function CatalogApp() {
           catalogName={data.catalogName}
           catalogComment={data.catalogComment}
           serviceUrl={serviceUrl}
-          logoUrl={logoUrl}
         />
       )}
       <div className="flex flex-1 overflow-hidden">
