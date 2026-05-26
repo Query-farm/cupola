@@ -456,6 +456,37 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           console.warn("[chart] schema validation failed to run:", e?.message || e);
         }
 
+        // Semantic lint — catches interactor/scale mismatches the JSON
+        // schema can't detect (e.g. `intervalX` brush on a `barY` chart,
+        // which renders fine but crashes the moment the user drags the
+        // brush because the categorical X scale has no `.invert`).
+        //
+        // Two passes: first a synchronous mark-based heuristic (catches
+        // barY/barX/cell mismatches without touching the DB), then a
+        // column-type-aware async pass (catches free-form marks like
+        // `dot`/`circle` whose axis type depends on the column type —
+        // DESCRIBE the data source's SQL to read the actual types).
+        try {
+          const { lintMosaicSpecWithTypes, formatLintIssues } = await import("@/lib/mosaic-lint");
+          const runQuery = bridge.query
+            ? (sql: string) => withAbort(bridge.query!(sql), signal)
+            : undefined;
+          const lintIssues = await lintMosaicSpecWithTypes(spec, runQuery);
+          if (signal?.aborted) throw new Error("Cancelled");
+          const errors = lintIssues.filter((i) => i.severity === "error");
+          if (errors.length > 0) {
+            return JSON.stringify({
+              ok: false,
+              error: `Spec has interactor/scale compatibility problems that will crash on user interaction:\n${formatLintIssues(errors)}`,
+              lintIssues: errors,
+              hint:
+                "These bugs don't show up at render time — they fire when the user drags a brush or pans. Fix the cited entries before the spec ships. Common rule: use `toggleX`/`toggleY` (categorical click-toggle) instead of `intervalX`/`intervalY` (continuous brush) on charts with categorical axes (bar charts, cells) and on any axis whose column is a string/enum/boolean.",
+            });
+          }
+        } catch (e: any) {
+          console.warn("[chart] semantic lint failed to run:", e?.message || e);
+        }
+
         // Full pre-render. We run parse + astToDOM + data queries here AND
         // wait for the plot widget's async chart-data SELECTs to fire via
         // our connector-level error capture, so every failure mode the AI

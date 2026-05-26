@@ -91,6 +91,39 @@ A common mistake when adding widgets:
 Use `catalog.schema.table` (three-part) in SQL, just like the user does in
 the SQL Shell. The default catalog/schema may not be what you expect.
 
+### Rule 6 — Pick the interactor that matches the axis type
+
+`intervalX` / `intervalY` / `intervalXY` are **continuous brushes** — they
+call `scale.invert(pixel)` to translate the drag region back to data
+values. They only work on continuous scales (numeric, temporal,
+logarithmic). Putting them on a categorical axis (string keys, band/ordinal
+scale) crashes at brush-drag time with `TypeError: scale.invert is not a function`.
+
+Use the right selector per axis type:
+
+| Axis type           | Mark example          | Use                        |
+|---------------------|----------------------|----------------------------|
+| Numeric / temporal  | line, area, dot, rect | `intervalX` / `intervalY`  |
+| Categorical (bar)   | `barX` / `barY`       | `toggleX` / `toggleY`      |
+| Both categorical    | `cell`                | `toggle` (with `channels`) |
+
+If the user asks for "interactive bar chart by category," choose `toggleX`
+(or `toggleY` if the categories run along Y). The Mosaic schema's
+`Interactor` allows any combination, so the JSON-schema validator can't
+catch this — you have to choose correctly from the data shape.
+
+```json
+// ✅ bar chart by category, click-toggle selection
+{
+  "data": { "byCat": "SELECT cat, COUNT(*) AS n FROM t GROUP BY 1" },
+  "params": { "sel": { "select": "single" } },
+  "plot": [
+    { "mark": "barY", "data": { "from": "byCat" }, "x": "cat", "y": "n" },
+    { "select": "toggleX", "as": "$sel" }
+  ]
+}
+```
+
 ---
 
 ## Table of contents
