@@ -142,12 +142,28 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   const db = new duckdb.AsyncDuckDB(logger, subWorker);
 
   setBootPhase("Downloading Haybarn", 0);
+  // db.instantiate covers download + WASM compile + pthread spin-up, but the
+  // progress callback only fires during the download. Once we see 100% we
+  // flip the label to "Warming up Haybarn" — on Safari the compile and
+  // pthread phase can easily dwarf the download itself, and leaving the
+  // label on "Downloading" makes users think the network is stuck.
+  let warmingUp = false;
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker, (p) => {
     const pct = Number(p.percentage);
     if (!Number.isFinite(pct)) return;
     bridge.progress?.(pct);
-    setBootPhase("Downloading Haybarn", Math.round(pct));
+    if (pct >= 100) {
+      if (!warmingUp) {
+        warmingUp = true;
+        // null progress → indeterminate sweep, since compile + pthread
+        // spin-up don't emit progress events.
+        setBootPhase("Warming up Haybarn", null);
+      }
+    } else {
+      setBootPhase("Downloading Haybarn", Math.round(pct));
+    }
   });
+  if (!warmingUp) setBootPhase("Warming up Haybarn", null);
   mark("instantiate");
 
   setBootPhase("Connecting to Haybarn");

@@ -37,7 +37,9 @@ export function ShellBootScreen() {
   // it's hung.
   const showSafariTip =
     elapsedSec >= 8 &&
-    (phase.startsWith("Downloading") || phase.startsWith("Connecting"));
+    (phase.startsWith("Downloading") ||
+      phase.startsWith("Warming up") ||
+      phase.startsWith("Connecting"));
 
   return (
     <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 text-terminal-fg gap-5">
