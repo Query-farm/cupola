@@ -955,21 +955,15 @@ function ConnectingScreen({
   return (
     <BrandShell>
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-12 text-center">
-        {/* Logo + animated halo. The logo gets a slow scale pulse; the ring
-            (Tailwind animate-spin) sits one layer above as a 3/4 arc in
-            harvest green so it reads clearly as motion. The image needs
-            explicit width/height because `<img>` (a replaced element)
-            doesn't stretch to fill all four insets — Chrome anchors to
-            top/left and uses intrinsic dimensions for size. So we center
-            the logo manually via top/left + transform. */}
-        <div className="relative w-32 h-32 mb-6">
-          <img
-            src={logoUrl}
-            alt="VGI"
-            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-28 h-28 rounded-full shadow-lg animate-cs-pulse"
-          />
-          <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-harvest-500 border-r-harvest-500/40 animate-spin" />
-        </div>
+        {/* Cupola mark with a slow scale pulse. The illustration is square
+            (not a roundel), so we drop the old rotating circular halo —
+            it would clip the cupola corners and read awkwardly. */}
+        <img
+          src={`${import.meta.env.BASE_URL}cupola-icon.png`}
+          alt=""
+          aria-hidden="true"
+          className="w-32 h-32 mb-6 animate-cs-pulse"
+        />
 
         <h1 className="font-heading text-2xl md:text-3xl font-bold text-soil-900 dark:text-soil-100 mb-2">
           {message}
@@ -1034,9 +1028,10 @@ function ErrorScreen({
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
             <img
-              src={logoUrl}
-              alt="VGI logo"
-              className="w-20 h-20 rounded-full shadow-lg ring-2 ring-earth-200 dark:ring-earth-700 mx-auto mb-6"
+              src={`${import.meta.env.BASE_URL}cupola-icon.png`}
+              alt=""
+              aria-hidden="true"
+              className="w-20 h-20 mx-auto mb-6"
             />
             <h1 className="font-heading text-2xl font-bold text-soil-900 dark:text-soil-100 mb-3">
               Connection Error
@@ -1126,9 +1121,10 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
       <div className="max-w-xl w-full mx-auto px-6 py-12 lg:py-16">
         <div className="flex flex-col items-center text-center mb-8">
           <img
-            src={logoUrl}
-            alt="VGI logo"
-            className="w-20 h-20 rounded-full shadow-lg ring-1 ring-soil-200 dark:ring-soil-700 mb-5"
+            src={`${import.meta.env.BASE_URL}cupola-icon.png`}
+            alt=""
+            aria-hidden="true"
+            className="w-20 h-20 mb-5"
           />
           <div className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-soil-500 dark:text-soil-400 mb-3">
             <img
