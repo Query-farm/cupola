@@ -384,6 +384,36 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         }
         return text;
       }
+      if (name === "list_chart_schema_definitions") {
+        const { listSchemaDefinitions } = await import("@/lib/mosaic-schema-tools");
+        const entries = await listSchemaDefinitions();
+        // Compact one-line-per-entry text. Format: `name (kind, Nb) — hint`.
+        // Cheaper than JSON for the model to scan and keeps the response
+        // well under 100 KB for the full 216-entry index.
+        const lines = entries.map((e) => {
+          const hint = e.hint ? ` — ${e.hint}` : "";
+          return `${e.name} (${e.kind}, ${e.size}b)${hint}`;
+        });
+        return JSON.stringify({ count: entries.length, definitions: lines });
+      }
+      if (name === "read_chart_schema") {
+        const { readSchemaDefinition } = await import("@/lib/mosaic-schema-tools");
+        const defName = String((input as any)?.name || "");
+        if (!defName) {
+          return JSON.stringify({
+            ok: false,
+            error: "Missing 'name' parameter. Call list_chart_schema_definitions to browse available names.",
+          });
+        }
+        const def = await readSchemaDefinition(defName);
+        if (def == null) {
+          return JSON.stringify({
+            ok: false,
+            error: `No schema definition named "${defName}". Call list_chart_schema_definitions to see available names.`,
+          });
+        }
+        return JSON.stringify({ ok: true, name: defName, definition: def });
+      }
       if (name === "generate_chart") {
         const { spec, title } = input as { spec: any; title: string };
         if (!spec || typeof spec !== "object") {
@@ -392,6 +422,40 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         if (!title || typeof title !== "string") {
           return JSON.stringify({ ok: false, error: "title must be a non-empty string" });
         }
+
+        // JSON-schema pre-flight. Catches structural errors (wrong attribute
+        // names, missing required keys, type mismatches) before the expensive
+        // parse + DuckDB roundtrip. The schema is the one mosaic-spec ships,
+        // so this validates against the SAME parser the renderer uses next.
+        try {
+          const { validateMosaicSpec, formatValidationErrors } = await import("@/lib/mosaic-validator");
+          const v = await validateMosaicSpec(spec);
+          if (!v.valid) {
+            // Surface a single deduplicated list of schema-definition names
+            // the agent should fetch via read_chart_schema. The list is
+            // already embedded inside formatValidationErrors's body string,
+            // but we also expose it as a structured array so downstream
+            // logging / debugging can see what the agent was nudged toward.
+            const hints = Array.from(
+              new Set(v.errors.map((e) => e.definitionHint).filter(Boolean)),
+            ) as string[];
+            return JSON.stringify({
+              ok: false,
+              error: `Spec failed JSON-schema validation against the Mosaic spec schema:\n${formatValidationErrors(v.errors)}`,
+              errors: v.errors,
+              suggestedDefinitions: hints,
+              hint:
+                hints.length > 0
+                  ? `For the exact shape requirement, call read_chart_schema with one of: ${hints.join(", ")}. If none match what you intended, call list_chart_schema_definitions to browse all named shapes.`
+                  : "Fix the schema violations above and retry. Use read_chart_docs for the spec format, or list_chart_schema_definitions to find the right named shape, then read_chart_schema for its exact contract.",
+            });
+          }
+        } catch (e: any) {
+          // Don't block the render if the validator itself errors — log and
+          // fall through to the render path so we still get a usable error.
+          console.warn("[chart] schema validation failed to run:", e?.message || e);
+        }
+
         // Full pre-render. We run parse + astToDOM + data queries here AND
         // wait for the plot widget's async chart-data SELECTs to fire via
         // our connector-level error capture, so every failure mode the AI

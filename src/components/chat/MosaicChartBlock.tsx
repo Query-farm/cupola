@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Loader2, AlertCircle, ChevronDown, Code2,
   Maximize2, X, Download, RotateCw, Eye, EyeOff,
+  Copy, Check,
 } from "lucide-react";
 import { renderChartSpec } from "@/lib/mosaic-bridge";
 import { findChartSvg, downloadChartSVG, downloadChartPNG } from "@/lib/chart-export";
@@ -64,11 +65,7 @@ export function MosaicChartBlock({
           onCycleWatch={() => setWatchIdx((i) => (i + 1) % WATCH_INTERVALS_MS.length)}
         />
 
-        {showSpec && (
-          <pre className="text-[11px] font-mono bg-muted/50 border-b border-border px-3 py-2 overflow-x-auto max-h-48">
-            {JSON.stringify(spec, null, 2)}
-          </pre>
-        )}
+        {showSpec && <SpecViewer spec={spec} />}
 
         <div className="p-3">
           <ChartCanvas spec={spec} containerRef={inlineRef} refreshKey={refreshKey} />
@@ -83,6 +80,57 @@ export function MosaicChartBlock({
         />
       )}
     </>
+  );
+}
+
+/**
+ * Spec viewer with an overlaid Copy button. Clicking copies the pretty-printed
+ * JSON to the clipboard; the button briefly swaps to a check-icon "Copied"
+ * confirmation. Falls back to a textarea + execCommand path on browsers
+ * without the Clipboard API (older Safari over plain http).
+ */
+function SpecViewer({ spec }: { spec: any }) {
+  const [copied, setCopied] = useState(false);
+  const json = JSON.stringify(spec, null, 2);
+
+  const copy = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(json);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = json;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (e) {
+      console.error("[chart] copy failed:", e);
+    }
+  };
+
+  return (
+    <div className="relative border-b border-border bg-muted/50">
+      <button
+        onClick={copy}
+        title={copied ? "Copied!" : "Copy spec JSON"}
+        className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-card/90 border border-border text-muted-foreground hover:text-foreground hover:bg-card transition-colors cursor-pointer shadow-sm"
+      >
+        {copied ? (
+          <><Check className="h-3 w-3 text-harvest-600" /> Copied</>
+        ) : (
+          <><Copy className="h-3 w-3" /> Copy</>
+        )}
+      </button>
+      <pre className="text-[11px] font-mono px-3 py-2 pr-16 overflow-x-auto max-h-48 m-0">
+        {json}
+      </pre>
+    </div>
   );
 }
 
