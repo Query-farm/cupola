@@ -9,6 +9,8 @@ const BASE_URL = `http://localhost:4321${BASE_PATH}`;
 
 const config = {
   testDir: "./tests",
+  // Only e2e specs. Bun unit tests live in tests/unit/*.test.ts and must not be picked up here.
+  testMatch: "**/*.spec.ts",
   timeout: 30_000,
   expect: { timeout: 5_000 },
   retries: 0,

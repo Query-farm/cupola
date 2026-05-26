@@ -54,30 +54,10 @@ export interface AgentCallbacks {
   onRetry?: (message: string | null) => void;
 }
 
-// ---------------------------------------------------------------------------
-// Result cache — bounded to last 3 query results
-// ---------------------------------------------------------------------------
-
-interface CachedResult {
-  columns: string[];
-  types: string[];
-  rows: Record<string, any>[];
-  rowCount: number;
-}
-
-const resultCache = new Map<string, CachedResult>();
-let resultCounter = 0;
-
-function cacheResult(result: CachedResult): string {
-  const id = `result_${++resultCounter}`;
-  resultCache.set(id, result);
-  // Evict oldest if more than 3
-  if (resultCache.size > 3) {
-    const oldest = resultCache.keys().next().value;
-    if (oldest) resultCache.delete(oldest);
-  }
-  return id;
-}
+// Query-result serialization + caching lives in ./query-results (depends only on the pure
+// ./format helpers, so it stays unit-testable without the VGI/service import graph).
+// Re-exported here so existing `from "./ai-agent"` import sites keep working.
+export { formatArrowTableAsJson, executeReadQueryResults } from "./query-results";
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -429,86 +409,6 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
 // Tool executors
 // ---------------------------------------------------------------------------
 
-function truncate(val: any, maxLen = 200): string {
-  if (val === null || val === undefined) return "NULL";
-  const s = typeof val === "object" ? JSON.stringify(val) : String(val);
-  return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
-}
-
-/** Format an Arrow field value, converting Date/Timestamp/Time epochs and BigInt. */
-function formatFieldVal(val: any, field: any): any {
-  if (val === null || val === undefined) return null;
-  if (val instanceof Uint8Array) return "[binary]";
-  const typeStr: string = field.type?.toString() || "";
-  const num = typeof val === "bigint" ? Number(val) : val;
-  if (typeof num === "number" && !isNaN(num)) {
-    if (typeStr.startsWith("Date")) {
-      const d = new Date(num);
-      if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
-    }
-    if (typeStr.startsWith("Timestamp")) {
-      const d = new Date(num);
-      if (!isNaN(d.getTime())) {
-        const s = d.toISOString().replace("T", " ").replace("Z", "");
-        return s.endsWith(".000") ? s.slice(0, -4) : s;
-      }
-    }
-    if (typeStr.startsWith("Time")) {
-      const totalSec = Math.floor(num / 1000);
-      const h = Math.floor(totalSec / 3600);
-      const m = Math.floor((totalSec % 3600) / 60);
-      const s = totalSec % 60;
-      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-    }
-  }
-  if (typeof val === "bigint") return val.toString();
-  return truncate(val);
-}
-
-export function formatArrowTableAsJson(
-  table: any,
-  maxRows = 20
-): { json: string; resultId: string } {
-  const fields = table.schema.fields;
-  const columns = fields.map((f: any) => f.name);
-  const types = fields.map((f: any) => f.type?.toString() || "unknown");
-  const numRows = table.numRows;
-  const limit = Math.min(maxRows, numRows);
-
-  const rows: Record<string, any>[] = [];
-  for (let r = 0; r < limit; r++) {
-    const row: Record<string, any> = {};
-    for (let c = 0; c < fields.length; c++) {
-      row[columns[c]] = formatFieldVal(table.getChildAt(c)?.get(r), fields[c]);
-    }
-    rows.push(row);
-  }
-
-  // Cache result (capped to prevent OOM on large tables)
-  const CACHE_LIMIT = 10_000;
-  const rowsToCache = Math.min(numRows, CACHE_LIMIT);
-  const allRows: Record<string, any>[] = [];
-  for (let r = 0; r < rowsToCache; r++) {
-    const row: Record<string, any> = {};
-    for (let c = 0; c < fields.length; c++) {
-      row[columns[c]] = formatFieldVal(table.getChildAt(c)?.get(r), fields[c]);
-    }
-    allRows.push(row);
-  }
-  const resultId = cacheResult({ columns, types, rows: allRows, rowCount: numRows });
-
-  const result = {
-    columns,
-    types,
-    rows,
-    row_count: numRows,
-    showing: limit,
-    result_id: resultId,
-  };
-
-  return { json: JSON.stringify(result), resultId };
-}
-
 export function executeListTables(catalog: CatalogData): string {
   const result: any = {
     catalog: catalog.catalogName,
@@ -634,23 +534,6 @@ export function executeDescribeTable(catalog: CatalogData, schemaName: string, t
     type: "view",
     comment: view!.comment || null,
     tags: filterTagsForAI(view!.tags),
-  });
-}
-
-export function executeReadQueryResults(resultId: string, offset = 0, limit = 20): string {
-  const cached = resultCache.get(resultId);
-  if (!cached) return JSON.stringify({ error: `Result '${resultId}' not found or expired` });
-
-  const clampedLimit = Math.min(limit, 100);
-  const slice = cached.rows.slice(offset, offset + clampedLimit);
-  return JSON.stringify({
-    columns: cached.columns,
-    types: cached.types,
-    rows: slice,
-    offset,
-    showing: slice.length,
-    row_count: cached.rowCount,
-    result_id: resultId,
   });
 }
 

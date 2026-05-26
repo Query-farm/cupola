@@ -1,7 +1,7 @@
 {
   "name": "vgi-web-frontend",
   "type": "module",
-  "version": "0.4.37",
+  "version": "0.4.38",
   "engines": {
     "node": ">=22.12.0"
   },
@@ -11,7 +11,9 @@
     "preview": "astro preview",
     "deploy": "./deploy.sh",
     "publish": "./publish.sh",
-    "astro": "astro"
+    "astro": "astro",
+    "test": "bun test ./tests/unit",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@astrojs/react": "^5.0.4",
