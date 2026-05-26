@@ -215,9 +215,20 @@ export async function renderChartSpec(
 
   // Per-render Coordinator + Connector. The HaybarnConnector instance
   // carries the session bag — no module-level state to race on.
+  //
+  // preagg.enabled=false: Mosaic's PreAggregator builds materialized views
+  // in a schema named "mosaic" for fast cross-filtering. Its default code
+  // path is `CREATE SCHEMA "mosaic"; CREATE TABLE "mosaic"."preagg_<hash>" …`
+  // followed by SELECTs against that table. In our session the default
+  // catalog after `ATTACH '…' AS X (TYPE VGI); USE X.schema;` is the
+  // VGI-attached read-only catalog, so the CREATE SCHEMA fails. The
+  // PreAggregator just `.catch()`-logs and moves on — but then the SELECT
+  // surfaces "schema mosaic does not exist" to the user. Disabling preagg
+  // takes the materialized-view fast path off the table; cross-filtering
+  // still works (Mosaic falls back to running the client's own SELECT on
+  // every filter change), which is fine for typical exploration sizes.
   const connector = new HaybarnConnector();
-  const coordinator = new Coordinator();
-  coordinator.databaseConnector(connector);
+  const coordinator = new Coordinator(connector, { preagg: { enabled: false } });
   const api = createAPIContext({ coordinator });
 
   // Capture unhandled promise rejections that fire during THIS render.
