@@ -910,7 +910,7 @@ function BrandShell({ children }: { children: React.ReactNode }) {
             src={`${import.meta.env.BASE_URL}cupola-icon.png`}
             alt=""
             aria-hidden="true"
-            className="w-5 h-5 self-center text-foreground group-hover/brand:text-earth-700 transition-colors"
+            className="w-8 h-8 self-center text-foreground group-hover/brand:text-earth-700 transition-colors"
           />
           <span className="font-heading font-bold text-base leading-none text-foreground group-hover/brand:text-earth-700 transition-colors">
             Cupola
