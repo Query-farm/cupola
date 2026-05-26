@@ -14,7 +14,10 @@ interface ExampleQuery {
 interface Props {
   /** Raw JSON string from the vgi.example_queries tag, or null for default query. */
   exampleQueriesJson?: string | null;
-  /** Fallback query when no vgi.example_queries tag exists. */
+  /** Already-parsed examples (e.g. FunctionInfo.examples). Merged with the
+   *  tag-derived list so structured + tag-based examples appear together. */
+  queries?: ExampleQuery[];
+  /** Fallback query when no examples come from either source. */
   defaultSql?: string;
   /** Whether the shell can be opened to run queries. */
   onOpenShell?: () => void;
@@ -85,10 +88,24 @@ function QueryBlock({ query, index, onOpenShell }: { query: ExampleQuery; index:
   );
 }
 
-export function ExampleQueries({ exampleQueriesJson, defaultSql, onOpenShell }: Props) {
+export function ExampleQueries({ exampleQueriesJson, queries: queriesProp, defaultSql, onOpenShell }: Props) {
+  const fromTag = exampleQueriesJson ? parseExampleQueries(exampleQueriesJson) : null;
+  const fromProp = queriesProp && queriesProp.length > 0 ? queriesProp : null;
+  // Merge with prop-supplied examples first (they're typically the structured
+  // first-class source like FunctionInfo.examples), then tag-derived. Dedupe
+  // by exact SQL match so the same query doesn't appear twice when the
+  // server populates both channels.
+  const merged: ExampleQuery[] = [];
+  const seen = new Set<string>();
+  for (const q of [...(fromProp || []), ...(fromTag || [])]) {
+    if (seen.has(q.sql)) continue;
+    seen.add(q.sql);
+    merged.push(q);
+  }
   const queries: ExampleQuery[] =
-    (exampleQueriesJson ? parseExampleQueries(exampleQueriesJson) : null)
-    || (defaultSql ? [{ sql: defaultSql }] : []);
+    merged.length > 0
+      ? merged
+      : defaultSql ? [{ sql: defaultSql }] : [];
 
   if (queries.length === 0) return null;
 

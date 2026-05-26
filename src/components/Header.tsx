@@ -20,7 +20,7 @@ export function Header({ catalogName, catalogComment, serviceUrl, logoUrl }: Pro
       <div className="flex items-center gap-3 min-w-0">
         <a
           href="https://query.farm"
-          className="flex items-center gap-2 whitespace-nowrap group/brand"
+          className="flex items-baseline gap-2 whitespace-nowrap group/brand"
           target="_blank"
           rel="noopener noreferrer"
           title="Cupola — a Query.Farm tool"
@@ -29,12 +29,12 @@ export function Header({ catalogName, catalogComment, serviceUrl, logoUrl }: Pro
             src={`${import.meta.env.BASE_URL}cupola-icon.svg`}
             alt=""
             aria-hidden="true"
-            className="w-5 h-5 text-foreground group-hover/brand:text-earth-700 transition-colors"
+            className="w-5 h-5 self-center text-foreground group-hover/brand:text-earth-700 transition-colors"
           />
-          <span className="font-heading font-bold text-base text-foreground group-hover/brand:text-earth-700 transition-colors">
+          <span className="font-heading font-bold text-base leading-none text-foreground group-hover/brand:text-earth-700 transition-colors">
             Cupola
           </span>
-          <span className="hidden md:inline text-[11px] text-muted-foreground group-hover/brand:text-foreground transition-colors">
+          <span className="hidden md:inline font-heading text-sm leading-none text-muted-foreground group-hover/brand:text-foreground transition-colors">
             by <span aria-hidden="true">🚜&nbsp;</span>Query.Farm
           </span>
         </a>

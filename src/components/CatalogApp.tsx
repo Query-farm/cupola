@@ -901,7 +901,7 @@ function BrandShell({ children }: { children: React.ReactNode }) {
       <header className="sticky top-0 z-40 flex items-center px-4 h-14 border-b border-border bg-card/95 backdrop-blur-sm shadow-sm">
         <a
           href="https://query.farm"
-          className="flex items-center gap-2 group/brand"
+          className="flex items-baseline gap-2 group/brand"
           target="_blank"
           rel="noopener noreferrer"
           title="Cupola — a Query.Farm tool"
@@ -910,12 +910,12 @@ function BrandShell({ children }: { children: React.ReactNode }) {
             src={`${import.meta.env.BASE_URL}cupola-icon.svg`}
             alt=""
             aria-hidden="true"
-            className="w-5 h-5 text-foreground group-hover/brand:text-earth-700 transition-colors"
+            className="w-5 h-5 self-center text-foreground group-hover/brand:text-earth-700 transition-colors"
           />
-          <span className="font-heading font-bold text-base text-foreground group-hover/brand:text-earth-700 transition-colors">
+          <span className="font-heading font-bold text-base leading-none text-foreground group-hover/brand:text-earth-700 transition-colors">
             Cupola
           </span>
-          <span className="hidden md:inline text-[11px] text-muted-foreground group-hover/brand:text-foreground transition-colors">
+          <span className="hidden md:inline font-heading text-sm leading-none text-muted-foreground group-hover/brand:text-foreground transition-colors">
             by <span aria-hidden="true">🚜&nbsp;</span>Query.Farm
           </span>
         </a>
@@ -1259,17 +1259,17 @@ function ContentPanel({
 
   if (selection.type === "view") {
     const view = schema.views.find((v) => v.name === selection.name);
-    if (view) return <ViewDetail view={view} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onNavigate} />;
+    if (view) return <ViewDetail view={view} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onNavigate} onOpenShell={onOpenShell} />;
   }
 
   if (selection.type === "function") {
     const func = schema.functions.find((f) => f.name === selection.name);
-    if (func) return <FunctionDetail func={func} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onNavigate} />;
+    if (func) return <FunctionDetail func={func} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onNavigate} onOpenShell={onOpenShell} />;
   }
 
   if (selection.type === "macro") {
     const macro = schema.macros?.find((m) => m.name === selection.name);
-    if (macro) return <MacroDetail macro={macro} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onNavigate} />;
+    if (macro) return <MacroDetail macro={macro} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onNavigate} onOpenShell={onOpenShell} />;
   }
 
   return <CatalogOverview catalog={data} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;

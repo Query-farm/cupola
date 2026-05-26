@@ -23,9 +23,10 @@ interface Props {
   catalogName?: string;
   schemaName?: string;
   onNavigate?: (selection: Selection) => void;
+  onOpenShell?: () => void;
 }
 
-export function ViewDetail({ view, catalogName, schemaName, onNavigate }: Props) {
+export function ViewDetail({ view, catalogName, schemaName, onNavigate, onOpenShell }: Props) {
   const [columns, setColumns] = useState<ViewColumn[] | null>(null);
   const [copied, setCopied] = useState(false);
   const displayTags = useMemo(() => filterDisplayTags(view.tags), [view.tags]);
@@ -134,7 +135,7 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate }: Props)
       )}
 
       {/* Example Queries */}
-      <ExampleQueries exampleQueriesJson={view.tags?.[TAG_EXAMPLE_QUERIES]} />
+      <ExampleQueries exampleQueriesJson={view.tags?.[TAG_EXAMPLE_QUERIES]} onOpenShell={onOpenShell} />
     </div>
   );
 }

@@ -3,7 +3,8 @@ import type { Selection } from "@/lib/tree";
 import { Breadcrumb } from "./Breadcrumb";
 import { SqlCodeBlock } from "./SqlCodeBlock";
 import { TagsTable } from "./TagsTable";
-import { filterDisplayTags } from "@/lib/tags";
+import { ExampleQueries } from "./ExampleQueries";
+import { filterDisplayTags, TAG_EXAMPLE_QUERIES } from "@/lib/tags";
 import { useMemo } from "react";
 
 interface Props {
@@ -11,9 +12,10 @@ interface Props {
   catalogName: string;
   schemaName?: string;
   onNavigate?: (selection: Selection) => void;
+  onOpenShell?: () => void;
 }
 
-export function MacroDetail({ macro, catalogName, schemaName, onNavigate }: Props) {
+export function MacroDetail({ macro, catalogName, schemaName, onNavigate, onOpenShell }: Props) {
   const displayTags = useMemo(() => filterDisplayTags(macro.tags), [macro.tags]);
 
   return (
@@ -60,6 +62,11 @@ export function MacroDetail({ macro, catalogName, schemaName, onNavigate }: Prop
       {displayTags && (
         <TagsTable tags={displayTags} />
       )}
+
+      <ExampleQueries
+        exampleQueriesJson={macro.tags?.[TAG_EXAMPLE_QUERIES]}
+        onOpenShell={onOpenShell}
+      />
     </div>
   );
 }
