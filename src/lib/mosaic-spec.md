@@ -112,6 +112,28 @@ If the user asks for "interactive bar chart by category," choose `toggleX`
 `Interactor` allows any combination, so the JSON-schema validator can't
 catch this — you have to choose correctly from the data shape.
 
+**For 2D brushing (e.g. brush a scatter plot by both X and Y), use the
+single 2D interactor `intervalXY` — never pair `intervalX` and `intervalY`
+on the same plot writing to the same selection.** Two 1D interactors do
+NOT compose into a 2D brush; D3 attaches each as its own brush behavior
+on the SVG element, they fight for pointer events, and they publish
+independent 1D clauses rather than one coordinated 2D selection.
+
+```json
+// ❌ Wrong — two 1D brushes that fight for pointer events:
+"plot": [
+  { "mark": "circle", "data": { "from": "pts", "filterBy": "$brush" }, "x": "lon", "y": "lat" },
+  { "select": "intervalX", "as": "$brush" },
+  { "select": "intervalY", "as": "$brush" }
+]
+
+// ✅ Right — one 2D brush:
+"plot": [
+  { "mark": "circle", "data": { "from": "pts", "filterBy": "$brush" }, "x": "lon", "y": "lat" },
+  { "select": "intervalXY", "as": "$brush" }
+]
+```
+
 ```json
 // ✅ bar chart by category, click-toggle selection
 {

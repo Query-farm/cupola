@@ -165,6 +165,44 @@ function lintPlot(plotPath: string, plotArray: any[], out: MosaicLintIssue[]): v
       message: buildMessage(select, xBad, yBad, forcingMarks),
     });
   }
+
+  // Detect `intervalX` + `intervalY` paired on the same plot writing to the
+  // same selection target. They look like they'd combine into a 2D brush,
+  // but D3 attaches each as its own brush behavior on the SVG element —
+  // they fight for pointer events and publish independent 1D clauses
+  // instead of a coordinated 2D one. The canonical fix is a single
+  // `intervalXY` interactor on that plot.
+  const intervalEntries = plotArray
+    .map((e, i) => ({ idx: i, entry: e }))
+    .filter((p) => p.entry && typeof p.entry === "object" &&
+      (p.entry.select === "intervalX" || p.entry.select === "intervalY"));
+  // Group by the `as` target — only paired interactors writing to the SAME
+  // selection are problematic. Independent selections are fine.
+  const byTarget = new Map<string, typeof intervalEntries>();
+  for (const e of intervalEntries) {
+    const target = typeof e.entry.as === "string" ? e.entry.as : "<no-target>";
+    const list = byTarget.get(target) || [];
+    list.push(e);
+    byTarget.set(target, list);
+  }
+  for (const [target, list] of byTarget) {
+    const hasX = list.some((e) => e.entry.select === "intervalX");
+    const hasY = list.some((e) => e.entry.select === "intervalY");
+    if (!hasX || !hasY) continue;
+    // Flag both interactors, but emit one issue per plot so the agent
+    // gets a single actionable message.
+    const xIdx = list.find((e) => e.entry.select === "intervalX")!.idx;
+    out.push({
+      path: `${plotPath}/${xIdx}`,
+      severity: "error",
+      selector: "intervalX",
+      message:
+        `\`intervalX\` and \`intervalY\` on the same plot writing to the same selection (\`${target}\`) ` +
+        `do not compose into a 2D brush — D3 attaches each as its own brush behavior on the SVG element, ` +
+        `they fight for pointer events, and they publish independent 1D clauses rather than one coordinated 2D selection. ` +
+        `Replace both interactors with a single \`{ "select": "intervalXY", "as": "${target}" }\`.`,
+    });
+  }
 }
 
 function buildMessage(

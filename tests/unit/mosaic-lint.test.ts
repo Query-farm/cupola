@@ -212,6 +212,36 @@ test("type-aware lint degrades gracefully when DESCRIBE fails", async () => {
   expect(issues).toHaveLength(0);
 });
 
+test("intervalX + intervalY on same plot writing to same selection is flagged", () => {
+  // The recurring antipattern: agent wires up two 1D brushes hoping they'll
+  // compose into a 2D brush. They don't — D3 brushes fight for pointer
+  // events on the same SVG. The right thing is `intervalXY`.
+  const spec = {
+    plot: [
+      { mark: "circle", data: { from: "eq" }, x: "lon", y: "lat" },
+      { select: "intervalX", as: "$brush" },
+      { select: "intervalY", as: "$brush" },
+    ],
+  };
+  const issues = lintMosaicSpec(spec);
+  expect(issues).toHaveLength(1);
+  expect(issues[0].selector).toBe("intervalX");
+  expect(issues[0].message).toContain("intervalXY");
+  expect(issues[0].message).toContain("$brush");
+});
+
+test("intervalX + intervalY on same plot to DIFFERENT selections is NOT flagged", () => {
+  // Independent selections — perfectly valid.
+  const spec = {
+    plot: [
+      { mark: "circle", data: { from: "eq" }, x: "lon", y: "lat" },
+      { select: "intervalX", as: "$brushX" },
+      { select: "intervalY", as: "$brushY" },
+    ],
+  };
+  expect(lintMosaicSpec(spec)).toHaveLength(0);
+});
+
 test("formatLintIssues produces a path-prefixed multi-line string", () => {
   const spec = {
     plot: [
