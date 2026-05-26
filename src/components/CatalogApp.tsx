@@ -959,10 +959,12 @@ function ConnectingScreen({
             (not a roundel), so we drop the old rotating circular halo —
             it would clip the cupola corners and read awkwardly. */}
         <img
-          src={`${import.meta.env.BASE_URL}cupola-icon.png`}
+          src={`${import.meta.env.BASE_URL}cupola-logo-large.png`}
           alt=""
           aria-hidden="true"
-          className="w-32 h-32 mb-6 animate-cs-pulse"
+          width={128}
+          height={128}
+          className="w-32 h-32 mb-6 rounded-2xl shadow-xl ring-1 ring-soil-200/60 dark:ring-soil-700/60 animate-cs-pulse"
         />
 
         <h1 className="font-heading text-2xl md:text-3xl font-bold text-soil-900 dark:text-soil-100 mb-2">
@@ -1028,10 +1030,12 @@ function ErrorScreen({
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
             <img
-              src={`${import.meta.env.BASE_URL}cupola-icon.png`}
+              src={`${import.meta.env.BASE_URL}cupola-logo-large.png`}
               alt=""
               aria-hidden="true"
-              className="w-20 h-20 mx-auto mb-6"
+              width={96}
+              height={96}
+              className="w-24 h-24 mx-auto mb-6 rounded-2xl shadow-lg ring-1 ring-soil-200/60 dark:ring-soil-700/60"
             />
             <h1 className="font-heading text-2xl font-bold text-soil-900 dark:text-soil-100 mb-3">
               Connection Error
@@ -1121,22 +1125,13 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
       <div className="max-w-xl w-full mx-auto px-6 py-12 lg:py-16">
         <div className="flex flex-col items-center text-center mb-8">
           <img
-            src={`${import.meta.env.BASE_URL}cupola-icon.png`}
+            src={`${import.meta.env.BASE_URL}cupola-logo-large.png`}
             alt=""
             aria-hidden="true"
-            className="w-20 h-20 mb-5"
+            width={144}
+            height={144}
+            className="w-36 h-36 mb-6 rounded-2xl shadow-xl ring-1 ring-soil-200/60 dark:ring-soil-700/60"
           />
-          <div className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-soil-500 dark:text-soil-400 mb-3">
-            <img
-              src={`${import.meta.env.BASE_URL}cupola-icon.png`}
-              alt=""
-              aria-hidden="true"
-              className="w-3.5 h-3.5"
-            />
-            <span>Cupola</span>
-            <span className="text-soil-300 dark:text-soil-600">·</span>
-            <span><span aria-hidden="true">🚜&nbsp;</span>A Query.Farm tool</span>
-          </div>
           <h1 className="font-heading text-4xl md:text-5xl font-bold text-soil-900 dark:text-soil-100 leading-[1.05] tracking-tight mb-3">
             Browse any VGI catalog.
           </h1>
