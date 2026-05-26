@@ -1,7 +1,7 @@
 {
   "name": "vgi-web-frontend",
   "type": "module",
-  "version": "0.4.35",
+  "version": "0.4.36",
   "engines": {
     "node": ">=22.12.0"
   },
@@ -16,7 +16,7 @@
   "dependencies": {
     "@astrojs/react": "^5.0.4",
     "@base-ui/react": "^1.3.0",
-    "@haybarn/haybarn-wasm": "^1.5.3-rc7",
+    "@haybarn/haybarn-wasm": "^1.5.3-rc9",
     "@kepler.gl/actions": "^3.2.6",
     "@kepler.gl/components": "file:../kepler.gl/src/components/kepler.gl-components-3.2.6.tgz",
     "@kepler.gl/deckgl-arrow-layers": "file:../kepler.gl/src/deckgl-arrow-layers/kepler.gl-deckgl-arrow-layers-3.2.6.tgz",
