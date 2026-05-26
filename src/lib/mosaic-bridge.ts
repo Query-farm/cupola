@@ -216,19 +216,40 @@ export async function renderChartSpec(
   // Per-render Coordinator + Connector. The HaybarnConnector instance
   // carries the session bag — no module-level state to race on.
   //
-  // preagg.enabled=false: Mosaic's PreAggregator builds materialized views
-  // in a schema named "mosaic" for fast cross-filtering. Its default code
-  // path is `CREATE SCHEMA "mosaic"; CREATE TABLE "mosaic"."preagg_<hash>" …`
-  // followed by SELECTs against that table. In our session the default
-  // catalog after `ATTACH '…' AS X (TYPE VGI); USE X.schema;` is the
-  // VGI-attached read-only catalog, so the CREATE SCHEMA fails. The
-  // PreAggregator just `.catch()`-logs and moves on — but then the SELECT
-  // surfaces "schema mosaic does not exist" to the user. Disabling preagg
-  // takes the materialized-view fast path off the table; cross-filtering
-  // still works (Mosaic falls back to running the client's own SELECT on
-  // every filter change), which is fine for typical exploration sizes.
+  // Pre-aggregation: Mosaic builds materialized "cube" tables that bucket
+  // by the brush dimension, so subsequent brush updates issue tiny
+  // SELECTs (~100 rows) instead of re-running each linked chart's full
+  // query. Without it, dragging a brush re-runs the chart's whole SELECT
+  // per pixel-step — fine on small data, painfully slow on the kind of
+  // 10k+ row VGI extracts we typically render.
+  //
+  // PreAggregator's default schema is the bare name "mosaic", which it
+  // tries to create with `CREATE SCHEMA "mosaic"`. That lands in the
+  // CURRENT catalog (the read-only attached VGI catalog after a `USE`)
+  // and fails silently, leaving the SELECT against the never-created
+  // `mosaic.preagg_<hash>` to crash the brush. We work around by pinning
+  // preagg to a writable, fully-qualified schema in the in-memory catalog:
+  //
+  //    CREATE SCHEMA IF NOT EXISTS "memory"."mosaic"
+  //    CREATE TABLE "memory"."mosaic"."preagg_<hash>" AS …
+  //
+  // Mosaic's PreAggregator builds the preagg table name as
+  // `new TableRefNode([schema, "preagg_<id>"])`. With `schema` as an array
+  // `["memory", "mosaic"]`, the resulting TableRefNode flattens to
+  // `["memory", "mosaic", "preagg_<id>"]` — a three-part catalog.schema.table
+  // identifier — and both `createSchema` and `createTable` emit qualified
+  // SQL that's catalog-explicit and survives whatever `USE` the user's
+  // session is in. The PreAggregator constructor's TypeScript type says
+  // `schema?: string`, but the runtime path through `asTableRef` accepts
+  // `string | string[]`, so the array form propagates correctly. Cast
+  // suppresses the type error without us forking Mosaic.
   const connector = new HaybarnConnector();
-  const coordinator = new Coordinator(connector, { preagg: { enabled: false } });
+  const coordinator = new Coordinator(connector, {
+    preagg: {
+      enabled: true,
+      schema: ["memory", "mosaic"] as unknown as string,
+    },
+  });
   const api = createAPIContext({ coordinator });
 
   // Capture unhandled promise rejections that fire during THIS render.
