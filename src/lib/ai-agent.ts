@@ -63,7 +63,7 @@ export { formatArrowTableAsJson, executeReadQueryResults } from "./query-results
 // Tool definitions
 // ---------------------------------------------------------------------------
 
-const TOOLS: Tool[] = [
+export const TOOLS: Tool[] = [
   {
     name: "run_sql",
     description: "Execute a DuckDB SQL query against the connected database. Returns results as JSON with columns, types, first 20 rows, total row count, and a result_id for paging. Use standard DuckDB 1.5.1 SQL syntax.",
@@ -127,11 +127,45 @@ const TOOLS: Tool[] = [
   },
 ];
 
+/** Chart tool — only exposed on surfaces that can render charts (AskAIChat).
+ *  The terminal `.ai` mode does not include this in its tool set.
+ *
+ *  The tool dispatcher runs the SQL itself, caches rows, inserts a vega_chart
+ *  block, and returns a truthful tool_result (row count + sample). It does NOT
+ *  send full rows back to the model (waste of context) — just metadata. */
+export const CHART_TOOL: Tool = {
+  name: "render_chart",
+  description: [
+    "Visualize a SQL result as a Vega-Lite chart in the chat. Provide a re-runnable SELECT (the user can refresh, which re-executes it) and a Vega-Lite v5 spec.",
+    "DO NOT include a `data` field in the spec — rows from the SQL are injected automatically.",
+    "Prefer minimal specs: omit defaults, no inline data values, encode columns by their SQL output names. For multi-series charts use a single SELECT with a category column and Vega-Lite's color/strokeDash channels — do NOT request multiple queries.",
+    "Use this any time a chart explains the data better than a table.",
+  ].join(" "),
+  input_schema: {
+    type: "object",
+    properties: {
+      sql: {
+        type: "string",
+        description: "SELECT statement that produces the chart rows. Re-run verbatim on refresh.",
+      },
+      spec: {
+        type: "object",
+        description: "Vega-Lite v5 JSON spec without a `data` field. Encode columns by their SQL output names.",
+      },
+      title: {
+        type: "string",
+        description: "Optional chart title displayed above the chart.",
+      },
+    },
+    required: ["sql", "spec"],
+  },
+};
+
 // ---------------------------------------------------------------------------
 // System prompt builder
 // ---------------------------------------------------------------------------
 
-export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memoryCatalog?: CatalogData | null): string {
+export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memoryCatalog?: CatalogData | null, hasChartTool: boolean = false): string {
   const cat = catalog.catalogName;
   const firstSchema = catalog.schemas[0]?.info.name || "schema";
   const firstTable = catalog.schemas[0]?.tables[0]?.name || "table";
@@ -144,6 +178,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `* **describe_table** — Get column names, types, and descriptions for a table.`,
     `* **run_sql** — Execute a DuckDB SQL query.`,
     `* **ask_user** — Ask the user to choose between specific options.`,
+    ...(hasChartTool ? [`* **render_chart** — Visualize a SQL result as a Vega-Lite chart in the chat. Provide a re-runnable SELECT and a minimal Vega-Lite v5 spec WITHOUT a \`data\` field — rows from the SQL are injected automatically. Prefer one query with a category column for multi-series charts; do NOT inline data values. Use a chart whenever it explains the data better than a table.`] : []),
     ``,
     `## Rules`,
     ``,
@@ -479,6 +514,7 @@ async function streamOneRequest(
   messages: MessageParam[],
   systemPrompt: string,
   callbacks: AgentCallbacks,
+  tools: Tool[],
   signal?: AbortSignal
 ): Promise<{ content: ContentBlock[]; stopReason: string; inputTokens: number; outputTokens: number }> {
   const response = await fetchWithRetry(
@@ -495,8 +531,12 @@ async function streamOneRequest(
       body: JSON.stringify({
         model,
         messages,
-        tools: TOOLS.map((t, i) =>
-          i === TOOLS.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t
+        // Place cache_control on the LAST tool of whatever active set the
+        // caller passed. Hardcoding the index would fragment the cache
+        // across surfaces that ship different tool subsets (e.g. terminal
+        // vs AskAIChat with the chart tool).
+        tools: tools.map((t, i) =>
+          i === tools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t
         ),
         system: [
           { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
@@ -575,7 +615,8 @@ export async function runAgentTurn(
   executeTool: (name: string, input: any, signal?: AbortSignal) => Promise<string>,
   callbacks: AgentCallbacks,
   signal?: AbortSignal,
-  maxToolRounds = 20
+  maxToolRounds = 20,
+  tools: Tool[] = TOOLS,
 ): Promise<void> {
   const MAX_TOOL_ROUNDS = maxToolRounds;
   let totalInputTokens = 0;
@@ -589,7 +630,7 @@ export async function runAgentTurn(
     // Any error that escapes here is final — do not re-retry, which would
     // multiply attempts and resend the full conversation each time.
     const { content, stopReason, inputTokens, outputTokens } = await streamOneRequest(
-      apiKey, model, messages, systemPrompt, callbacks, signal
+      apiKey, model, messages, systemPrompt, callbacks, tools, signal
     );
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
@@ -658,4 +699,4 @@ export async function runAgentTurn(
   callbacks.onDone();
 }
 
-export { TOOLS, type MessageParam, type ContentBlock, type ToolResultBlock };
+export { type MessageParam, type ContentBlock, type ToolResultBlock, type Tool };

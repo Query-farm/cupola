@@ -11,6 +11,8 @@
  *     UI side effects (print, navigate, refresh) come in as callbacks.
  *   - describeTableWithFallback: the SQL-fallback path for tables in
  *     secondary-attached catalogs that aren't in the primary CatalogData.
+ *   - validateChartSpec: shape-walk for the render_chart tool that rejects
+ *     any external-resource reference (url/href/src) at any nesting depth.
  *
  * Tools that have no UI side effects (read_query_results, list_tables,
  * the in-catalog describe_table) are already shared via their direct
@@ -209,3 +211,55 @@ export async function describeTableWithFallback(
     columns: cols,
   });
 }
+
+// ---------------------------------------------------------------------------
+// render_chart spec validation
+// ---------------------------------------------------------------------------
+
+/** Keys that, if present anywhere in a Vega-Lite spec, could trigger a network
+ *  fetch (or worse). Rejecting them anywhere in the spec tree is overly strict
+ *  but the chart tool's contract is "data comes from DuckDB, period" — there
+ *  is no legitimate reason for these keys to appear. */
+const FORBIDDEN_KEYS = new Set(["url", "href", "src"]);
+
+/** Validate (and lightly normalize) a Vega-Lite spec from the LLM.
+ *
+ *  Returns:
+ *    - errors[]: human-readable rejection reasons (empty = ok).
+ *    - sanitized: a copy of the spec with `data` removed (we always inject
+ *      rows from the SQL result).
+ *
+ *  This is a belt-and-suspenders defense; the embed call also passes a
+ *  Vega loader that rejects all network requests. Both layers exist because
+ *  Vega-Lite has more network surfaces than this validator can be sure to
+ *  enumerate — locking the loader is the real guarantee. */
+export function validateChartSpec(spec: unknown): { errors: string[]; sanitized: Record<string, any> } {
+  const errors: string[] = [];
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+    return { errors: ["spec must be a JSON object"], sanitized: {} };
+  }
+  // Deep-walk to find any forbidden keys anywhere in the tree. Note: we
+  // walk the ORIGINAL spec (with `data` still attached) so the LLM can't
+  // smuggle a url under data.* either; we strip data only after the walk.
+  walkForForbiddenKeys(spec, "", errors);
+  const sanitized = { ...(spec as Record<string, any>) };
+  if ("data" in sanitized) delete sanitized.data;
+  return { errors, sanitized };
+}
+
+function walkForForbiddenKeys(node: unknown, path: string, errors: string[]): void {
+  if (node === null || node === undefined) return;
+  if (typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    node.forEach((child, i) => walkForForbiddenKeys(child, `${path}[${i}]`, errors));
+    return;
+  }
+  for (const [key, value] of Object.entries(node)) {
+    if (FORBIDDEN_KEYS.has(key) && typeof value === "string") {
+      errors.push(`spec${path}.${key} is not allowed (external resources are forbidden in charts)`);
+      continue;
+    }
+    walkForForbiddenKeys(value, `${path}.${key}`, errors);
+  }
+}
+

@@ -1,9 +1,17 @@
+import { lazy, Suspense } from "react";
 import { Sparkles, X } from "lucide-react";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { SqlToolCallBlock } from "./SqlToolCallBlock";
 import { AskUserBlock } from "./AskUserBlock";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { estimateCost, formatCost } from "@/lib/pricing";
+
+// Lazy: pulls vega-embed (and transitively vega + vega-lite runtime) only
+// when a chart block is actually present. Keeps the AskAIChat entry chunk
+// out of the vega tree.
+const VegaChartBlock = lazy(() =>
+  import("./VegaChartBlock").then((m) => ({ default: m.VegaChartBlock })),
+);
 
 export interface ToolCallDisplayResult {
   /** SQL result shape (used by run_sql). */
@@ -31,17 +39,41 @@ export interface AskUserState {
   resolved: boolean;
 }
 
+/** Vega-Lite chart block created by the render_chart tool. The actual rows
+ *  live in src/lib/chart-rows-store.ts keyed by `chartId`; this block only
+ *  carries the metadata needed to re-run the query and render the chart.
+ *
+ *  `spec` is intentionally typed as Record<string, any> here (NOT
+ *  TopLevelSpec from vega-lite). The strongly-typed import only happens
+ *  inside VegaChartBlock.tsx, which is dynamic-imported. This keeps the
+ *  vega-lite runtime out of the eager bundle even if someone forgets the
+ *  `type` keyword on an import elsewhere. */
+export interface VegaChartContent {
+  chartId: string;
+  sql: string;
+  spec: Record<string, any>;
+  title?: string;
+  rowCount: number;
+  columns: string[];
+  fetchedAt: number;
+  /** Set after a failed refresh; chart from last successful fetch stays visible. */
+  error?: string;
+}
+
 export type ContentBlock =
   | { type: "text"; id: string; content: string }
   | { type: "tool_call"; id: string; toolCall: ToolCallEntry }
   | { type: "thinking"; id: string; label: string }
-  | { type: "ask_user"; id: string; askUser: AskUserState };
+  | { type: "ask_user"; id: string; askUser: AskUserState }
+  | { type: "vega_chart"; id: string; chart: VegaChartContent };
 
 interface Props {
   blocks: ContentBlock[];
   isStreaming?: boolean;
   onAskUserSelect?: (option: string, index: number) => void;
   onCancel?: () => void;
+  /** Patch a block in place by id — used by VegaChartBlock for refresh state. */
+  onUpdateBlock?: (blockId: string, patch: Partial<VegaChartContent>) => void;
   usage?: { inputTokens: number; outputTokens: number };
   model?: string;
 }
@@ -61,7 +93,7 @@ function CancelChip({ onCancel }: { onCancel: () => void }) {
 }
 
 export function ChatMessageAssistant({
-  blocks, isStreaming, onAskUserSelect, onCancel, usage, model,
+  blocks, isStreaming, onAskUserSelect, onCancel, onUpdateBlock, usage, model,
 }: Props) {
   return (
     <div className="flex gap-2.5">
@@ -111,6 +143,19 @@ export function ChatMessageAssistant({
                 resolved={block.askUser.resolved}
                 onSelect={onAskUserSelect}
               />
+            );
+          }
+          if (block.type === "vega_chart") {
+            return (
+              <Suspense
+                key={block.id}
+                fallback={<div className="text-xs text-muted-foreground/60 py-2">Loading chart…</div>}
+              >
+                <VegaChartBlock
+                  chart={block.chart}
+                  onUpdate={(patch) => onUpdateBlock?.(block.id, patch)}
+                />
+              </Suspense>
             );
           }
           return null;

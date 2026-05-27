@@ -9,9 +9,13 @@ import {
   buildSystemPrompt,
   executeListTables,
   executeReadQueryResults,
+  TOOLS,
+  CHART_TOOL,
   type MessageParam,
 } from "@/lib/ai-agent";
-import { executeRunSql, describeTableWithFallback } from "@/lib/ai-tool-executor";
+import { executeRunSql, describeTableWithFallback, validateChartSpec } from "@/lib/ai-tool-executor";
+import { readRows } from "@/lib/duckdb-query";
+import { cacheChartRows } from "@/lib/chart-rows-store";
 const uid = () => crypto.randomUUID();
 
 import { ChatInput } from "./chat/ChatInput";
@@ -118,7 +122,10 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
     setIsLoading(true);
     abortRef.current = new AbortController();
 
-    const systemPrompt = buildSystemPrompt(catalogData, serviceUrl, bridge.memoryCatalog);
+    // hasChartTool = true: include render_chart capability in the prompt
+    // guidance (and CHART_TOOL in the tool list below). Terminal `.ai` mode
+    // passes a different surface and would set this false.
+    const systemPrompt = buildSystemPrompt(catalogData, serviceUrl, bridge.memoryCatalog, true);
     const model = getSetting("aiModel") || "claude-sonnet-4-20250514";
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
 
@@ -281,6 +288,56 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           updateBlocks(blocks);
         });
       }
+      if (name === "render_chart") {
+        // Validate first — rejects external resource references anywhere in
+        // the spec and strips any `data` field (rows always come from SQL).
+        const { errors, sanitized } = validateChartSpec(input.spec);
+        if (errors.length) {
+          return JSON.stringify({ ok: false, error: `Invalid chart spec: ${errors.join("; ")}` });
+        }
+        if (!bridge.query) {
+          return JSON.stringify({ ok: false, error: "DuckDB not ready — open the SQL Shell first." });
+        }
+        const rows = await readRows(input.sql);
+        if (rows === null) {
+          // Surface the DuckDB error to the model so it can fix the SQL.
+          // readRows returns null on both query failure AND empty result;
+          // for the chart case both are unrenderable, but we can do better
+          // by re-running through bridge.query directly to get the actual
+          // error message.
+          const raw = await bridge.query(input.sql);
+          if (!raw.ok) {
+            return JSON.stringify({ ok: false, error: raw.error || "Query failed" });
+          }
+          return JSON.stringify({ ok: false, error: "Query returned no rows — nothing to chart." });
+        }
+        const chartId = uid();
+        const columns = rows.length ? Object.keys(rows[0]) : [];
+        cacheChartRows(chartId, rows, columns);
+        removeThinking();
+        blocks = [...blocks, {
+          type: "vega_chart",
+          id: uid(),
+          chart: {
+            chartId,
+            sql: input.sql,
+            spec: sanitized,
+            title: input.title,
+            rowCount: rows.length,
+            columns,
+            fetchedAt: Date.now(),
+          },
+        }];
+        updateBlocks(blocks);
+        return JSON.stringify({
+          ok: true,
+          row_count: rows.length,
+          columns,
+          // First 3 rows as a sample so the model knows the shape without
+          // burning context on the full dataset.
+          sample: rows.slice(0, 3),
+        });
+      }
       return JSON.stringify({ error: `Unknown tool: ${name}` });
     };
 
@@ -348,6 +405,10 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         },
         abortRef.current.signal,
         maxRounds,
+        // AskAIChat is the only surface that can render charts. Terminal
+        // .ai mode passes the default TOOLS via shell-ai-mode.ts and
+        // doesn't see render_chart at all.
+        [...TOOLS, CHART_TOOL],
       );
     } catch (err: any) {
       removeThinking();
@@ -429,7 +490,9 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
   const hasMessages = messages.length > 0;
   const model = getSetting("aiModel") || "claude-sonnet-4-20250514";
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
-  const systemPrompt = useMemo(() => catalogData ? buildSystemPrompt(catalogData, serviceUrl, bridge.memoryCatalog) : null, [catalogData, serviceUrl]);
+  // Pass hasChartTool=true so the preview shown to the user matches what
+  // the agent actually sees at runtime (see line 128).
+  const systemPrompt = useMemo(() => catalogData ? buildSystemPrompt(catalogData, serviceUrl, bridge.memoryCatalog, true) : null, [catalogData, serviceUrl]);
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -474,6 +537,17 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
                   isStreaming={msg.isStreaming}
                   onAskUserSelect={handleAskUserSelect}
                   onCancel={msg.isStreaming ? handleStop : undefined}
+                  onUpdateBlock={(blockId, patch) => {
+                    // Used by VegaChartBlock for refresh state. Patches the
+                    // chart portion of a specific block in place by id.
+                    setMessages(prev => prev.map(m => m.id === msg.id ? {
+                      ...m,
+                      blocks: (m.blocks ?? []).map(b => b.id === blockId && b.type === "vega_chart"
+                        ? { ...b, chart: { ...b.chart, ...patch } }
+                        : b,
+                      ),
+                    } : m));
+                  }}
                   usage={msg.usage}
                   model={model}
                 />
