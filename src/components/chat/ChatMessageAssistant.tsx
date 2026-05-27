@@ -48,13 +48,27 @@ export interface AskUserState {
  *  inside VegaChartBlock.tsx, which is dynamic-imported. This keeps the
  *  vega-lite runtime out of the eager bundle even if someone forgets the
  *  `type` keyword on an import elsewhere. */
+/** Metadata for one of a chart's extra named datasets (overlays, layers,
+ *  reference data). Up to 5 per chart. Each has its own SQL that the
+ *  refresh button re-runs alongside the primary. */
+export interface VegaChartExtraSource {
+  name: string;
+  sql: string;
+  rowCount: number;
+  columns: string[];
+}
+
 export interface VegaChartContent {
   chartId: string;
   sql: string;
   spec: Record<string, any>;
   title?: string;
+  /** Primary dataset's row count + columns. */
   rowCount: number;
   columns: string[];
+  /** Additional named datasets injected as Vega-Lite's top-level `datasets`.
+   *  Undefined for single-source charts (the common case). */
+  extraSources?: VegaChartExtraSource[];
   fetchedAt: number;
   /** Set after a failed refresh; chart from last successful fetch stays visible. */
   error?: string;

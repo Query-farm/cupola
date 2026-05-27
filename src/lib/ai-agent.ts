@@ -219,15 +219,34 @@ export const CHART_TOOL: Tool = {
     properties: {
       sql: {
         type: "string",
-        description: "SELECT statement that produces the chart rows. Re-run verbatim on refresh.",
+        description: "SELECT statement that produces the chart's PRIMARY rows. Re-run verbatim on refresh.",
       },
       spec: {
         type: "object",
-        description: "Vega-Lite v5 JSON spec without a `data` field. Encode columns by their SQL output names.",
+        description: "Vega-Lite v5 JSON spec without `data` or `datasets` fields. The primary SQL result is auto-injected; declare additional datasets via the `extraData` parameter and reference them in layer/concat marks as `data: { name: '...' }`.",
       },
       title: {
         type: "string",
         description: "Optional chart title displayed above the chart.",
+      },
+      extraData: {
+        type: "array",
+        maxItems: 5,
+        description: "Optional additional named datasets to overlay alongside the primary. Use when you need heterogeneous sources on one chart (e.g. earthquake points + volcano markers; raw data + a reference line). Each entry's `name` is referenced in the spec as `data: { name: '<name>' }` on layer/concat marks. Up to 5 extras per chart.",
+        items: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Dataset name for this extra source. Must match /^[a-zA-Z_][a-zA-Z0-9_]*$/ and not be '__cupola_data' (reserved for the primary).",
+            },
+            sql: {
+              type: "string",
+              description: "SELECT statement producing the rows for this extra dataset. Re-run on refresh.",
+            },
+          },
+          required: ["name", "sql"],
+        },
       },
     },
     required: ["sql", "spec"],
@@ -251,7 +270,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `* **describe_table** — Get column names, types, and descriptions for a table.`,
     `* **run_sql** — Execute a DuckDB SQL query.`,
     `* **ask_user** — Ask the user to choose between specific options.`,
-    ...(hasChartTool ? [`* **render_chart** — Visualize a SQL result as a Vega-Lite chart in the chat. Provide a re-runnable SELECT and a minimal Vega-Lite v5 spec WITHOUT a \`data\` field — rows from the SQL are injected automatically. Prefer one query with a category column for multi-series charts; do NOT inline data values. Use a chart whenever it explains the data better than a table.`] : []),
+    ...(hasChartTool ? [`* **render_chart** — Visualize SQL results as a Vega-Lite chart in the chat. Provide a re-runnable SELECT and a minimal Vega-Lite v5 spec WITHOUT \`data\` or \`datasets\` fields — rows are injected automatically. For multi-series charts you can either: (a) write one SELECT with a category column and encode it via \`color\` / \`strokeDash\`, OR (b) pass additional sources via the \`extraData\` parameter and reference them in layer marks as \`data: { name: '...' }\`. Use extraData when sources have different shapes (e.g. earthquake points + volcano markers, raw data + a reference line). Do NOT inline data values. Use a chart whenever it explains the data better than a table.`] : []),
     ``,
     `## Rules`,
     ``,

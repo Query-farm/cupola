@@ -20,7 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RotateCw, Loader2, Copy, Check } from "lucide-react";
 import type { VegaChartContent } from "./ChatMessageAssistant";
-import { getChartRows } from "@/lib/chart-rows-store";
+import { getChartRows, getChartExtras } from "@/lib/chart-rows-store";
 import { embedChart, downloadPNG, downloadSVG, type VegaView } from "./chart-embed";
 import { ChartDownloadMenu } from "./ChartDownloadMenu";
 import { SqlCodeBlock } from "@/components/content/SqlCodeBlock";
@@ -81,9 +81,13 @@ export function MaximizedChartDialog({ chart, onClose, onRefresh, refreshing }: 
     }
     const cached = getChartRows(chart.chartId);
     const rows = cached?.rows ?? [];
+    const extrasMap = getChartExtras(chart.chartId);
+    const extraDatasets = extrasMap.size > 0
+      ? Object.fromEntries(Array.from(extrasMap, ([name, ds]) => [name, ds.rows]))
+      : undefined;
     try {
       const forceHeight = Math.max(200, Math.floor(el.clientHeight) - 60);
-      const view = await embedChart(el, chart.spec, rows, { forceHeight });
+      const view = await embedChart(el, chart.spec, rows, extraDatasets, { forceHeight });
       if (!containerRef.current || containerRef.current !== el) {
         view.finalize();
         return;
@@ -237,9 +241,11 @@ export function MaximizedChartDialog({ chart, onClose, onRefresh, refreshing }: 
             data-testid="vega-chart-maximize-data-panel"
             className="flex-1 min-h-0 flex flex-col gap-3 m-0 overflow-auto"
           >
-            <div>
+            <div data-testid="chart-maximize-primary-section">
               <div className="flex items-center justify-between mb-1.5">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">SQL</div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {chart.extraSources && chart.extraSources.length > 0 ? "Primary SQL" : "SQL"}
+                </div>
                 <button
                   onClick={copySql}
                   className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded"
@@ -251,23 +257,27 @@ export function MaximizedChartDialog({ chart, onClose, onRefresh, refreshing }: 
                 </button>
               </div>
               {/* SqlCodeBlock formats with sql-formatter (multi-line,
-                  keyword case, indentation) and syntax-highlights. The
-                  one-line truncated <code> in the old footer is gone. */}
+                  keyword case, indentation) and syntax-highlights. */}
               <div className="bg-muted/40 rounded-md p-3">
                 <SqlCodeBlock query={chart.sql} />
               </div>
+              <div className="mt-1.5 text-[11px] text-muted-foreground font-mono">
+                {chart.rowCount.toLocaleString()} rows · columns: {chart.columns.join(", ")}
+              </div>
             </div>
 
-            <div className="flex gap-6 text-xs">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">Rows</div>
-                <div className="font-mono">{chart.rowCount.toLocaleString()}</div>
+            {/* Extras section: one SqlCodeBlock per additional dataset.
+                Each can be inspected and copied individually. */}
+            {chart.extraSources && chart.extraSources.length > 0 && (
+              <div data-testid="chart-maximize-extras-section" className="flex flex-col gap-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Extra datasets ({chart.extraSources.length})
+                </div>
+                {chart.extraSources.map((extra) => (
+                  <ExtraSourceCard key={extra.name} extra={extra} />
+                ))}
               </div>
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">Columns</div>
-                <div className="font-mono">{chart.columns.join(", ")}</div>
-              </div>
-            </div>
+            )}
 
             {chart.warnings && chart.warnings.length > 0 && (
               <div>
@@ -281,5 +291,46 @@ export function MaximizedChartDialog({ chart, onClose, onRefresh, refreshing }: 
         </Tabs>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** One card per extra dataset in the Data tab: name + multi-line SQL via
+ *  SqlCodeBlock + copy button + row/column count footer. */
+function ExtraSourceCard({
+  extra,
+}: {
+  extra: { name: string; sql: string; rowCount: number; columns: string[] };
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(extra.sql);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  };
+  return (
+    <div data-testid={`chart-maximize-extra-${extra.name}`}>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="text-[11px] font-medium text-foreground/80">
+          <span className="text-muted-foreground">name:</span>{" "}
+          <code className="font-mono">{extra.name}</code>
+        </div>
+        <button
+          onClick={copy}
+          className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded"
+          title="Copy SQL"
+        >
+          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <div className="bg-muted/40 rounded-md p-3">
+        <SqlCodeBlock query={extra.sql} />
+      </div>
+      <div className="mt-1.5 text-[11px] text-muted-foreground font-mono">
+        {extra.rowCount.toLocaleString()} rows · columns: {extra.columns.join(", ")}
+      </div>
+    </div>
   );
 }

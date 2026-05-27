@@ -254,6 +254,84 @@ export function validateChartSpec(spec: unknown): { errors: string[]; sanitized:
   return { errors, sanitized };
 }
 
+// ---------------------------------------------------------------------------
+// render_chart `extraData` validation
+// ---------------------------------------------------------------------------
+
+/** Reserved name for the primary dataset injected by the embed pipeline.
+ *  Kept in sync with CUPOLA_DATA_NAME in components/chat/chart-embed.ts —
+ *  duplicated here to avoid a React component import in a pure helper. */
+const PRIMARY_DATA_NAME = "__cupola_data";
+
+/** Vega-Lite dataset name pattern. Must start with a letter or underscore;
+ *  rest can include alphanumerics + underscores. Matches what's safe to
+ *  splice into a `data: { name: '...' }` reference without surprises. */
+const EXTRA_DATA_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+/** Soft cap on extra datasets per chart — defends against runaway agent
+ *  loops that fan out into many SQL queries per chart. */
+const MAX_EXTRA_DATA = 5;
+
+export interface ExtraDataItem {
+  name: string;
+  sql: string;
+}
+
+/**
+ * Validate the `extraData` parameter of render_chart. Returns a cleaned
+ * array (trimmed strings) on success or an array of error strings.
+ *
+ * Rules:
+ *  - At most MAX_EXTRA_DATA entries.
+ *  - Each `name` matches EXTRA_DATA_NAME_RE.
+ *  - No `name` equals PRIMARY_DATA_NAME (collision with primary).
+ *  - `name`s are unique across the array.
+ *  - `sql` is non-empty after trim.
+ */
+export function validateExtraData(extras: unknown): { errors: string[]; cleaned: ExtraDataItem[] } {
+  if (extras === undefined || extras === null) return { errors: [], cleaned: [] };
+  if (!Array.isArray(extras)) {
+    return { errors: ["extraData must be an array"], cleaned: [] };
+  }
+  const errors: string[] = [];
+  if (extras.length > MAX_EXTRA_DATA) {
+    errors.push(`extraData has ${extras.length} entries (max ${MAX_EXTRA_DATA}). Combine sources or drop the least essential.`);
+  }
+  const cleaned: ExtraDataItem[] = [];
+  const seenNames = new Set<string>();
+  extras.forEach((item, i) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      errors.push(`extraData[${i}] must be an object with { name, sql }`);
+      return;
+    }
+    const name = typeof (item as any).name === "string" ? (item as any).name.trim() : "";
+    const sql = typeof (item as any).sql === "string" ? (item as any).sql.trim() : "";
+    if (!name) {
+      errors.push(`extraData[${i}].name is required`);
+      return;
+    }
+    if (!EXTRA_DATA_NAME_RE.test(name)) {
+      errors.push(`extraData[${i}].name "${name}" must match /^[a-zA-Z_][a-zA-Z0-9_]*$/`);
+      return;
+    }
+    if (name === PRIMARY_DATA_NAME) {
+      errors.push(`extraData[${i}].name "${name}" is reserved for the primary dataset`);
+      return;
+    }
+    if (seenNames.has(name)) {
+      errors.push(`extraData[${i}].name "${name}" is duplicated`);
+      return;
+    }
+    if (!sql) {
+      errors.push(`extraData[${i}].sql is required (got empty string)`);
+      return;
+    }
+    seenNames.add(name);
+    cleaned.push({ name, sql });
+  });
+  return { errors, cleaned };
+}
+
 function walkForForbiddenKeys(node: unknown, path: string, errors: string[]): void {
   if (node === null || node === undefined) return;
   if (typeof node !== "object") return;

@@ -18,7 +18,7 @@
 import { memo, useEffect, useRef, useState, useCallback } from "react";
 import { RotateCw, Maximize2, Download, Loader2 } from "lucide-react";
 import type { VegaChartContent } from "./ChatMessageAssistant";
-import { getChartRows, refreshChartRows } from "@/lib/chart-rows-store";
+import { getChartRows, getChartExtras, refreshChartRows, refreshChartExtra } from "@/lib/chart-rows-store";
 import { MaximizedChartDialog } from "./MaximizedChartDialog";
 import { embedChart, downloadPNG, downloadSVG, sanitizeRowsForVega, CUPOLA_DATA_NAME, type VegaView } from "./chart-embed";
 import { ChartDownloadMenu } from "./ChartDownloadMenu";
@@ -78,8 +78,12 @@ function VegaChartBlockImpl({ chart, onUpdate }: Props) {
     }
     const cached = getChartRows(chart.chartId);
     const rows = cached?.rows ?? [];
+    const extrasMap = getChartExtras(chart.chartId);
+    const extraDatasets = extrasMap.size > 0
+      ? Object.fromEntries(Array.from(extrasMap, ([name, ds]) => [name, ds.rows]))
+      : undefined;
     try {
-      const view = await embedChart(el, chart.spec, rows);
+      const view = await embedChart(el, chart.spec, rows, extraDatasets);
       if (containerNodeRef.current !== el) {
         view.finalize();
         return;
@@ -106,33 +110,77 @@ function VegaChartBlockImpl({ chart, onUpdate }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chart.chartId, chart.spec]);
 
-  // Refresh = re-run the SQL and stream new rows into the existing view.
-  // Keeps the chart on screen during the fetch (no skeleton flash).
+  // Refresh = re-run the primary SQL AND every extra dataset's SQL, then
+  // stream the new rows into the existing view via chained view.change
+  // calls. Keeps the chart on screen during the fetch (no skeleton flash).
+  // All datasets update in a single Vega tick so multi-source charts
+  // don't flicker between primary-updated and extras-updated states.
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const result = await refreshChartRows(chart.chartId, chart.sql);
+      // Run primary + all extras in parallel. DuckDB-WASM serializes
+      // internally on a single connection; Promise.all just keeps the
+      // code tidy.
+      const [primaryResult, ...extraResults] = await Promise.all([
+        refreshChartRows(chart.chartId, chart.sql),
+        ...(chart.extraSources ?? []).map((e) =>
+          refreshChartExtra(chart.chartId, e.name, e.sql),
+        ),
+      ]);
       if (!isMountedRef.current) return;
-      if ("error" in result) {
-        onUpdate({ error: result.error });
+
+      if ("error" in primaryResult) {
+        onUpdate({ error: primaryResult.error });
         return;
       }
-      onUpdate({ rowCount: result.rows.length, columns: result.columns, fetchedAt: Date.now(), error: undefined });
-      // Swap the dataset without remounting the view.
+      // If any extra failed, surface it but still update the rest.
+      const extraErrors = extraResults
+        .map((r, i) => ("error" in r ? `${chart.extraSources![i].name}: ${r.error}` : null))
+        .filter((s): s is string => s !== null);
+      if (extraErrors.length > 0) {
+        onUpdate({ error: `Extra dataset refresh failed — ${extraErrors.join("; ")}` });
+        return;
+      }
+
+      // All good. Update the block metadata.
+      const successfulExtras = extraResults.map((r, i) => ({
+        ...chart.extraSources![i],
+        rowCount: "rows" in r ? r.rows.length : chart.extraSources![i].rowCount,
+        columns: "rows" in r ? r.columns : chart.extraSources![i].columns,
+      }));
+      onUpdate({
+        rowCount: primaryResult.rows.length,
+        columns: primaryResult.columns,
+        fetchedAt: Date.now(),
+        error: undefined,
+        extraSources: successfulExtras.length > 0 ? successfulExtras : undefined,
+      });
+
+      // Stream rows into the existing view via chained view.change calls.
+      // Wrap each in sanitizeRowsForVega — the rows from readRows are
+      // already JSON-safe, but refresh paths historically forgot this.
       const v = viewRef.current;
       if (v) {
-        // The lazy embedChart helper exposes the vega module on the view
-        // for changeset construction. Sanitize rows the same way embedChart
-        // does (BigInt → Number, Date → timestamp) so refresh doesn't
-        // re-introduce the "BigInt -> number not allowed" error.
         const vega = (v as any).__vega;
-        const safeRows = sanitizeRowsForVega(result.rows);
-        await v.change(CUPOLA_DATA_NAME, vega.changeset().remove(() => true).insert(safeRows)).runAsync();
+        let chained: any = v.change(
+          CUPOLA_DATA_NAME,
+          vega.changeset().remove(() => true).insert(sanitizeRowsForVega(primaryResult.rows)),
+        );
+        extraResults.forEach((r, i) => {
+          if ("rows" in r) {
+            const name = chart.extraSources![i].name;
+            chained = chained.change(
+              name,
+              vega.changeset().remove(() => true).insert(sanitizeRowsForVega(r.rows)),
+            );
+          }
+        });
+        await chained.runAsync();
       }
     } finally {
       if (isMountedRef.current) setRefreshing(false);
     }
-  }, [chart.chartId, chart.sql, onUpdate]);
+  }, [chart.chartId, chart.sql, chart.extraSources, onUpdate]);
 
   const handleDownload = useCallback(async (format: "png" | "svg") => {
     const v = viewRef.current;
@@ -277,5 +325,9 @@ export const VegaChartBlock = memo(
     prev.chart.title === next.chart.title &&
     prev.chart.warnings === next.chart.warnings &&
     prev.chart.rowCount === next.chart.rowCount &&
-    prev.chart.pending === next.chart.pending,
+    prev.chart.pending === next.chart.pending &&
+    // extraSources reference equality: AskAIChat builds a new array
+    // whenever the chart's extras change (refresh updates the array),
+    // so identity is the right signal for "do we need to re-render?".
+    prev.chart.extraSources === next.chart.extraSources,
 );

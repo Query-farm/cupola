@@ -13,9 +13,9 @@ import {
   CHART_TOOL,
   type MessageParam,
 } from "@/lib/ai-agent";
-import { executeRunSql, describeTableWithFallback, validateChartSpec } from "@/lib/ai-tool-executor";
+import { executeRunSql, describeTableWithFallback, validateChartSpec, validateExtraData } from "@/lib/ai-tool-executor";
 import { readRows } from "@/lib/duckdb-query";
-import { cacheChartRows, evictChartRows } from "@/lib/chart-rows-store";
+import { cacheChartRows, cacheChartExtra, evictChartRows } from "@/lib/chart-rows-store";
 import { compileChartSpec, renderChartToPng } from "./chat/chart-embed";
 import type { ToolResult } from "@/lib/ai-agent";
 const uid = () => crypto.randomUUID();
@@ -96,9 +96,18 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
   // the running app. The hook is a no-op outside of e2e test runs.
   useEffect(() => {
     (window as any).__cupolaChartTest = {
-      pushChart: async (input: { sql: string; spec: Record<string, any>; title?: string; withPng?: boolean }) => {
+      pushChart: async (input: {
+        sql: string;
+        spec: Record<string, any>;
+        title?: string;
+        withPng?: boolean;
+        extraData?: Array<{ name: string; sql: string }>;
+      }) => {
         const { errors, sanitized } = validateChartSpec(input.spec);
         if (errors.length) throw new Error(`Invalid chart spec: ${errors.join("; ")}`);
+        const extraVal = validateExtraData(input.extraData);
+        if (extraVal.errors.length) throw new Error(`Invalid extraData: ${extraVal.errors.join("; ")}`);
+        const cleanedExtras = extraVal.cleaned;
         const compileResult = await compileChartSpec(sanitized);
         if (compileResult.error) throw new Error(`Vega-Lite compile failed: ${compileResult.error}`);
         if (!bridge.query) throw new Error("DuckDB not ready");
@@ -107,6 +116,20 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         const chartId = uid();
         const columns = rows.length ? Object.keys(rows[0]) : [];
         cacheChartRows(chartId, rows, columns);
+
+        // Fetch + cache extras (parallel via Promise.all for tidiness;
+        // DuckDB serializes on its single connection anyway).
+        const extraRowsByName: Record<string, Record<string, any>[]> = {};
+        const extraMeta: Array<{ name: string; sql: string; rowCount: number; columns: string[] }> = [];
+        for (const ex of cleanedExtras) {
+          const exRows = await readRows(ex.sql);
+          if (exRows === null) throw new Error(`extraData "${ex.name}" query failed`);
+          extraRowsByName[ex.name] = exRows;
+          const exCols = exRows.length ? Object.keys(exRows[0]) : [];
+          cacheChartExtra(chartId, ex.name, exRows, exCols);
+          extraMeta.push({ name: ex.name, sql: ex.sql, rowCount: exRows.length, columns: exCols });
+        }
+
         const msgId = crypto.randomUUID();
         const blockId = uid();
         setMessages((prev) => [...prev, {
@@ -116,23 +139,36 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
             id: blockId,
             chart: {
               chartId, sql: input.sql, spec: sanitized, title: input.title,
-              rowCount: rows.length, columns, fetchedAt: Date.now(),
+              rowCount: rows.length, columns,
+              extraSources: extraMeta.length ? extraMeta : undefined,
+              fetchedAt: Date.now(),
               warnings: compileResult.warnings.length ? compileResult.warnings : undefined,
             },
           }],
         }]);
-        // Optionally also exercise the PNG-for-agent path so tests can
-        // verify the byte payload Anthropic would receive.
+        // Optionally exercise the PNG path with extras included.
         let pngBytes: number | undefined;
         let pngMediaType: string | undefined;
         if (input.withPng) {
-          const png = await renderChartToPng(sanitized, rows);
+          const png = await renderChartToPng(
+            sanitized,
+            rows,
+            cleanedExtras.length ? extraRowsByName : undefined,
+          );
           if ("data" in png) {
             pngBytes = png.data.length;
             pngMediaType = png.mediaType;
           }
         }
-        return { messageId: msgId, blockId, chartId, warnings: compileResult.warnings, pngBytes, pngMediaType };
+        return {
+          messageId: msgId,
+          blockId,
+          chartId,
+          warnings: compileResult.warnings,
+          extras: extraMeta.map((e) => ({ name: e.name, rowCount: e.rowCount, columns: e.columns })),
+          pngBytes,
+          pngMediaType,
+        };
       },
     };
     return () => {
@@ -347,6 +383,14 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         if (errors.length) {
           return JSON.stringify({ ok: false, error: `Invalid chart spec: ${errors.join("; ")}` });
         }
+        // Validate extraData (multi-source). Each entry must have a unique
+        // name matching /^[a-zA-Z_][a-zA-Z0-9_]*$/, not collide with the
+        // primary's reserved CUPOLA_DATA_NAME, with non-empty SQL.
+        const extraVal = validateExtraData(input.extraData);
+        if (extraVal.errors.length) {
+          return JSON.stringify({ ok: false, error: `Invalid extraData: ${extraVal.errors.join("; ")}` });
+        }
+        const cleanedExtras = extraVal.cleaned;
         // Compile the spec to catch warnings (incompatible shape on circle,
         // log scale with zeros, etc.) BEFORE we run the SQL. If compile
         // throws, the spec is broken and the model needs to fix it; return
@@ -360,11 +404,6 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         }
         const rows = await readRows(input.sql);
         if (rows === null) {
-          // Surface the DuckDB error to the model so it can fix the SQL.
-          // readRows returns null on both query failure AND empty result;
-          // for the chart case both are unrenderable, but we can do better
-          // by re-running through bridge.query directly to get the actual
-          // error message.
           const raw = await bridge.query(input.sql);
           if (!raw.ok) {
             return JSON.stringify({ ok: false, error: raw.error || "Query failed" });
@@ -373,16 +412,39 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         }
         const columns = rows.length ? Object.keys(rows[0]) : [];
 
-        // Render the PNG FIRST — it doubles as a smoke test. If headless
-        // render fails (e.g. "Duplicate data set name", malformed transform,
-        // unknown scheme), the inline embed would also fail. Bail with an
-        // error tool_result so the agent sees the failure and can fix the
-        // spec — don't insert a doomed block that produces a red banner
-        // the agent never learns about.
+        // Fetch each extra dataset. Bail on first error — the agent sees
+        // which dataset failed and can fix the SQL. (We don't try to
+        // render with a partial set of datasets — Vega-Lite would error
+        // on the missing reference anyway.)
+        const extraRowsByName: Record<string, Record<string, any>[]> = {};
+        const extraMeta: Array<{ name: string; sql: string; rowCount: number; columns: string[] }> = [];
+        for (const ex of cleanedExtras) {
+          const exRows = await readRows(ex.sql);
+          if (exRows === null) {
+            const raw = await bridge.query(ex.sql);
+            const msg = !raw.ok ? raw.error : "Query returned no rows";
+            return JSON.stringify({ ok: false, error: `extraData "${ex.name}" failed: ${msg || "Query failed"}` });
+          }
+          extraRowsByName[ex.name] = exRows;
+          extraMeta.push({
+            name: ex.name,
+            sql: ex.sql,
+            rowCount: exRows.length,
+            columns: exRows.length ? Object.keys(exRows[0]) : [],
+          });
+        }
+
+        // Render the PNG FIRST — smoke test + agent feedback. With extras
+        // included so the headless render exercises the full multi-source
+        // spec the inline view will use.
         const wantFeedback = getSetting("aiChartFeedback") !== false;
         let png: { data: string; mediaType: "image/png" } | null = null;
         if (wantFeedback) {
-          const result = await renderChartToPng(sanitized, rows);
+          const result = await renderChartToPng(
+            sanitized,
+            rows,
+            cleanedExtras.length ? extraRowsByName : undefined,
+          );
           if ("error" in result) {
             return JSON.stringify({ ok: false, error: `Chart render failed: ${result.error}. Fix the spec and call render_chart again.` });
           }
@@ -391,11 +453,10 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
 
         const chartId = uid();
         cacheChartRows(chartId, rows, columns);
+        for (const ex of extraMeta) {
+          cacheChartExtra(chartId, ex.name, extraRowsByName[ex.name], ex.columns);
+        }
         removeThinking();
-        // If the previous block is also a pending chart, the agent is
-        // iterating on the same visualization — drop the prior version
-        // so the user only sees the final approved one. Distinct charts
-        // in one turn (separated by other blocks) survive.
         const lastBlock = blocks[blocks.length - 1];
         if (lastBlock?.type === "vega_chart" && lastBlock.chart.pending) {
           evictChartRows(lastBlock.chart.chartId);
@@ -411,27 +472,32 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
             title: input.title,
             rowCount: rows.length,
             columns,
+            extraSources: extraMeta.length ? extraMeta : undefined,
             fetchedAt: Date.now(),
             warnings: compileResult.warnings.length ? compileResult.warnings : undefined,
-            // Hide the chart from the user until the agent finishes its
-            // turn. If the agent decides the chart needs work and calls
-            // render_chart again, the user sees only the final version.
             pending: true,
           },
         }];
         updateBlocks(blocks);
 
-        // Build the text part of the tool_result that the model sees.
+        // Build the text part of the tool_result. Include a sample of each
+        // extra so the agent knows what shape it has — same treatment as
+        // the primary, just at a lower per-dataset budget.
         const textPart = JSON.stringify({
           ok: true,
           row_count: rows.length,
           columns,
-          // First 3 rows as a sample so the model knows the shape without
-          // burning context on the full dataset.
           sample: rows.slice(0, 3),
-          // Vega-Lite compile warnings — incompatible encodings, scale
-          // domain issues, etc. The chart still rendered but the model
-          // should consider fixing these on the next turn.
+          ...(extraMeta.length
+            ? {
+                extras: extraMeta.map((ex) => ({
+                  name: ex.name,
+                  row_count: ex.rowCount,
+                  columns: ex.columns,
+                  sample: extraRowsByName[ex.name].slice(0, 3),
+                })),
+              }
+            : {}),
           ...(compileResult.warnings.length ? { warnings: compileResult.warnings } : {}),
         });
 

@@ -684,6 +684,114 @@ test.describe("Vega chart block", () => {
     expect(svgCount).toBe(1);
   });
 
+  test("multi-source chart: primary + extraData renders and tool result lists extras", async ({ page }) => {
+    // Seed two memory tables with distinct row counts so we can confirm
+    // both feed the chart. points_a is the primary; points_b is an extra.
+    await page.evaluate(async () => {
+      const bridge = (window as any).__bridge;
+      await bridge.query("DROP TABLE IF EXISTS memory.main.points_a");
+      await bridge.query("DROP TABLE IF EXISTS memory.main.points_b");
+      await bridge.query(`CREATE TABLE memory.main.points_a AS
+        SELECT * FROM (VALUES (1, 'aa', 10.0, 20.0), (2, 'ab', 11.0, 22.0), (3, 'ac', 12.0, 24.0))
+        t(id, label, x, y)`);
+      await bridge.query(`CREATE TABLE memory.main.points_b AS
+        SELECT * FROM (VALUES (1, 'ba', 30.0, 5.0), (2, 'bb', 32.0, 7.0))
+        t(id, label, x, y)`);
+    });
+
+    const result = await page.evaluate(async () => {
+      return (window as any).__cupolaChartTest.pushChart({
+        sql: "SELECT * FROM memory.main.points_a",
+        spec: {
+          layer: [
+            {
+              mark: { type: "circle", color: "steelblue", size: 80 },
+              encoding: { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" } },
+            },
+            {
+              mark: { type: "point", shape: "triangle-up", color: "crimson", size: 120 },
+              data: { name: "points_b" },
+              encoding: { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" } },
+            },
+          ],
+        },
+        title: "Multi-source",
+        extraData: [{ name: "points_b", sql: "SELECT * FROM memory.main.points_b" }],
+      });
+    });
+
+    // pushChart return value includes the extras metadata.
+    expect(result.extras).toHaveLength(1);
+    expect(result.extras[0].name).toBe("points_b");
+    expect(result.extras[0].rowCount).toBe(2);
+
+    // Chart renders.
+    const container = page.getByTestId("vega-chart-container");
+    await expect(container.locator("svg").first()).toBeVisible({ timeout: T_NORMAL });
+  });
+
+  test("multi-source: maximize Data tab lists extras with formatted SQL", async ({ page }) => {
+    await page.evaluate(async () => {
+      const bridge = (window as any).__bridge;
+      await bridge.query("DROP TABLE IF EXISTS memory.main.points_a");
+      await bridge.query("DROP TABLE IF EXISTS memory.main.points_b");
+      await bridge.query(`CREATE TABLE memory.main.points_a AS SELECT 1 AS x, 2 AS y`);
+      await bridge.query(`CREATE TABLE memory.main.points_b AS SELECT 3 AS x, 4 AS y`);
+    });
+
+    await page.evaluate(async () => {
+      return (window as any).__cupolaChartTest.pushChart({
+        sql: "SELECT * FROM memory.main.points_a",
+        spec: {
+          layer: [
+            { mark: "circle", encoding: { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" } } },
+            { mark: "point", data: { name: "points_b" }, encoding: { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" } } },
+          ],
+        },
+        title: "Multi maximize",
+        extraData: [{ name: "points_b", sql: "SELECT * FROM memory.main.points_b" }],
+      });
+    });
+
+    await page.getByTestId("chart-maximize").click();
+    await page.getByTestId("chart-maximize-tab-data").click();
+    await expect(page.getByTestId("vega-chart-maximize-data-panel")).toBeVisible();
+
+    // Primary section is still there.
+    await expect(page.getByTestId("chart-maximize-primary-section")).toBeVisible();
+    // Extras section appears with one card.
+    await expect(page.getByTestId("chart-maximize-extras-section")).toBeVisible();
+    await expect(page.getByTestId("chart-maximize-extra-points_b")).toBeVisible();
+    // The extra's SQL is rendered through SqlCodeBlock — target the
+    // highlighted code element (class "hljs"). The card also contains a
+    // small <code> with the dataset name, which is not the SQL we want.
+    const extraCard = page.getByTestId("chart-maximize-extra-points_b");
+    await expect(extraCard.locator("code.hljs").first()).toContainText(/SELECT/i);
+  });
+
+  test("multi-source: invalid extraData (name collision) is rejected", async ({ page }) => {
+    await page.evaluate(async () => {
+      const bridge = (window as any).__bridge;
+      await bridge.query("DROP TABLE IF EXISTS memory.main.pt");
+      await bridge.query(`CREATE TABLE memory.main.pt AS SELECT 1 AS x, 2 AS y`);
+    });
+    const out = await page.evaluate(async () => {
+      try {
+        await (window as any).__cupolaChartTest.pushChart({
+          sql: "SELECT * FROM memory.main.pt",
+          spec: { mark: "circle", encoding: { x: { field: "x" }, y: { field: "y" } } },
+          // Try to use the reserved primary name.
+          extraData: [{ name: "__cupola_data", sql: "SELECT 1 AS x, 2 AS y" }],
+        });
+        return { ok: true };
+      } catch (e: any) {
+        return { ok: false, msg: String(e?.message ?? e) };
+      }
+    });
+    expect(out.ok).toBe(false);
+    expect(out.msg).toMatch(/reserved/i);
+  });
+
   test("spec with data.url is rejected by validateChartSpec", async ({ page }) => {
     const sql = await seedTestTable(page);
     // pushChart calls validateChartSpec internally and throws; we expect the

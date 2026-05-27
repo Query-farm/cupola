@@ -112,6 +112,7 @@ const AGENT_FEEDBACK_PNG_HEIGHT = 500;
 export async function renderChartToPng(
   spec: Record<string, any>,
   rows: Record<string, any>[],
+  extraDatasets?: Record<string, Record<string, any>[]>,
 ): Promise<{ data: string; mediaType: "image/png" } | { error: string }> {
   try {
     const [vega, compile] = await Promise.all([getVega(), getVegaLiteCompile()]);
@@ -127,6 +128,11 @@ export async function renderChartToPng(
       height: spec.height ?? AGENT_FEEDBACK_PNG_HEIGHT,
       autosize: { type: "fit", contains: "padding" },
       data: { values: safeRows, name: CUPOLA_DATA_NAME },
+      // Top-level datasets that layer/concat marks can reference via
+      // `data: { name: '...' }`. Sanitized so BigInt/Date are JSON-safe.
+      ...(extraDatasets && Object.keys(extraDatasets).length
+        ? { datasets: sanitizeDatasets(extraDatasets) }
+        : {}),
       config: { ...(spec.config ?? {}), background: "white" },
     };
 
@@ -224,6 +230,7 @@ export async function embedChart(
   el: HTMLElement,
   spec: Record<string, any>,
   rows: Record<string, any>[],
+  extraDatasets?: Record<string, Record<string, any>[]>,
   options: EmbedOptions = {},
 ): Promise<VegaView> {
   const [vega, embed, loader] = await Promise.all([getVega(), getEmbed(), getLockedLoader()]);
@@ -258,6 +265,11 @@ export async function embedChart(
     ...(options.forceHeight ? { height: options.forceHeight } : {}),
     autosize,
     data: { values: safeRows, name: CUPOLA_DATA_NAME },
+    // Top-level datasets that layer/concat marks reference via
+    // `data: { name: '...' }`. Sanitized for JSON/Vega safety.
+    ...(extraDatasets && Object.keys(extraDatasets).length
+      ? { datasets: sanitizeDatasets(extraDatasets) }
+      : {}),
     // Force transparent background regardless of what the LLM put in
     // spec.config — the chat surface owns its own background.
     config: { ...(spec.config ?? {}), background: "transparent" },
@@ -292,6 +304,19 @@ export function sanitizeRowsForVega(rows: Record<string, any>[]): Record<string,
     }
     return out;
   });
+}
+
+/** Sanitize a map of name → rows for injection into Vega-Lite's `datasets`
+ *  field. Each dataset's rows go through sanitizeRowsForVega so multi-source
+ *  charts get the same BigInt/Date coercion as the primary. */
+export function sanitizeDatasets(
+  extras: Record<string, Record<string, any>[]>,
+): Record<string, Record<string, any>[]> {
+  const out: Record<string, Record<string, any>[]> = {};
+  for (const [name, rows] of Object.entries(extras)) {
+    out[name] = sanitizeRowsForVega(rows);
+  }
+  return out;
 }
 
 /** Download the chart as a PNG at 2x scale (retina-friendly). */
