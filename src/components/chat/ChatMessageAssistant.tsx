@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Sparkles, X } from "lucide-react";
+import { Sparkles, X, Loader2 } from "lucide-react";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { SqlToolCallBlock } from "./SqlToolCallBlock";
 import { AskUserBlock } from "./AskUserBlock";
@@ -158,20 +158,28 @@ export function ChatMessageAssistant({
           if (block.type === "vega_chart") {
             // While the agent's turn is still in progress, the chart may
             // get replaced by a follow-up render_chart call — don't show
-            // the user a draft. Render a compact placeholder until the
-            // turn ends (onDone clears pending).
+            // the user a draft. Render a spinner-bearing placeholder that
+            // makes it obvious work is happening; the placeholder
+            // disappears (and the real chart appears) when the agent's
+            // turn ends or it calls render_chart again with revisions.
             if (block.chart.pending) {
               return (
                 <div
                   key={block.id}
                   data-testid="vega-chart-pending"
-                  className="border border-border rounded-md bg-card px-3 py-3 flex items-center gap-2 text-xs text-muted-foreground"
+                  className="border border-accent/30 rounded-md bg-accent/5 px-4 py-3 flex items-center gap-3 text-sm"
+                  role="status"
+                  aria-live="polite"
                 >
-                  <Sparkles className="h-3.5 w-3.5 animate-pulse text-accent" />
-                  <span className="flex-1 truncate">
-                    {block.chart.title ? `Evaluating chart: ${block.chart.title}` : "Evaluating chart"}
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" />
+                  <span className="flex-1 truncate text-foreground/80">
+                    Agent is reviewing the chart
+                    {block.chart.title ? <span className="text-muted-foreground"> — {block.chart.title}</span> : null}
+                    <span className="ml-0.5 inline-block animate-pulse text-accent">…</span>
                   </span>
-                  <span className="text-[10px] font-mono">{block.chart.rowCount.toLocaleString()} rows</span>
+                  <span className="text-[10px] font-mono text-muted-foreground shrink-0">
+                    {block.chart.rowCount.toLocaleString()} rows
+                  </span>
                 </div>
               );
             }

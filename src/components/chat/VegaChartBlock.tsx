@@ -15,7 +15,7 @@
  * is also referenced only here (not in ChatMessageAssistant) so the
  * vega-lite type metadata doesn't sneak into the entry chunk either.
  */
-import { useEffect, useRef, useState, useCallback } from "react";
+import { memo, useEffect, useRef, useState, useCallback } from "react";
 import { RotateCw, Maximize2, Download, Loader2 } from "lucide-react";
 import type { VegaChartContent } from "./ChatMessageAssistant";
 import { getChartRows, refreshChartRows } from "@/lib/chart-rows-store";
@@ -29,7 +29,7 @@ interface Props {
   onUpdate: (patch: Partial<VegaChartContent>) => void;
 }
 
-export function VegaChartBlock({ chart, onUpdate }: Props) {
+function VegaChartBlockImpl({ chart, onUpdate }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<VegaView | null>(null);
   const isMountedRef = useRef(true);
@@ -256,3 +256,26 @@ function formatRelative(ms: number): string {
   const d = Math.floor(h / 24);
   return `${d} day${d === 1 ? "" : "s"} ago`;
 }
+
+/**
+ * Memoize on the chart fields a chart block actually cares about. The
+ * parent (ChatMessageAssistant inside AskAIChat) re-renders on every
+ * streaming chunk; without memoization every chart in the conversation
+ * re-renders its toolbar, footer, RelativeTime tick, etc. With many
+ * charts on screen this is the dominant cause of scroll jank.
+ *
+ * Identity of `onUpdate` is intentionally NOT compared — the parent
+ * creates a new closure on each render. Treat it as stable in spirit;
+ * the child only calls it from event handlers, never from render.
+ */
+export const VegaChartBlock = memo(
+  VegaChartBlockImpl,
+  (prev, next) =>
+    prev.chart.chartId === next.chart.chartId &&
+    prev.chart.fetchedAt === next.chart.fetchedAt &&
+    prev.chart.error === next.chart.error &&
+    prev.chart.title === next.chart.title &&
+    prev.chart.warnings === next.chart.warnings &&
+    prev.chart.rowCount === next.chart.rowCount &&
+    prev.chart.pending === next.chart.pending,
+);

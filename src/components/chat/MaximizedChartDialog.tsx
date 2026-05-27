@@ -15,6 +15,7 @@
  * back is instant.
  */
 import { useEffect, useRef, useState } from "react";
+// useRef already imported above; hadInitialTab uses it.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RotateCw, Loader2, Copy, Check } from "lucide-react";
@@ -35,10 +36,18 @@ export function MaximizedChartDialog({ chart, onClose, onRefresh, refreshing }: 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<VegaView | null>(null);
   const [copied, setCopied] = useState(false);
+  // Controlled tab state so we can re-embed the chart when the user
+  // switches back from Data → Visualization. base-ui's Tabs keeps both
+  // panels mounted but the hidden panel can briefly have clientHeight=0
+  // during the transition; the initial embed sized the Vega view to
+  // that wrong height, leaving the chart squashed when the user came
+  // back. Tracking the active tab lets us re-embed on transition.
+  const [activeTab, setActiveTab] = useState<string>("viz");
 
-  // Ref-callback fires synchronously when React attaches the DOM node.
-  // Portaled dialog content makes useEffect-based embedding race-prone;
-  // this avoids it.
+  // Ref-callback: initial embed on first mount (fires synchronously when
+  // React attaches the DOM node — no useEffect timing race vs portaled
+  // content). Finalizes the Vega view on unmount. The activeTab effect
+  // below handles re-embed on Data→Viz switches and on window resize.
   const onContainerRef = (node: HTMLDivElement | null) => {
     containerRef.current = node;
     if (!node) {
@@ -47,18 +56,29 @@ export function MaximizedChartDialog({ chart, onClose, onRefresh, refreshing }: 
       if (v) v.finalize();
       return;
     }
-    if (viewRef.current) return;
+    if (viewRef.current) return; // already embedded
     void embedIntoContainer(node);
   };
 
   const embedIntoContainer = async (el: HTMLElement) => {
-    // Defer until layout — dialog open transitions can produce a 0-width
-    // container for the first frame.
-    while (el.clientWidth < 50) {
+    // Defer until layout — dialog open transitions can produce a
+    // 0-width OR 0-height container for the first frame, and tab
+    // switches can briefly collapse the hidden panel's height.
+    // Both dimensions need to be real or forceHeight degrades to its
+    // floor (200) and the chart looks tiny on the next tab switch.
+    let polls = 0;
+    while ((el.clientWidth < 50 || el.clientHeight < 50) && polls < 60) {
       await new Promise<void>((r) => requestAnimationFrame(() => r()));
       if (!containerRef.current || containerRef.current !== el) return;
+      polls++;
     }
     if (!containerRef.current || containerRef.current !== el) return;
+    // Tear down any prior view before re-embedding — this function is
+    // called on resize and tab-switch, not just initial mount.
+    if (viewRef.current) {
+      viewRef.current.finalize();
+      viewRef.current = null;
+    }
     const cached = getChartRows(chart.chartId);
     const rows = cached?.rows ?? [];
     try {
@@ -75,18 +95,19 @@ export function MaximizedChartDialog({ chart, onClose, onRefresh, refreshing }: 
   };
 
   // Re-embed on window resize so the chart picks up the new dialog size.
+  // Skip if the viz tab isn't active — the container has clientWidth=0
+  // when hidden, embedIntoContainer would poll forever and we'd be
+  // tearing down a working view for nothing.
   useEffect(() => {
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const onResize = () => {
       const el = containerRef.current;
-      if (!el) return;
+      if (!el || activeTab !== "viz") return;
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        if (viewRef.current) {
-          viewRef.current.finalize();
-          viewRef.current = null;
+        if (containerRef.current && activeTab === "viz") {
+          void embedIntoContainer(containerRef.current);
         }
-        if (containerRef.current) void embedIntoContainer(containerRef.current);
       }, 100);
     };
     window.addEventListener("resize", onResize);
@@ -95,19 +116,43 @@ export function MaximizedChartDialog({ chart, onClose, onRefresh, refreshing }: 
       if (resizeTimer) clearTimeout(resizeTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeTab]);
 
   // When the underlying data refreshes (parent updates chart.fetchedAt),
-  // re-embed with the new rows.
+  // re-embed with the new rows. Same skip rule as the resize handler.
   useEffect(() => {
-    if (!containerRef.current) return;
-    if (viewRef.current) {
-      viewRef.current.finalize();
-      viewRef.current = null;
-    }
+    if (!containerRef.current || activeTab !== "viz") return;
     void embedIntoContainer(containerRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chart.fetchedAt]);
+
+  // When the user switches Data → Visualization, re-embed. Vega doesn't
+  // reflow when its container is shown/hidden; if the initial embed
+  // happened at a different height than the now-active container, the
+  // chart looks squashed. Easier and safer to re-embed than to coax
+  // Vega into a resize.
+  //
+  // Skip the very first run (it lands on mount with activeTab="viz" and
+  // would race the ref-callback's initial embed, double-embedding).
+  const hadInitialTab = useRef(false);
+  useEffect(() => {
+    if (!hadInitialTab.current) {
+      hadInitialTab.current = true;
+      return;
+    }
+    if (activeTab !== "viz") return;
+    const el = containerRef.current;
+    if (!el) return;
+    // Defer one frame so the tab panel has fully laid out before we
+    // measure clientHeight.
+    const raf = requestAnimationFrame(() => {
+      if (containerRef.current === el && activeTab === "viz") {
+        void embedIntoContainer(el);
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   const handleDownload = async (format: "png" | "svg") => {
     const v = viewRef.current;
@@ -159,7 +204,11 @@ export function MaximizedChartDialog({ chart, onClose, onRefresh, refreshing }: 
             defaultValue="viz" because users click the maximize button to
             see the chart bigger, not to read SQL. The Data tab is one
             click away when they want it. */}
-        <Tabs defaultValue="viz" className="flex-1 min-h-0 flex flex-col gap-2">
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => setActiveTab(String(v))}
+          className="flex-1 min-h-0 flex flex-col gap-2"
+        >
           <TabsList variant="line" className="shrink-0 self-start">
             <TabsTrigger value="viz" data-testid="chart-maximize-tab-viz">Visualization</TabsTrigger>
             <TabsTrigger value="data" data-testid="chart-maximize-tab-data">
