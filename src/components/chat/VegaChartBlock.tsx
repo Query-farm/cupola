@@ -167,6 +167,21 @@ export function VegaChartBlock({ chart, onUpdate }: Props) {
           </div>
         )}
 
+        {/* Vega-Lite compile warnings — the chart still renders but the
+            model's spec had issues. The same list is also sent to the
+            model via the tool_result so it can self-correct. */}
+        {chart.warnings && chart.warnings.length > 0 && (
+          <div
+            data-testid="chart-warnings"
+            className="px-3 py-1.5 border-b border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-900 dark:text-amber-200"
+          >
+            <span className="font-medium">Chart warnings:</span>
+            <ul className="list-disc list-inside mt-0.5">
+              {chart.warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          </div>
+        )}
+
         {/* Chart container: explicit w-full lets Vega's width:"container" do
             its job; min-h gives the chart vertical room while letting it
             grow when the spec asks for a tall chart. overflow-x-auto

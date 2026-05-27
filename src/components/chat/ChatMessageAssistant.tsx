@@ -58,6 +58,11 @@ export interface VegaChartContent {
   fetchedAt: number;
   /** Set after a failed refresh; chart from last successful fetch stays visible. */
   error?: string;
+  /** Vega-Lite compile warnings (e.g. "shape dropped as it is incompatible
+   *  with 'circle'", "Log scale domain includes zero"). The chart still
+   *  renders — these are informational so the user knows the model's spec
+   *  had issues. The model also receives them via the tool_result. */
+  warnings?: string[];
 }
 
 export type ContentBlock =

@@ -16,6 +16,7 @@ import {
 import { executeRunSql, describeTableWithFallback, validateChartSpec } from "@/lib/ai-tool-executor";
 import { readRows } from "@/lib/duckdb-query";
 import { cacheChartRows } from "@/lib/chart-rows-store";
+import { compileChartSpec } from "./chat/chart-embed";
 const uid = () => crypto.randomUUID();
 
 import { ChatInput } from "./chat/ChatInput";
@@ -97,6 +98,8 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
       pushChart: async (input: { sql: string; spec: Record<string, any>; title?: string }) => {
         const { errors, sanitized } = validateChartSpec(input.spec);
         if (errors.length) throw new Error(`Invalid chart spec: ${errors.join("; ")}`);
+        const compileResult = await compileChartSpec(sanitized);
+        if (compileResult.error) throw new Error(`Vega-Lite compile failed: ${compileResult.error}`);
         if (!bridge.query) throw new Error("DuckDB not ready");
         const rows = await readRows(input.sql);
         if (rows === null) throw new Error("Query failed or returned no rows");
@@ -113,10 +116,11 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
             chart: {
               chartId, sql: input.sql, spec: sanitized, title: input.title,
               rowCount: rows.length, columns, fetchedAt: Date.now(),
+              warnings: compileResult.warnings.length ? compileResult.warnings : undefined,
             },
           }],
         }]);
-        return { messageId: msgId, blockId, chartId };
+        return { messageId: msgId, blockId, chartId, warnings: compileResult.warnings };
       },
     };
     return () => {
@@ -331,6 +335,14 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         if (errors.length) {
           return JSON.stringify({ ok: false, error: `Invalid chart spec: ${errors.join("; ")}` });
         }
+        // Compile the spec to catch warnings (incompatible shape on circle,
+        // log scale with zeros, etc.) BEFORE we run the SQL. If compile
+        // throws, the spec is broken and the model needs to fix it; return
+        // an error so the agent self-corrects.
+        const compileResult = await compileChartSpec(sanitized);
+        if (compileResult.error) {
+          return JSON.stringify({ ok: false, error: `Vega-Lite compile failed: ${compileResult.error}` });
+        }
         if (!bridge.query) {
           return JSON.stringify({ ok: false, error: "DuckDB not ready — open the SQL Shell first." });
         }
@@ -362,6 +374,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
             rowCount: rows.length,
             columns,
             fetchedAt: Date.now(),
+            warnings: compileResult.warnings.length ? compileResult.warnings : undefined,
           },
         }];
         updateBlocks(blocks);
@@ -372,6 +385,10 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           // First 3 rows as a sample so the model knows the shape without
           // burning context on the full dataset.
           sample: rows.slice(0, 3),
+          // Vega-Lite compile warnings — incompatible encodings, scale
+          // domain issues, etc. The chart still rendered but the model
+          // should consider fixing these on the next turn.
+          ...(compileResult.warnings.length ? { warnings: compileResult.warnings } : {}),
         });
       }
       return JSON.stringify({ error: `Unknown tool: ${name}` });

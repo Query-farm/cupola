@@ -54,6 +54,69 @@ async function getEmbed(): Promise<any> {
   return _embedModule;
 }
 
+let _vegaLiteCompile: ((spec: any, opts?: any) => any) | null = null;
+async function getVegaLiteCompile(): Promise<(spec: any, opts?: any) => any> {
+  if (_vegaLiteCompile) return _vegaLiteCompile;
+  // Lazy: only loaded when we validate a chart spec, not on app boot.
+  // We accept the duplicate compile (this one for warnings, then again
+  // inside vega-embed for rendering) — compile is millisecond-scale.
+  const m = await import("vega-lite");
+  _vegaLiteCompile = m.compile;
+  return _vegaLiteCompile;
+}
+
+export interface ChartCompileResult {
+  /** Vega-Lite warnings emitted at compile time. Examples:
+   *  - "shape dropped as it is incompatible with 'circle'"
+   *  - "Log scale domain includes zero: [0, 584]"
+   *  Surface these in the tool_result so the agent can self-correct. */
+  warnings: string[];
+  /** Set when compile threw (the spec is malformed beyond fixup). */
+  error?: string;
+}
+
+/**
+ * Compile a Vega-Lite spec in isolation, capturing warnings and errors
+ * synchronously. The actual render still goes through vega-embed (which
+ * compiles again internally) — this is a pre-flight check whose output
+ * we hand back to the LLM as a tool_result side-channel.
+ *
+ * Without this, vega-lite warnings go to console.warn where the agent
+ * never sees them, so it keeps producing the same broken charts.
+ */
+export async function compileChartSpec(spec: Record<string, any>): Promise<ChartCompileResult> {
+  const warnings: string[] = [];
+  // Vega's logger interface: { level, warn, info, debug, error } where
+  // each returns the logger (chainable). We capture only warnings —
+  // errors throw out of compile() directly.
+  const captureLogger = {
+    _level: 2, // vega.Warn
+    level(n?: number) {
+      if (typeof n === "number") this._level = n;
+      return this._level;
+    },
+    warn(...args: any[]) {
+      warnings.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
+      return this;
+    },
+    info() { return this; },
+    debug() { return this; },
+    error(...args: any[]) {
+      // compile() usually throws on real errors before reaching the logger;
+      // capture defensively in case some path logs an error instead.
+      warnings.push("ERROR: " + args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
+      return this;
+    },
+  };
+  try {
+    const compile = await getVegaLiteCompile();
+    compile(spec, { logger: captureLogger });
+    return { warnings };
+  } catch (e) {
+    return { warnings, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /**
  * Embed a Vega-Lite spec into a container DOM element, injecting `rows` as
  * the data and forcing transparent background (so Cupola's theme tokens

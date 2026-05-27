@@ -335,6 +335,76 @@ test.describe("Vega chart block", () => {
     await expect(block).toContainText("6 rows", { timeout: T_NORMAL });
   });
 
+  test("Vega-Lite warnings are surfaced to user and agent", async ({ page }) => {
+    // The LLM frequently emits specs that compile with warnings but still
+    // render — e.g. log scale over zero-containing data, incompatible
+    // shape encoding on a circle mark. Without surfacing these, the model
+    // keeps producing the same broken charts because it can't see Vega's
+    // console.warn output. The render_chart dispatcher compiles the spec
+    // and forwards warnings on both the block (for the user) and the
+    // tool_result (for the agent).
+    const sql = await seedTestTable(page);
+    // Shape encoding on a `circle` mark — circles don't accept shape, so
+    // vega-lite emits a warning and drops the channel. Deterministic and
+    // exactly the warning that prompted this work (see user report).
+    const result = await page.evaluate(async (s) => {
+      return (window as any).__cupolaChartTest.pushChart({
+        sql: s,
+        spec: {
+          mark: "circle",
+          encoding: {
+            x: { field: "big_id", type: "quantitative" },
+            y: { field: "count", type: "quantitative" },
+            // circle marks don't support shape — Vega-Lite drops with warning.
+            shape: { field: "fruit", type: "nominal" },
+          },
+        },
+        title: "Shape warning",
+      });
+    }, sql);
+
+    // pushChart returns the warnings array — the same that goes to the agent.
+    expect(Array.isArray(result.warnings)).toBe(true);
+    expect(result.warnings.length).toBeGreaterThan(0);
+    // Check the keyword without coupling to Vega-Lite's exact wording.
+    expect(result.warnings.join(" ").toLowerCase()).toMatch(/shape|circle|incompatible/);
+
+    // UI shows the warnings banner.
+    const banner = page.getByTestId("chart-warnings");
+    await expect(banner).toBeVisible({ timeout: T_NORMAL });
+    await expect(banner).toContainText(/shape|circle|incompatible/i);
+
+    // The chart STILL renders alongside the warning (Vega clamps to a
+    // valid log domain) — warnings are advisory, not fatal.
+    await expect(page.getByTestId("vega-chart-container").locator("svg").first()).toBeVisible({ timeout: T_NORMAL });
+  });
+
+  test("compile failure (malformed spec) returns error before block insertion", async ({ page }) => {
+    // If the LLM emits a spec that vega-lite's compile() rejects (e.g. a
+    // completely malformed encoding), we should reject the tool call early
+    // and surface the message to the model, NOT insert a broken block.
+    const sql = await seedTestTable(page);
+    const result = await page.evaluate(async (s) => {
+      try {
+        await (window as any).__cupolaChartTest.pushChart({
+          sql: s,
+          spec: {
+            // mark.type is required when mark is an object — this is a
+            // canonical compile error.
+            mark: { invalid: "no_type_here" },
+            encoding: { x: { field: "fruit" } },
+          },
+        });
+        return { ok: true };
+      } catch (e: any) {
+        return { ok: false, msg: String(e?.message ?? e) };
+      }
+    }, sql);
+    expect(result.ok).toBe(false);
+    // No chart block should have been inserted.
+    await expect(page.getByTestId("vega-chart-block")).toHaveCount(0);
+  });
+
   test("spec with data.url is rejected by validateChartSpec", async ({ page }) => {
     const sql = await seedTestTable(page);
     // pushChart calls validateChartSpec internally and throws; we expect the
