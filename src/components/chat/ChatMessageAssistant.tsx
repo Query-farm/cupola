@@ -63,6 +63,11 @@ export interface VegaChartContent {
    *  renders — these are informational so the user knows the model's spec
    *  had issues. The model also receives them via the tool_result. */
   warnings?: string[];
+  /** True while the agent's current turn is still in progress and the
+   *  agent might call render_chart again to improve. UI shows a placeholder
+   *  card instead of the chart. Cleared when the turn finishes; user sees
+   *  only the version the agent settled on. */
+  pending?: boolean;
 }
 
 export type ContentBlock =
@@ -151,6 +156,25 @@ export function ChatMessageAssistant({
             );
           }
           if (block.type === "vega_chart") {
+            // While the agent's turn is still in progress, the chart may
+            // get replaced by a follow-up render_chart call — don't show
+            // the user a draft. Render a compact placeholder until the
+            // turn ends (onDone clears pending).
+            if (block.chart.pending) {
+              return (
+                <div
+                  key={block.id}
+                  data-testid="vega-chart-pending"
+                  className="border border-border rounded-md bg-card px-3 py-3 flex items-center gap-2 text-xs text-muted-foreground"
+                >
+                  <Sparkles className="h-3.5 w-3.5 animate-pulse text-accent" />
+                  <span className="flex-1 truncate">
+                    {block.chart.title ? `Evaluating chart: ${block.chart.title}` : "Evaluating chart"}
+                  </span>
+                  <span className="text-[10px] font-mono">{block.chart.rowCount.toLocaleString()} rows</span>
+                </div>
+              );
+            }
             return (
               <Suspense
                 key={block.id}

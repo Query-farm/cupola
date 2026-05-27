@@ -15,7 +15,7 @@ import {
 } from "@/lib/ai-agent";
 import { executeRunSql, describeTableWithFallback, validateChartSpec } from "@/lib/ai-tool-executor";
 import { readRows } from "@/lib/duckdb-query";
-import { cacheChartRows } from "@/lib/chart-rows-store";
+import { cacheChartRows, evictChartRows } from "@/lib/chart-rows-store";
 import { compileChartSpec, renderChartToPng } from "./chat/chart-embed";
 import type { ToolResult } from "@/lib/ai-agent";
 const uid = () => crypto.randomUUID();
@@ -392,6 +392,15 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         const chartId = uid();
         cacheChartRows(chartId, rows, columns);
         removeThinking();
+        // If the previous block is also a pending chart, the agent is
+        // iterating on the same visualization — drop the prior version
+        // so the user only sees the final approved one. Distinct charts
+        // in one turn (separated by other blocks) survive.
+        const lastBlock = blocks[blocks.length - 1];
+        if (lastBlock?.type === "vega_chart" && lastBlock.chart.pending) {
+          evictChartRows(lastBlock.chart.chartId);
+          blocks = blocks.slice(0, -1);
+        }
         blocks = [...blocks, {
           type: "vega_chart",
           id: uid(),
@@ -404,6 +413,10 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
             columns,
             fetchedAt: Date.now(),
             warnings: compileResult.warnings.length ? compileResult.warnings : undefined,
+            // Hide the chart from the user until the agent finishes its
+            // turn. If the agent decides the chart needs work and calls
+            // render_chart again, the user sees only the final version.
+            pending: true,
           },
         }];
         updateBlocks(blocks);
@@ -475,6 +488,16 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           },
           onDone: (usage) => {
             removeThinking();
+            // The agent has finished its turn. Reveal every pending chart
+            // block — whatever spec the agent settled on is what the user
+            // should see. If the agent iterated through several charts in
+            // this turn, all of them become visible at this point (they
+            // were hidden behind "Evaluating chart…" placeholders).
+            blocks = blocks.map((b) =>
+              b.type === "vega_chart" && b.chart.pending
+                ? { ...b, chart: { ...b.chart, pending: false } }
+                : b,
+            );
             updateBlocks(blocks);
             updateAssistant({ isStreaming: false, usage });
           },
@@ -505,12 +528,19 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
       );
     } catch (err: any) {
       removeThinking();
-      // Mark any still-executing tool calls as stopped
-      blocks = blocks.map(b =>
-        b.type === "tool_call" && b.toolCall.isExecuting
-          ? { ...b, toolCall: { ...b.toolCall, isExecuting: false, error: "Cancelled" } }
-          : b
-      );
+      // Mark any still-executing tool calls as stopped and reveal any
+      // pending chart blocks — the agent isn't going to call render_chart
+      // again from this turn, so show whatever the user has so they
+      // aren't left looking at "Evaluating chart…" forever.
+      blocks = blocks.map(b => {
+        if (b.type === "tool_call" && b.toolCall.isExecuting) {
+          return { ...b, toolCall: { ...b.toolCall, isExecuting: false, error: "Cancelled" } };
+        }
+        if (b.type === "vega_chart" && b.chart.pending) {
+          return { ...b, chart: { ...b.chart, pending: false } };
+        }
+        return b;
+      });
       const isCancellation = err.name === "AbortError" || err.message === "Cancelled." || err.message === "Query cancelled";
       if (!isCancellation) {
         const idx = ensureTextBlock();
