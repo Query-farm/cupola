@@ -60,7 +60,12 @@ export function MaximizedChartDialog({ chart, onClose, onRefresh, refreshing }: 
     const cached = getChartRows(chart.chartId);
     const rows = cached?.rows ?? [];
     try {
-      const view = await embedChart(el, chart.spec, rows);
+      // Fill the available vertical space (minus a small buffer for the
+      // chart's own title + x-axis labels, which Vega adds outside the
+      // `height` value). The LLM's default height (~250px) would leave
+      // ~70% of the dialog empty.
+      const forceHeight = Math.max(200, Math.floor(el.clientHeight) - 60);
+      const view = await embedChart(el, chart.spec, rows, { forceHeight });
       if (!containerRef.current || containerRef.current !== el) {
         view.finalize();
         return;

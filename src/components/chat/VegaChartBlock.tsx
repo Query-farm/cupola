@@ -171,10 +171,16 @@ export function VegaChartBlock({ chart, onUpdate }: Props) {
             its job; min-h gives the chart vertical room while letting it
             grow when the spec asks for a tall chart. overflow-x-auto
             handles the rare case of a chart wider than the container. */}
+        {/* No horizontal padding on the chart container: Vega's
+            width:"container" measures clientWidth (excludes padding) but
+            then renders the SVG at that width inside the container,
+            which lands in the padding zone and overflows by exactly the
+            padding amount. Vertical padding is fine — height isn't
+            container-sized. */}
         <div
           ref={onContainerRef}
           data-testid="vega-chart-container"
-          className="px-3 py-2 w-full min-h-[280px] overflow-x-auto"
+          className="py-2 w-full min-h-[280px] overflow-x-auto"
         />
 
         {/* Footer: row count + relative timestamp */}

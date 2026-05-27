@@ -60,35 +60,54 @@ async function getEmbed(): Promise<any> {
  * carry contrast). Returns the Vega `view` for refresh/export.
  *
  * Sizing: we measure the container's clientWidth at embed time and pass
- * it as a numeric `width` (Vega-Lite's `width: "container"` proved
- * unreliable when nested in flex/grid layouts — it sometimes resolved
- * to a 14px chart even with autosize:fit and the container measuring
- * 600+px). We do NOT default height — Vega-Lite picks one from the data
- * shape. LLM-specified width/height in the spec win over both.
+ * it as a numeric `width`. The LLM's spec width is INTENTIONALLY ignored —
+ * Vega-Lite's `width: "container"` proved unreliable in nested flex/grid
+ * layouts, and letting the LLM win (it tends to emit `width: 500-600`)
+ * produces tiny charts in our wide chat / maximize-dialog containers.
+ * Height is left to the spec / Vega's default — vertical sizing rarely
+ * causes complaints.
  *
  * Caller is responsible for triggering re-embed on container resize via
  * ResizeObserver. See VegaChartBlock / MaximizedChartDialog.
  */
+export interface EmbedOptions {
+  /** When set, overrides the spec's height (and Vega's default). Used by
+   *  the maximize dialog where we want the chart to fill the available
+   *  vertical space instead of staying at the LLM's typical ~250px. */
+  forceHeight?: number;
+}
+
 export async function embedChart(
   el: HTMLElement,
   spec: Record<string, any>,
   rows: Record<string, any>[],
+  options: EmbedOptions = {},
 ): Promise<VegaView> {
   const [vega, embed, loader] = await Promise.all([getVega(), getEmbed(), getLockedLoader()]);
   const safeRows = sanitizeRowsForVega(rows);
   // Account for the parent's horizontal padding so the chart doesn't bleed
-  // out and trigger horizontal scroll. clientWidth already excludes the
-  // element's own padding-box deduction is what we want.
-  const measuredWidth = Math.max(50, Math.floor(el.clientWidth) - 8);
+  // out and trigger horizontal scroll. clientWidth excludes our own
+  // padding-box, but the LLM's spec also adds axis labels / legends to the
+  // right of the plot — subtracting another small buffer keeps wide legend
+  // entries (e.g. "Magnitude Class") from spilling off-screen.
   const finalSpec: TopLevelSpec = {
-    // Numeric width measured from the container. The LLM's spec spread
-    // below can override (e.g. `width: 600` for a fixed-size chart).
-    width: measuredWidth,
     ...spec,
+    // Override AFTER the spread so the LLM's hardcoded width never wins.
+    // The chat surface owns sizing; the model should worry about marks,
+    // encoding, and color — not how big the canvas is.
+    //
+    // width: "container" makes Vega-Lite size the chart to the parent's
+    // clientWidth. Combined with autosize:"fit" + contains:"padding",
+    // the TOTAL chart (plot + axes + legend) fits within the container —
+    // the right-hand legend is included in that budget. A numeric width
+    // here would make `width` refer to the plot area only, and the legend
+    // would overflow.
+    width: "container",
+    ...(options.forceHeight ? { height: options.forceHeight } : {}),
+    autosize: { type: "fit", contains: "padding", resize: true },
     data: { values: safeRows, name: "source_0" },
     // Force transparent background regardless of what the LLM put in
-    // spec.config — the chat surface owns its own background. Spread the
-    // model's config first, then override.
+    // spec.config — the chat surface owns its own background.
     config: { ...(spec.config ?? {}), background: "transparent" },
   } as TopLevelSpec;
 

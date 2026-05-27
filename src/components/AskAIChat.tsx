@@ -562,7 +562,10 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
             )}
           </div>
         ) : (
-          <div className="max-w-2xl space-y-4">
+          // max-w-5xl (1024px) instead of 2xl so chart blocks get enough
+          // horizontal room. Text still reads fine at this width and the
+          // tool_call / chart blocks finally have a real canvas.
+          <div className="max-w-5xl space-y-4">
             {messages.map((msg) => (
               msg.role === "user" ? (
                 <ChatMessageUser key={msg.id} content={msg.content || ""} />

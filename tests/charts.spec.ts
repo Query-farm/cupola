@@ -96,6 +96,88 @@ test.describe("Vega chart block", () => {
     // SVG should be at least 60% of the container (catches the old 200px
     // default which was the original "narrow" regression).
     expect(svgWidth).toBeGreaterThan(containerWidth * 0.6);
+
+    // Save a screenshot for manual review.
+    await page.getByTestId("vega-chart-block").screenshot({ path: "test-results/chart-inline-default.png" });
+  });
+
+  test("LLM-specified width does NOT shrink the chart (must fill container)", async ({ page }) => {
+    // Regression: the model frequently emits `width: 500` or `width: 600`
+    // in its specs. The chat container is much wider than that; respecting
+    // the model's width leaves the chart looking tiny against empty space.
+    // chart-embed must force the container-measured width.
+    const sql = await seedTestTable(page);
+    await pushChart(page, {
+      sql,
+      // Deliberately emit a width the chart MUST ignore.
+      spec: {
+        width: 200,
+        mark: "bar",
+        encoding: { x: { field: "fruit" }, y: { field: "count" } },
+      },
+      title: "Width override",
+    });
+
+    const chartContainer = page.getByTestId("vega-chart-container");
+    await expect(chartContainer.locator("svg").first()).toBeVisible({ timeout: T_NORMAL });
+
+    const { containerWidth, svgWidth } = await chartContainer.evaluate((el) => ({
+      containerWidth: el.clientWidth,
+      svgWidth: (el.querySelector("svg") as SVGSVGElement).getBoundingClientRect().width,
+    }));
+    // The chart should fill the container, NOT honor the 200px spec width.
+    expect(svgWidth).toBeGreaterThan(containerWidth * 0.6);
+    expect(svgWidth).toBeGreaterThan(400);
+  });
+
+  test("chart SVG fits within container — no horizontal clipping", async ({ page }) => {
+    // Regression for user-reported bug: chart was being clipped on the right
+    // side. Check that the SVG's right edge is inside the container's right
+    // edge (no overflow).
+    const sql = await seedTestTable(page);
+    await pushChart(page, {
+      sql,
+      spec: {
+        mark: "circle",
+        encoding: {
+          x: { field: "big_id", type: "quantitative" },
+          y: { field: "count", type: "quantitative" },
+          // Add a color legend on the right — this is what was pushing
+          // content off-screen in the reported bug.
+          color: { field: "fruit", type: "nominal" },
+          size: { field: "count", type: "quantitative" },
+        },
+      },
+      title: "Clipping check",
+    });
+
+    const chartContainer = page.getByTestId("vega-chart-container");
+    const svg = chartContainer.locator("svg").first();
+    await expect(svg).toBeVisible({ timeout: T_NORMAL });
+
+    const overflow = await chartContainer.evaluate((el) => {
+      const svg = el.querySelector("svg") as SVGSVGElement;
+      const cRect = el.getBoundingClientRect();
+      const sRect = svg.getBoundingClientRect();
+      return {
+        // Positive = SVG extends past container right edge (clipping).
+        rightOverflow: Math.round(sRect.right - cRect.right),
+        bottomOverflow: Math.round(sRect.bottom - cRect.bottom),
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+      };
+    });
+    // SVG must not overflow the container horizontally. ~10px slack
+    // accounts for subpixel rendering and the small buffer chart-embed
+    // subtracts from clientWidth.
+    expect(overflow.rightOverflow).toBeLessThanOrEqual(10);
+    // overflow-x-auto on the container means scrollWidth can exceed
+    // clientWidth IF the chart genuinely needs more space (e.g. categorical
+    // x with hundreds of bars). For this 5-row chart that should not
+    // happen — locks in the regression.
+    expect(overflow.scrollWidth - overflow.clientWidth).toBeLessThanOrEqual(10);
+
+    await page.getByTestId("vega-chart-block").screenshot({ path: "test-results/chart-with-legend.png" });
   });
 
   test("BIGINT columns don't crash the chart", async ({ page }) => {
@@ -171,15 +253,63 @@ test.describe("Vega chart block", () => {
     const dialogSvg = dialogContainer.locator("svg").first();
     await expect(dialogSvg).toBeVisible({ timeout: T_NORMAL });
 
-    const containerWidth = await dialogContainer.evaluate((el) => el.clientWidth);
-    const dialogSvgWidth = await dialogSvg.evaluate((el) => (el as SVGSVGElement).getBoundingClientRect().width);
-    // Dialog chart should fill the container.
-    expect(dialogSvgWidth).toBeGreaterThan(containerWidth * 0.6);
-    expect(containerWidth).toBeGreaterThan(600);
+    const sizes = await dialogContainer.evaluate((el) => {
+      const svg = el.querySelector("svg") as SVGSVGElement;
+      return {
+        containerWidth: el.clientWidth,
+        containerHeight: el.clientHeight,
+        svgWidth: svg.getBoundingClientRect().width,
+        svgHeight: svg.getBoundingClientRect().height,
+      };
+    });
+    // Maximize dialog should be wide.
+    expect(sizes.containerWidth).toBeGreaterThan(600);
+    expect(sizes.containerHeight).toBeGreaterThan(400);
+    // Chart should fill the dialog: at least 60% of both width AND height.
+    // The reported bug was a small chart in a big empty dialog — the LLM
+    // emits height ~250 which left 70%+ of the dialog blank. forceHeight
+    // in MaximizedChartDialog should override.
+    expect(sizes.svgWidth).toBeGreaterThan(sizes.containerWidth * 0.6);
+    expect(sizes.svgHeight).toBeGreaterThan(sizes.containerHeight * 0.6);
+
+    // Screenshot for visual regression review.
+    await dialog.screenshot({ path: "test-results/chart-maximized.png" });
 
     // Esc closes the dialog.
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden({ timeout: T_NORMAL });
+  });
+
+  test("maximize: LLM-specified small height does NOT leave empty space", async ({ page }) => {
+    // Regression: when the LLM emits height: 200, the maximize dialog
+    // showed a 200px-tall chart inside an 800px-tall dialog. forceHeight
+    // must win in the dialog.
+    const sql = await seedTestTable(page);
+    await pushChart(page, {
+      sql,
+      spec: {
+        // Small width AND height — both should be ignored in maximize.
+        width: 300,
+        height: 200,
+        mark: "bar",
+        encoding: { x: { field: "fruit" }, y: { field: "count" } },
+      },
+      title: "Override test",
+    });
+
+    await page.getByTestId("chart-maximize").click();
+    const dialogContainer = page.getByTestId("vega-chart-maximize-container");
+    await expect(dialogContainer.locator("svg").first()).toBeVisible({ timeout: T_NORMAL });
+
+    const sizes = await dialogContainer.evaluate((el) => {
+      const svg = el.querySelector("svg") as SVGSVGElement;
+      return {
+        containerHeight: el.clientHeight,
+        svgHeight: svg.getBoundingClientRect().height,
+      };
+    });
+    // Chart must fill majority of available height — NOT the LLM's 200px.
+    expect(sizes.svgHeight).toBeGreaterThan(sizes.containerHeight * 0.6);
   });
 
   test("refresh button updates fetchedAt and re-runs SQL", async ({ page }) => {
