@@ -191,10 +191,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `* **describe_table** — Get column names, types, and descriptions for a table.`,
     `* **run_sql** — Execute a DuckDB SQL query.`,
     `* **ask_user** — Ask the user to choose between specific options.`,
-    ...(hasChartTool ? [
-      `* **render_chart** — Visualize a SQL result as a Vega-Lite chart in the chat. Provide a re-runnable SELECT and a minimal Vega-Lite v5 spec WITHOUT a \`data\` field — rows from the SQL are injected automatically. Prefer one query with a category column for multi-series charts; do NOT inline data values. Use a chart whenever it explains the data better than a table.`,
-      `* The render_chart tool_result includes a PNG of the rendered chart. **Look at it.** If the chart has problems — overlapping labels, illegible colors, a bad scale, missing data, an empty plot, axis labels that don't fit — call render_chart again with a corrected spec. Common fixes: increase \`width\`, rotate \`labelAngle: -45\`, use \`scale: { type: "log" }\` only when data is strictly positive, switch \`circle\` mark to \`point\` if you need shape encoding, sort the x-axis. Don't apologize to the user about a bad chart — fix it.`,
-    ] : []),
+    ...(hasChartTool ? [`* **render_chart** — Visualize a SQL result as a Vega-Lite chart in the chat. Provide a re-runnable SELECT and a minimal Vega-Lite v5 spec WITHOUT a \`data\` field — rows from the SQL are injected automatically. Prefer one query with a category column for multi-series charts; do NOT inline data values. Use a chart whenever it explains the data better than a table.`] : []),
     ``,
     `## Rules`,
     ``,
@@ -224,6 +221,11 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `* For wide results (>6 columns): select only the relevant columns rather than dumping everything.`,
     `* Always explain your findings in plain language after presenting data.`,
     ``,
+    ...(hasChartTool ? [
+      `### Chart iteration`,
+      `Every render_chart tool_result includes a PNG of the rendered chart. Look at it. If the chart has problems — overlapping labels, illegible colors, a bad scale, an empty plot — call render_chart again with a fixed spec. Common fixes: rotate axis labels with \`labelAngle: -45\`, only use \`scale: { type: "log" }\` when data is strictly positive, use \`point\` instead of \`circle\` when you need shape encoding, sort the x-axis. Don't apologize to the user about a bad chart — fix it.`,
+      ``,
+    ] : []),
     `### Never do this`,
     `* Never use \`SELECT *\` in result queries.`,
     `* Never perform arithmetic outside SQL.`,
