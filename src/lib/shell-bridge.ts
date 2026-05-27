@@ -92,7 +92,26 @@ export const bridge = {
   // can replay it on worker creation (worker may boot before CatalogApp's
   // setUser effect fires, or vice-versa).
   sentryUser: null as { id?: string; email?: string; username?: string } | null,
+
+  // Resolves once the shell has run ATTACH + USE for the active VGI catalog.
+  // Consumers that depend on the VGI catalog being attached (column stats,
+  // data preview) must `await bridge.attached` before issuing queries — the
+  // raw `bridge.query` becomes callable at worker boot, well before ATTACH.
+  // Re-initialized by resetAttached() on a shell reconnect / catalog switch.
+  attached: null as Promise<void> | null,
+  markAttached: null as (() => void) | null,
+  resetAttached: null as (() => void) | null,
 };
+
+// Initialize the attached Promise + control functions. Called at module load
+// and whenever the shell needs to start a new attach cycle.
+function initAttached() {
+  bridge.attached = new Promise<void>((resolve) => {
+    bridge.markAttached = () => resolve();
+  });
+}
+bridge.resetAttached = () => initAttached();
+initAttached();
 
 /** Update the worker's Sentry user identity. Caches the value on the bridge
  *  so a later worker boot can pick it up, and forwards it to the worker now

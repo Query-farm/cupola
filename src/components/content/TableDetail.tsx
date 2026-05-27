@@ -4,7 +4,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button"
 import type { TableInfo } from "vgi/client";
 import { getColumns, getForeignKeys, fetchColumnStats, type ForeignKeyInfo, type ColumnStats } from "@/lib/service";
-import { onQueryChange } from "@/lib/shell-bridge";
 import type { Selection } from "@/lib/tree";
 import { Breadcrumb } from "./Breadcrumb";
 import { ColumnsTable } from "./ColumnsTable";
@@ -29,35 +28,17 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
 
   // Lazily fetch column statistics from DuckDB WASM shell.
   // undefined = loading, Map = loaded, null = unavailable.
-  // If the shell isn't ready yet, subscribes to bridge.query availability
-  // and retries once the shell initializes.
+  // fetchColumnStats internally awaits bridge.attached, so a click that
+  // lands before the shell finishes booting is queued, not failed.
   const [columnStats, setColumnStats] = useState<Map<string, ColumnStats> | undefined | null>(undefined);
   useEffect(() => {
     let cancelled = false;
-    let unsubscribe: (() => void) | null = null;
-
-    function doFetch() {
-      fetchColumnStats(catalogName, table.schema_name, table.name).then(
-        (stats) => {
-          if (cancelled) return;
-          setColumnStats(stats);
-          // bridge.query was null — subscribe so we retry when the shell is ready
-          if (stats === null && !unsubscribe) {
-            unsubscribe = onQueryChange(() => {
-              if (!cancelled) doFetch();
-            });
-          }
-        },
-        () => { if (!cancelled) setColumnStats(null); },
-      );
-    }
-
     setColumnStats(undefined);
-    doFetch();
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-    };
+    fetchColumnStats(catalogName, table.schema_name, table.name).then(
+      (stats) => { if (!cancelled) setColumnStats(stats); },
+      () => { if (!cancelled) setColumnStats(null); },
+    );
+    return () => { cancelled = true; };
   }, [catalogName, table.schema_name, table.name]);
 
   // Build constraint lookup sets

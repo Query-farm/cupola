@@ -258,12 +258,19 @@ export function CatalogApp() {
     try { localStorage.setItem("vgi-shell-mode", shellMode); } catch {}
   }, [shellMode]);
 
-  // Expose refresh globally (navigate is exposed after it's defined below)
-  if (typeof window !== "undefined") {
+  // Expose refresh globally (navigate is exposed after it's defined below).
+  // useEffect + cleanup so unmount clears the slots instead of leaking the
+  // previous component instance's closures.
+  useEffect(() => {
     bridge.refreshMemoryTables = fetchMemoryTables;
     bridge.onAttachedCatalogsChanged = syncAttachedCatalogs;
     bridge.memoryCatalog = memoryCatalog;
-  }
+    return () => {
+      bridge.refreshMemoryTables = null;
+      bridge.onAttachedCatalogsChanged = null;
+      bridge.memoryCatalog = null;
+    };
+  }, [fetchMemoryTables, syncAttachedCatalogs, memoryCatalog]);
 
 
   // Escape key exits fullscreen
@@ -438,10 +445,12 @@ export function CatalogApp() {
     [data]
   );
 
-  // Expose navigate globally so AI agent can select newly created objects
-  if (typeof window !== "undefined") {
+  // Expose navigate globally so AI agent can select newly created objects.
+  // useEffect + cleanup so unmount drops the stale callback.
+  useEffect(() => {
     bridge.navigateToSelection = navigate;
-  }
+    return () => { bridge.navigateToSelection = null; };
+  }, [navigate]);
 
   const loadCatalog = useCallback(
     async (isRefresh = false) => {

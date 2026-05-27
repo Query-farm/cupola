@@ -15,21 +15,29 @@ import { safeGetArrowValue } from "@/lib/format";
 import { bridge, onQueryChange } from "@/lib/shell-bridge";
 
 /**
- * Wait for `bridge.query` to be set by DuckDBShell. Resolves immediately if
- * the bridge is already ready. Used so DataPreview doesn't fire a query
- * (and erroneously cache a fallback ORDER BY) before the shell has finished
- * its async boot.
+ * Wait until DuckDB can serve the given tablePath:
+ *   - bridge.query must be live (worker booted)
+ *   - if the table lives in the primary VGI catalog, ATTACH + USE must have
+ *     completed (bridge.attached resolved). Tables in memory or
+ *     secondary-attached catalogs only need bridge.query.
+ *
+ * Without the attached gate, a click on a VGI-catalog table immediately after
+ * page load fires a query against an unattached DB and caches the resulting
+ * ORDER BY ALL fallback as the wrong choice for the table's lifetime.
  */
-function waitForBridgeQuery(): Promise<void> {
-  if (bridge.query) return Promise.resolve();
-  return new Promise((resolve) => {
-    const unsubscribe = onQueryChange(() => {
-      if (bridge.query) {
-        unsubscribe();
-        resolve();
-      }
-    });
-  });
+function waitForTableReady(tablePath: string): Promise<void> {
+  const firstSegment = tablePath.split(".")[0];
+  const needsAttached = !!bridge.catalogName && firstSegment === bridge.catalogName;
+  const queryReady: Promise<void> = bridge.query
+    ? Promise.resolve()
+    : new Promise((resolve) => {
+        const unsubscribe = onQueryChange(() => {
+          if (bridge.query) { unsubscribe(); resolve(); }
+        });
+      });
+  return needsAttached && bridge.attached
+    ? Promise.all([queryReady, bridge.attached]).then(() => {})
+    : queryReady;
 }
 
 const PAGE_SIZES = [25, 50, 100, 200];
@@ -165,11 +173,11 @@ export function DataPreview({ tablePath }: Props) {
     setLoading(true);
     setError(null);
     try {
-      // Wait for the DuckDB shell to finish initializing. The Preview tab
-      // can mount before bridge.query is set (shell boot is async), and we
-      // must NOT run the orderBy probe with a null bridge — it would
-      // cascade to the ALL fallback and cache that wrong choice.
-      await waitForBridgeQuery();
+      // Wait for the shell to be ready to query this specific table — for
+      // VGI-catalog tables this awaits ATTACH+USE, not just bridge.query.
+      // The orderBy probe must NOT run pre-ATTACH or it cascades to the ALL
+      // fallback and caches that wrong choice for the table's lifetime.
+      await waitForTableReady(tablePath);
       if (thisRequest !== requestIdRef.current) return; // stale, tablePath changed while waiting
 
       // Resolve ORDER BY (cached after first call per tablePath). This is

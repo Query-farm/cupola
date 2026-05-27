@@ -140,10 +140,15 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
     if (mode !== "minimized") setShellActivated(true);
   }, [mode]);
 
-  // Expose query history setter for the initShell closure
-  bridge.addQueryHistoryEntry = (entry: QueryHistoryEntry) => {
-    setQueryHistory(prev => [...prev, entry]);
-  };
+  // Expose query history setter for the initShell closure. Inside useEffect
+  // with cleanup so React's strict-mode mount/unmount/remount doesn't leave a
+  // stale closure pointing at the previous component instance's setState.
+  useEffect(() => {
+    bridge.addQueryHistoryEntry = (entry: QueryHistoryEntry) => {
+      setQueryHistory(prev => [...prev, entry]);
+    };
+    return () => { bridge.addQueryHistoryEntry = null; };
+  }, []);
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
   const [perspectiveHasData, setPerspectiveHasData] = useState(false);
   const [mapHasData, setMapHasData] = useState(false);
@@ -192,11 +197,16 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
     if (!showMapTab && activeTab === "map") setActiveTab("shell");
   }, [showMapTab, activeTab]);
 
-  // Expose a function to switch to the shell tab and ensure it's visible
-  bridge.activateShell = () => {
-    setActiveTab("shell");
-    if (mode === "minimized") onModeChange("panel");
-  };
+  // Expose a function to switch to the shell tab and ensure it's visible.
+  // useEffect + cleanup so unmount doesn't leave a callback closed over a
+  // stale mode/onModeChange.
+  useEffect(() => {
+    bridge.activateShell = () => {
+      setActiveTab("shell");
+      if (mode === "minimized") onModeChange("panel");
+    };
+    return () => { bridge.activateShell = null; };
+  }, [mode, onModeChange]);
 
   // Expose a callback for the shell to trigger Perspective view
   useEffect(() => {
@@ -226,6 +236,10 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   useEffect(() => {
     if (!shellActivated) return;
     let cancelled = false;
+
+    // Service or catalog switched — make sure any consumers awaiting the
+    // previous ATTACH cycle now block on the new one.
+    bridge.resetAttached?.();
 
     (async () => {
       try {
@@ -1219,6 +1233,10 @@ function initShell(
         if (result.ok) {
           await bridge.query!(`USE ${config.catalogName}`);
           writeln(`Connected to ${config.catalogName}`, "32");
+          // Wake up consumers (column stats, data preview) that were awaiting
+          // ATTACH completion. They block on bridge.attached so they don't
+          // race the boot-phase exposure of bridge.query.
+          bridge.markAttached?.();
         } else {
           const errStr = result.error ?? "";
           console.log("[shell] ATTACH failed:", errStr);
@@ -1227,9 +1245,15 @@ function initShell(
           if (handled !== "surfaced") {
             writeln(`Attach failed: ${errStr}`, "31");
           }
+          // Resolve attached even on failure so downstream consumers fail
+          // fast with their own "catalog not found" error instead of hanging.
+          bridge.markAttached?.();
         }
         writeln("");
       } else {
+        // No VGI catalog configured — resolve attached immediately so any
+        // consumer that races here (shouldn't, but be defensive) doesn't hang.
+        bridge.markAttached?.();
         writeln("");
         writeln("Type SQL queries below.", "33");
         writeln("");

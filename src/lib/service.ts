@@ -103,6 +103,16 @@ export function getColumns(table: TableInfo): ColumnInfo[] {
   }
 }
 
+// Function metadata parsing/formatting lives in ./function-info (kept free of RPC
+// imports so it stays unit-testable). Re-exported here for a stable import surface.
+export type { FunctionArg, FunctionReturn } from "./function-info";
+export {
+  isTableFunction,
+  getFunctionArgs,
+  getFunctionReturn,
+  formatFunctionSignature,
+} from "./function-info";
+
 /** Parse foreign key constraints from a TableInfo. */
 export function getForeignKeys(table: TableInfo): ForeignKeyInfo[] {
   try {
@@ -198,6 +208,12 @@ export async function fetchColumnStats(
   schemaName: string,
   tableName: string,
 ): Promise<Map<string, ColumnStats> | null> {
+  if (!bridge.query || !bridge.attached) return null;
+  // Wait for ATTACH + USE to complete. vgi_table_statistics() resolves
+  // against the current catalog; firing pre-ATTACH returns "Catalog not
+  // found" and TableDetail's retry-on-onQueryChange would never retry
+  // (bridge.query is already set — only attached is pending).
+  await bridge.attached;
   const queryFn = bridge.query;
   if (!queryFn) return null;
 
