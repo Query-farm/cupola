@@ -8,6 +8,7 @@
 import type { CatalogData } from "./service";
 import { getColumns, getForeignKeys } from "./service";
 import { filterTagsForAI, TAG_DESCRIPTION_LLM, TAG_DESCRIPTION_MD, TAG_EXAMPLE_QUERIES } from "./tags";
+import { fetchWithRetry } from "./ai-fetch";
 
 // TEMP: keep in sync with the extension list in public/shell/worker.js.
 // Flip to true to re-enable spatial-aware prompting once the extension is loaded again.
@@ -472,72 +473,6 @@ async function* parseSSEStream(
 // Agent turn — one full request/response cycle with streaming
 // ---------------------------------------------------------------------------
 
-async function fetchWithRetry(
-  url: string,
-  init: RequestInit,
-  callbacks: AgentCallbacks,
-  maxRetries = 3
-): Promise<Response> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    let response: Response;
-    try {
-      response = await fetch(url, init);
-    } catch (err: any) {
-      // Network error (offline, DNS failure, CORS, connection reset)
-      if (init.signal?.aborted) throw new Error("Cancelled.");
-      if (attempt < maxRetries) {
-        const waitSec = Math.min(2 ** attempt * 2, 10);
-        let interrupted = false;
-        for (let remaining = waitSec; remaining > 0; remaining--) {
-          if (init.signal?.aborted) { interrupted = true; break; }
-          callbacks.onRetry?.(`Network error, retrying in ${remaining}s...`);
-          await new Promise((r) => setTimeout(r, 1000));
-        }
-        callbacks.onRetry?.(null);
-        if (interrupted) continue; // abort during wait → skip to next attempt (will abort on fetch)
-        continue;
-      }
-      throw new Error("Network error. Check your connection.");
-    }
-
-    if (response.ok) return response;
-
-    const status = response.status;
-    let errorMsg: string;
-    try {
-      const body = await response.json();
-      errorMsg = body.error?.message || JSON.stringify(body);
-    } catch {
-      errorMsg = response.statusText;
-    }
-
-    // Don't retry auth or not-found errors
-    if (status === 401 || status === 403) throw new Error("Invalid API key. Check Settings.");
-    if (status === 404) throw new Error(`API endpoint not found (404). Check your API configuration.`);
-
-    // Retry on rate limit (429) and overloaded (529)
-    if ((status === 429 || status === 529) && attempt < maxRetries) {
-      const retryAfter = response.headers.get("retry-after");
-      const waitSec = retryAfter ? Math.min(parseInt(retryAfter, 10) || 5, 30) : Math.min(2 ** attempt * 2, 15);
-      let interrupted = false;
-      for (let remaining = waitSec; remaining > 0; remaining--) {
-        if (init.signal?.aborted) { interrupted = true; break; }
-        callbacks.onRetry?.(`Rate limited, retrying in ${remaining}s...`);
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-      callbacks.onRetry?.(null);
-      if (interrupted) continue; // abort during wait → skip retry, re-enter loop (will abort on next fetch)
-      continue;
-    }
-
-    if (status === 429) throw new Error("Rate limited. Try again shortly.");
-    if (status === 529) throw new Error("Claude is busy. Try again shortly.");
-    throw new Error(`API error (${status}): ${errorMsg}`);
-  }
-
-  throw new Error("Max retries exceeded.");
-}
-
 async function streamOneRequest(
   apiKey: string,
   model: string,
@@ -610,7 +545,10 @@ async function streamOneRequest(
           try {
             currentBlock.input = JSON.parse(currentToolInput);
           } catch {
-            currentBlock.input = {};
+            // Sentinel so the tool dispatch loop returns an explicit
+            // is_error tool_result the model can self-correct from. Silent
+            // {} would cause undefined SQL / undefined table lookups.
+            currentBlock.input = { __parseError: currentToolInput };
           }
         }
         content.push(currentBlock);
@@ -646,41 +584,13 @@ export async function runAgentTurn(
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (signal?.aborted) return;
 
-    // Retry streamOneRequest on network errors (stream disconnect, fetch failure)
-    let result: { content: ContentBlock[]; stopReason: string; inputTokens: number; outputTokens: number } | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        result = await streamOneRequest(
-          apiKey, model, messages, systemPrompt, callbacks, signal
-        );
-        break;
-      } catch (err: any) {
-        const msg = err?.message?.toLowerCase() || "";
-        const isNetworkError = msg.includes("network") || msg.includes("failed to fetch") || msg.includes("load failed") || msg.includes("aborted");
-        if (isNetworkError && !signal?.aborted && attempt < 2) {
-          const waitSec = Math.min(2 ** attempt * 2, 10);
-          for (let remaining = waitSec; remaining > 0; remaining--) {
-            if (signal?.aborted) throw err;
-            if (callbacks.onRetry) {
-              callbacks.onRetry(`Network error, retrying in ${remaining}s...`);
-            } else {
-              callbacks.onText(`\r\x1b[2m(Network error, retrying in ${remaining}s...)\x1b[0m\x1b[K`);
-            }
-            await new Promise((r) => setTimeout(r, 1000));
-          }
-          if (callbacks.onRetry) {
-            callbacks.onRetry(null);
-          } else {
-            callbacks.onText(`\r\x1b[K`);
-          }
-          continue;
-        }
-        throw err;
-      }
-    }
-    if (!result) throw new Error("Network error. Check your connection.");
-
-    const { content, stopReason, inputTokens, outputTokens } = result;
+    // Single retry policy: fetchWithRetry handles 429/529 (retry-after), network
+    // errors (exponential backoff with jitter), and abort-signal short-circuiting.
+    // Any error that escapes here is final — do not re-retry, which would
+    // multiply attempts and resend the full conversation each time.
+    const { content, stopReason, inputTokens, outputTokens } = await streamOneRequest(
+      apiKey, model, messages, systemPrompt, callbacks, signal
+    );
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
 
@@ -699,6 +609,18 @@ export async function runAgentTurn(
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       if (block.type === "tool_use" && block.id && block.name) {
         callbacks.onToolCall(block.name, block.input);
+        if (block.input && typeof block.input === "object" && "__parseError" in block.input) {
+          const raw = String(block.input.__parseError ?? "");
+          const errMsg = `Tool input was not valid JSON. Raw partial input: ${raw.slice(0, 500)}`;
+          callbacks.onToolResult(block.name, `Error: ${errMsg}`);
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: errMsg,
+            is_error: true,
+          });
+          continue;
+        }
         try {
           const result = await executeTool(block.name, block.input, signal);
           if (signal?.aborted) throw new DOMException("Aborted", "AbortError");

@@ -46,8 +46,15 @@ let _hadToken = false;
 /** Extract and cache the token + OAuth metadata from the URL fragment, then clean the URL. */
 function _extractFragmentToken(): string | null {
   if (typeof window === "undefined") return null;
-  if (_cachedToken) return _cachedToken;
   const hash = window.location.hash;
+  // If a fresh #token=... arrived mid-session (e.g. a re-auth redirect),
+  // invalidate the cache so the new token wins. Without this, the early-return
+  // below would keep returning the stale token forever.
+  if (hash && /[#&]token=/.test(hash)) {
+    _cachedToken = null;
+    _cachedOAuthMeta = null;
+  }
+  if (_cachedToken) return _cachedToken;
   if (hash) {
     // Parse all fragment params
     const params = new URLSearchParams(hash.replace(/^#/, ""));

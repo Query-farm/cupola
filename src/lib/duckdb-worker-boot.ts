@@ -181,6 +181,12 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // runQuery returns a single Uint8Array of File-format Arrow IPC bytes —
   // exactly what every consumer's tableFromIPC() call expects.
   const runQueryWrapped = async (sql: string) => {
+    // Clear any stale cancel flag from a prior query that was cancelled
+    // cross-surface (e.g. AskAIChat cancel hit before the shell readLoop's
+    // post-query reset ran). Without this, a fresh query would be cancelled
+    // immediately by the wasm-side poll. Belt-and-suspenders with the shell's
+    // own post-query reset in DuckDBShell.tsx.
+    if (cancelInt32) Atomics.store(cancelInt32, 0, 0);
     try {
       const bytes = await db.runQuery(connId, sql);
       // Detach the underlying buffer so tableFromIPC's Uint8Array view is

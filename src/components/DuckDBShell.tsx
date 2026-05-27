@@ -1214,7 +1214,7 @@ function initShell(
         writeln(`Connecting to ${config.catalogName}...`, "33");
         setBootPhase(`Connecting to ${config.catalogName}`);
         const attachSql = buildAttachSql();
-        console.log("[shell] ATTACH SQL:", attachSql.replace(/oauth_refresh_token '[^']*'/, "oauth_refresh_token '***'"));
+        console.log("[shell] ATTACH SQL:", attachSql.replace(/(oauth_refresh_token|bearer_token) '[^']*'/g, "$1 '***'"));
         const result = await bridge.query!(attachSql);
         if (result.ok) {
           await bridge.query!(`USE ${config.catalogName}`);
