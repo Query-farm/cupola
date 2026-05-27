@@ -11,6 +11,7 @@
  * misses an external-resource surface, no fetch will fire.
  */
 import type { TopLevelSpec } from "vega-lite";
+import { coerceArrowValue } from "@/lib/duckdb-query";
 
 export interface VegaView {
   change(name: string, changeset: any): VegaView;
@@ -223,6 +224,17 @@ export async function embedChart(
   // padding-box, but the LLM's spec also adds axis labels / legends to the
   // right of the plot — subtracting another small buffer keeps wide legend
   // entries (e.g. "Magnitude Class") from spilling off-screen.
+  // Pick autosize mode based on whether the caller is force-sizing
+  // height. The inline chat view doesn't constrain height — we want the
+  // chart to be as tall as it needs (axis titles, dense facets, etc.).
+  // `fit-x` fits only the width and lets height grow to fit content; that
+  // prevents the "Longitude" axis-title clipping we saw with `fit` +
+  // numeric LLM height. The maximize dialog DOES constrain height (it
+  // forces a target via forceHeight), so it uses `fit` to shrink to the
+  // dialog's vertical budget.
+  const autosize: { type: "fit" | "fit-x"; contains: "padding"; resize: true } = options.forceHeight
+    ? { type: "fit", contains: "padding", resize: true }
+    : { type: "fit-x", contains: "padding", resize: true };
   const finalSpec: TopLevelSpec = {
     ...spec,
     // Override AFTER the spread so the LLM's hardcoded width never wins.
@@ -230,14 +242,12 @@ export async function embedChart(
     // encoding, and color — not how big the canvas is.
     //
     // width: "container" makes Vega-Lite size the chart to the parent's
-    // clientWidth. Combined with autosize:"fit" + contains:"padding",
-    // the TOTAL chart (plot + axes + legend) fits within the container —
-    // the right-hand legend is included in that budget. A numeric width
-    // here would make `width` refer to the plot area only, and the legend
-    // would overflow.
+    // clientWidth. Combined with autosize fit-x + contains:"padding",
+    // the TOTAL chart width (plot + axes + legend) fits within the
+    // container — the right-hand legend is included in that budget.
     width: "container",
     ...(options.forceHeight ? { height: options.forceHeight } : {}),
-    autosize: { type: "fit", contains: "padding", resize: true },
+    autosize,
     data: { values: safeRows, name: "source_0" },
     // Force transparent background regardless of what the LLM put in
     // spec.config — the chat surface owns its own background.
@@ -255,48 +265,24 @@ export async function embedChart(
 }
 
 /**
- * Convert each row's values so Vega can consume them.
+ * Convert each row's values to a Vega-/JSON-safe shape.
  *
- * Two transforms:
- *  - BigInt → Number (DuckDB BIGINT/INT64 columns arrive as JS BigInt via
- *    Arrow). Vega's expression engine does Math.abs / arithmetic that
- *    throws on BigInt. We accept the precision loss above 2^53 — flagging
- *    the rare overflow as a string keeps the row readable rather than
- *    silently truncating to Infinity.
- *  - Arrow Vector children (struct/list) → null. Vega can't render
- *    nested values; we drop them so the rest of the row still works.
+ * Delegates to `coerceArrowValue` from duckdb-query.ts (BigInt → Number/
+ * String, Date → epoch ms, recursive into nested plain objects). Kept
+ * as an exported helper for the rare caller that has rows from a non-
+ * readRows source (e.g. inline values built from a foreign API).
  *
- * The conversion is shallow-by-row but recursive into nested plain objects
- * so encoded computed columns survive.
+ * readRows() itself already applies the same coercion, so most callers
+ * can hand its output straight to embedChart with no extra step.
  */
 export function sanitizeRowsForVega(rows: Record<string, any>[]): Record<string, any>[] {
   return rows.map((row) => {
     const out: Record<string, any> = {};
     for (const [k, v] of Object.entries(row)) {
-      out[k] = coerceForVega(v);
+      out[k] = coerceArrowValue(v);
     }
     return out;
   });
-}
-
-function coerceForVega(v: any): any {
-  if (v === null || v === undefined) return v;
-  if (typeof v === "bigint") {
-    const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
-    const MIN_SAFE = -MAX_SAFE;
-    if (v > MAX_SAFE || v < MIN_SAFE) return v.toString();
-    return Number(v);
-  }
-  if (v instanceof Date) return v.getTime();
-  // Plain objects / arrays may carry nested BigInts; recurse so encoded
-  // sub-fields remain usable. Don't touch typed arrays.
-  if (Array.isArray(v)) return v.map(coerceForVega);
-  if (typeof v === "object" && v.constructor === Object) {
-    const out: Record<string, any> = {};
-    for (const [k, val] of Object.entries(v)) out[k] = coerceForVega(val);
-    return out;
-  }
-  return v;
 }
 
 /** Download the chart as a PNG at 2x scale (retina-friendly). */

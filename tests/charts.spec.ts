@@ -405,6 +405,81 @@ test.describe("Vega chart block", () => {
     await expect(page.getByTestId("vega-chart-block")).toHaveCount(0);
   });
 
+  test("axis titles are NOT clipped at the bottom of the chart container", async ({ page }) => {
+    // Regression from the user's screenshot: a scatter plot with an
+    // explicit x-axis title ("Longitude") had its title cropped by the
+    // chart container's bottom edge. Root cause was autosize:"fit" with
+    // a numeric height shrinking the plot but not reserving enough
+    // bottom padding for the axis title. Fix uses autosize:"fit-x" for
+    // inline charts so height grows naturally; this test locks that in.
+    const sql = await seedTestTable(page);
+    await pushChart(page, {
+      sql,
+      spec: {
+        // Numeric height like an LLM would emit — used to cause clipping.
+        height: 400,
+        mark: "point",
+        encoding: {
+          x: { field: "big_id", type: "quantitative", title: "BIG_ID_AXIS_TITLE" },
+          y: { field: "count", type: "quantitative", title: "COUNT_AXIS_TITLE" },
+        },
+      },
+      title: "Axis title clipping",
+    });
+
+    const chartContainer = page.getByTestId("vega-chart-container");
+    await expect(chartContainer.locator("svg").first()).toBeVisible({ timeout: T_NORMAL });
+
+    // The axis title must be inside the container's vertical bounds —
+    // not clipped by the bottom edge. Look up the title text element
+    // by content, and verify its bottom is inside the container.
+    const placement = await chartContainer.evaluate((el) => {
+      const cRect = el.getBoundingClientRect();
+      // Vega renders axis titles as <text> elements with the title string.
+      const titles = Array.from(el.querySelectorAll("text"))
+        .filter((t) => (t.textContent ?? "").includes("BIG_ID_AXIS_TITLE"));
+      if (titles.length === 0) return { found: false } as const;
+      const titleRect = titles[0].getBoundingClientRect();
+      return {
+        found: true as const,
+        // Positive = title's bottom is past container's bottom (clipped).
+        bottomOverflow: titleRect.bottom - cRect.bottom,
+      };
+    });
+    expect(placement.found).toBe(true);
+    // Title must be at least 4px above the container's bottom edge.
+    expect((placement as { found: true; bottomOverflow: number }).bottomOverflow).toBeLessThanOrEqual(-4);
+  });
+
+  test("render_chart's sample payload survives JSON.stringify with BIGINT columns", async ({ page }) => {
+    // Regression: readRows used to return raw Arrow BigInt for BIGINT
+    // columns. render_chart builds its tool_result via JSON.stringify
+    // which throws "Do not know how to serialize a BigInt". The fix
+    // moved BigInt → Number/String coercion into readRows itself, so
+    // every caller is automatically JSON-safe. Verify the pushChart
+    // test hook (which mirrors render_chart's dispatch) doesn't throw.
+    const sql = await seedTestTable(page);
+    // big_id is a BIGINT column (from seedTestTable's CAST(N AS BIGINT)).
+    // If readRows still returned BigInt, the JSON.stringify inside
+    // pushChart would throw and this whole evaluate would reject.
+    const result = await page.evaluate(async (s) => {
+      return (window as any).__cupolaChartTest.pushChart({
+        sql: s,
+        spec: {
+          mark: "bar",
+          encoding: {
+            x: { field: "big_id", type: "quantitative" },
+            y: { field: "count", type: "quantitative" },
+          },
+        },
+        title: "BIGINT survives JSON.stringify",
+      });
+    }, sql);
+    // No throw = success. Also verify the chart actually rendered.
+    expect(result.chartId).toBeTruthy();
+    await expect(page.getByTestId("vega-chart-container").locator("svg").first()).toBeVisible({ timeout: T_NORMAL });
+  });
+
   test("render_chart produces a PNG for the agent to see", async ({ page }) => {
     // The whole point of including the PNG in the tool_result is closing
     // the feedback loop: the model sees what it rendered and can iterate.

@@ -191,11 +191,11 @@ export function VegaChartBlock({ chart, onUpdate }: Props) {
             then renders the SVG at that width inside the container,
             which lands in the padding zone and overflows by exactly the
             padding amount. Vertical padding is fine — height isn't
-            container-sized. */}
+            container-sized when autosize is fit-x. */}
         <div
           ref={onContainerRef}
           data-testid="vega-chart-container"
-          className="py-2 w-full min-h-[280px] overflow-x-auto"
+          className="py-4 w-full min-h-[280px] overflow-x-auto"
         />
 
         {/* Footer: row count + relative timestamp */}

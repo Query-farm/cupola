@@ -73,6 +73,66 @@ export interface AgentCallbacks {
 export { formatArrowTableAsJson, executeReadQueryResults } from "./query-results";
 
 // ---------------------------------------------------------------------------
+// Dev-side tool-call tracing
+// ---------------------------------------------------------------------------
+
+/** Gate for the [ai] tool console logs. Default-on; user can silence by
+ *  setting `window.__cupolaAiDebug = false` from devtools. */
+function aiDebugEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  const v = (window as any).__cupolaAiDebug;
+  return v !== false;
+}
+
+function logToolCall(name: string, input: unknown): void {
+  if (!aiDebugEnabled()) return;
+  // Use console.groupCollapsed so a chatty session doesn't fill the
+  // console with text — each call is one collapsible entry.
+  console.groupCollapsed(`%c[ai] → ${name}`, "color:#4a7c23;font-weight:bold");
+  try {
+    console.log("input:", input);
+  } finally {
+    console.groupEnd();
+  }
+}
+
+function logToolResult(name: string, result: ToolResult): void {
+  if (!aiDebugEnabled()) return;
+  console.groupCollapsed(`%c[ai] ← ${name}`, "color:#2d5016;font-weight:bold");
+  try {
+    if (typeof result === "string") {
+      // Try to parse as JSON for readable inspection; fall back to raw.
+      try {
+        console.log("result:", JSON.parse(result));
+      } catch {
+        console.log("result:", result.length > 1000 ? result.slice(0, 1000) + "… (truncated)" : result);
+      }
+    } else {
+      // Array form (multi-part content). Show text parts inline and note
+      // image parts by media type / size only — base64 PNGs would flood
+      // the console.
+      const parts = result.map((p) =>
+        p.type === "text"
+          ? { type: "text", text: tryJson(p.text) }
+          : { type: "image", media_type: p.source.media_type, dataBytes: p.source.data.length }
+      );
+      console.log("result:", parts);
+    }
+  } finally {
+    console.groupEnd();
+  }
+}
+
+function logToolError(name: string, errMsg: string): void {
+  if (!aiDebugEnabled()) return;
+  console.warn(`%c[ai] ✗ ${name}`, "color:#b94a48;font-weight:bold", errMsg);
+}
+
+function tryJson(s: string): unknown {
+  try { return JSON.parse(s); } catch { return s; }
+}
+
+// ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
 
@@ -680,6 +740,12 @@ export async function runAgentTurn(
           });
           continue;
         }
+        // Dev-side console trace: shows tool name + input before the
+        // call, plus the result (or error) after. Enables debugging the
+        // agent's behavior from the browser console. Gated by a window
+        // flag so we can leave it on by default without polluting end-
+        // user consoles — set window.__cupolaAiDebug = false to silence.
+        logToolCall(block.name, block.input);
         try {
           const result = await executeTool(block.name, block.input, signal);
           if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -689,6 +755,7 @@ export async function runAgentTurn(
           const summary = typeof result === "string"
             ? result
             : result.filter((p) => p.type === "text").map((p) => (p as { type: "text"; text: string }).text).join(" ");
+          logToolResult(block.name, result);
           callbacks.onToolResult(block.name, summary.length > 200 ? summary.slice(0, 200) + "…" : summary);
           toolResults.push({
             type: "tool_result",
@@ -697,6 +764,7 @@ export async function runAgentTurn(
           });
         } catch (err: any) {
           const errMsg = err instanceof Error ? err.message : String(err);
+          logToolError(block.name, errMsg);
           callbacks.onToolResult(block.name, `Error: ${errMsg}`);
 
           // Fatal errors (e.g., VGI server crash) — abort the agent loop entirely
