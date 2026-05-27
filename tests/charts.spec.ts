@@ -405,6 +405,26 @@ test.describe("Vega chart block", () => {
     await expect(page.getByTestId("vega-chart-block")).toHaveCount(0);
   });
 
+  test("render_chart produces a PNG for the agent to see", async ({ page }) => {
+    // The whole point of including the PNG in the tool_result is closing
+    // the feedback loop: the model sees what it rendered and can iterate.
+    // This test exercises the headless renderChartToPng path and checks
+    // that a real PNG payload comes out.
+    const sql = await seedTestTable(page);
+    const result = await page.evaluate(async (s) => {
+      return (window as any).__cupolaChartTest.pushChart({
+        sql: s,
+        spec: { mark: "bar", encoding: { x: { field: "fruit" }, y: { field: "count" } } },
+        title: "PNG feedback",
+        withPng: true,
+      });
+    }, sql);
+    expect(result.pngMediaType).toBe("image/png");
+    // Base64-encoded PNG of a real chart at 800x500 should be at least a
+    // few KB. A header-only / empty render would be tiny.
+    expect(result.pngBytes).toBeGreaterThan(2000);
+  });
+
   test("spec with data.url is rejected by validateChartSpec", async ({ page }) => {
     const sql = await seedTestTable(page);
     // pushChart calls validateChartSpec internally and throws; we expect the

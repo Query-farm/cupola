@@ -31,10 +31,23 @@ interface ContentBlock {
   input?: any;
 }
 
+/** Content fragments that may appear inside a multi-part tool_result.
+ *  Anthropic accepts `content: string` OR `content: ToolResultContent[]`.
+ *  The array form is what enables image-in-tool-result — used by
+ *  render_chart to feed the rendered PNG back to the agent. */
+export type ToolResultContent =
+  | { type: "text"; text: string }
+  | { type: "image"; source: { type: "base64"; media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp"; data: string } };
+
+/** What a tool implementation may return. A plain string is the common case
+ *  (everything except render_chart); the array form is used when an image
+ *  needs to ride along with the text response. */
+export type ToolResult = string | ToolResultContent[];
+
 interface ToolResultBlock {
   type: "tool_result";
   tool_use_id: string;
-  content: string;
+  content: ToolResult;
   is_error?: boolean;
 }
 
@@ -178,7 +191,10 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `* **describe_table** — Get column names, types, and descriptions for a table.`,
     `* **run_sql** — Execute a DuckDB SQL query.`,
     `* **ask_user** — Ask the user to choose between specific options.`,
-    ...(hasChartTool ? [`* **render_chart** — Visualize a SQL result as a Vega-Lite chart in the chat. Provide a re-runnable SELECT and a minimal Vega-Lite v5 spec WITHOUT a \`data\` field — rows from the SQL are injected automatically. Prefer one query with a category column for multi-series charts; do NOT inline data values. Use a chart whenever it explains the data better than a table.`] : []),
+    ...(hasChartTool ? [
+      `* **render_chart** — Visualize a SQL result as a Vega-Lite chart in the chat. Provide a re-runnable SELECT and a minimal Vega-Lite v5 spec WITHOUT a \`data\` field — rows from the SQL are injected automatically. Prefer one query with a category column for multi-series charts; do NOT inline data values. Use a chart whenever it explains the data better than a table.`,
+      `* The render_chart tool_result includes a PNG of the rendered chart. **Look at it.** If the chart has problems — overlapping labels, illegible colors, a bad scale, missing data, an empty plot, axis labels that don't fit — call render_chart again with a corrected spec. Common fixes: increase \`width\`, rotate \`labelAngle: -45\`, use \`scale: { type: "log" }\` only when data is strictly positive, switch \`circle\` mark to \`point\` if you need shape encoding, sort the x-axis. Don't apologize to the user about a bad chart — fix it.`,
+    ] : []),
     ``,
     `## Rules`,
     ``,
@@ -612,7 +628,7 @@ export async function runAgentTurn(
   model: string,
   messages: MessageParam[],
   systemPrompt: string,
-  executeTool: (name: string, input: any, signal?: AbortSignal) => Promise<string>,
+  executeTool: (name: string, input: any, signal?: AbortSignal) => Promise<ToolResult>,
   callbacks: AgentCallbacks,
   signal?: AbortSignal,
   maxToolRounds = 20,
@@ -665,7 +681,13 @@ export async function runAgentTurn(
         try {
           const result = await executeTool(block.name, block.input, signal);
           if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-          callbacks.onToolResult(block.name, result.length > 200 ? result.slice(0, 200) + "…" : result);
+          // Build a short display string for the UI (the array form carries
+          // an image; we summarize using its text parts only). The full
+          // result still goes to the model via toolResults below.
+          const summary = typeof result === "string"
+            ? result
+            : result.filter((p) => p.type === "text").map((p) => (p as { type: "text"; text: string }).text).join(" ");
+          callbacks.onToolResult(block.name, summary.length > 200 ? summary.slice(0, 200) + "…" : summary);
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
@@ -700,3 +722,4 @@ export async function runAgentTurn(
 }
 
 export { type MessageParam, type ContentBlock, type ToolResultBlock, type Tool };
+// ToolResult and ToolResultContent are already `export type` declarations above.

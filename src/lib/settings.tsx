@@ -15,6 +15,11 @@ export interface Settings {
    *  and emits React 19 dev warnings from kepler internals. Can also be
    *  forced on per-session with `?kepler=1`. */
   enableKeplerMap: boolean;
+  /** Send the rendered chart PNG back to the AI agent as part of
+   *  render_chart's tool_result, so it can SEE its output and iterate on
+   *  visual issues (overlapping labels, bad scales). Adds ~1500 input
+   *  tokens per chart; disable for long sessions if cost is a concern. */
+  aiChartFeedback: boolean;
 }
 
 const defaultSettings: Settings = {
@@ -27,6 +32,7 @@ const defaultSettings: Settings = {
   aiModel: "claude-sonnet-4-20250514",
   aiMaxToolRounds: 20,
   enableKeplerMap: false,
+  aiChartFeedback: true,
 };
 
 const STORAGE_KEY = "vgi-frontend-settings";

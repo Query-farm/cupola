@@ -16,7 +16,8 @@ import {
 import { executeRunSql, describeTableWithFallback, validateChartSpec } from "@/lib/ai-tool-executor";
 import { readRows } from "@/lib/duckdb-query";
 import { cacheChartRows } from "@/lib/chart-rows-store";
-import { compileChartSpec } from "./chat/chart-embed";
+import { compileChartSpec, renderChartToPng } from "./chat/chart-embed";
+import type { ToolResult } from "@/lib/ai-agent";
 const uid = () => crypto.randomUUID();
 
 import { ChatInput } from "./chat/ChatInput";
@@ -95,7 +96,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
   // the running app. The hook is a no-op outside of e2e test runs.
   useEffect(() => {
     (window as any).__cupolaChartTest = {
-      pushChart: async (input: { sql: string; spec: Record<string, any>; title?: string }) => {
+      pushChart: async (input: { sql: string; spec: Record<string, any>; title?: string; withPng?: boolean }) => {
         const { errors, sanitized } = validateChartSpec(input.spec);
         if (errors.length) throw new Error(`Invalid chart spec: ${errors.join("; ")}`);
         const compileResult = await compileChartSpec(sanitized);
@@ -120,7 +121,18 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
             },
           }],
         }]);
-        return { messageId: msgId, blockId, chartId, warnings: compileResult.warnings };
+        // Optionally also exercise the PNG-for-agent path so tests can
+        // verify the byte payload Anthropic would receive.
+        let pngBytes: number | undefined;
+        let pngMediaType: string | undefined;
+        if (input.withPng) {
+          const png = await renderChartToPng(sanitized, rows);
+          if ("data" in png) {
+            pngBytes = png.data.length;
+            pngMediaType = png.mediaType;
+          }
+        }
+        return { messageId: msgId, blockId, chartId, warnings: compileResult.warnings, pngBytes, pngMediaType };
       },
     };
     return () => {
@@ -378,7 +390,9 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           },
         }];
         updateBlocks(blocks);
-        return JSON.stringify({
+
+        // Build the text part of the tool_result that the model sees.
+        const textPart = JSON.stringify({
           ok: true,
           row_count: rows.length,
           columns,
@@ -390,6 +404,27 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           // should consider fixing these on the next turn.
           ...(compileResult.warnings.length ? { warnings: compileResult.warnings } : {}),
         });
+
+        // Render a thumbnail PNG of the chart and ship it back to the model
+        // so it can SEE its output. Multimodal Claude catches problems the
+        // spec alone can't reveal (overlapping labels, bad color, empty
+        // plot, wrong scale). Gated by setting — adds ~1500 input tokens.
+        // Done after the block is already inserted so the user sees the
+        // chart immediately, even if PNG generation is slow or fails.
+        if (getSetting("aiChartFeedback") !== false) {
+          const png = await renderChartToPng(sanitized, rows);
+          if ("data" in png) {
+            const toolResult: ToolResult = [
+              { type: "text", text: textPart },
+              { type: "image", source: { type: "base64", media_type: "image/png", data: png.data } },
+            ];
+            return toolResult;
+          }
+          // PNG failed — fall through to text-only result. Don't block the
+          // chart's user-visible render on agent feedback.
+          console.warn("[render_chart] PNG generation failed:", png.error);
+        }
+        return textPart;
       }
       return JSON.stringify({ error: `Unknown tool: ${name}` });
     };

@@ -75,6 +75,76 @@ export interface ChartCompileResult {
   error?: string;
 }
 
+/** Default width for the headless agent-feedback PNG render. ~800px is
+ *  small enough to keep image input tokens reasonable (~1568 tokens via
+ *  Claude's image tokenizer) while still being readable enough that the
+ *  model can spot overlapping labels, bad scale choices, etc. */
+const AGENT_FEEDBACK_PNG_WIDTH = 800;
+/** Default height for the agent-feedback PNG. Square-ish aspect ratio
+ *  works for most chart types; the spec's own height usually overrides
+ *  this for tall faceted plots. */
+const AGENT_FEEDBACK_PNG_HEIGHT = 500;
+
+/**
+ * Render a Vega-Lite spec to a base64 PNG, headless (no DOM mount).
+ *
+ * Used to ship the rendered chart back to the agent inside the tool_result
+ * so it can SEE what it produced — Claude is multimodal and reading the
+ * image catches problems (label overlap, bad color choice, empty plot,
+ * wrong scale) that the spec alone doesn't reveal.
+ *
+ * This runs in PARALLEL with the inline VegaChartBlock's normal embed —
+ * we don't try to share the view because the inline render is in React's
+ * lifecycle and resolves later. The duplicate compile + render cost is
+ * acceptable (~50-200ms for typical charts, paid only on initial
+ * render_chart, NOT on user refresh).
+ */
+export async function renderChartToPng(
+  spec: Record<string, any>,
+  rows: Record<string, any>[],
+): Promise<{ data: string; mediaType: "image/png" } | { error: string }> {
+  try {
+    const [vega, compile] = await Promise.all([getVega(), getVegaLiteCompile()]);
+    const safeRows = sanitizeRowsForVega(rows);
+    // Compose the same spec the inline embed will use, but with fixed
+    // dimensions so the PNG sent to the model is reproducible regardless
+    // of the user's viewport. Override the LLM's spec width/height too —
+    // the goal is a model-readable thumbnail, not pixel-matching the
+    // inline view.
+    const finalSpec = {
+      ...spec,
+      width: AGENT_FEEDBACK_PNG_WIDTH,
+      height: spec.height ?? AGENT_FEEDBACK_PNG_HEIGHT,
+      autosize: { type: "fit", contains: "padding" },
+      data: { values: safeRows, name: "source_0" },
+      config: { ...(spec.config ?? {}), background: "white" },
+    };
+
+    // Compile vl → vega. Errors here are caller's problem (compileChartSpec
+    // should have caught them already), but be defensive.
+    const compileResult = compile(finalSpec);
+    const runtime = vega.parse(compileResult.spec);
+    // renderer: "none" means no automatic DOM render; we still get a
+    // working view that can produce a canvas via toCanvas/toImageURL.
+    const view = new vega.View(runtime, { renderer: "none" });
+    try {
+      await view.runAsync();
+      const dataUrl: string = await view.toImageURL("png", 1);
+      view.finalize();
+      // dataUrl is "data:image/png;base64,iVBOR..." — strip the prefix
+      // so we hand Anthropic just the base64 payload.
+      const comma = dataUrl.indexOf(",");
+      if (comma < 0) return { error: "Vega returned a non-data-URL image" };
+      return { data: dataUrl.slice(comma + 1), mediaType: "image/png" };
+    } catch (renderErr) {
+      try { view.finalize(); } catch { /* already finalized */ }
+      throw renderErr;
+    }
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /**
  * Compile a Vega-Lite spec in isolation, capturing warnings and errors
  * synchronously. The actual render still goes through vega-embed (which
