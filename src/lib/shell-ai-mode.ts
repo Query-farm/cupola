@@ -6,11 +6,10 @@ import {
   runAgentTurn,
   buildSystemPrompt,
   executeListTables,
-  executeDescribeTable,
   executeReadQueryResults,
-  formatArrowTableAsJson,
   type MessageParam,
 } from "@/lib/ai-agent";
+import { executeRunSql, describeTableWithFallback } from "@/lib/ai-tool-executor";
 import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 import { estimateCost, formatCost } from "@/lib/pricing";
 import { bridge, recordQuery } from "@/lib/shell-bridge";
@@ -119,50 +118,46 @@ function createToolExecutor(
 ) {
   return async (name: string, input: any): Promise<string> => {
     if (name === "run_sql") {
-      spinner.stop();
-      ops.setQueryRunning(true);
-      const t0 = performance.now();
-      const result = await ops.runQueryAsync(input.sql);
-      const elapsed = performance.now() - t0;
-      ops.clearProgressBar();
-      ops.setQueryRunning(false);
-      ops.resetCancelFlag();
-
       const lastUserMsg = conv.messages.filter(m => m.role === "user").pop();
       const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
-
-      if (!result.ok) {
-        const errMsg = result.error || "Query failed";
-        term.println(`\x1b[31m  Error: ${errMsg}\x1b[0m`);
-        recordQuery({
-          sql: input.sql, executionTimeMs: elapsed, success: false, error: errMsg,
-          userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
-        });
-        if (errMsg.includes("HTTP Error") || errMsg.includes("HTTP 5")) {
-          const fatal = new Error(`VGI connection error: ${errMsg}`);
-          (fatal as any).fatal = true;
-          throw fatal;
-        }
-        throw new Error(errMsg);
-      }
-
-      if (!result.arrowBuffers?.length) {
-        term.println(`\x1b[2m  OK (no results)\x1b[0m`);
-        recordQuery({
-          sql: input.sql, executionTimeMs: elapsed, success: true, rowCount: 0,
-          userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
-        });
-        return JSON.stringify({ ok: true, message: "Query executed successfully (no results)" });
-      }
-
-      const table = ops.tableFromIPC(result.arrowBuffers[0]);
-      await ops.printTable(table);
-      const { json } = formatArrowTableAsJson(table);
-      recordQuery({
-        sql: input.sql, executionTimeMs: elapsed, success: true, rowCount: table.numRows,
-        userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
+      return executeRunSql(input.sql, { query: ops.runQueryAsync }, {
+        onStart: () => { spinner.stop(); ops.setQueryRunning(true); },
+        onEnd: () => { ops.clearProgressBar(); ops.setQueryRunning(false); ops.resetCancelFlag(); },
+        onOutcome: async (out) => {
+          if (out.kind === "error") {
+            term.println(`\x1b[31m  Error: ${out.errMsg}\x1b[0m`);
+            recordQuery({
+              sql: input.sql, executionTimeMs: out.elapsedMs, success: false, error: out.errMsg,
+              userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
+            });
+            return;
+          }
+          if (out.kind === "empty") {
+            term.println(`\x1b[2m  OK (no results)\x1b[0m`);
+            recordQuery({
+              sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: 0,
+              userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
+            });
+            return;
+          }
+          if (out.kind === "ddl") {
+            // shell .ai mode doesn't refresh sidebar / navigate on DDL — the
+            // shell's own readLoop handles that for direct queries, and the
+            // model already knows the schema it just changed.
+            recordQuery({
+              sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: 0,
+              userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
+            });
+            return;
+          }
+          // out.kind === "table"
+          await ops.printTable(out.table);
+          recordQuery({
+            sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows,
+            userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
+          });
+        },
       });
-      return json;
     }
 
     if (name === "read_query_results") {
@@ -172,7 +167,7 @@ function createToolExecutor(
       return executeListTables(ops.catalogData);
     }
     if (name === "describe_table") {
-      return executeDescribeTable(ops.catalogData, input.schema, input.table);
+      return describeTableWithFallback(ops.catalogData, { query: ops.runQueryAsync }, input);
     }
     if (name === "ask_user") {
       spinner.stop();

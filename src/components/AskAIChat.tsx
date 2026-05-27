@@ -8,15 +8,10 @@ import {
   runAgentTurn,
   buildSystemPrompt,
   executeListTables,
-  executeDescribeTable,
   executeReadQueryResults,
-  formatArrowTableAsJson,
   type MessageParam,
 } from "@/lib/ai-agent";
-/** Safely quote a SQL identifier to prevent injection. */
-function quoteIdent(name: string): string {
-  return '"' + name.replace(/"/g, '""') + '"';
-}
+import { executeRunSql, describeTableWithFallback } from "@/lib/ai-tool-executor";
 const uid = () => crypto.randomUUID();
 
 import { ChatInput } from "./chat/ChatInput";
@@ -27,8 +22,6 @@ import {
   type ToolCallEntry,
   type AskUserState,
 } from "./chat/ChatMessageAssistant";
-import { tableFromIPC } from "apache-arrow";
-
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -182,10 +175,18 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
       });
     }
 
-    // Tool executor
+    // Tool executor. Heavy lifting (error classification, DDL detection,
+    // describe_table SQL fallback) lives in ai-tool-executor.ts; this file
+    // wires the UI-specific callbacks (progress, history entry, navigation).
     const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<string> => {
       if (name === "run_sql") {
-        // Subscribe to progress
+        const queryFn = bridge.query;
+        if (!queryFn) throw new Error("DuckDB shell not initialized — open SQL Shell first");
+        const lastUserMsg = agentMessages.current.filter(m => m.role === "user").pop();
+        const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
+
+        // Subscribe to bridge.progress while the query runs so the tool
+        // block can render its progress bar. Restored in onEnd.
         const prevProgress = bridge.progress;
         const updateProgress = (pct: number) => {
           blocks = blocks.map(b =>
@@ -195,93 +196,70 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           );
           updateBlocks(blocks);
         };
-        bridge.progress = updateProgress;
-
-        const queryFn = bridge.query;
-        if (!queryFn) throw new Error("DuckDB shell not initialized — open SQL Shell first");
-        const t0 = performance.now();
-        const result = await withAbort(queryFn(input.sql), signal);
-        const elapsed = performance.now() - t0;
-
-        bridge.progress = prevProgress;
-
-        const lastUserMsg = agentMessages.current.filter(m => m.role === "user").pop();
-        const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
-
-        if (!result.ok) {
-          const errMsg = result.error || "Query failed";
-          bridge.addQueryHistoryEntry?.({
-            id: Date.now(), timestamp: Date.now(), sql: input.sql,
-            executionTimeMs: elapsed, success: false, error: errMsg, userQuestion,
-          });
-          if (errMsg.includes("HTTP Error") || errMsg.includes("HTTP 5")) {
-            const fatal = new Error(`VGI connection error: ${errMsg}`);
-            (fatal as any).fatal = true;
-            throw fatal;
-          }
-          throw new Error(errMsg);
-        }
-
-        const firstBuf = result.arrowBuffers?.[0];
-        if (!firstBuf || (firstBuf instanceof ArrayBuffer ? firstBuf.byteLength === 0 : firstBuf.length === 0)) {
-          bridge.addQueryHistoryEntry?.({
-            id: Date.now(), timestamp: Date.now(), sql: input.sql,
-            executionTimeMs: elapsed, success: true, rowCount: 0, userQuestion,
-          });
-          // COMMENT ON returns empty result — refresh so comments appear on detail pages
-          if (/COMMENT\s+ON/i.test(input.sql)) {
-            await bridge.refreshMemoryTables?.();
-          }
-          pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
-          return JSON.stringify({ ok: true, message: "Query executed successfully" });
-        }
-
-        const table = tableFromIPC(firstBuf instanceof ArrayBuffer ? new Uint8Array(firstBuf) : firstBuf);
-
-        // DDL results (CREATE/DROP etc.) return single Count column
-        const fields = table.schema.fields;
-        if (fields.length === 1 && fields[0].name === "Count" && table.numRows <= 1) {
-          bridge.addQueryHistoryEntry?.({
-            id: Date.now(), timestamp: Date.now(), sql: input.sql,
-            executionTimeMs: elapsed, success: true, rowCount: 0, userQuestion,
-          });
-          pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
-          // DDL — refresh sidebar and handle navigation
-          await bridge.refreshMemoryTables?.();
-          const createMatch = input.sql.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
-          if (createMatch) {
-            const schema = createMatch[1] || "main";
-            const name = createMatch[2];
-            bridge.navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
-          }
-          const dropMatch = input.sql.match(/DROP\s+(?:TABLE|VIEW|SCHEMA)\s+(?:IF\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
-          if (dropMatch) {
-            const isSchemaLevel = /DROP\s+SCHEMA/i.test(input.sql);
-            if (isSchemaLevel) {
-              bridge.navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
-            } else {
-              const schema = dropMatch[1] || "main";
-              bridge.navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
-            }
-          }
-          return JSON.stringify({ ok: true, message: "Query executed successfully" });
-        }
-
-        const { json } = formatArrowTableAsJson(table);
-        // Build display result with first 20 rows for the UI
-        const parsed = JSON.parse(json);
-        pendingDisplayResult = {
-          columns: parsed.columns,
-          rows: parsed.rows,
-          rowCount: parsed.row_count,
-          showing: parsed.showing,
-        };
-
-        bridge.addQueryHistoryEntry?.({
-          id: Date.now(), timestamp: Date.now(), sql: input.sql,
-          executionTimeMs: elapsed, success: true, rowCount: table.numRows, userQuestion,
-        });
-        return json;
+        return executeRunSql(
+          input.sql,
+          { query: (sql) => withAbort(queryFn(sql), signal) },
+          {
+            onStart: () => { bridge.progress = updateProgress; },
+            onEnd: () => { bridge.progress = prevProgress; },
+            onOutcome: async (out) => {
+              if (out.kind === "error") {
+                bridge.addQueryHistoryEntry?.({
+                  id: Date.now(), timestamp: Date.now(), sql: input.sql,
+                  executionTimeMs: out.elapsedMs, success: false, error: out.errMsg, userQuestion,
+                });
+                return;
+              }
+              if (out.kind === "empty") {
+                bridge.addQueryHistoryEntry?.({
+                  id: Date.now(), timestamp: Date.now(), sql: input.sql,
+                  executionTimeMs: out.elapsedMs, success: true, rowCount: 0, userQuestion,
+                });
+                pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
+                // COMMENT ON returns empty — refresh sidebar so comments appear.
+                if (/COMMENT\s+ON/i.test(input.sql)) await bridge.refreshMemoryTables?.();
+                return;
+              }
+              if (out.kind === "ddl") {
+                bridge.addQueryHistoryEntry?.({
+                  id: Date.now(), timestamp: Date.now(), sql: input.sql,
+                  executionTimeMs: out.elapsedMs, success: true, rowCount: 0, userQuestion,
+                });
+                pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
+                await bridge.refreshMemoryTables?.();
+                const createMatch = input.sql.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
+                if (createMatch) {
+                  const schema = createMatch[1] || "main";
+                  const name = createMatch[2];
+                  bridge.navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
+                }
+                const dropMatch = input.sql.match(/DROP\s+(?:TABLE|VIEW|SCHEMA)\s+(?:IF\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
+                if (dropMatch) {
+                  const isSchemaLevel = /DROP\s+SCHEMA/i.test(input.sql);
+                  if (isSchemaLevel) {
+                    bridge.navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
+                  } else {
+                    const schema = dropMatch[1] || "main";
+                    bridge.navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
+                  }
+                }
+                return;
+              }
+              // out.kind === "table"
+              const parsed = JSON.parse(out.json);
+              pendingDisplayResult = {
+                columns: parsed.columns,
+                rows: parsed.rows,
+                rowCount: parsed.row_count,
+                showing: parsed.showing,
+              };
+              bridge.addQueryHistoryEntry?.({
+                id: Date.now(), timestamp: Date.now(), sql: input.sql,
+                executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion,
+              });
+            },
+          },
+        );
       }
       if (name === "read_query_results") {
         return executeReadQueryResults(input.result_id, input.offset, input.limit);
@@ -290,62 +268,9 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         return executeListTables(catalogData!);
       }
       if (name === "describe_table") {
-        // If catalog specified and not the main catalog, use SQL to describe
-        if (input.catalog && input.catalog !== catalogData!.catalogName) {
-          const queryFn = bridge.query;
-          if (queryFn) {
-            // Get columns
-            const r = await queryFn(`SELECT column_name, data_type, is_nullable, column_default, comment FROM duckdb_columns() WHERE database_name = ${quoteIdent(input.catalog)} AND schema_name = ${quoteIdent(input.schema)} AND table_name = ${quoteIdent(input.table)} ORDER BY column_index`);
-            if (r.ok && r.arrowBuffers?.length) {
-              const t = tableFromIPC(r.arrowBuffers[0] instanceof ArrayBuffer ? new Uint8Array(r.arrowBuffers[0]) : r.arrowBuffers[0]);
-              const cols: any[] = [];
-              for (let i = 0; i < t.numRows; i++) {
-                const col: any = {
-                  name: String(t.getChildAt(0)?.get(i)),
-                  type: String(t.getChildAt(1)?.get(i)),
-                  nullable: String(t.getChildAt(2)?.get(i)) === "YES",
-                };
-                const def = t.getChildAt(3)?.get(i);
-                if (def) col.default = String(def);
-                const cmt = t.getChildAt(4)?.get(i);
-                if (cmt) col.comment = String(cmt);
-                cols.push(col);
-              }
-              // Get table comment
-              const commentR = await queryFn(`SELECT comment FROM duckdb_tables() WHERE database_name = ${quoteIdent(input.catalog)} AND schema_name = ${quoteIdent(input.schema)} AND table_name = ${quoteIdent(input.table)}`);
-              let tableComment = null;
-              if (commentR.ok && commentR.arrowBuffers?.length) {
-                const ct = tableFromIPC(commentR.arrowBuffers[0] instanceof ArrayBuffer ? new Uint8Array(commentR.arrowBuffers[0]) : commentR.arrowBuffers[0]);
-                if (ct.numRows > 0) tableComment = String(ct.getChildAt(0)?.get(0) ?? "") || null;
-              }
-              // Get constraints
-              const constraintR = await queryFn(`SELECT constraint_type, constraint_column_names FROM duckdb_constraints() WHERE database_name = ${quoteIdent(input.catalog)} AND schema_name = ${quoteIdent(input.schema)} AND table_name = ${quoteIdent(input.table)}`);
-              let primaryKey: string[] | null = null;
-              const checkConstraints: string[] = [];
-              const uniqueConstraints: string[][] = [];
-              if (constraintR.ok && constraintR.arrowBuffers?.length) {
-                const ct2 = tableFromIPC(constraintR.arrowBuffers[0] instanceof ArrayBuffer ? new Uint8Array(constraintR.arrowBuffers[0]) : constraintR.arrowBuffers[0]);
-                for (let i = 0; i < ct2.numRows; i++) {
-                  const ctype = String(ct2.getChildAt(0)?.get(i));
-                  const ccols = ct2.getChildAt(1)?.get(i);
-                  const colNames = ccols ? (Array.isArray(ccols) ? ccols.map(String) : [String(ccols)]) : [];
-                  if (ctype === "PRIMARY KEY") primaryKey = colNames;
-                  else if (ctype === "UNIQUE") uniqueConstraints.push(colNames);
-                  else if (ctype === "CHECK") checkConstraints.push(colNames.join(", "));
-                }
-              }
-              return JSON.stringify({
-                catalog: input.catalog, schema: input.schema, name: input.table, type: "table",
-                comment: tableComment,
-                primary_key: primaryKey,
-                unique_constraints: uniqueConstraints.length > 0 ? uniqueConstraints : null,
-                check_constraints: checkConstraints.length > 0 ? checkConstraints : null,
-                columns: cols,
-              });
-            }
-          }
-        }
-        return executeDescribeTable(catalogData!, input.schema, input.table);
+        const queryFn = bridge.query;
+        if (!queryFn) throw new Error("DuckDB shell not initialized");
+        return describeTableWithFallback(catalogData!, { query: queryFn }, input);
       }
       if (name === "ask_user") {
         return new Promise<string>((resolve) => {
