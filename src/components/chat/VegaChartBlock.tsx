@@ -20,7 +20,7 @@ import { RotateCw, Maximize2, Download, Loader2 } from "lucide-react";
 import type { VegaChartContent } from "./ChatMessageAssistant";
 import { getChartRows, refreshChartRows } from "@/lib/chart-rows-store";
 import { MaximizedChartDialog } from "./MaximizedChartDialog";
-import { embedChart, downloadPNG, downloadSVG, sanitizeRowsForVega, type VegaView } from "./chart-embed";
+import { embedChart, downloadPNG, downloadSVG, sanitizeRowsForVega, CUPOLA_DATA_NAME, type VegaView } from "./chart-embed";
 import { ChartDownloadMenu } from "./ChartDownloadMenu";
 
 interface Props {
@@ -36,42 +36,42 @@ export function VegaChartBlock({ chart, onUpdate }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [maximized, setMaximized] = useState(false);
 
-  // Ref-callback approach: fires synchronously when the DOM node is attached
-  // (no useEffect timing race vs portaled content or parent layout). Inside
-  // it we set up the ResizeObserver that triggers re-embed on container
-  // width changes (window resize, panel drag, sidebar collapse).
-  const roRef = useRef<ResizeObserver | null>(null);
+  // Ref-callback: fires synchronously when React attaches the DOM node.
+  // We rely on vega-embed's own resize handling (autosize.resize: true in
+  // the spec) to track container width changes after the initial embed —
+  // an additional ResizeObserver here caused flicker because the chart's
+  // height-grow on autosize:fit-x triggers a chat scrollbar toggle, which
+  // changes container width by ~scrollbar-px, which fires the observer,
+  // which tears down and re-embeds, which changes height again, etc.
+  // Vega's internal handler updates width without a full re-embed, so it
+  // doesn't loop.
   const containerNodeRef = useRef<HTMLDivElement | null>(null);
 
   const onContainerRef = (node: HTMLDivElement | null) => {
     containerNodeRef.current = node;
     containerRef.current = node;
-    // Detach: clean up observer and view.
     if (!node) {
-      roRef.current?.disconnect();
-      roRef.current = null;
       const v = viewRef.current;
       viewRef.current = null;
       if (v) v.finalize();
       return;
     }
-    // Already attached on a previous render; don't double-embed.
-    if (roRef.current) return;
-    let lastWidth = 0;
-    let debounce: ReturnType<typeof setTimeout> | null = null;
-    const ro = new ResizeObserver((entries) => {
-      const w = Math.round(entries[0]?.contentRect.width ?? 0);
-      if (w < 50 || Math.abs(w - lastWidth) < 2) return;
-      lastWidth = w;
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => { void doEmbed(node); }, 80);
-    });
-    ro.observe(node);
-    roRef.current = ro;
+    // Already embedded on a previous render — vega-embed handles resize
+    // internally, no need to re-trigger.
+    if (viewRef.current) return;
+    void doEmbed(node);
   };
 
   const doEmbed = async (el: HTMLElement) => {
     if (containerNodeRef.current !== el) return;
+    // Wait for the container to have a real width — flex/grid layout
+    // sometimes lands the ref before the parent has been measured.
+    let attempts = 0;
+    while (el.clientWidth < 50 && attempts < 30) {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      if (containerNodeRef.current !== el) return;
+      attempts++;
+    }
     if (viewRef.current) {
       viewRef.current.finalize();
       viewRef.current = null;
@@ -127,7 +127,7 @@ export function VegaChartBlock({ chart, onUpdate }: Props) {
         // re-introduce the "BigInt -> number not allowed" error.
         const vega = (v as any).__vega;
         const safeRows = sanitizeRowsForVega(result.rows);
-        await v.change("source_0", vega.changeset().remove(() => true).insert(safeRows)).runAsync();
+        await v.change(CUPOLA_DATA_NAME, vega.changeset().remove(() => true).insert(safeRows)).runAsync();
       }
     } finally {
       if (isMountedRef.current) setRefreshing(false);

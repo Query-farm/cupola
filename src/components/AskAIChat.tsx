@@ -371,8 +371,25 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           }
           return JSON.stringify({ ok: false, error: "Query returned no rows — nothing to chart." });
         }
-        const chartId = uid();
         const columns = rows.length ? Object.keys(rows[0]) : [];
+
+        // Render the PNG FIRST — it doubles as a smoke test. If headless
+        // render fails (e.g. "Duplicate data set name", malformed transform,
+        // unknown scheme), the inline embed would also fail. Bail with an
+        // error tool_result so the agent sees the failure and can fix the
+        // spec — don't insert a doomed block that produces a red banner
+        // the agent never learns about.
+        const wantFeedback = getSetting("aiChartFeedback") !== false;
+        let png: { data: string; mediaType: "image/png" } | null = null;
+        if (wantFeedback) {
+          const result = await renderChartToPng(sanitized, rows);
+          if ("error" in result) {
+            return JSON.stringify({ ok: false, error: `Chart render failed: ${result.error}. Fix the spec and call render_chart again.` });
+          }
+          png = result;
+        }
+
+        const chartId = uid();
         cacheChartRows(chartId, rows, columns);
         removeThinking();
         blocks = [...blocks, {
@@ -405,24 +422,12 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           ...(compileResult.warnings.length ? { warnings: compileResult.warnings } : {}),
         });
 
-        // Render a thumbnail PNG of the chart and ship it back to the model
-        // so it can SEE its output. Multimodal Claude catches problems the
-        // spec alone can't reveal (overlapping labels, bad color, empty
-        // plot, wrong scale). Gated by setting — adds ~1500 input tokens.
-        // Done after the block is already inserted so the user sees the
-        // chart immediately, even if PNG generation is slow or fails.
-        if (getSetting("aiChartFeedback") !== false) {
-          const png = await renderChartToPng(sanitized, rows);
-          if ("data" in png) {
-            const toolResult: ToolResult = [
-              { type: "text", text: textPart },
-              { type: "image", source: { type: "base64", media_type: "image/png", data: png.data } },
-            ];
-            return toolResult;
-          }
-          // PNG failed — fall through to text-only result. Don't block the
-          // chart's user-visible render on agent feedback.
-          console.warn("[render_chart] PNG generation failed:", png.error);
+        if (png) {
+          const toolResult: ToolResult = [
+            { type: "text", text: textPart },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: png.data } },
+          ];
+          return toolResult;
         }
         return textPart;
       }

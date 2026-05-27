@@ -243,7 +243,14 @@ export function validateChartSpec(spec: unknown): { errors: string[]; sanitized:
   // smuggle a url under data.* either; we strip data only after the walk.
   walkForForbiddenKeys(spec, "", errors);
   const sanitized = { ...(spec as Record<string, any>) };
+  // Strip both `data` and `datasets`. We inject the SQL result as the
+  // top-level data; an LLM-supplied `datasets` (used for multi-source
+  // Vega-Lite charts) collides with our injection if it reuses the
+  // internal data name and triggers "Duplicate data set name" at compile.
+  // Multi-source charts aren't supported in v1 of render_chart anyway —
+  // the LLM should produce a single SELECT with a category column.
   if ("data" in sanitized) delete sanitized.data;
+  if ("datasets" in sanitized) delete sanitized.datasets;
   return { errors, sanitized };
 }
 

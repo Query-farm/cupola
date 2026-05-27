@@ -13,6 +13,15 @@
 import type { TopLevelSpec } from "vega-lite";
 import { coerceArrowValue } from "@/lib/duckdb-query";
 
+/** Name of the data source we inject into every chart spec. Used both at
+ *  embed time (so vega-lite has rows to render) and at refresh time (so
+ *  view.change(NAME, changeset) can target the same dataset). Underscore-
+ *  prefixed + project-specific to avoid colliding with anything the LLM
+ *  might emit (the bare "source_0" default collides with Vega-Lite's own
+ *  internal naming for inline datasets — observed as "Duplicate data set
+ *  name" compile errors). */
+export const CUPOLA_DATA_NAME = "__cupola_data";
+
 export interface VegaView {
   change(name: string, changeset: any): VegaView;
   runAsync(): Promise<VegaView>;
@@ -117,7 +126,7 @@ export async function renderChartToPng(
       width: AGENT_FEEDBACK_PNG_WIDTH,
       height: spec.height ?? AGENT_FEEDBACK_PNG_HEIGHT,
       autosize: { type: "fit", contains: "padding" },
-      data: { values: safeRows, name: "source_0" },
+      data: { values: safeRows, name: CUPOLA_DATA_NAME },
       config: { ...(spec.config ?? {}), background: "white" },
     };
 
@@ -248,7 +257,7 @@ export async function embedChart(
     width: "container",
     ...(options.forceHeight ? { height: options.forceHeight } : {}),
     autosize,
-    data: { values: safeRows, name: "source_0" },
+    data: { values: safeRows, name: CUPOLA_DATA_NAME },
     // Force transparent background regardless of what the LLM put in
     // spec.config — the chat surface owns its own background.
     config: { ...(spec.config ?? {}), background: "transparent" },
