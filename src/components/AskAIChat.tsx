@@ -88,6 +88,42 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
     return () => document.removeEventListener("keydown", handler);
   }, []);
 
+  // Test hook: push a chart block into the conversation without going through
+  // the agent loop. Used by tests/charts.spec.ts. Always exposed (no DEV gate)
+  // for the same reason __bridge is: integration tests need a real handle into
+  // the running app. The hook is a no-op outside of e2e test runs.
+  useEffect(() => {
+    (window as any).__cupolaChartTest = {
+      pushChart: async (input: { sql: string; spec: Record<string, any>; title?: string }) => {
+        const { errors, sanitized } = validateChartSpec(input.spec);
+        if (errors.length) throw new Error(`Invalid chart spec: ${errors.join("; ")}`);
+        if (!bridge.query) throw new Error("DuckDB not ready");
+        const rows = await readRows(input.sql);
+        if (rows === null) throw new Error("Query failed or returned no rows");
+        const chartId = uid();
+        const columns = rows.length ? Object.keys(rows[0]) : [];
+        cacheChartRows(chartId, rows, columns);
+        const msgId = crypto.randomUUID();
+        const blockId = uid();
+        setMessages((prev) => [...prev, {
+          id: msgId, role: "assistant", isStreaming: false,
+          blocks: [{
+            type: "vega_chart" as const,
+            id: blockId,
+            chart: {
+              chartId, sql: input.sql, spec: sanitized, title: input.title,
+              rowCount: rows.length, columns, fetchedAt: Date.now(),
+            },
+          }],
+        }]);
+        return { messageId: msgId, blockId, chartId };
+      },
+    };
+    return () => {
+      delete (window as any).__cupolaChartTest;
+    };
+  }, []);
+
   const getSetting = (key: string) => {
     try {
       const stored = localStorage.getItem("vgi-frontend-settings");

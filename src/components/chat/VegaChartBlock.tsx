@@ -16,11 +16,12 @@
  * vega-lite type metadata doesn't sneak into the entry chunk either.
  */
 import { useEffect, useRef, useState, useCallback } from "react";
-import { RotateCw, Maximize2, FileImage, Image as ImageIcon, Loader2 } from "lucide-react";
+import { RotateCw, Maximize2, Download, Loader2 } from "lucide-react";
 import type { VegaChartContent } from "./ChatMessageAssistant";
 import { getChartRows, refreshChartRows } from "@/lib/chart-rows-store";
 import { MaximizedChartDialog } from "./MaximizedChartDialog";
-import { embedChart, downloadPNG, downloadSVG, type VegaView } from "./chart-embed";
+import { embedChart, downloadPNG, downloadSVG, sanitizeRowsForVega, type VegaView } from "./chart-embed";
+import { ChartDownloadMenu } from "./ChartDownloadMenu";
 
 interface Props {
   chart: VegaChartContent;
@@ -35,48 +36,75 @@ export function VegaChartBlock({ chart, onUpdate }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [maximized, setMaximized] = useState(false);
 
-  // Embed the chart whenever the spec changes (rare — usually only on first
-  // mount since rows are updated via view.change(), not by re-embedding).
-  useEffect(() => {
-    isMountedRef.current = true;
-    const el = containerRef.current;
-    if (!el) return;
+  // Ref-callback approach: fires synchronously when the DOM node is attached
+  // (no useEffect timing race vs portaled content or parent layout). Inside
+  // it we set up the ResizeObserver that triggers re-embed on container
+  // width changes (window resize, panel drag, sidebar collapse).
+  const roRef = useRef<ResizeObserver | null>(null);
+  const containerNodeRef = useRef<HTMLDivElement | null>(null);
 
-    // Strict-mode-safe: capture an effect-local token; ignore late embed
-    // resolutions that belong to a previous effect run.
-    const effectId = Symbol();
-    let myEffectId: Symbol | null = effectId;
-
-    (async () => {
-      const cached = getChartRows(chart.chartId);
-      const rows = cached?.rows ?? [];
-      try {
-        const view = await embedChart(el, chart.spec, rows);
-        if (myEffectId !== effectId) {
-          // Effect was cleaned up while we awaited — discard.
-          view.finalize();
-          return;
-        }
-        viewRef.current = view;
-      } catch (err) {
-        if (myEffectId !== effectId || !isMountedRef.current) return;
-        onUpdate({ error: err instanceof Error ? err.message : String(err) });
-      }
-    })();
-
-    return () => {
-      myEffectId = null;
-      isMountedRef.current = false;
+  const onContainerRef = (node: HTMLDivElement | null) => {
+    containerNodeRef.current = node;
+    containerRef.current = node;
+    // Detach: clean up observer and view.
+    if (!node) {
+      roRef.current?.disconnect();
+      roRef.current = null;
       const v = viewRef.current;
       viewRef.current = null;
       if (v) v.finalize();
-    };
-    // chart.spec identity should be stable unless the LLM emits a brand-new
-    // chart (which gets a new block id anyway); we still re-run on spec
-    // changes to be safe. chartId is part of the key so block reuse can't
-    // accidentally share a view.
+      return;
+    }
+    // Already attached on a previous render; don't double-embed.
+    if (roRef.current) return;
+    let lastWidth = 0;
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const ro = new ResizeObserver((entries) => {
+      const w = Math.round(entries[0]?.contentRect.width ?? 0);
+      if (w < 50 || Math.abs(w - lastWidth) < 2) return;
+      lastWidth = w;
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => { void doEmbed(node); }, 80);
+    });
+    ro.observe(node);
+    roRef.current = ro;
+  };
+
+  const doEmbed = async (el: HTMLElement) => {
+    if (containerNodeRef.current !== el) return;
+    if (viewRef.current) {
+      viewRef.current.finalize();
+      viewRef.current = null;
+    }
+    const cached = getChartRows(chart.chartId);
+    const rows = cached?.rows ?? [];
+    try {
+      const view = await embedChart(el, chart.spec, rows);
+      if (containerNodeRef.current !== el) {
+        view.finalize();
+        return;
+      }
+      viewRef.current = view;
+    } catch (err) {
+      if (containerNodeRef.current !== el || !isMountedRef.current) return;
+      onUpdate({ error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
+
+  // Re-embed when the SPEC changes (e.g. a brand-new chartId — but blocks
+  // usually have stable chartId, so this is rare). chart.fetchedAt changes
+  // trigger view.change() via handleRefresh, NOT a full re-embed.
+  useEffect(() => {
+    const el = containerNodeRef.current;
+    if (!el) return;
+    void doEmbed(el);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chart.chartId]);
+  }, [chart.chartId, chart.spec]);
 
   // Refresh = re-run the SQL and stream new rows into the existing view.
   // Keeps the chart on screen during the fetch (no skeleton flash).
@@ -94,47 +122,40 @@ export function VegaChartBlock({ chart, onUpdate }: Props) {
       const v = viewRef.current;
       if (v) {
         // The lazy embedChart helper exposes the vega module on the view
-        // for changeset construction.
+        // for changeset construction. Sanitize rows the same way embedChart
+        // does (BigInt → Number, Date → timestamp) so refresh doesn't
+        // re-introduce the "BigInt -> number not allowed" error.
         const vega = (v as any).__vega;
-        await v.change("source_0", vega.changeset().remove(() => true).insert(result.rows)).runAsync();
+        const safeRows = sanitizeRowsForVega(result.rows);
+        await v.change("source_0", vega.changeset().remove(() => true).insert(safeRows)).runAsync();
       }
     } finally {
       if (isMountedRef.current) setRefreshing(false);
     }
   }, [chart.chartId, chart.sql, onUpdate]);
 
-  const handlePNG = useCallback(async () => {
+  const handleDownload = useCallback(async (format: "png" | "svg") => {
     const v = viewRef.current;
     if (!v) return;
-    await downloadPNG(v, chart.title || "chart");
-  }, [chart.title]);
-
-  const handleSVG = useCallback(async () => {
-    const v = viewRef.current;
-    if (!v) return;
-    await downloadSVG(v, chart.title || "chart");
+    if (format === "png") await downloadPNG(v, chart.title || "chart");
+    else await downloadSVG(v, chart.title || "chart");
   }, [chart.title]);
 
   return (
     <>
-      <div className="border border-border rounded-md bg-card overflow-hidden">
+      <div className="border border-border rounded-md bg-card overflow-hidden w-full" data-testid="vega-chart-block">
         {/* Header: title + toolbar */}
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/60 bg-muted/30">
           <div className="flex-1 text-xs font-medium truncate">
             {chart.title ?? "Chart"}
           </div>
-          <ToolbarButton onClick={handleRefresh} disabled={refreshing} title="Refresh from DuckDB">
+          <ToolbarButton onClick={handleRefresh} disabled={refreshing} title="Refresh from DuckDB" testId="chart-refresh">
             {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCw className="h-3.5 w-3.5" />}
           </ToolbarButton>
-          <ToolbarButton onClick={() => setMaximized(true)} title="Maximize">
+          <ToolbarButton onClick={() => setMaximized(true)} title="Maximize" testId="chart-maximize">
             <Maximize2 className="h-3.5 w-3.5" />
           </ToolbarButton>
-          <ToolbarButton onClick={handlePNG} title="Download PNG">
-            <ImageIcon className="h-3.5 w-3.5" />
-          </ToolbarButton>
-          <ToolbarButton onClick={handleSVG} title="Download SVG">
-            <FileImage className="h-3.5 w-3.5" />
-          </ToolbarButton>
+          <ChartDownloadMenu onDownload={handleDownload} size="sm" testId="chart-download" />
         </div>
 
         {/* Error banner (chart from last successful fetch stays visible below) */}
@@ -146,8 +167,15 @@ export function VegaChartBlock({ chart, onUpdate }: Props) {
           </div>
         )}
 
-        {/* Chart container — fixed height for predictable layout in chat */}
-        <div ref={containerRef} className="px-3 py-2 min-h-[280px] flex items-center justify-center" />
+        {/* Chart container: explicit w-full lets Vega's width:"container" do
+            its job; min-h gives the chart vertical room while letting it
+            grow when the spec asks for a tall chart. overflow-x-auto
+            handles the rare case of a chart wider than the container. */}
+        <div
+          ref={onContainerRef}
+          data-testid="vega-chart-container"
+          className="px-3 py-2 w-full min-h-[280px] overflow-x-auto"
+        />
 
         {/* Footer: row count + relative timestamp */}
         <div className="px-3 py-1 border-t border-border/60 text-[10px] text-muted-foreground/70 flex items-center gap-2">
@@ -170,13 +198,16 @@ export function VegaChartBlock({ chart, onUpdate }: Props) {
 }
 
 function ToolbarButton({
-  children, onClick, disabled, title,
-}: { children: React.ReactNode; onClick: () => void; disabled?: boolean; title: string }) {
+  children, onClick, disabled, title, testId, asChild,
+}: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; title: string; testId?: string; asChild?: boolean }) {
+  // asChild=true: the parent (e.g. ChartDownloadMenu's PopoverTrigger) owns
+  // the click/keyboard behavior; we just render the icon and styling.
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       title={title}
+      data-testid={testId}
       className="p-1 rounded hover:bg-foreground/5 disabled:opacity-40 transition-colors"
     >
       {children}

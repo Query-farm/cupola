@@ -58,6 +58,16 @@ async function getEmbed(): Promise<any> {
  * Embed a Vega-Lite spec into a container DOM element, injecting `rows` as
  * the data and forcing transparent background (so Cupola's theme tokens
  * carry contrast). Returns the Vega `view` for refresh/export.
+ *
+ * Sizing: we measure the container's clientWidth at embed time and pass
+ * it as a numeric `width` (Vega-Lite's `width: "container"` proved
+ * unreliable when nested in flex/grid layouts — it sometimes resolved
+ * to a 14px chart even with autosize:fit and the container measuring
+ * 600+px). We do NOT default height — Vega-Lite picks one from the data
+ * shape. LLM-specified width/height in the spec win over both.
+ *
+ * Caller is responsible for triggering re-embed on container resize via
+ * ResizeObserver. See VegaChartBlock / MaximizedChartDialog.
  */
 export async function embedChart(
   el: HTMLElement,
@@ -65,9 +75,17 @@ export async function embedChart(
   rows: Record<string, any>[],
 ): Promise<VegaView> {
   const [vega, embed, loader] = await Promise.all([getVega(), getEmbed(), getLockedLoader()]);
+  const safeRows = sanitizeRowsForVega(rows);
+  // Account for the parent's horizontal padding so the chart doesn't bleed
+  // out and trigger horizontal scroll. clientWidth already excludes the
+  // element's own padding-box deduction is what we want.
+  const measuredWidth = Math.max(50, Math.floor(el.clientWidth) - 8);
   const finalSpec: TopLevelSpec = {
+    // Numeric width measured from the container. The LLM's spec spread
+    // below can override (e.g. `width: 600` for a fixed-size chart).
+    width: measuredWidth,
     ...spec,
-    data: { values: rows, name: "source_0" },
+    data: { values: safeRows, name: "source_0" },
     // Force transparent background regardless of what the LLM put in
     // spec.config — the chat surface owns its own background. Spread the
     // model's config first, then override.
@@ -82,6 +100,51 @@ export async function embedChart(
   const view = result.view as VegaView;
   view.__vega = vega;
   return view;
+}
+
+/**
+ * Convert each row's values so Vega can consume them.
+ *
+ * Two transforms:
+ *  - BigInt → Number (DuckDB BIGINT/INT64 columns arrive as JS BigInt via
+ *    Arrow). Vega's expression engine does Math.abs / arithmetic that
+ *    throws on BigInt. We accept the precision loss above 2^53 — flagging
+ *    the rare overflow as a string keeps the row readable rather than
+ *    silently truncating to Infinity.
+ *  - Arrow Vector children (struct/list) → null. Vega can't render
+ *    nested values; we drop them so the rest of the row still works.
+ *
+ * The conversion is shallow-by-row but recursive into nested plain objects
+ * so encoded computed columns survive.
+ */
+export function sanitizeRowsForVega(rows: Record<string, any>[]): Record<string, any>[] {
+  return rows.map((row) => {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(row)) {
+      out[k] = coerceForVega(v);
+    }
+    return out;
+  });
+}
+
+function coerceForVega(v: any): any {
+  if (v === null || v === undefined) return v;
+  if (typeof v === "bigint") {
+    const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+    const MIN_SAFE = -MAX_SAFE;
+    if (v > MAX_SAFE || v < MIN_SAFE) return v.toString();
+    return Number(v);
+  }
+  if (v instanceof Date) return v.getTime();
+  // Plain objects / arrays may carry nested BigInts; recurse so encoded
+  // sub-fields remain usable. Don't touch typed arrays.
+  if (Array.isArray(v)) return v.map(coerceForVega);
+  if (typeof v === "object" && v.constructor === Object) {
+    const out: Record<string, any> = {};
+    for (const [k, val] of Object.entries(v)) out[k] = coerceForVega(val);
+    return out;
+  }
+  return v;
 }
 
 /** Download the chart as a PNG at 2x scale (retina-friendly). */
