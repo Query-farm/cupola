@@ -1,7 +1,8 @@
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
-import { fetchCatalog, getServiceUrl, getAttachOptionsFromUrl, hasExplicitService, type CatalogData, type ResolvedSchema } from "@/lib/service";
+import { fetchCatalog, type CatalogData, type ResolvedSchema } from "@/lib/service";
+import { getServiceUrl, getAttachOptionsFromUrl, hasExplicitService, consumePrefillFromHash } from "@/lib/url-params";
 import { fetchAttachedCatalog } from "@/lib/duckdb-catalog";
-import { tableFromIPC } from "apache-arrow";
+import { readRows } from "@/lib/duckdb-query";
 import { type Selection } from "@/lib/tree";
 import { getAuthToken, getAuthTokenForService, getUserInfo, hadAuthToken, redirectToAuth } from "@/lib/auth";
 import * as Sentry from "@sentry/astro";
@@ -83,65 +84,48 @@ export function CatalogApp() {
 
   /** Fetch in-memory DuckDB tables via the shell worker. Returns null if shell isn't running. */
   const fetchMemoryTables = useCallback(async () => {
-    const queryFn = bridge.query;
-    if (!queryFn) { setMemoryCatalog(null); return; }
+    if (!bridge.query) { setMemoryCatalog(null); return; }
 
     try {
-      const result = await queryFn(
+      const colRows = await readRows(
         `SELECT schema_name, table_name, column_name, data_type, CASE WHEN is_nullable = 'YES' THEN true ELSE false END as nullable
          FROM duckdb_columns()
          WHERE database_name = 'memory'
          ORDER BY schema_name, table_name, column_index`
       );
-      const buf = result.arrowBuffers?.[0];
-      if (!result.ok || !buf) { setMemoryCatalog(null); return; }
-
-      const table = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
-      if (table.numRows === 0) {
+      if (colRows === null) { setMemoryCatalog(null); return; }
+      if (colRows.length === 0) {
         setMemoryCatalog({ catalogName: "memory", catalogComment: null, catalogTags: {}, defaultSchema: "main", schemas: [] });
         return;
       }
 
       // Fetch table comments
       const commentMap = new Map<string, string>(); // "schema.table" → comment
-      const commentResult = await queryFn(
+      const commentRows = await readRows(
         `SELECT schema_name, table_name, comment FROM duckdb_tables() WHERE database_name = 'memory' AND comment IS NOT NULL AND comment != ''`
       );
-      if (commentResult.ok && commentResult.arrowBuffers?.length) {
-        const cbuf = commentResult.arrowBuffers[0];
-        const ct = tableFromIPC(cbuf instanceof ArrayBuffer ? new Uint8Array(cbuf) : cbuf);
-        for (let r = 0; r < ct.numRows; r++) {
-          const s = String(ct.getChildAt(0)?.get(r) ?? "");
-          const t = String(ct.getChildAt(1)?.get(r) ?? "");
-          const c = String(ct.getChildAt(2)?.get(r) ?? "");
-          if (c) commentMap.set(`${s}.${t}`, c);
-        }
+      for (const row of commentRows ?? []) {
+        const c = String(row.comment ?? "");
+        if (c) commentMap.set(`${row.schema_name ?? ""}.${row.table_name ?? ""}`, c);
       }
 
       // Fetch view names and definitions to distinguish views from tables
       const viewDefs = new Map<string, string>(); // "schema.view" → SQL definition
-      const viewResult = await queryFn(
+      const viewRows = await readRows(
         `SELECT schema_name, view_name, sql FROM duckdb_views() WHERE database_name = 'memory'`
       );
-      if (viewResult.ok && viewResult.arrowBuffers?.length) {
-        const vbuf = viewResult.arrowBuffers[0];
-        const vt = tableFromIPC(vbuf instanceof ArrayBuffer ? new Uint8Array(vbuf) : vbuf);
-        for (let r = 0; r < vt.numRows; r++) {
-          const s = String(vt.getChildAt(0)?.get(r) ?? "");
-          const v = String(vt.getChildAt(1)?.get(r) ?? "");
-          const sql = String(vt.getChildAt(2)?.get(r) ?? "");
-          viewDefs.set(`${s}.${v}`, sql);
-        }
+      for (const row of viewRows ?? []) {
+        viewDefs.set(`${row.schema_name ?? ""}.${row.view_name ?? ""}`, String(row.sql ?? ""));
       }
 
       // Group by schema → table → columns
       const schemaMap = new Map<string, Map<string, { name: string; type: string; nullable: boolean }[]>>();
-      for (let r = 0; r < table.numRows; r++) {
-        const schema = String(table.getChildAt(0)?.get(r) ?? "main");
-        const tbl = String(table.getChildAt(1)?.get(r) ?? "");
-        const col = String(table.getChildAt(2)?.get(r) ?? "");
-        const dtype = String(table.getChildAt(3)?.get(r) ?? "VARCHAR");
-        const nullable = Boolean(table.getChildAt(4)?.get(r) ?? true);
+      for (const row of colRows) {
+        const schema = String(row.schema_name ?? "main");
+        const tbl = String(row.table_name ?? "");
+        const col = String(row.column_name ?? "");
+        const dtype = String(row.data_type ?? "VARCHAR");
+        const nullable = Boolean(row.nullable ?? true);
 
         if (!schemaMap.has(schema)) schemaMap.set(schema, new Map());
         const tableMap = schemaMap.get(schema)!;
@@ -210,18 +194,15 @@ export function CatalogApp() {
    *  refresh button. The primary (?service=) catalog is excluded — it's
    *  rendered from `data` separately. */
   const syncAttachedCatalogs = useCallback(async (): Promise<void> => {
-    const queryFn = bridge.query;
-    if (!queryFn) return;
+    if (!bridge.query) return;
     let names: string[] = [];
     try {
-      const result = await queryFn(
+      const rows = await readRows(
         "SELECT database_name FROM duckdb_databases() WHERE type = 'vgi'"
       );
-      if (!result.ok || !result.arrowBuffers?.length) return;
-      const buf = result.arrowBuffers[0];
-      const table = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
-      for (let r = 0; r < table.numRows; r++) {
-        const name = String(table.getChildAt(0)?.get(r) ?? "");
+      if (rows === null) return;
+      for (const row of rows) {
+        const name = String(row.database_name ?? "");
         if (name) names.push(name);
       }
     } catch (e) {
@@ -821,20 +802,15 @@ const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
   // "Edit connection options" button to bring the user back to a populated
   // form without invoking ?service= (which would auto-connect).
   useEffect(() => {
-    const m = window.location.hash.match(/^#prefill=(.+)$/);
-    if (m) {
-      try {
-        const target = decodeURIComponent(m[1]);
-        const found = getRecentServices().find((s) => s.url === target);
-        if (found) {
-          setUrl(found.url);
-          setOptions(found.attachOptions ?? "");
-        } else {
-          setUrl(target);
-        }
-      } catch {}
-      // Clean the hash so reload doesn't keep prefilling.
-      try { history.replaceState(null, "", window.location.pathname + window.location.search); } catch {}
+    const target = consumePrefillFromHash();
+    if (target) {
+      const found = getRecentServices().find((s) => s.url === target);
+      if (found) {
+        setUrl(found.url);
+        setOptions(found.attachOptions ?? "");
+      } else {
+        setUrl(target);
+      }
     }
   }, []);
 
@@ -956,9 +932,7 @@ function ConnectingScreen({
   // if the prop is empty (happens during SSR/initial hydration tick).
   let displayUrl = serviceUrl?.replace(/^https?:\/\//, "") || "";
   if (!displayUrl && typeof window !== "undefined") {
-    const p = new URLSearchParams(window.location.search).get("service");
-    const u = p || window.location.origin;
-    displayUrl = u.replace(/^https?:\/\//, "");
+    displayUrl = getServiceUrl().replace(/^https?:\/\//, "");
   }
 
   return (

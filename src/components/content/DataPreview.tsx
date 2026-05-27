@@ -12,6 +12,7 @@ import { DataGrid } from "./DataGrid";
 import type { ColumnInfo } from "@/lib/service";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 import { safeGetArrowValue } from "@/lib/format";
+import { tableFromIPC } from "apache-arrow";
 import { bridge, onQueryChange } from "@/lib/shell-bridge";
 
 /**
@@ -49,18 +50,18 @@ interface Props {
 }
 
 async function queryDuckDB(sql: string): Promise<{ table: any; error?: string }> {
+  // DataPreview needs to distinguish three states that the generic readTable
+  // collapses: bridge not ready (UX hint), query failed (surface error
+  // verbatim), and empty success (table: null with no error). Decode is
+  // the same single-buffer / Uint8Array dance — using the static
+  // tableFromIPC import standardized in duckdb-query.ts.
   const queryFn = bridge.query;
   if (!queryFn) return { table: null, error: "DuckDB shell not initialized. Open the SQL Shell tab first." };
-
   const result = await queryFn(sql);
   if (!result.ok) return { table: null, error: result.error || "Query failed" };
-
   const buf = result.arrowBuffers?.[0];
-  if (!buf) return { table: null, error: undefined }; // Empty result
-
-  const { tableFromIPC } = await import("apache-arrow");
-  const table = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
-  return { table };
+  if (!buf) return { table: null };
+  return { table: tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf) };
 }
 
 /**

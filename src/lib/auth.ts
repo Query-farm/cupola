@@ -15,6 +15,7 @@ import {
   clearAllTokens as spaClearAllTokens,
   extractOrigin,
 } from "./oauth-client";
+import { consumeAuthFragment } from "./url-params";
 
 const AUTH_COOKIE_NAME = "_vgi_auth";
 
@@ -46,55 +47,36 @@ let _hadToken = false;
 /** Extract and cache the token + OAuth metadata from the URL fragment, then clean the URL. */
 function _extractFragmentToken(): string | null {
   if (typeof window === "undefined") return null;
-  const hash = window.location.hash;
   // If a fresh #token=... arrived mid-session (e.g. a re-auth redirect),
-  // invalidate the cache so the new token wins. Without this, the early-return
-  // below would keep returning the stale token forever.
-  if (hash && /[#&]token=/.test(hash)) {
+  // invalidate the cache so the new token wins. consumeAuthFragment will
+  // then re-read and strip it.
+  if (window.location.hash && /[#&]token=/.test(window.location.hash)) {
     _cachedToken = null;
     _cachedOAuthMeta = null;
   }
   if (_cachedToken) return _cachedToken;
-  if (hash) {
-    // Parse all fragment params
-    const params = new URLSearchParams(hash.replace(/^#/, ""));
-    const token = params.get("token");
-    if (token) {
-      _cachedToken = token;
-      console.log("[auth] Extracted token from URL fragment:", _cachedToken.substring(0, 20) + "...");
 
-      // Extract OAuth metadata if present
-      const refreshToken = params.get("refresh_token") || undefined;
-      const tokenEndpoint = params.get("token_endpoint") || undefined;
-      const clientId = params.get("client_id") || undefined;
-      const clientSecret = params.get("client_secret") || undefined;
-      const useIdToken = params.get("use_id_token") === "true" || undefined;
-      if (refreshToken || tokenEndpoint) {
-        _cachedOAuthMeta = { refreshToken, tokenEndpoint, clientId, clientSecret, useIdToken };
-        console.log("[auth] Extracted OAuth metadata:", {
-          hasRefreshToken: !!refreshToken,
-          tokenEndpoint,
-          clientId: clientId?.substring(0, 20) + "...",
-          useIdToken,
-        });
-      }
+  const fragment = consumeAuthFragment();
+  if (!fragment) return null;
+  _cachedToken = fragment.token;
+  console.log("[auth] Extracted token from URL fragment:", _cachedToken.substring(0, 20) + "...");
 
-      // Clean the URL — strip just the auth keys, preserving any other
-      // fragment params (e.g. `ai_key=`) that a redirector may have bundled
-      // alongside the token.
-      params.delete("token");
-      params.delete("refresh_token");
-      params.delete("token_endpoint");
-      params.delete("client_id");
-      params.delete("client_secret");
-      params.delete("use_id_token");
-      const remaining = params.toString();
-      const cleanUrl = window.location.pathname + window.location.search + (remaining ? `#${remaining}` : "");
-      history.replaceState(null, "", cleanUrl);
-      return _cachedToken;
-    }
+  if (fragment.refreshToken || fragment.tokenEndpoint) {
+    _cachedOAuthMeta = {
+      refreshToken: fragment.refreshToken,
+      tokenEndpoint: fragment.tokenEndpoint,
+      clientId: fragment.clientId,
+      clientSecret: fragment.clientSecret,
+      useIdToken: fragment.useIdToken,
+    };
+    console.log("[auth] Extracted OAuth metadata:", {
+      hasRefreshToken: !!fragment.refreshToken,
+      tokenEndpoint: fragment.tokenEndpoint,
+      clientId: fragment.clientId?.substring(0, 20) + "...",
+      useIdToken: fragment.useIdToken,
+    });
   }
-  return null;
+  return _cachedToken;
 }
 
 /** Decode a JWT payload without verification. Returns null on failure. */

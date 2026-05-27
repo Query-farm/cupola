@@ -14,6 +14,14 @@ let currentHash = "";
 let currentPath = "/";
 let currentSearch = "";
 
+const fakeHistory = {
+  replaceState: (_state: unknown, _title: string, url: string) => {
+    const u = new URL(url, "http://localhost");
+    currentPath = u.pathname;
+    currentSearch = u.search;
+    currentHash = u.hash;
+  },
+};
 (globalThis as any).window = {
   get location() {
     return {
@@ -22,15 +30,9 @@ let currentSearch = "";
       search: currentSearch,
     };
   },
+  history: fakeHistory,
 };
-(globalThis as any).history = {
-  replaceState: (_state: unknown, _title: string, url: string) => {
-    const u = new URL(url, "http://localhost");
-    currentPath = u.pathname;
-    currentSearch = u.search;
-    currentHash = u.hash;
-  },
-};
+(globalThis as any).history = fakeHistory;
 
 // Import AFTER the window stub so module-level checks pass cleanly.
 const { getAuthToken, clearAllAuth } = await import("../../src/lib/auth");

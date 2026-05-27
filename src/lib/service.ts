@@ -18,6 +18,7 @@ import type {
 import { getAuthToken, getAuthTokenForService } from "./auth";
 import { arrowFieldToDuckDB } from "./arrow-to-duckdb";
 import { bridge } from "./shell-bridge";
+import { readRows, esc } from "./duckdb-query";
 
 /** Column info extracted from a TableInfo's serialized Arrow schema. */
 export interface ColumnInfo {
@@ -57,29 +58,9 @@ export interface CatalogData {
   schemas: ResolvedSchema[];
 }
 
-/** Get the VGI service URL from ?service= param or fall back to current origin. */
-export function getServiceUrl(): string {
-  if (typeof window === "undefined") return "";
-  const params = new URLSearchParams(window.location.search);
-  return params.get("service") || window.location.origin;
-}
-
-/** Whether a ?service= URL parameter was explicitly provided. */
-export function hasExplicitService(): boolean {
-  if (typeof window === "undefined") return false;
-  return new URLSearchParams(window.location.search).has("service");
-}
-
-/** Read the `?attach_options=` URL parameter, if present.
- *  Returns `undefined` when the param is absent (caller should fall back to
- *  the localStorage value), or the (possibly empty) decoded string when set.
- *  An explicit empty value clears any previously saved options. */
-export function getAttachOptionsFromUrl(): string | undefined {
-  if (typeof window === "undefined") return undefined;
-  const params = new URLSearchParams(window.location.search);
-  if (!params.has("attach_options")) return undefined;
-  return params.get("attach_options") ?? "";
-}
+// URL-param accessors moved to lib/url-params.ts. Re-exported here so existing
+// import sites keep working without an immediate sweep.
+export { getServiceUrl, hasExplicitService, getAttachOptionsFromUrl } from "./url-params";
 
 /** Extract column info from a TableInfo's serialized Arrow schema bytes.
  *  Also supports a pre-built _columnInfo override (used for in-memory tables). */
@@ -210,35 +191,21 @@ export async function fetchColumnStats(
 ): Promise<Map<string, ColumnStats> | null> {
   if (!bridge.query || !bridge.attached) return null;
   // Wait for ATTACH + USE to complete. vgi_table_statistics() resolves
-  // against the current catalog; firing pre-ATTACH returns "Catalog not
-  // found" and TableDetail's retry-on-onQueryChange would never retry
-  // (bridge.query is already set — only attached is pending).
+  // against the current catalog; firing pre-ATTACH returns "Catalog not found".
   await bridge.attached;
-  const queryFn = bridge.query;
-  if (!queryFn) return null;
-
   try {
-    const esc = (s: string) => s.replace(/'/g, "''");
     const sql = `SELECT column_name, column_type, min, max, has_null, has_not_null, distinct_count FROM vgi_table_statistics('${esc(catalogName)}', '${esc(schemaName)}', '${esc(tableName)}')`;
-
-    const result = await queryFn(sql);
-    if (!result.ok || !result.arrowBuffers?.length) return null;
-
-    const { tableFromIPC } = await import("apache-arrow");
-    const buf = result.arrowBuffers[0];
-    const table = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
-    if (table.numRows === 0) return null;
-
+    const rows = await readRows(sql);
+    if (!rows || rows.length === 0) return null;
     const stats = new Map<string, ColumnStats>();
-    for (let i = 0; i < table.numRows; i++) {
-      const columnName = String(table.getChildAt(0)?.get(i) ?? "");
-      stats.set(columnName, {
-        columnType: String(table.getChildAt(1)?.get(i) ?? ""),
-        min: table.getChildAt(2)?.get(i) ?? null,
-        max: table.getChildAt(3)?.get(i) ?? null,
-        hasNull: Boolean(table.getChildAt(4)?.get(i)),
-        hasNotNull: Boolean(table.getChildAt(5)?.get(i)),
-        distinctCount: Number(table.getChildAt(6)?.get(i) ?? -1),
+    for (const row of rows) {
+      stats.set(String(row.column_name ?? ""), {
+        columnType: String(row.column_type ?? ""),
+        min: row.min ?? null,
+        max: row.max ?? null,
+        hasNull: Boolean(row.has_null),
+        hasNotNull: Boolean(row.has_not_null),
+        distinctCount: Number(row.distinct_count ?? -1),
       });
     }
     return stats;

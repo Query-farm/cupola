@@ -22,6 +22,7 @@ import { ShellBootScreen } from "./ShellBootScreen";
 import * as Sentry from "@sentry/astro";
 import { ensureDuckDB, resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { getTerminalTheme } from "@/lib/theme";
+import { getKeplerForced } from "@/lib/url-params";
 
 const KeplerMap = lazy(() => import("./KeplerMap").then((m) => ({ default: m.KeplerMap })));
 
@@ -186,10 +187,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
     return false;
   }, [catalogData, memoryCatalog, attachedCatalogs]);
 
-  const keplerEnabled =
-    settings.enableKeplerMap ||
-    (typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("kepler") === "1");
+  const keplerEnabled = settings.enableKeplerMap || getKeplerForced();
   const showMapTab = keplerEnabled && (catalogHasMapData || mapHasData);
 
   // If map tab is active but becomes hidden, fall back to shell

@@ -168,12 +168,10 @@ export function clearTheme(): void {
   } catch {}
 }
 
-/** Get the theme URL from ?theme= query parameter. */
-export function getThemeUrl(): string | null {
-  if (typeof window === "undefined") return null;
-  const params = new URLSearchParams(window.location.search);
-  return params.get("theme");
-}
+// Theme URL accessor is now in lib/url-params.ts; re-exported so callers that
+// reach for it via `theme` continue to compile during the consolidation.
+import { getThemeUrl } from "./url-params";
+export { getThemeUrl };
 
 /**
  * Load and apply theme from the `?theme=` URL parameter.
