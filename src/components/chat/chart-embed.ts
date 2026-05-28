@@ -122,11 +122,20 @@ export async function renderChartToPng(
     // of the user's viewport. Override the LLM's spec width/height too —
     // the goal is a model-readable thumbnail, not pixel-matching the
     // inline view.
+    // Container views (facet/repeat/concat) reject top-level width +
+    // autosize:fit. Skip those overrides and let the LLM's per-unit
+    // dimensions drive the headless PNG size — Vega-Lite picks
+    // reasonable defaults if per-unit dimensions are omitted.
+    const isContainer = isContainerSpec(spec);
     const finalSpec = {
       ...spec,
-      width: AGENT_FEEDBACK_PNG_WIDTH,
-      height: spec.height ?? AGENT_FEEDBACK_PNG_HEIGHT,
-      autosize: { type: "fit", contains: "padding" },
+      ...(isContainer
+        ? {}
+        : {
+            width: AGENT_FEEDBACK_PNG_WIDTH,
+            height: spec.height ?? AGENT_FEEDBACK_PNG_HEIGHT,
+            autosize: { type: "fit", contains: "padding" },
+          }),
       data: { values: safeRows, name: CUPOLA_DATA_NAME },
       // Top-level datasets that layer/concat marks can reference via
       // `data: { name: '...' }`. Sanitized so BigInt/Date are JSON-safe.
@@ -235,35 +244,30 @@ export async function embedChart(
 ): Promise<VegaView> {
   const [vega, embed, loader] = await Promise.all([getVega(), getEmbed(), getLockedLoader()]);
   const safeRows = sanitizeRowsForVega(rows);
-  // Account for the parent's horizontal padding so the chart doesn't bleed
-  // out and trigger horizontal scroll. clientWidth excludes our own
-  // padding-box, but the LLM's spec also adds axis labels / legends to the
-  // right of the plot — subtracting another small buffer keeps wide legend
-  // entries (e.g. "Magnitude Class") from spilling off-screen.
-  // Pick autosize mode based on whether the caller is force-sizing
-  // height. The inline chat view doesn't constrain height — we want the
-  // chart to be as tall as it needs (axis titles, dense facets, etc.).
-  // `fit-x` fits only the width and lets height grow to fit content; that
-  // prevents the "Longitude" axis-title clipping we saw with `fit` +
-  // numeric LLM height. The maximize dialog DOES constrain height (it
-  // forces a target via forceHeight), so it uses `fit` to shrink to the
-  // dialog's vertical budget.
+  // Container views (facet/repeat/concat/hconcat/vconcat, or implicit
+  // facet via encoding.row/column) reject top-level width and autosize
+  // overrides — Vega-Lite ignores them. Inject only the data, datasets,
+  // and background; trust the LLM's per-unit sizing.
+  const isContainer = isContainerSpec(spec);
+  // For non-container (unit + layer) specs: width="container" +
+  // autosize fit-x (or fit when forceHeight is set) is the standard
+  // pattern that fits the chart to the surrounding container width and
+  // lets height grow with axis labels / legend.
   const autosize: { type: "fit" | "fit-x"; contains: "padding"; resize: true } = options.forceHeight
     ? { type: "fit", contains: "padding", resize: true }
     : { type: "fit-x", contains: "padding", resize: true };
   const finalSpec: TopLevelSpec = {
     ...spec,
-    // Override AFTER the spread so the LLM's hardcoded width never wins.
-    // The chat surface owns sizing; the model should worry about marks,
-    // encoding, and color — not how big the canvas is.
-    //
-    // width: "container" makes Vega-Lite size the chart to the parent's
-    // clientWidth. Combined with autosize fit-x + contains:"padding",
-    // the TOTAL chart width (plot + axes + legend) fits within the
-    // container — the right-hand legend is included in that budget.
-    width: "container",
-    ...(options.forceHeight ? { height: options.forceHeight } : {}),
-    autosize,
+    // Override AFTER the spread so the LLM's hardcoded width never wins —
+    // but ONLY for non-container specs. Container views handle width per-
+    // unit and Vega-Lite silently drops top-level width on them.
+    ...(isContainer
+      ? {}
+      : {
+          width: "container",
+          ...(options.forceHeight ? { height: options.forceHeight } : {}),
+          autosize,
+        }),
     data: { values: safeRows, name: CUPOLA_DATA_NAME },
     // Top-level datasets that layer/concat marks reference via
     // `data: { name: '...' }`. Sanitized for JSON/Vega safety.
@@ -304,6 +308,39 @@ export function sanitizeRowsForVega(rows: Record<string, any>[]): Record<string,
     }
     return out;
   });
+}
+
+/**
+ * Detect specs that Vega-Lite calls "container views" — `facet`, `repeat`,
+ * `concat`/`hconcat`/`vconcat`, and unit specs with an implicit facet via
+ * `encoding.row` or `encoding.column`. These have two hard constraints
+ * documented in the Vega-Lite docs:
+ *
+ *   1. `autosize: "fit"` (and "fit-x") is silently ignored.
+ *   2. Top-level `width` / `height` are silently ignored. Sizing is
+ *      controlled per-unit-spec instead (via `spec.width` for `repeat`
+ *      and `facet`, or per-item `width` in `concat`/`hconcat`/`vconcat`).
+ *
+ * If we apply our usual `width: "container"` + `autosize: fit-x`
+ * overrides to a faceted spec, the chart renders incorrectly — squashed,
+ * empty, or stripped of facets entirely. Detection lets us skip the
+ * overrides and trust the LLM's spec.
+ *
+ * Note: `layer` is NOT a container view in this sense — `autosize: "fit"`
+ * works fine on layered charts. Only the five operators above (plus the
+ * implicit-row/column encoding shorthand) need the bail-out.
+ */
+export function isContainerSpec(spec: Record<string, any>): boolean {
+  if (spec.facet !== undefined) return true;
+  if (spec.repeat !== undefined) return true;
+  if (spec.concat !== undefined) return true;
+  if (spec.hconcat !== undefined) return true;
+  if (spec.vconcat !== undefined) return true;
+  const enc = spec.encoding;
+  if (enc && typeof enc === "object" && (enc.row !== undefined || enc.column !== undefined)) {
+    return true;
+  }
+  return false;
 }
 
 /** Sanitize a map of name → rows for injection into Vega-Lite's `datasets`

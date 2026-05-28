@@ -792,6 +792,115 @@ test.describe("Vega chart block", () => {
     expect(out.msg).toMatch(/reserved/i);
   });
 
+  test("faceted chart (encoding.row) renders without being squashed", async ({ page }) => {
+    // Regression: the previous overrides applied `width: "container"` +
+    // `autosize: "fit-x"` at the top level for ALL specs. Vega-Lite
+    // silently drops those on container views (facet/repeat/concat) and
+    // the resulting chart came out empty or with a single facet only.
+    // The fix branches on isContainerSpec — for faceted specs we leave
+    // sizing to the LLM (per-unit `spec.width`/`spec.height`).
+    await page.evaluate(async () => {
+      const bridge = (window as any).__bridge;
+      await bridge.query("DROP TABLE IF EXISTS memory.main.facet_test");
+      await bridge.query(`CREATE TABLE memory.main.facet_test AS
+        SELECT * FROM (VALUES
+          ('A', 1, 10), ('A', 2, 20), ('A', 3, 15),
+          ('B', 1, 5),  ('B', 2, 12), ('B', 3, 8),
+          ('C', 1, 18), ('C', 2, 22), ('C', 3, 25)
+        ) t(category, x, y)`);
+    });
+
+    // Implicit facet via encoding.row — the most common LLM-emitted form
+    // (Vega-Lite's tutorial uses this for simple cases). Under the bug,
+    // our top-level width:"container" override applied here and
+    // Vega-Lite silently broke the chart.
+    const result = await page.evaluate(async () => {
+      try {
+        await (window as any).__cupolaChartTest.pushChart({
+          sql: "SELECT * FROM memory.main.facet_test",
+          spec: {
+            mark: "bar",
+            encoding: {
+              x: { field: "x", type: "ordinal" },
+              y: { field: "y", type: "quantitative" },
+              row: { field: "category", type: "nominal" },
+            },
+            width: 200,
+            height: 80,
+          },
+          title: "Faceted by row",
+        });
+        return { ok: true };
+      } catch (e: any) {
+        return { ok: false, msg: String(e?.message ?? e) };
+      }
+    });
+    expect(result.ok).toBe(true);
+
+    const container = page.getByTestId("vega-chart-container");
+    const svg = container.locator("svg").first();
+    await expect(svg).toBeVisible({ timeout: T_NORMAL });
+    // SVG must have substantial content — the broken (pre-fix) state was
+    // either an empty SVG or one with only a chrome-rect. Vega renders
+    // bar marks as <path> elements within nested <g> groups, so the
+    // simplest reliable check is "the SVG is taller than a stub" plus
+    // "the row category labels show up in the rendered text".
+    const info = await svg.evaluate((el) => {
+      const r = (el as SVGSVGElement).getBoundingClientRect();
+      return {
+        h: Math.round(r.height),
+        innerTextRaw: Array.from(el.querySelectorAll("text"))
+          .map((t) => t.textContent ?? "")
+          .filter(Boolean),
+      };
+    });
+    // 3 facets stacked vertically at height 80 each + spacing should be
+    // well over 200px. The broken state was a near-empty SVG.
+    expect(info.h).toBeGreaterThan(200);
+    // The facet's row label "A", "B", "C" must appear in the rendered text.
+    const joined = info.innerTextRaw.join(" ");
+    expect(joined).toContain("A");
+    expect(joined).toContain("B");
+    expect(joined).toContain("C");
+  });
+
+  test("hconcat chart renders with multiple panels visible", async ({ page }) => {
+    // Same regression as faceted, but exercised via explicit hconcat.
+    await page.evaluate(async () => {
+      const bridge = (window as any).__bridge;
+      await bridge.query("DROP TABLE IF EXISTS memory.main.concat_test");
+      await bridge.query(`CREATE TABLE memory.main.concat_test AS
+        SELECT * FROM (VALUES (1, 10, 'L'), (2, 20, 'L'), (3, 15, 'L'), (4, 25, 'L'))
+        t(x, y, label)`);
+    });
+
+    await page.evaluate(async () => {
+      return (window as any).__cupolaChartTest.pushChart({
+        sql: "SELECT * FROM memory.main.concat_test",
+        spec: {
+          hconcat: [
+            {
+              width: 200, height: 150, mark: "line",
+              encoding: { x: { field: "x", type: "quantitative" }, y: { field: "y", type: "quantitative" } },
+            },
+            {
+              width: 200, height: 150, mark: "bar",
+              encoding: { x: { field: "x", type: "ordinal" }, y: { field: "y", type: "quantitative" } },
+            },
+          ],
+        },
+        title: "hconcat panels",
+      });
+    });
+
+    const container = page.getByTestId("vega-chart-container");
+    const svg = container.locator("svg").first();
+    await expect(svg).toBeVisible({ timeout: T_NORMAL });
+    // hconcat at width 200+gutter+200 should produce a wide svg.
+    const svgWidth = await svg.evaluate((el) => Math.round((el as SVGSVGElement).getBoundingClientRect().width));
+    expect(svgWidth).toBeGreaterThan(400);
+  });
+
   test("spec with data.url is rejected by validateChartSpec", async ({ page }) => {
     const sql = await seedTestTable(page);
     // pushChart calls validateChartSpec internally and throws; we expect the

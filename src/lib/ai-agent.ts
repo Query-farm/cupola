@@ -311,6 +311,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
       `* Is the scale appropriate (log only for strictly positive data; quantitative axes start at zero unless that defeats the comparison)?`,
       `* Would a viewer who hadn't read the user's question understand what the chart shows at a glance?`,
       `If ANY of those checks fail, immediately call render_chart again with a fixed spec. Common fixes: rotate axis labels with \`labelAngle: -45\`, use \`point\` instead of \`circle\` when you need shape encoding, sort the x-axis, add explicit axis titles, set a dark mark/text color for low-contrast elements, increase \`size\`. **Iterate until the chart meets all checks — the user sees only the version you settle on, so don't ship a draft.** When you're satisfied, give the user a short interpretation of what the chart shows.`,
+      `**Faceted / repeated / concat charts** (specs with top-level \`facet\`, \`repeat\`, \`concat\`/\`hconcat\`/\`vconcat\`, or \`encoding.row\` / \`encoding.column\`): Vega-Lite ignores top-level \`width\`/\`height\` on these — the chat surface will NOT inject sizing. You MUST set dimensions per-unit-spec yourself: e.g. \`{ facet: { row: { field: "..." } }, spec: { width: 300, height: 150, mark: "circle", encoding: {...} } }\`, or for repeat: \`{ repeat: [...], spec: { width: 200, height: 120, ... } }\`. Keep per-facet width modest (150-300) so the row of facets fits horizontally.`,
       ``,
     ] : []),
     `### Never do this`,
