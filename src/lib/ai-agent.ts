@@ -211,8 +211,8 @@ export const CHART_TOOL: Tool = {
   description: [
     "Visualize a SQL result as a Vega-Lite chart in the chat. Provide a re-runnable SELECT (the user can refresh, which re-executes it) and a Vega-Lite v5 spec.",
     "DO NOT include a `data` field in the spec — rows from the SQL are injected automatically.",
-    "Prefer minimal specs: omit defaults, no inline data values, encode columns by their SQL output names. For multi-series charts use a single SELECT with a category column and Vega-Lite's color/strokeDash channels — do NOT request multiple queries.",
-    "Use this any time a chart explains the data better than a table.",
+    "Prefer minimal specs: omit defaults, no inline data values, encode columns by their SQL output names.",
+    "**USER-INITIATED ONLY.** Call this tool ONLY when the user explicitly asks for a chart, plot, graph, visualization, histogram, map, scatter, heatmap, etc. For every other question — counts, lookups, comparisons, summaries — return a table or prose answer. Do not infer that a chart 'would help' or volunteer one because the data is plottable.",
   ].join(" "),
   input_schema: {
     type: "object",
@@ -270,7 +270,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `* **describe_table** — Get column names, types, and descriptions for a table.`,
     `* **run_sql** — Execute a DuckDB SQL query.`,
     `* **ask_user** — Ask the user to choose between specific options.`,
-    ...(hasChartTool ? [`* **render_chart** — Visualize SQL results as a Vega-Lite chart in the chat. Provide a re-runnable SELECT and a minimal Vega-Lite v5 spec WITHOUT \`data\` or \`datasets\` fields — rows are injected automatically. For multi-series charts you can either: (a) write one SELECT with a category column and encode it via \`color\` / \`strokeDash\`, OR (b) pass additional sources via the \`extraData\` parameter and reference them in layer marks as \`data: { name: '...' }\`. Use extraData when sources have different shapes (e.g. earthquake points + volcano markers, raw data + a reference line). Do NOT inline data values. Use a chart whenever it explains the data better than a table.`] : []),
+    ...(hasChartTool ? [`* **render_chart** — Visualize SQL results as a Vega-Lite chart in the chat. **Call this tool ONLY when the user explicitly asks for a visualization** — words like "chart", "plot", "graph", "histogram", "scatter", "map", "heatmap", "bar/line chart", "visualize", "show me a [chart]". For every other question (counts, lookups, comparisons, top-N lists, summaries) return a table or prose. Do not volunteer a chart because the data happens to be plottable or because "it might be helpful". Visualizations are user-initiated, not agent-initiated. When the user IS asking for a chart: provide a re-runnable SELECT and a minimal Vega-Lite v5 spec WITHOUT \`data\` or \`datasets\` fields — rows are injected automatically. For multi-series charts, either (a) write one SELECT with a category column and encode it via \`color\`/\`strokeDash\`, or (b) pass additional sources via the \`extraData\` parameter and reference them in layer marks as \`data: { name: '...' }\` when sources have different shapes (e.g. earthquakes + volcanos). Do NOT inline data values.`] : []),
     ``,
     `## Rules`,
     ``,
