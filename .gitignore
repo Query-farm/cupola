@@ -37,3 +37,6 @@ public/shell/extensions/
 # Playwright MCP test artifacts
 .playwright-mcp/
 /*.png
+
+# Playwright test artifacts
+test-results/
