@@ -34,6 +34,17 @@ function mapTypeString(s: string): string {
   if (exact) return exact;
 
   // Parameterized types
+  //
+  // apache-arrow's Decimal.toString() emits `Decimal[<precision>e<±scale>]`
+  // (e.g. DECIMAL(18,4) → "Decimal[18e+4]", scale 0 → "Decimal[18e0]",
+  // negative scale → "Decimal[18e-2]"). It does NOT use the `Decimal128(p, s)`
+  // form, so match the bracket form first. bitWidth (128 vs 256) isn't encoded
+  // in the string, but DuckDB renders both as DECIMAL(p, s) anyway.
+  const decimalMatch = s.match(/^Decimal\[(\d+)e([+-]?\d+)\]$/);
+  if (decimalMatch) {
+    return `DECIMAL(${decimalMatch[1]},${parseInt(decimalMatch[2], 10)})`;
+  }
+  // Fallbacks for Arrow impls that use the function-call form.
   if (s.startsWith("Decimal128(")) {
     return s.replace("Decimal128", "DECIMAL");
   }
