@@ -699,8 +699,6 @@ export function CatalogApp() {
                   selection={selection}
                   onAuthError={(title, message) => setAuthError({ title, message })}
                   onAttachError={(title, message) => setAttachError({ title, message })}
-                  memoryCatalog={memoryCatalog}
-                  attachedCatalogs={attachedCatalogs}
                   attachOptions={attachOptions}
                 />
               </div>

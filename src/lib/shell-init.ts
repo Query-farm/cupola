@@ -402,6 +402,7 @@ export function initShell(
       const extensions: Array<{ name: string; source?: string; required?: boolean }> = [
         { name: "icu" },
         { name: "json" },
+        { name: "httpfs" },
         { name: "vgi", source: "community", required: true },
         { name: "iceberg" },
         { name: "spatial" },

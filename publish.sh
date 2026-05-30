@@ -67,9 +67,9 @@ fi
 
 # ---- Build ----
 echo "==> Building..."
-# 8 GiB of old-space heap. With source maps enabled, the kepler.gl +
-# perspective + duckdb-wasm chunks push past Node's 4 GiB default and
-# crash with "Ineffective mark-compacts near heap limit".
+# 8 GiB of old-space heap. With source maps enabled, the perspective +
+# duckdb-wasm chunks push past Node's 4 GiB default and crash with
+# "Ineffective mark-compacts near heap limit".
 NODE_OPTIONS="--max-old-space-size=8192" bun run build
 
 echo "==> dist/ size: $(du -sh dist/ | cut -f1)"

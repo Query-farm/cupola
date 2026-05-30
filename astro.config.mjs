@@ -195,8 +195,6 @@ export default defineConfig({
         // Use the client-only connect module directly to avoid bundling
         // Node.js server-side code (node:crypto, node:zlib, etc.)
         '@query-farm/vgi-rpc/connect': resolve('../vgi-rpc-typescript/src/client/connect.ts'),
-        // kepler.gl's dataset-utils.ts imports Node.js assert
-        'assert': resolve('src/lib/assert-stub.ts'),
         'node:stream': resolve('src/lib/node-stubs.ts'),
         'node:zlib': resolve('src/lib/node-stubs.ts'),
         'node:crypto': resolve('src/lib/node-stubs.ts'),

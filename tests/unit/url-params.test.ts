@@ -31,7 +31,6 @@ const {
   consumeAuthFragment,
   consumePrefillFromHash,
   getServiceUrl,
-  getKeplerForced,
   getThemeUrl,
 } = await import("../../src/lib/url-params");
 
@@ -45,15 +44,6 @@ describe("getters", () => {
   test("getServiceUrl: from ?service=", () => {
     currentSearch = "?service=https%3A%2F%2Fexample.com";
     expect(getServiceUrl()).toBe("https://example.com");
-  });
-
-  test("getKeplerForced: only true on ?kepler=1", () => {
-    currentSearch = "";
-    expect(getKeplerForced()).toBe(false);
-    currentSearch = "?kepler=1";
-    expect(getKeplerForced()).toBe(true);
-    currentSearch = "?kepler=0";
-    expect(getKeplerForced()).toBe(false);
   });
 
   test("getThemeUrl: returns ?theme= or null", () => {

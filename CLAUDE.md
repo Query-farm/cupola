@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Standalone web frontend for browsing VGI (Vector Gateway Interface) database catalogs. Connects to any VGI HTTP server and displays schemas, tables, views, and functions in a sidebar tree with detail panels. Includes an embedded DuckDB-WASM SQL shell, AI data analysis agent, map visualization (Kepler.gl), and pivot tables (Perspective). Built with Astro + React + ShadCN/UI + Tailwind CSS.
+Standalone web frontend for browsing VGI (Vector Gateway Interface) database catalogs. Connects to any VGI HTTP server and displays schemas, tables, views, and functions in a sidebar tree with detail panels. Includes an embedded DuckDB-WASM SQL shell, AI data analysis agent, and pivot tables (Perspective). Built with Astro + React + ShadCN/UI + Tailwind CSS.
 
 Designed to be shared across all VGI implementations (Python, TypeScript, Go). Hosted on Cloudflare Pages with assets served from R2. VGI servers redirect browsers to this frontend with `?service={url}`.
 
@@ -53,7 +53,6 @@ The app reads the following parameters from the URL. VGI servers issuing the red
 | `ai_key` | Anthropic API key for the AI agent. Also accepted in the URL fragment (see below — fragments aren't sent to servers, so prefer that form). Merged into `settings.anthropicApiKey`, persisted to localStorage, and **stripped from the URL via `replaceState`** on first read so it doesn't linger in browser history or get sent as a referrer. Treat it as one-shot: passing the param overwrites any previously stored key. The query-string form takes precedence if both are set. | `loadSettings()` + `SettingsProvider` in `src/lib/settings.tsx` |
 | `theme` | URL of a theme JSON file (colors + optional logo + terminal theme). Cached in localStorage so subsequent loads can apply it before first paint. | `getThemeUrl()` / `loadTheme()` in `src/lib/theme.ts`; pre-paint application in `src/layouts/Layout.astro` |
 | `fresh` | Presence (no value needed) clears any corrupted DuckDB session snapshot for this service before the worker boots. Use to recover from a bad auto-saved session. | `DuckDBShell.tsx` |
-| `kepler` | `kepler=1` force-enables the Kepler.gl map tab without toggling the setting (the setting is `enableKeplerMap`). | `DuckDBShell.tsx` |
 
 ### URL fragment (`#...`)
 
@@ -73,7 +72,6 @@ The app reads the following parameters from the URL. VGI servers issuing the red
 - **TanStack Table** — column sorting, filtering, expansion in ColumnsTable
 - **xterm.js** — terminal emulator for the DuckDB SQL shell (loaded from CDN)
 - **DuckDB-WASM** — in-browser SQL engine with VGI extension
-- **Kepler.gl** — geospatial map visualization
 - **Perspective** — pivot table / data grid visualization
 - **vgi-typescript** (`vgi/client`) — browser-safe VGI client for Arrow IPC RPC
 - **Bun** — package manager and runtime
@@ -97,7 +95,6 @@ src/
     SettingsModal.tsx        # Settings dialog (types, shell, AI config)
     UserInfo.tsx             # OAuth user info from JWT cookie
     AskAIChat.tsx            # Claude AI chat panel with streaming + tool calls
-    KeplerMap.tsx            # Kepler.gl map visualization with isolated Redux store
     ErrorBoundary.tsx        # React error boundary
     ThemeBuilder.tsx         # Live theme editor with color pickers
     tree-view.tsx            # Accordion-based tree (from mrlightful/shadcn-tree-view)
@@ -160,7 +157,6 @@ src/
     # Integrations
     duckdb-catalog.ts        # Introspect attached DuckDB databases for sidebar
     perspective-duckdb-handler.ts  # Perspective VirtualServerHandler backed by DuckDB WASM
-    vgi-duckdb-adapter.ts    # Kepler.gl DatabaseAdapter for SQL panel
 
     # Auth & Identity
     oauth-client.ts          # Browser OAuth 2.0 PKCE client (Entra/IdP)
@@ -189,7 +185,7 @@ functions/
 
 **Hash routing**: Navigation state is encoded in the URL hash (`#/schema/property/table/parcels`) so users can share deep links. Uses `pushState` + `popstate` for browser back/forward.
 
-**Shell bridge** (`src/lib/shell-bridge.ts`): A typed global singleton for cross-component messaging. Holds: `query` (DuckDB query function), `worker` reference, terminal state, navigation callbacks, tab handlers (Perspective, Kepler). Components subscribe to `bridge.query` availability via `onQueryChange`/`notifyQueryChange` so features like column stats can retry after the shell finishes initializing.
+**Shell bridge** (`src/lib/shell-bridge.ts`): A typed global singleton for cross-component messaging. Holds: `query` (DuckDB query function), `worker` reference, terminal state, navigation callbacks, tab handlers (Perspective). Components subscribe to `bridge.query` availability via `onQueryChange`/`notifyQueryChange` so features like column stats can retry after the shell finishes initializing.
 
 **Eager worker boot** (`src/lib/duckdb-worker-boot.ts`): The DuckDB WASM worker is created at CatalogApp mount time (not when the shell panel opens), so the worker is typically ready by the time the user clicks "Open SQL Shell". Pre-allocates SharedArrayBuffers for query cancellation and OAuth. Prefetched WASM bytes are transferred via `postMessage(..., [bytes])` to avoid double-fetch.
 

@@ -116,18 +116,6 @@ export function SettingsModal() {
                   onCheckedChange={(checked) => updateSettings({ hideDollarTables: checked })}
                 />
               </SettingRow>
-              <SettingRow>
-                <SettingLabel
-                  htmlFor="enable-kepler-map"
-                  title="Enable map (Kepler.gl)"
-                  description="Show the Kepler.gl map tab in the shell when spatial data is detected. Off by default — Kepler is a large dependency. You can also force-enable per session with ?kepler=1."
-                />
-                <Switch
-                  id="enable-kepler-map"
-                  checked={settings.enableKeplerMap}
-                  onCheckedChange={(checked) => updateSettings({ enableKeplerMap: checked })}
-                />
-              </SettingRow>
             </div>
           </TabsContent>
 

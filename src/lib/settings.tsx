@@ -11,10 +11,6 @@ export interface Settings {
   anthropicApiKey: string;
   aiModel: string;
   aiMaxToolRounds: number;
-  /** Enable the Kepler.gl map tab. Disabled by default — pulls a large chunk
-   *  and emits React 19 dev warnings from kepler internals. Can also be
-   *  forced on per-session with `?kepler=1`. */
-  enableKeplerMap: boolean;
   /** Send the rendered chart PNG back to the AI agent as part of
    *  render_chart's tool_result, so it can SEE its output and iterate on
    *  visual issues (overlapping labels, bad scales). Adds ~1500 input
@@ -31,7 +27,6 @@ const defaultSettings: Settings = {
   anthropicApiKey: "",
   aiModel: "claude-sonnet-4-20250514",
   aiMaxToolRounds: 20,
-  enableKeplerMap: false,
   aiChartFeedback: true,
 };
 

@@ -49,7 +49,6 @@ export async function handleDotCommand(trimmed: string, state: ShellState, io: S
     writeln(".download excel    Download last result as Excel (.xlsx)");
     writeln(".reset             Reload with a fresh database");
     writeln(".perspective       Open last result in Perspective viewer");
-    writeln(".kepler            Switch to Map tab");
     return true;
   }
 
@@ -115,12 +114,6 @@ export async function handleDotCommand(trimmed: string, state: ShellState, io: S
     return true;
   }
 
-  // .kepler
-  if (trimmed === ".kepler") {
-    bridge.showKepler?.();
-    writeln("Switched to Map tab", "32");
-    return true;
-  }
 
   // .test_formats
   if (trimmed === ".test_formats") {

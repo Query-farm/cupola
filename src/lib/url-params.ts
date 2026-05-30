@@ -96,12 +96,6 @@ export function getThemeUrl(): string | null {
   return new URLSearchParams(window.location.search).get("theme");
 }
 
-/** `?kepler=1` force-enable. */
-export function getKeplerForced(): boolean {
-  if (!hasWindow()) return false;
-  return new URLSearchParams(window.location.search).get("kepler") === "1";
-}
-
 /** `?fresh` flag to clear a corrupted DuckDB session snapshot. */
 export function getFreshFlag(): boolean {
   if (!hasWindow()) return false;

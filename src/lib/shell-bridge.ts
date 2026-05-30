@@ -85,7 +85,6 @@ export const bridge = {
 
   // UI tabs (set by DuckDBShell)
   showPerspective: null as ((arrowBuf: ArrayBuffer) => void) | null,
-  showKepler: null as (() => void) | null,
   addQueryHistoryEntry: null as ((entry: QueryHistoryEntry) => void) | null,
 
   // Sentry identity for the shell worker. Stored here so duckdb-worker-boot
