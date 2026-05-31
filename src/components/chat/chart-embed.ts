@@ -12,7 +12,7 @@
  */
 import type { TopLevelSpec } from "vega-lite";
 import { coerceArrowValue } from "@/lib/duckdb-query";
-import { wkbToGeoJSON } from "@/lib/wkb";
+import { wkbToGeoJSON, rewindGeometryForD3 } from "@/lib/wkb";
 
 /** Name of the data source we inject into every chart spec. Used both at
  *  embed time (so vega-lite has rows to render) and at refresh time (so
@@ -357,7 +357,9 @@ function rowToGeoFeature(row: Record<string, any>): Record<string, any> {
   let geometry: any = null;
   const properties: Record<string, any> = {};
   for (const [k, v] of Object.entries(row)) {
-    if (geometry === null && isGeoJSONGeometry(v)) geometry = v;
+    // Rewind to d3-geo's expected winding (exterior CW, holes CCW) — without
+    // this, DuckDB/Overture polygons invert and flood the whole map.
+    if (geometry === null && isGeoJSONGeometry(v)) geometry = rewindGeometryForD3(v);
     else properties[k] = v;
   }
   return { type: "Feature", geometry, properties };

@@ -171,3 +171,49 @@ function geometryToWKT(g: GeoJSONGeometry): string {
 export function wkbToWKT(wkb: Uint8Array): string {
   return geometryToWKT(wkbToGeoJSON(wkb));
 }
+
+// ---------------------------------------------------------------------------
+// Winding-order correction for d3-geo / Vega-Lite
+// ---------------------------------------------------------------------------
+
+/** Signed area of a ring via the shoelace formula (planar lon/lat).
+ *  > 0 ⇒ counter-clockwise, < 0 ⇒ clockwise. */
+function ringSignedArea(ring: number[][]): number {
+  let a = 0;
+  for (let i = 0, n = ring.length; i < n; i++) {
+    const [x1, y1] = ring[i];
+    const [x2, y2] = ring[(i + 1) % n];
+    a += x1 * y2 - x2 * y1;
+  }
+  return a / 2;
+}
+
+/** Orient a polygon's rings the way d3-geo wants: exterior CLOCKWISE, holes
+ *  COUNTER-clockwise. Reverses only the rings that are wound the wrong way. */
+function rewindRings(rings: number[][][]): number[][][] {
+  return rings.map((ring, i) => {
+    const isClockwise = ringSignedArea(ring) < 0;
+    const wantClockwise = i === 0; // first ring = exterior
+    return wantClockwise === isClockwise ? ring : [...ring].reverse();
+  });
+}
+
+/**
+ * Rewind a GeoJSON geometry to the ring orientation d3-geo / Vega-Lite require:
+ * exterior rings CLOCKWISE, holes COUNTER-clockwise.
+ *
+ * Geometry from DuckDB / Overture / most WKB sources uses the opposite (or
+ * inconsistent) winding. d3-geo projects on a SPHERE and is winding-sensitive:
+ * a wrongly-wound polygon is interpreted as "the entire globe EXCEPT this
+ * shape", so it floods the whole map (and a layer of them collapses to one
+ * color). Idempotent. Non-polygon geometries pass through unchanged.
+ */
+export function rewindGeometryForD3(geom: any): any {
+  if (!geom || typeof geom !== "object") return geom;
+  if (geom.type === "Polygon") return { ...geom, coordinates: rewindRings(geom.coordinates) };
+  if (geom.type === "MultiPolygon") return { ...geom, coordinates: geom.coordinates.map(rewindRings) };
+  if (geom.type === "GeometryCollection") {
+    return { ...geom, geometries: (geom.geometries ?? []).map(rewindGeometryForD3) };
+  }
+  return geom;
+}

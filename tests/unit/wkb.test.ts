@@ -73,3 +73,33 @@ describe("wkbToWKT", () => {
     expect(wkbToWKT(new Uint8Array(buf))).toBe("POINT (10 20)");
   });
 });
+
+describe("rewindGeometryForD3", () => {
+  // A clockwise exterior ring (as DuckDB/Overture emit) must be detected and
+  // left clockwise; a counter-clockwise one must be reversed to clockwise.
+  const ccwSquare = [[[0,0],[1,0],[1,1],[0,1],[0,0]]];   // CCW exterior (shoelace > 0)
+  const cwSquare  = [[[0,0],[0,1],[1,1],[1,0],[0,0]]];   // CW exterior  (shoelace < 0)
+  const area = (r:number[][]) => { let a=0; for(let i=0,n=r.length;i<n;i++){const[x1,y1]=r[i],[x2,y2]=r[(i+1)%n];a+=x1*y2-x2*y1;} return a/2; };
+
+  test("forces a Polygon exterior ring clockwise (negative shoelace)", () => {
+    const { rewindGeometryForD3 } = require("../../src/lib/wkb");
+    const out = rewindGeometryForD3({ type:"Polygon", coordinates: ccwSquare });
+    expect(area(out.coordinates[0])).toBeLessThan(0);
+  });
+  test("leaves an already-clockwise exterior ring untouched", () => {
+    const { rewindGeometryForD3 } = require("../../src/lib/wkb");
+    const out = rewindGeometryForD3({ type:"Polygon", coordinates: cwSquare });
+    expect(out.coordinates[0]).toEqual(cwSquare[0]);
+  });
+  test("is idempotent", () => {
+    const { rewindGeometryForD3 } = require("../../src/lib/wkb");
+    const once = rewindGeometryForD3({ type:"Polygon", coordinates: ccwSquare });
+    const twice = rewindGeometryForD3(once);
+    expect(twice).toEqual(once);
+  });
+  test("passes Point geometries through unchanged", () => {
+    const { rewindGeometryForD3 } = require("../../src/lib/wkb");
+    const pt = { type:"Point", coordinates:[1,2] };
+    expect(rewindGeometryForD3(pt)).toEqual(pt);
+  });
+});
