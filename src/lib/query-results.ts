@@ -121,3 +121,47 @@ export function executeReadQueryResults(resultId: string, offset = 0, limit = 20
     result_id: resultId,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Context pruning — keep chart images from bloating the conversation
+// ---------------------------------------------------------------------------
+
+/** Structural view of an agent message — matches MessageParam/ToolResultBlock/
+ *  ToolResultContent in ./ai-agent without importing that module's
+ *  browser-only service graph (so this file stays unit-testable in isolation). */
+interface PrunableMessage {
+  content: unknown;
+}
+
+/**
+ * Drop chart images (render_chart tool_results) from every message except the
+ * last one. An image is only sent back so the model can SEE the chart it just
+ * drew and revise it — that evaluation happens in the single request right
+ * after the render, which is always the final message. Once anything follows
+ * it (the model's revision, or a new user turn) the PNG has served its purpose
+ * and is pure bloat: each costs ~1.5k input tokens and is re-sent on every
+ * later request, which is what pushes a chart-heavy conversation past the
+ * model's input limit.
+ *
+ * Mutates `messages` in place. runAgentTurn passes the caller's own array
+ * (e.g. AskAIChat's persistent agentMessages ref), so images are shed from
+ * stored history too and don't re-accumulate across turns. The tool_result's
+ * text part is preserved so the model still knows the chart rendered
+ * (row count, columns, warnings).
+ */
+export function pruneCarriedToolImages(messages: PrunableMessage[]): void {
+  const PLACEHOLDER = "[chart image removed from history to save context]";
+  for (let i = 0; i < messages.length - 1; i++) {
+    const content = messages[i].content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (!block || block.type !== "tool_result" || !Array.isArray(block.content)) continue;
+      if (!block.content.some((p: any) => p?.type === "image")) continue;
+      const text = block.content
+        .filter((p: any) => p?.type === "text")
+        .map((p: any) => p.text)
+        .join(" ");
+      block.content = text ? `${text}\n${PLACEHOLDER}` : PLACEHOLDER;
+    }
+  }
+}

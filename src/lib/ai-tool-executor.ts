@@ -134,32 +134,21 @@ function quoteIdent(name: string): string {
   return '"' + name.replace(/"/g, '""') + '"';
 }
 
-/**
- * describe_table that handles tables in secondary-attached or memory
- * catalogs by querying duckdb_columns()/duckdb_tables()/duckdb_constraints()
- * directly. For tables in the primary VGI catalog, delegates to the
- * shared executeDescribeTable (which uses the already-fetched CatalogData).
- */
-export async function describeTableWithFallback(
-  catalogData: CatalogData | null,
+/** Fetch column rows for any DuckDB-attached relation (table OR view) via
+ *  duckdb_columns(). Returns null if the relation isn't found, the query
+ *  fails, or it has no columns — callers treat null as "fall back". */
+async function fetchColumnsViaSql(
   env: RunSqlEnv,
-  input: DescribeTableInput,
-): Promise<string> {
-  // Primary-catalog fast path — use the in-memory CatalogData.
-  if (!input.catalog || (catalogData && input.catalog === catalogData.catalogName)) {
-    if (catalogData) return executeDescribeTable(catalogData, input.schema, input.table);
-  }
-
-  // Secondary catalog (memory / attached) — query DuckDB introspection tables.
-  const colSql = `SELECT column_name, data_type, is_nullable, column_default, comment FROM duckdb_columns() WHERE database_name = ${quoteIdent(input.catalog!)} AND schema_name = ${quoteIdent(input.schema)} AND table_name = ${quoteIdent(input.table)} ORDER BY column_index`;
+  database: string,
+  schema: string,
+  table: string,
+): Promise<any[] | null> {
+  const colSql = `SELECT column_name, data_type, is_nullable, column_default, comment FROM duckdb_columns() WHERE database_name = ${quoteIdent(database)} AND schema_name = ${quoteIdent(schema)} AND table_name = ${quoteIdent(table)} ORDER BY column_index`;
   const r = await env.query(colSql);
-  if (!r.ok || !r.arrowBuffers?.length) {
-    // Fall back to whatever the primary catalog knows (may be empty).
-    return catalogData ? executeDescribeTable(catalogData, input.schema, input.table)
-                       : JSON.stringify({ error: `Table ${input.schema}.${input.table} not found` });
-  }
+  if (!r.ok || !r.arrowBuffers?.length) return null;
   const buf = r.arrowBuffers[0];
   const t = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+  if (t.numRows === 0) return null;
   const cols: any[] = [];
   for (let i = 0; i < t.numRows; i++) {
     const col: any = {
@@ -172,6 +161,60 @@ export async function describeTableWithFallback(
     const cmt = t.getChildAt(4)?.get(i);
     if (cmt) col.comment = String(cmt);
     cols.push(col);
+  }
+  return cols;
+}
+
+/**
+ * describe_table that handles tables in secondary-attached or memory
+ * catalogs by querying duckdb_columns()/duckdb_tables()/duckdb_constraints()
+ * directly. For tables in the primary VGI catalog, delegates to the
+ * shared executeDescribeTable (which uses the already-fetched CatalogData).
+ *
+ * Views are a special case: the VGI catalog payload (ViewInfo) ships no
+ * column schema, so executeDescribeTable returns a columnless view stub.
+ * We enrich it with live duckdb_columns() introspection (which covers views)
+ * plus the view's SQL definition and column comments from the catalog —
+ * otherwise the agent gets no column names and loops re-listing tables.
+ */
+export async function describeTableWithFallback(
+  catalogData: CatalogData | null,
+  env: RunSqlEnv,
+  input: DescribeTableInput,
+): Promise<string> {
+  // Primary-catalog fast path — use the in-memory CatalogData.
+  if ((!input.catalog || (catalogData && input.catalog === catalogData.catalogName)) && catalogData) {
+    const base = executeDescribeTable(catalogData, input.schema, input.table);
+    const parsed = JSON.parse(base);
+    // Tables (and not-found errors) already carry everything they can; only
+    // views need the live-column enrichment below.
+    if (parsed?.type !== "view") return base;
+
+    const cols = await fetchColumnsViaSql(env, catalogData.catalogName, input.schema, input.table);
+    const viewInfo = catalogData.schemas
+      .find((s) => s.info.name === input.schema)?.views
+      .find((v) => v.name === input.table);
+    if (cols) {
+      // DuckDB often lacks per-column comments for views; the VGI catalog's
+      // column_comments map is authoritative, so backfill from it.
+      const comments = viewInfo?.column_comments;
+      if (comments) {
+        for (const c of cols) if (!c.comment && comments[c.name]) c.comment = comments[c.name];
+      }
+      parsed.columns = cols;
+    }
+    // The view's SQL definition lets the agent see exactly how each column is
+    // derived — cheap to include and high-value for query planning.
+    if (viewInfo?.definition) parsed.definition = viewInfo.definition;
+    return JSON.stringify(parsed);
+  }
+
+  // Secondary catalog (memory / attached) — query DuckDB introspection tables.
+  const cols = await fetchColumnsViaSql(env, input.catalog!, input.schema, input.table);
+  if (!cols) {
+    // Fall back to whatever the primary catalog knows (may be empty).
+    return catalogData ? executeDescribeTable(catalogData, input.schema, input.table)
+                       : JSON.stringify({ error: `Table ${input.schema}.${input.table} not found` });
   }
 
   const commentR = await env.query(`SELECT comment FROM duckdb_tables() WHERE database_name = ${quoteIdent(input.catalog!)} AND schema_name = ${quoteIdent(input.schema)} AND table_name = ${quoteIdent(input.table)}`);

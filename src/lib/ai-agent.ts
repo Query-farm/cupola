@@ -10,9 +10,9 @@ import { getColumns, getForeignKeys } from "./service";
 import { filterTagsForAI, TAG_DESCRIPTION_LLM, TAG_DESCRIPTION_MD, TAG_EXAMPLE_QUERIES } from "./tags";
 import { fetchWithRetry } from "./ai-fetch";
 
-// TEMP: keep in sync with the extension list in public/shell/worker.js.
-// Flip to true to re-enable spatial-aware prompting once the extension is loaded again.
-const SPATIAL_ENABLED = false;
+// Keep in sync with the extension list loaded in src/lib/shell-init.ts.
+// Spatial is loaded there, so the spatial-aware prompting below is active.
+const SPATIAL_ENABLED = true;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -71,6 +71,7 @@ export interface AgentCallbacks {
 // ./format helpers, so it stays unit-testable without the VGI/service import graph).
 // Re-exported here so existing `from "./ai-agent"` import sites keep working.
 export { formatArrowTableAsJson, executeReadQueryResults } from "./query-results";
+import { pruneCarriedToolImages } from "./query-results";
 
 // ---------------------------------------------------------------------------
 // Dev-side tool-call tracing
@@ -364,7 +365,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `## Attached catalogs`,
     ``,
     `### ${cat}`,
-    `Loaded extensions: json, icu${SPATIAL_ENABLED ? ", spatial" : ""}`,
+    `Loaded extensions: icu, json, httpfs, iceberg, spatial, ducklake`,
   ];
 
   // Catalog-level description for AI context
@@ -730,6 +731,10 @@ export async function runAgentTurn(
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (signal?.aborted) return;
+
+    // Shed chart PNGs from earlier in the conversation — only the most recent
+    // render needs to ride along for the model to evaluate (see helper doc).
+    pruneCarriedToolImages(messages);
 
     // Single retry policy: fetchWithRetry handles 429/529 (retry-after), network
     // errors (exponential backoff with jitter), and abort-signal short-circuiting.
