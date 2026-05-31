@@ -73,6 +73,7 @@ export interface AgentCallbacks {
 export { formatArrowTableAsJson, executeReadQueryResults } from "./query-results";
 import { pruneCarriedToolImages } from "./query-results";
 import { recordToolCall, repeatedCallMessage } from "./ai-loop-guard";
+import { parseStreamedToolInput } from "./tool-input";
 
 // ---------------------------------------------------------------------------
 // Dev-side tool-call tracing
@@ -719,14 +720,11 @@ async function streamOneRequest(
     } else if (event.type === "content_block_stop") {
       if (currentBlock) {
         if (currentBlock.type === "tool_use") {
-          try {
-            currentBlock.input = JSON.parse(currentToolInput);
-          } catch {
-            // Sentinel so the tool dispatch loop returns an explicit
-            // is_error tool_result the model can self-correct from. Silent
-            // {} would cause undefined SQL / undefined table lookups.
-            currentBlock.input = { __parseError: currentToolInput };
-          }
+          // Empty input (no-arg tools like list_tables stream "") → {}. A
+          // non-empty payload that won't parse yields the __parseError
+          // sentinel so the dispatch loop returns a self-correctable error
+          // (a silent {} would run a tool with undefined arguments).
+          currentBlock.input = parseStreamedToolInput(currentToolInput).input;
         }
         content.push(currentBlock);
         currentBlock = null;
