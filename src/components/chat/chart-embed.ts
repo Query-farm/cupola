@@ -291,31 +291,37 @@ export async function embedChart(
 }
 
 /**
- * Convert each row's values to a Vega-/JSON-safe shape.
+ * Convert query rows into Vega-ready data values.
  *
- * Delegates to `coerceArrowValue` from duckdb-query.ts (BigInt → Number/
- * String, Date → epoch ms, recursive into nested plain objects). Kept
- * as an exported helper for the rare caller that has rows from a non-
- * readRows source (e.g. inline values built from a foreign API).
+ * Two jobs:
+ *  1. Coerce every cell to a Vega-/JSON-safe shape (BigInt → Number/String,
+ *     Date → epoch ms, recursive into nested objects) via coerceArrowValue,
+ *     and turn GEOMETRY columns (raw WKB / Uint8Array) into GeoJSON objects.
+ *  2. If any column holds geometry, reshape the rows into GeoJSON **Feature**
+ *     objects: `{ type: "Feature", geometry, properties: {…other columns} }`.
+ *     This is REQUIRED — Vega-Lite's geoshape mark renders the geometry of
+ *     Feature/geometry data values, but does NOT render geometry sitting in a
+ *     field of a tabular row (verified: `shape: {field, type:"geojson"}` and a
+ *     plain `geometry` field both produce empty bounds). With Features, the
+ *     spec uses a bare `mark: "geoshape"` and references other columns as
+ *     `properties.<col>` in color/tooltip/etc.
  *
- * readRows() itself already applies the same coercion, so most callers
- * can hand its output straight to embedChart with no extra step.
+ * Kept exported so every data-injection site — both render paths, extra
+ * datasets, and the refresh changeset in VegaChartBlock — gets identical
+ * treatment by routing through this one function.
  */
 export function sanitizeRowsForVega(rows: Record<string, any>[]): Record<string, any>[] {
-  return rows.map((row) => {
+  const coerced = rows.map((row) => {
     const out: Record<string, any> = {};
-    for (const [k, v] of Object.entries(row)) {
-      out[k] = coerceGeometryOrValue(v);
-    }
+    for (const [k, v] of Object.entries(row)) out[k] = coerceGeometryOrValue(v);
     return out;
   });
+  return coerced.some(rowHasGeometry) ? coerced.map(rowToGeoFeature) : coerced;
 }
 
 /** Like coerceArrowValue, but additionally turns a GEOMETRY column's raw WKB
- *  (Uint8Array) into a GeoJSON geometry object so Vega-Lite's geoshape mark /
- *  `type: "geojson"` field encoding can render it. A non-geometry BLOB that
- *  fails to parse as WKB falls back to the plain coercion (and renders as
- *  nothing useful, which is correct — you can't chart an opaque blob). */
+ *  (Uint8Array) into a GeoJSON geometry object so it can be rendered. A
+ *  non-geometry BLOB that fails to parse as WKB falls back to plain coercion. */
 function coerceGeometryOrValue(v: any): any {
   if (v instanceof Uint8Array) {
     try {
@@ -325,6 +331,36 @@ function coerceGeometryOrValue(v: any): any {
     }
   }
   return coerceArrowValue(v);
+}
+
+const GEOJSON_GEOMETRY_TYPES = new Set([
+  "Point", "LineString", "Polygon", "MultiPoint", "MultiLineString", "MultiPolygon", "GeometryCollection",
+]);
+
+/** True if a coerced value is a GeoJSON geometry object (from coerceGeometryOrValue). */
+function isGeoJSONGeometry(v: any): boolean {
+  return (
+    !!v && typeof v === "object" && !Array.isArray(v) &&
+    typeof v.type === "string" && GEOJSON_GEOMETRY_TYPES.has(v.type) &&
+    ("coordinates" in v || "geometries" in v)
+  );
+}
+
+function rowHasGeometry(row: Record<string, any>): boolean {
+  for (const v of Object.values(row)) if (isGeoJSONGeometry(v)) return true;
+  return false;
+}
+
+/** Reshape one coerced row into a GeoJSON Feature: the first geometry column
+ *  becomes `geometry`, every other column becomes a `properties` entry. */
+function rowToGeoFeature(row: Record<string, any>): Record<string, any> {
+  let geometry: any = null;
+  const properties: Record<string, any> = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (geometry === null && isGeoJSONGeometry(v)) geometry = v;
+    else properties[k] = v;
+  }
+  return { type: "Feature", geometry, properties };
 }
 
 /**

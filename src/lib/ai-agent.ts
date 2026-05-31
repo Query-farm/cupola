@@ -331,18 +331,20 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
         `                "color": {"field": "name", "type": "nominal"} } }`,
         `\`\`\``,
         ``,
-        `**Polygons / lines / mixed geometry** — \`SELECT\` the geometry column directly (it is converted to a GeoJSON object for you automatically — do NOT wrap it in \`ST_AsGeoJSON\`, and do NOT select raw WKB text). Use the \`geoshape\` mark with a \`geojson\`-typed \`shape\` channel; keep any attributes for color/tooltip as their own columns:`,
+        `**Polygons / lines / mixed geometry** — \`SELECT\` the geometry column directly (do NOT wrap it in \`ST_AsGeoJSON\`; do NOT select raw WKB text). The chat surface automatically reshapes the rows into GeoJSON **Feature** objects — your geometry column becomes each feature's geometry, and EVERY OTHER selected column becomes a \`properties\` entry. Therefore:`,
+        `* Use a bare \`"mark": "geoshape"\` — do NOT add a \`shape\` encoding (a \`shape: {type: "geojson"}\` channel renders NOTHING).`,
+        `* Reference every non-geometry column with a \`properties.\` prefix in encodings (e.g. \`"field": "properties.population"\`, NOT \`"population"\`).`,
+        `* A \`projection\` is required.`,
         `\`\`\`sql`,
         `SELECT geom, region_name, population FROM ${exFull};`,
         `\`\`\``,
         `\`\`\`json`,
         `{ "projection": {"type": "mercator"}, "mark": "geoshape",`,
-        `  "encoding": { "shape": {"field": "geom", "type": "geojson"},`,
-        `                "color": {"field": "population", "type": "quantitative"},`,
-        `                "tooltip": {"field": "region_name", "type": "nominal"} } }`,
+        `  "encoding": { "color":   {"field": "properties.population", "type": "quantitative"},`,
+        `                "tooltip": {"field": "properties.region_name", "type": "nominal"} } }`,
         `\`\`\``,
         ``,
-        `**Performance:** detailed geometries are expensive to render and can overflow. Filter to only the rows you need, and simplify large/dense shapes in SQL first — e.g. \`ST_Simplify(geom, 0.001) AS geom\` (tolerance in degrees). To overlay points on a boundary, use a layered spec with the polygon \`geoshape\` as one layer and the \`circle\` (longitude/latitude) as another, sharing one \`projection\`.`,
+        `**Performance:** detailed geometries are expensive to render and can overflow. Filter to only the rows you need, and simplify large/dense shapes in SQL first — e.g. \`ST_Simplify(geom, 0.001) AS geom\` (tolerance in degrees). To overlay points on a boundary, use a layered spec: the polygon \`geoshape\` as one layer and the \`circle\` (longitude/latitude) as another, sharing one top-level \`projection\`.`,
         ``,
       ] : []),
     ] : []),
@@ -461,16 +463,28 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
   if (SPATIAL_ENABLED) {
     lines.push(`## Spatial data (${cat} catalog)`);
     lines.push(``);
-    lines.push(`Geometry columns are WGS84 (EPSG:4326) in WKB format. Coordinates are longitude/latitude in degrees.`);
+    lines.push(`Geometry columns are lon/lat degrees in WGS84 (EPSG:4326 / OGC:CRS84). The data is global — coordinates can be anywhere on Earth, so never hardcode a region-specific projection.`);
     lines.push(``);
-    lines.push(`| Need | Wrong (degrees) | Right (meters) |`);
-    lines.push(`|------|----------------|----------------|`);
-    lines.push(`| Distance | \`ST_Distance\` | \`ST_Distance_Spheroid\` |`);
-    lines.push(`| Area | \`ST_Area\` | \`ST_Area_Spheroid\` |`);
-    lines.push(`| Length | \`ST_Length\` | \`ST_Length_Spheroid\` |`);
+    lines.push(`The plain \`ST_Distance\` / \`ST_Area\` / \`ST_Length\` return values in DEGREES, which are meaningless for real-world measurement. Use these instead:`);
     lines.push(``);
-    lines.push(`Alternative: transform to a projected CRS first, then use the plain functions:`);
-    lines.push(`\`ST_Transform(geom, 'EPSG:4326', 'EPSG:32617')\` — UTM zone 17N`);
+    lines.push(`**Area / length / perimeter — accept GEOMETRY directly, return m² / m on the WGS84 spheroid. No projection needed:**`);
+    lines.push(`* \`ST_Area_Spheroid(geom)\` → square metres`);
+    lines.push(`* \`ST_Length_Spheroid(geom)\` / \`ST_Perimeter_Spheroid(geom)\` → metres`);
+    lines.push(``);
+    lines.push(`**Distance is the exception.** \`ST_Distance_Spheroid\` and \`ST_Distance_Sphere\` only work on POINT geometries — calling them on a polygon/line raises a binder or runtime error. For distance or proximity between ARBITRARY geometries, reproject BOTH to a local metre-based CRS, then use the plain planar functions (which give true edge-to-edge metres). For worldwide data, derive the CRS from the data's own longitude so it works anywhere — the UTM zone covering it:`);
+    lines.push(`\`\`\`sql`);
+    lines.push(`-- Pick ONE UTM zone for the area of interest (32600+zone north, 32700+zone south):`);
+    lines.push(`WITH p AS (SELECT 'EPSG:' || (32600 + (floor((ST_X(ST_Centroid(geom)) + 180) / 6)::INT + 1)) AS crs`);
+    lines.push(`           FROM ${exFull} LIMIT 1)`);
+    lines.push(`SELECT ... FROM ${exFull} a, ${exFull} b, p`);
+    lines.push(`-- proximity ("within 50 km"): ST_DWithin short-circuits — prefer it over ST_Distance(...) <= x`);
+    lines.push(`WHERE ST_DWithin(ST_Transform(a.geom, 'EPSG:4326', p.crs, always_xy := true),`);
+    lines.push(`                 ST_Transform(b.geom, 'EPSG:4326', p.crs, always_xy := true), 50000);`);
+    lines.push(`\`\`\``);
+    lines.push(`Non-negotiable details:`);
+    lines.push(`* **Pass \`always_xy := true\`** (4th arg to ST_Transform) — the data is lon/lat, but ST_Transform otherwise assumes lat/lon and silently swaps the axes, giving wrong (often zero) distances.`);
+    lines.push(`* **Both geometries must use the SAME target CRS** — transform both with the one \`p.crs\`, never per-row. UTM is accurate for the local/proximity distances these queries ask for; for a continent-wide span use an equal-distance CRS for that region instead.`);
+    lines.push(`* For point-to-point geodesic distance specifically, \`ST_Distance_Spheroid(p1, p2)\` works directly on POINT_2D values (run \`SET geometry_always_xy = true\` first so lon/lat points aren't swapped).`);
   }
 
   return lines.join("\n");
