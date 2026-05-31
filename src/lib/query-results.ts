@@ -68,6 +68,43 @@ export function formatCellForAI(column: any, row: number, field: any): any {
   return s.length > AI_CELL_MAX_LEN ? s.slice(0, AI_CELL_MAX_LEN - 1) + "…" : s;
 }
 
+/**
+ * Cap a single already-decoded JS value (from `readRows`/`tableToRows`) for
+ * inclusion in an AI tool_result.
+ *
+ * The render_chart sample path doesn't go through the Arrow-column formatter
+ * above — it samples plain JS rows. Without capping, a GEOMETRY column (WKB
+ * BLOB → Uint8Array) serializes under JSON.stringify as a per-byte object
+ * (`{"0":12,"1":34,…}`), so a few large geometries balloon to hundreds of KB
+ * and blow the model's input limit. This mirrors formatCellForAI's intent:
+ * binary collapses to a short tag, long strings truncate, structs recurse.
+ */
+export function capValueForAI(v: any): any {
+  if (v === null || v === undefined) return v;
+  // Same blob check as formatCellForAI — genuine binary only. Decimal128/
+  // HUGEINT arrive as Uint32Array subclasses and must NOT be collapsed.
+  if (v instanceof Uint8Array) return `[binary ${v.byteLength} bytes]`;
+  if (v instanceof ArrayBuffer) return `[binary ${v.byteLength} bytes]`;
+  if (typeof v === "string") return v.length > AI_CELL_MAX_LEN ? v.slice(0, AI_CELL_MAX_LEN - 1) + "…" : v;
+  if (Array.isArray(v)) return v.map(capValueForAI);
+  if (typeof v === "object" && v.constructor === Object) {
+    const out: Record<string, any> = {};
+    for (const [k, val] of Object.entries(v)) out[k] = capValueForAI(val);
+    return out;
+  }
+  return v;
+}
+
+/** Build a context-safe sample of plain-JS rows (from readRows) for an AI
+ *  tool_result — slices to `maxRows` and caps every cell via capValueForAI. */
+export function sampleRowsForAI(rows: Record<string, any>[], maxRows = 3): Record<string, any>[] {
+  return rows.slice(0, maxRows).map((row) => {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(row)) out[k] = capValueForAI(v);
+    return out;
+  });
+}
+
 export function formatArrowTableAsJson(
   table: any,
   maxRows = 20

@@ -128,3 +128,46 @@ export function wkbToGeoJSON(wkb: Uint8Array): GeoJSONGeometry {
   const reader = new WKBReader(wkb.buffer.slice(wkb.byteOffset, wkb.byteOffset + wkb.byteLength));
   return reader.readGeometry();
 }
+
+// ---------------------------------------------------------------------------
+// WKT rendering — matches DuckDB spatial's ST_AsText output
+// ---------------------------------------------------------------------------
+
+const coordToWKT = (c: number[]): string => c.map((n) => String(n)).join(" ");
+const coordsToWKT = (cs: number[][]): string => cs.map(coordToWKT).join(", ");
+/** Wrap each ring (or sub-line) in parens: `(0 0, 1 1), (2 2, 3 3)`. */
+const ringsToWKT = (rings: number[][][]): string => rings.map((r) => `(${coordsToWKT(r)})`).join(", ");
+
+function geometryToWKT(g: GeoJSONGeometry): string {
+  switch (g.type) {
+    case "Point":
+      // WKB POINT EMPTY encodes as NaN coordinates; DuckDB prints `POINT EMPTY`.
+      return g.coordinates.length && !g.coordinates.some((n) => Number.isNaN(n))
+        ? `POINT (${coordToWKT(g.coordinates)})`
+        : "POINT EMPTY";
+    case "LineString":
+      return g.coordinates.length ? `LINESTRING (${coordsToWKT(g.coordinates)})` : "LINESTRING EMPTY";
+    case "Polygon":
+      return g.coordinates.length ? `POLYGON (${ringsToWKT(g.coordinates)})` : "POLYGON EMPTY";
+    case "MultiPoint":
+      // DuckDB renders MULTIPOINT without per-point parens: `MULTIPOINT (1 2, 3 4)`.
+      return g.coordinates.length ? `MULTIPOINT (${coordsToWKT(g.coordinates)})` : "MULTIPOINT EMPTY";
+    case "MultiLineString":
+      return g.coordinates.length ? `MULTILINESTRING (${ringsToWKT(g.coordinates)})` : "MULTILINESTRING EMPTY";
+    case "MultiPolygon":
+      return g.coordinates.length
+        ? `MULTIPOLYGON (${g.coordinates.map((poly) => `(${ringsToWKT(poly)})`).join(", ")})`
+        : "MULTIPOLYGON EMPTY";
+    case "GeometryCollection":
+      return g.geometries.length
+        ? `GEOMETRYCOLLECTION (${g.geometries.map(geometryToWKT).join(", ")})`
+        : "GEOMETRYCOLLECTION EMPTY";
+  }
+}
+
+/** Parse WKB and render as DuckDB-style WKT, e.g. `POINT (-78.4 38.0)`.
+ *  Throws (via wkbToGeoJSON) on malformed/unsupported WKB — callers that want
+ *  a graceful fallback should catch and render the raw blob instead. */
+export function wkbToWKT(wkb: Uint8Array): string {
+  return geometryToWKT(wkbToGeoJSON(wkb));
+}

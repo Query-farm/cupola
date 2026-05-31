@@ -12,6 +12,7 @@
  */
 import type { TopLevelSpec } from "vega-lite";
 import { coerceArrowValue } from "@/lib/duckdb-query";
+import { wkbToGeoJSON } from "@/lib/wkb";
 
 /** Name of the data source we inject into every chart spec. Used both at
  *  embed time (so vega-lite has rows to render) and at refresh time (so
@@ -304,10 +305,26 @@ export function sanitizeRowsForVega(rows: Record<string, any>[]): Record<string,
   return rows.map((row) => {
     const out: Record<string, any> = {};
     for (const [k, v] of Object.entries(row)) {
-      out[k] = coerceArrowValue(v);
+      out[k] = coerceGeometryOrValue(v);
     }
     return out;
   });
+}
+
+/** Like coerceArrowValue, but additionally turns a GEOMETRY column's raw WKB
+ *  (Uint8Array) into a GeoJSON geometry object so Vega-Lite's geoshape mark /
+ *  `type: "geojson"` field encoding can render it. A non-geometry BLOB that
+ *  fails to parse as WKB falls back to the plain coercion (and renders as
+ *  nothing useful, which is correct — you can't chart an opaque blob). */
+function coerceGeometryOrValue(v: any): any {
+  if (v instanceof Uint8Array) {
+    try {
+      return wkbToGeoJSON(v);
+    } catch {
+      return coerceArrowValue(v);
+    }
+  }
+  return coerceArrowValue(v);
 }
 
 /**

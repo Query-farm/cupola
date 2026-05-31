@@ -15,6 +15,7 @@ import {
 } from "@/lib/ai-agent";
 import { executeRunSql, describeTableWithFallback, validateChartSpec, validateExtraData } from "@/lib/ai-tool-executor";
 import { readRows } from "@/lib/duckdb-query";
+import { sampleRowsForAI } from "@/lib/query-results";
 import { cacheChartRows, cacheChartExtra, evictChartRows } from "@/lib/chart-rows-store";
 import { compileChartSpec, renderChartToPng } from "./chat/chart-embed";
 import type { ToolResult } from "@/lib/ai-agent";
@@ -487,14 +488,16 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
           ok: true,
           row_count: rows.length,
           columns,
-          sample: rows.slice(0, 3),
+          // Cap each cell — raw GEOMETRY/BLOB values (Uint8Array) would
+          // otherwise JSON-serialize as per-byte objects and blow the context.
+          sample: sampleRowsForAI(rows, 3),
           ...(extraMeta.length
             ? {
                 extras: extraMeta.map((ex) => ({
                   name: ex.name,
                   row_count: ex.rowCount,
                   columns: ex.columns,
-                  sample: extraRowsByName[ex.name].slice(0, 3),
+                  sample: sampleRowsForAI(extraRowsByName[ex.name], 3),
                 })),
               }
             : {}),

@@ -6,6 +6,8 @@
  * Uses pure arithmetic for dates/timestamps to support the full DuckDB range.
  */
 
+import { wkbToWKT } from "./wkb";
+
 /** Timezone name from DuckDB's TimeZone setting (e.g., "America/New_York").
  *  Set by the shell at init via setDuckDBTimezone(). Used for timestamp_tz display. */
 let _duckdbTimezone: string | null = null;
@@ -84,6 +86,15 @@ export function formatCellValue(value: any, _columnName?: string, field?: any, d
   if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
     const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : value;
     if (field) {
+      // GEOMETRY columns arrive as WKB tagged with a geoarrow.* extension name
+      // (geoarrow.wkb / .point / .polygon / …). Render as DuckDB-style WKT
+      // instead of a hex blob. On malformed WKB, fall through to the blob path.
+      const extName = field.metadata?.get?.("ARROW:extension:name");
+      if (extName && extName.startsWith("geoarrow.")) {
+        try {
+          return wkbToWKT(bytes);
+        } catch { /* not parseable as WKB — fall through to blob */ }
+      }
       try {
         const extMeta = field.metadata?.get?.("ARROW:extension:metadata");
         if (extMeta) {

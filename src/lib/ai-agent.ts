@@ -72,6 +72,7 @@ export interface AgentCallbacks {
 // Re-exported here so existing `from "./ai-agent"` import sites keep working.
 export { formatArrowTableAsJson, executeReadQueryResults } from "./query-results";
 import { pruneCarriedToolImages } from "./query-results";
+import { recordToolCall, repeatedCallMessage } from "./ai-loop-guard";
 
 // ---------------------------------------------------------------------------
 // Dev-side tool-call tracing
@@ -314,6 +315,35 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
       `If ANY of those checks fail, immediately call render_chart again with a fixed spec. Common fixes: rotate axis labels with \`labelAngle: -45\`, use \`point\` instead of \`circle\` when you need shape encoding, sort the x-axis, add explicit axis titles, set a dark mark/text color for low-contrast elements, increase \`size\`. **Iterate until the chart meets all checks — the user sees only the version you settle on, so don't ship a draft.** When you're satisfied, give the user a short interpretation of what the chart shows.`,
       `**Faceted / repeated / concat charts** (specs with top-level \`facet\`, \`repeat\`, \`concat\`/\`hconcat\`/\`vconcat\`, or \`encoding.row\` / \`encoding.column\`): Vega-Lite ignores top-level \`width\`/\`height\` on these — the chat surface will NOT inject sizing. You MUST set dimensions per-unit-spec yourself: e.g. \`{ facet: { row: { field: "..." } }, spec: { width: 300, height: 150, mark: "circle", encoding: {...} } }\`, or for repeat: \`{ repeat: [...], spec: { width: 200, height: 120, ... } }\`. Keep per-facet width modest (150-300) so the row of facets fits horizontally.`,
       ``,
+      ...(SPATIAL_ENABLED ? [
+        `### Plotting geometry (maps)`,
+        `Geometry columns hold spatial data (WGS84 / EPSG:4326 — longitude/latitude in degrees). There are two ways to map them, and a \`projection\` is ALWAYS required (use \`{"type": "mercator"}\` for general/world data, \`{"type": "albersUsa"}\` for US-only data).`,
+        ``,
+        `**Points** — pull the coordinates out in SQL and use Vega-Lite's \`longitude\`/\`latitude\` encoding channels (NOT \`x\`/\`y\`):`,
+        `\`\`\`sql`,
+        `SELECT ST_X(geom) AS lon, ST_Y(geom) AS lat, name FROM ${exFull};`,
+        `\`\`\``,
+        `\`\`\`json`,
+        `{ "projection": {"type": "mercator"}, "mark": "circle",`,
+        `  "encoding": { "longitude": {"field": "lon", "type": "quantitative"},`,
+        `                "latitude":  {"field": "lat", "type": "quantitative"},`,
+        `                "color": {"field": "name", "type": "nominal"} } }`,
+        `\`\`\``,
+        ``,
+        `**Polygons / lines / mixed geometry** — \`SELECT\` the geometry column directly (it is converted to a GeoJSON object for you automatically — do NOT wrap it in \`ST_AsGeoJSON\`, and do NOT select raw WKB text). Use the \`geoshape\` mark with a \`geojson\`-typed \`shape\` channel; keep any attributes for color/tooltip as their own columns:`,
+        `\`\`\`sql`,
+        `SELECT geom, region_name, population FROM ${exFull};`,
+        `\`\`\``,
+        `\`\`\`json`,
+        `{ "projection": {"type": "mercator"}, "mark": "geoshape",`,
+        `  "encoding": { "shape": {"field": "geom", "type": "geojson"},`,
+        `                "color": {"field": "population", "type": "quantitative"},`,
+        `                "tooltip": {"field": "region_name", "type": "nominal"} } }`,
+        `\`\`\``,
+        ``,
+        `**Performance:** detailed geometries are expensive to render and can overflow. Filter to only the rows you need, and simplify large/dense shapes in SQL first — e.g. \`ST_Simplify(geom, 0.001) AS geom\` (tolerance in degrees). To overlay points on a boundary, use a layered spec with the polygon \`geoshape\` as one layer and the \`circle\` (longitude/latitude) as another, sharing one \`projection\`.`,
+        ``,
+      ] : []),
     ] : []),
     `### Never do this`,
     `* Never use \`SELECT *\` in result queries.`,
@@ -728,6 +758,8 @@ export async function runAgentTurn(
   const MAX_TOOL_ROUNDS = maxToolRounds;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  // Per-turn counter for the repeated-call loop-breaker (see ai-loop-guard).
+  const toolCallCounts = new Map<string, number>();
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (signal?.aborted) return;
@@ -769,6 +801,23 @@ export async function runAgentTurn(
             type: "tool_result",
             tool_use_id: block.id,
             content: errMsg,
+            is_error: true,
+          });
+          continue;
+        }
+        // Loop-breaker: refuse a deterministic metadata tool (list_tables,
+        // describe_table, read_query_results) once it's been called with
+        // identical args too many times. Stops the agent from spinning on
+        // "Looking up tables…" until it exhausts MAX_TOOL_ROUNDS.
+        const guard = recordToolCall(toolCallCounts, block.name, block.input);
+        if (guard.block) {
+          const msg = repeatedCallMessage(block.name, guard.count);
+          logToolError(block.name, msg);
+          callbacks.onToolResult(block.name, `Error: ${msg}`);
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: msg,
             is_error: true,
           });
           continue;
