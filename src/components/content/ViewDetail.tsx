@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ViewInfo } from "vgi/client";
 import type { Selection } from "@/lib/tree";
-import { typeColorClass } from "@/lib/tree";
+import { ColumnTypeBadge } from "./ColumnTypeBadge";
 import { Breadcrumb } from "./Breadcrumb";
 import { SqlCodeBlock } from "./SqlCodeBlock";
 import { TagsTable } from "./TagsTable";
@@ -97,7 +97,7 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate, onOpenSh
                   <tr key={i} className="border-t border-border">
                     <td className="px-3 py-1.5 font-mono font-medium text-foreground/80">{col.name}</td>
                     <td className="px-3 py-1.5">
-                      <span className={`font-mono text-[11px] px-1.5 py-0.5 rounded ${typeColorClass(col.type)}`}>{col.type}</span>
+                      <ColumnTypeBadge type={col.type} />
                     </td>
                   </tr>
                 ))}

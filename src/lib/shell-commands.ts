@@ -48,6 +48,7 @@ export async function handleDotCommand(trimmed: string, state: ShellState, io: S
     writeln(".download csv      Download last result as CSV");
     writeln(".download excel    Download last result as Excel (.xlsx)");
     writeln(".reset             Reload with a fresh database");
+    writeln(".preview           Open last result in the Data Preview tab");
     writeln(".perspective       Open last result in Perspective viewer");
     return true;
   }
@@ -99,6 +100,19 @@ export async function handleDotCommand(trimmed: string, state: ShellState, io: S
       await io.downloadFile(state.lastTable, "excel");
     } else {
       writeln("Usage: .download [csv|excel]", "33");
+    }
+    return true;
+  }
+
+  // .preview
+  if (trimmed === ".preview") {
+    if (!state.lastArrowBuffer) {
+      writeln("No result to preview. Run a query first.", "31");
+    } else if (!bridge.showPreview) {
+      writeln("Data Preview is unavailable.", "31");
+    } else {
+      bridge.showPreview(state.lastArrowBuffer);
+      writeln("Opened last result in the Data Preview tab", "32");
     }
     return true;
   }

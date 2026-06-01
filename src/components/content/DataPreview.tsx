@@ -45,8 +45,14 @@ const PAGE_SIZES = [25, 50, 100, 200];
 const DEFAULT_PAGE_SIZE = 50;
 
 interface Props {
-  /** Fully qualified table path: catalog.schema.table */
-  tablePath: string;
+  /** Fully qualified table path: catalog.schema.table. Server-paginated. */
+  tablePath?: string;
+  /**
+   * An already-materialized Arrow table (e.g. the last shell query result)
+   * to preview instead of a tablePath. Paginated client-side by slicing the
+   * in-memory table — no re-execution, so it shows exactly what produced it.
+   */
+  result?: any;
 }
 
 async function queryDuckDB(sql: string): Promise<{ table: any; error?: string }> {
@@ -154,26 +160,73 @@ function arrowTableToRows(table: any): { columns: string[]; columnInfo: ColumnIn
   return { columns, columnInfo, arrowFields: fields, rows };
 }
 
-export function DataPreview({ tablePath }: Props) {
+export function DataPreview({ tablePath, result }: Props) {
   const [columns, setColumns] = useState<string[]>([]);
   const [columnInfo, setColumnInfo] = useState<ColumnInfo[]>([]);
   const [arrowFields, setArrowFields] = useState<any[]>([]);
   const [rows, setRows] = useState<Record<string, any>[]>([]);
   const [hasMore, setHasMore] = useState(false);
+  // Known total row count. Available for client-side `result` previews
+  // (the whole table is in memory); null for server-paginated tablePaths
+  // where we deliberately avoid a COUNT(*).
+  const [totalRows, setTotalRows] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  // Infinite-scroll append in progress (distinct from the initial/window
+  // `loading`). Used to show a footer spinner without blanking the grid.
+  const [appending, setAppending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // `page` is the base chunk the loaded window starts at. The footer pager
+  // jumps it (replacing the window); infinite scroll appends below it.
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const requestIdRef = useRef(0);
+  // Live row count for async append offset math, kept off `rows` so loadMore
+  // doesn't need `rows` in its deps (which would re-subscribe scroll handlers).
+  const rowsCountRef = useRef(0);
+  // Guards against overlapping appends (scroll + arrow can both fire).
+  const appendingRef = useRef(false);
   // Cache resolved ORDER BY expression per tablePath so the probe ladder
   // only runs once per selection.
   const orderByCacheRef = useRef<Map<string, string>>(new Map());
 
-  const fetchPage = useCallback(async (pageNum: number, size: number) => {
+  useEffect(() => { rowsCountRef.current = rows.length; }, [rows]);
+
+  // Resolve (and cache) the deterministic ORDER BY for a tablePath. Shared by
+  // window loads and appends so both page through the same stable ordering.
+  const ensureOrderBy = useCallback(async (path: string): Promise<string> => {
+    let orderBy = orderByCacheRef.current.get(path);
+    if (!orderBy) {
+      orderBy = await resolveOrderBy(path);
+      orderByCacheRef.current.set(path, orderBy);
+    }
+    return orderBy;
+  }, []);
+
+  // Load a fresh window of `size` rows starting at chunk `pageNum`, REPLACING
+  // the current rows. Used for the initial load, pager jumps, and page-size
+  // changes. Bumps requestId so any in-flight append for the old window is
+  // discarded.
+  const loadWindow = useCallback(async (pageNum: number, size: number) => {
     const thisRequest = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
+      // Client-side preview of an in-memory Arrow result: slice the table.
+      // No bridge/ATTACH/ORDER BY — the result is already materialized.
+      if (result) {
+        const total = result.numRows as number;
+        const offset = pageNum * size;
+        const slice = result.slice(offset, Math.min(offset + size, total));
+        const { columns: cols, columnInfo: info, arrowFields: fields, rows: data } = arrowTableToRows(slice);
+        setColumns(cols);
+        setColumnInfo(info);
+        setArrowFields(fields);
+        setRows(data);
+        setHasMore(offset + size < total);
+        setTotalRows(total);
+        return;
+      }
+      if (!tablePath) return;
       // Wait for the shell to be ready to query this specific table — for
       // VGI-catalog tables this awaits ATTACH+USE, not just bridge.query.
       // The orderBy probe must NOT run pre-ATTACH or it cascades to the ALL
@@ -181,19 +234,12 @@ export function DataPreview({ tablePath }: Props) {
       await waitForTableReady(tablePath);
       if (thisRequest !== requestIdRef.current) return; // stale, tablePath changed while waiting
 
-      // Resolve ORDER BY (cached after first call per tablePath). This is
-      // required for deterministic LIMIT/OFFSET; without it pages can
-      // overlap or skip rows between navigations.
-      let orderBy = orderByCacheRef.current.get(tablePath);
-      if (!orderBy) {
-        orderBy = await resolveOrderBy(tablePath);
-        if (thisRequest !== requestIdRef.current) return; // stale, tablePath changed mid-resolve
-        orderByCacheRef.current.set(tablePath, orderBy);
-      }
+      const orderBy = await ensureOrderBy(tablePath);
+      if (thisRequest !== requestIdRef.current) return; // stale, changed mid-resolve
 
       const offset = pageNum * size;
-      // Fetch N+1 rows: if we get back more than `size`, there's at least
-      // one more page (we trim the extra row off before display).
+      // Fetch N+1 rows: more than `size` back means at least one more chunk
+      // exists below (we trim the extra row before display).
       const { table, error: queryError } = await queryDuckDB(
         `SELECT * FROM ${tablePath} ORDER BY ${orderBy} LIMIT ${size + 1} OFFSET ${offset}`
       );
@@ -225,29 +271,73 @@ export function DataPreview({ tablePath }: Props) {
     } finally {
       if (thisRequest === requestIdRef.current) setLoading(false);
     }
-  }, [tablePath]);
+  }, [tablePath, result, ensureOrderBy]);
 
-  // Reset state and fetch the first page when the tablePath or pageSize
-  // changes. No COUNT(*) — has-more is detected from the LIMIT N+1 result.
+  // Infinite scroll: APPEND the next `pageSize` rows below the loaded window.
+  // Offset = base chunk (page*pageSize) + rows already loaded. Guarded so
+  // scroll + arrow can't double-fire, and tied to the current window's
+  // requestId so a window reset mid-flight discards the late append.
+  const loadMore = useCallback(async () => {
+    if (appendingRef.current) return;
+    const windowRequest = requestIdRef.current;
+    const offset = page * pageSize + rowsCountRef.current;
+    appendingRef.current = true;
+    setAppending(true);
+    try {
+      if (result) {
+        const total = result.numRows as number;
+        if (offset >= total) { setHasMore(false); return; }
+        const slice = result.slice(offset, Math.min(offset + pageSize, total));
+        const { rows: data } = arrowTableToRows(slice);
+        setRows((prev) => [...prev, ...data]);
+        setHasMore(offset + pageSize < total);
+        return;
+      }
+      if (!tablePath) return;
+      const orderBy = orderByCacheRef.current.get(tablePath);
+      if (!orderBy) return; // window not loaded yet; nothing to extend
+      const { table, error: queryError } = await queryDuckDB(
+        `SELECT * FROM ${tablePath} ORDER BY ${orderBy} LIMIT ${pageSize + 1} OFFSET ${offset}`
+      );
+      if (windowRequest !== requestIdRef.current) return; // window changed; drop
+      if (queryError) { setError(queryError); return; }
+      if (!table || table.numRows === 0) { setHasMore(false); return; }
+      const { rows: data } = arrowTableToRows(table);
+      const more = data.length > pageSize;
+      const visible = more ? data.slice(0, pageSize) : data;
+      setRows((prev) => [...prev, ...visible]);
+      setHasMore(more);
+    } catch (err: any) {
+      setError(err.message || "Failed to load more rows");
+    } finally {
+      appendingRef.current = false;
+      setAppending(false);
+    }
+  }, [tablePath, result, page, pageSize]);
+
+  // Reset and load the first window when the source or pageSize changes.
   useEffect(() => {
     setPage(0);
     setRows([]);
     setColumns([]);
     setHasMore(false);
-    void fetchPage(0, pageSize);
-  }, [tablePath, fetchPage, pageSize]);
+    setTotalRows(null);
+    void loadWindow(0, pageSize);
+  }, [tablePath, result, loadWindow, pageSize]);
 
-  // Fetch when page changes (but not on initial load which is handled above)
+  // Pager jump — replace the loaded window with a fresh chunk at newPage.
   const handlePageChange = useCallback((newPage: number) => {
     setPage(newPage);
-    fetchPage(newPage, pageSize);
-  }, [fetchPage, pageSize]);
+    setRows([]);
+    loadWindow(newPage, pageSize);
+  }, [loadWindow, pageSize]);
 
   const handlePageSizeChange = useCallback((newSize: number) => {
     setPageSize(newSize);
     setPage(0);
-    fetchPage(0, newSize);
-  }, [fetchPage]);
+    setRows([]);
+    loadWindow(0, newSize);
+  }, [loadWindow]);
 
   const startRow = page * pageSize;
 
@@ -261,7 +351,7 @@ export function DataPreview({ tablePath }: Props) {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => { setError(null); fetchPage(page, pageSize); }}
+          onClick={() => { setError(null); loadWindow(page, pageSize); }}
           className="mt-4 text-xs"
         >
           Retry
@@ -289,15 +379,16 @@ export function DataPreview({ tablePath }: Props) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-8">
         <Database className="h-8 w-8 text-muted-foreground/30 mb-3" />
-        <p className="text-sm text-muted-foreground">No rows in this table</p>
+        <p className="text-sm text-muted-foreground">{result ? "No rows in this result" : "No rows in this table"}</p>
       </div>
     );
   }
 
   return (
     <div className="flex flex-col h-full">
-      {/* Data grid — fills available space */}
-      <div className="flex-1 min-h-0 overflow-auto">
+      {/* Data grid — fills available space; DataGrid owns the scroll container
+          so its sticky header pins to the actual scroller on vertical scroll. */}
+      <div className="flex-1 min-h-0">
         <DataGrid
           columnNames={columns}
           columnInfo={columnInfo}
@@ -305,6 +396,9 @@ export function DataPreview({ tablePath }: Props) {
           rows={rows}
           startRow={startRow}
           borderless
+          cellNavigation
+          canLoadMore={hasMore && !loading}
+          onLoadMore={loadMore}
         />
       </div>
 
@@ -312,10 +406,11 @@ export function DataPreview({ tablePath }: Props) {
       <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-card shrink-0">
         {/* Left: row info */}
         <span className="text-xs text-muted-foreground whitespace-nowrap">
-          {loading ? (
+          {loading || appending ? (
             <Loader2 className="h-3 w-3 animate-spin inline mr-1" />
           ) : null}
           Rows {startRow + 1}&ndash;{startRow + rows.length}
+          {totalRows != null ? ` of ${totalRows.toLocaleString()}` : ""}
         </span>
 
         {/* Center: page controls */}

@@ -10,6 +10,7 @@ import {
 } from "@/lib/function-info";
 import { Badge } from "@/components/ui/badge";
 import { Breadcrumb } from "./Breadcrumb";
+import { ColumnTypeBadge } from "./ColumnTypeBadge";
 import { DescriptionSection } from "./DescriptionSection";
 import { ExampleQueries } from "./ExampleQueries";
 import { TagsTable } from "./TagsTable";
@@ -131,7 +132,7 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOp
                   <tr key={i} className="border-t border-border">
                     <td className="px-3 py-1.5 font-mono font-medium text-foreground/80">{arg.name}</td>
                     <td className="px-3 py-1.5 font-mono text-foreground/70">
-                      {arg.isAnyType ? "ANY" : arg.isTableInput ? "TABLE" : arg.duckdbType}
+                      {arg.isAnyType ? "ANY" : arg.isTableInput ? "TABLE" : <ColumnTypeBadge type={arg.duckdbType} />}
                     </td>
                     <td className="px-3 py-1.5 text-xs">
                       <ArgKindBadges arg={arg} />
@@ -161,7 +162,7 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOp
                 {ret.columns.map((col, i) => (
                   <tr key={i} className="border-t border-border">
                     <td className="px-3 py-1.5 font-mono font-medium text-foreground/80">{col.name}</td>
-                    <td className="px-3 py-1.5 font-mono text-foreground/70">{col.duckdbType}</td>
+                    <td className="px-3 py-1.5 font-mono text-foreground/70"><ColumnTypeBadge type={col.duckdbType} /></td>
                   </tr>
                 ))}
               </tbody>

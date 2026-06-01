@@ -8,6 +8,7 @@ import { Database, Folder, FolderOpen, Table2, Eye, FunctionSquare, Braces, Colu
 import { getColorForType } from "@/components/content/CatalogIcons";
 import type { CatalogData, ResolvedSchema, ColumnInfo } from "./service";
 import { getColumns } from "./service";
+import { shortTypeName } from "./arrow-to-duckdb";
 
 interface TreeDataItem {
   id: string;
@@ -131,6 +132,7 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
     );
     const columnChildren: TreeDataItem[] = columns.map((col) => {
       const typeLabel = showDuckDBTypes ? col.duckdbType : col.arrowType;
+      const displayType = shortTypeName(typeLabel);
       const isPK = pkColumns.has(col.name);
       return {
         id: `${schemaId}::c:${table.name}/${col.name}`,
@@ -140,7 +142,8 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
         draggable: !!onTableAction,
         actions: React.createElement("span", {
           className: `tree-col-type text-[10px] font-mono ml-1 truncate px-1 py-0.5 rounded ${typeColorClass(typeLabel)}`,
-        }, typeLabel),
+          title: displayType !== typeLabel ? typeLabel : undefined,
+        }, displayType),
       };
     });
 

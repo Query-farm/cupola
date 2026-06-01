@@ -11,7 +11,7 @@ import { test, expect, describe } from "bun:test";
 import {
   makeData, Vector, Table, vectorFromArray,
   Decimal, Timestamp, TimeUnit, TimeMicrosecond,
-  Int32, Int64, Float64,
+  Int32, Int64, Float64, Binary,
 } from "apache-arrow";
 import { formatArrowTableAsJson } from "../../src/lib/query-results";
 
@@ -87,6 +87,60 @@ describe("scalars & null", () => {
     const t = tableOf("n", new Int32(), Int32Array.from([0]),
       { nullCount: 1, nullBitmap: new Uint8Array([0]) });
     expect(JSON.parse(formatArrowTableAsJson(t).json).rows[0].n).toBeNull();
+  });
+});
+
+describe("binary & geometry", () => {
+  /** Build a one-row Binary column; optionally tag the field as a geoarrow extension type so the
+   *  serializer treats it as GEOMETRY (WKB → WKT) rather than an opaque blob. */
+  function binaryCell(bytes: Uint8Array, extName?: string): any {
+    const data = makeData({
+      type: new Binary(), length: 1, nullCount: 0,
+      data: bytes, valueOffsets: Int32Array.from([0, bytes.length]),
+    });
+    const table = new Table({ b: new Vector([data]) });
+    if (extName) table.schema.fields[0].metadata.set("ARROW:extension:name", extName);
+    return JSON.parse(formatArrowTableAsJson(table).json).rows[0].b;
+  }
+
+  /** Little-endian WKB POINT(x y). */
+  function wkbPoint(x: number, y: number): Uint8Array {
+    const b = new Uint8Array(21);
+    const dv = new DataView(b.buffer);
+    b[0] = 1; dv.setUint32(1, 1, true); dv.setFloat64(5, x, true); dv.setFloat64(13, y, true);
+    return b;
+  }
+
+  /** Little-endian WKB LINESTRING over `pts`. */
+  function wkbLineString(pts: number[][]): Uint8Array {
+    const b = new Uint8Array(9 + pts.length * 16);
+    const dv = new DataView(b.buffer);
+    b[0] = 1; dv.setUint32(1, 2, true); dv.setUint32(5, pts.length, true);
+    let o = 9;
+    for (const [x, y] of pts) { dv.setFloat64(o, x, true); dv.setFloat64(o + 8, y, true); o += 16; }
+    return b;
+  }
+
+  test("geometry (geoarrow.wkb WKB) → WKT, matching the user's display", () => {
+    expect(binaryCell(wkbPoint(-78.4, 38.02), "geoarrow.wkb")).toBe("POINT (-78.4 38.02)");
+  });
+
+  test("long geometry WKT is truncated with an ellipsis (not [binary])", () => {
+    const pts = Array.from({ length: 50 }, (_, i) => [i + 0.123456, i + 0.654321]);
+    const v = binaryCell(wkbLineString(pts), "geoarrow.wkb");
+    expect(v.startsWith("LINESTRING (")).toBe(true);
+    expect(v.endsWith("…")).toBe(true);
+    expect(v.length).toBeLessThanOrEqual(200);
+  });
+
+  test("non-geometry binary still collapses to [binary]", () => {
+    expect(binaryCell(new Uint8Array([1, 2, 3, 4]))).toBe("[binary]");
+  });
+
+  test("malformed WKB tagged as geometry falls back to a blob (capped), not a throw", () => {
+    const v = binaryCell(new Uint8Array([0xff, 0x00, 0x99]), "geoarrow.wkb");
+    expect(typeof v).toBe("string");
+    expect(v.length).toBeLessThanOrEqual(200);
   });
 });
 

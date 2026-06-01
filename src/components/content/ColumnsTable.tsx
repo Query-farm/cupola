@@ -1,5 +1,5 @@
 import { useState, useMemo, Fragment } from "react";
-import { typeColorClass } from "@/lib/tree";
+import { ColumnTypeBadge } from "./ColumnTypeBadge";
 import {
   flexRender,
   getCoreRowModel,
@@ -128,9 +128,7 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, check
       ),
       cell: ({ getValue }) => {
         const type = getValue() as string;
-        return (
-          <span className={`font-mono text-[11px] px-1.5 py-0.5 rounded ${typeColorClass(type)}`}>{type}</span>
-        );
+        return <ColumnTypeBadge type={type} />;
       },
     },
     {

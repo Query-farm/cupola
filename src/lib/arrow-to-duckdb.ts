@@ -88,14 +88,34 @@ function mapTypeString(s: string): string {
     return `${mapTypeString(innerType)}[]`;
   }
 
-  // Map types
+  // Map types: Map<{key: K, value: V}> or Map<entries: Struct<{key: K, value: V}>>.
+  // Recurse into key/value so nested types are converted too → MAP(K, V).
   const mapMatch = s.match(/^Map<(.+)>$/);
   if (mapMatch) {
+    let kv = parseStructBody(mapMatch[1]);
+    // Unwrap a single `entries: Struct<{...}>` wrapper if present.
+    if (kv && kv.length === 1 && kv[0].type.startsWith("Struct<")) {
+      kv = parseStructBody(kv[0].type.slice("Struct<".length, -1));
+    }
+    if (kv) {
+      const key = kv.find((f) => f.name === "key");
+      const value = kv.find((f) => f.name === "value");
+      if (key && value) {
+        return `MAP(${mapTypeString(key.type)}, ${mapTypeString(value.type)})`;
+      }
+    }
     return `MAP(${mapMatch[1]})`;
   }
 
-  // Struct types
+  // Struct types: Struct<{ name: type, ... }> — recurse into each field's type.
   if (s.startsWith("Struct<")) {
+    const fields = parseStructBody(s.slice("Struct<".length, -1));
+    if (fields) {
+      const inner = fields
+        .map((f) => `${f.name}: ${mapTypeString(f.type)}`)
+        .join(", ");
+      return `STRUCT<{${inner}}>`;
+    }
     return s.replace("Struct", "STRUCT");
   }
 
@@ -106,6 +126,106 @@ function mapTypeString(s: string): string {
 
   // Fall through — return as-is (already readable enough)
   return s;
+}
+
+/**
+ * Parse a struct/map body of the form `{ name: type, name: type, ... }`
+ * (surrounding braces optional) into its top-level fields. Returns null if
+ * the body has no usable `name: type` fields.
+ */
+function parseStructBody(raw: string): Array<{ name: string; type: string }> | null {
+  let body = raw.trim();
+  if (body.startsWith("{") && body.endsWith("}")) {
+    body = body.slice(1, -1);
+  }
+  const parts = splitTopLevel(body);
+  const fields: Array<{ name: string; type: string }> = [];
+  for (const part of parts) {
+    const idx = topLevelColon(part);
+    if (idx < 0) return null;
+    fields.push({
+      name: part.slice(0, idx).trim(),
+      type: part.slice(idx + 1).trim(),
+    });
+  }
+  return fields.length > 0 ? fields : null;
+}
+
+/** Split a string on commas that are not nested inside <>, (), {} or [] brackets. */
+function splitTopLevel(s: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "<" || ch === "(" || ch === "{" || ch === "[") depth++;
+    else if (ch === ">" || ch === ")" || ch === "}" || ch === "]") depth--;
+    else if (ch === "," && depth === 0) {
+      out.push(s.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(s.slice(start));
+  return out.map((p) => p.trim()).filter((p) => p.length > 0);
+}
+
+/** Index of the first `:` that is not nested inside any bracket pair, or -1. */
+function topLevelColon(s: string): number {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "<" || ch === "(" || ch === "{" || ch === "[") depth++;
+    else if (ch === ">" || ch === ")" || ch === "}" || ch === "]") depth--;
+    else if (ch === ":" && depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * Short label for compact display (e.g. the sidebar): collapses a STRUCT to
+ * its keyword, preserving a trailing `[]` for a list-of-struct. Other types
+ * pass through unchanged.
+ */
+export function shortTypeName(typeStr: string): string {
+  if (typeStr.startsWith("STRUCT")) {
+    return typeStr.endsWith("[]") ? "STRUCT[]" : "STRUCT";
+  }
+  return typeStr;
+}
+
+/**
+ * Pretty-print a (possibly nested) type string with newlines and indentation
+ * so deeply-nested STRUCTs are human-readable. Walks the string tracking the
+ * bracket stack: struct `{}` bodies get one field per line; commas inside other
+ * brackets (e.g. MAP(K, V), DECIMAL(p, s)) stay inline. Non-struct types come
+ * back essentially unchanged.
+ */
+export function formatTypeMultiline(typeStr: string): string {
+  let out = "";
+  const stack: string[] = [];
+  const pad = () => "  ".repeat(stack.length);
+  for (let i = 0; i < typeStr.length; i++) {
+    const ch = typeStr[i];
+    if (ch === "{") {
+      stack.push(ch);
+      out += "{\n" + pad();
+    } else if (ch === "}") {
+      stack.pop();
+      out += "\n" + pad() + "}";
+    } else if (ch === "<" || ch === "(" || ch === "[") {
+      stack.push(ch);
+      out += ch;
+    } else if (ch === ">" || ch === ")" || ch === "]") {
+      stack.pop();
+      out += ch;
+    } else if (ch === "," && stack[stack.length - 1] === "{") {
+      out += ",\n" + pad();
+      if (typeStr[i + 1] === " ") i++; // swallow the following space
+    } else {
+      out += ch;
+    }
+  }
+  return out;
 }
 
 /** Simple 1:1 Arrow type name → DuckDB type name. */

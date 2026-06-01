@@ -12,6 +12,7 @@ import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
 import { getAuthToken, getAuthTokenForService, getOAuthMeta, redirectToAuth } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
 import { formatCellValue, safeGetArrowValue } from "@/lib/format";
+import { tableFromIPC } from "apache-arrow";
 import { printBoxTable, printLineTable, type TerminalOutput } from "@/lib/shell-table-renderer";
 import { handleDotCommand, type ShellState, type ShellIO } from "@/lib/shell-commands";
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "@/lib/shell-ai-mode";
@@ -123,6 +124,10 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   const [error, setError] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const [activeTab, setActiveTab] = useState<"shell" | "askai" | "preview" | "perspective" | "queries">("shell");
+  // In-memory Arrow table to show in the Preview tab when the user runs
+  // `.preview` in the shell. Takes precedence over the selection-driven table
+  // preview, and is cleared when the sidebar selection changes (see below).
+  const [resultPreview, setResultPreview] = useState<any>(null);
   const [termSize, setTermSize] = useState<{ rows: number; cols: number } | null>(null);
   const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
 
@@ -192,6 +197,30 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
       bridge.showPerspective = null;
     };
   }, []);
+
+  // Expose a callback for the shell's `.preview` command to open the last
+  // query result in the Data Preview tab. The Arrow IPC buffer is decoded
+  // here and handed to DataPreview's client-side (result) pagination mode.
+  useEffect(() => {
+    bridge.showPreview = (arrowBuffer: Uint8Array) => {
+      try {
+        setResultPreview(tableFromIPC(arrowBuffer));
+        setActiveTab("preview");
+        if (mode === "minimized") onModeChange("panel");
+      } catch (e: any) {
+        console.error("Preview decode error:", e);
+        Sentry.captureException(e, { tags: { component: "preview", path: "showPreview" } });
+      }
+    };
+    return () => { bridge.showPreview = null; };
+  }, [mode, onModeChange]);
+
+  // A result preview belongs to a specific query, not to the sidebar. When the
+  // user navigates to a different table/view, drop it so the Preview tab falls
+  // back to previewing that selection.
+  useEffect(() => {
+    setResultPreview(null);
+  }, [selection?.type, selection?.catalog, selection?.schema, selection?.name]);
 
   useEffect(() => {
     if (!shellActivated) return;
@@ -460,10 +489,10 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
             <Sparkles className="h-3.5 w-3.5" />
             Ask AI
           </button>
-          {hasSelectedTableOrView && (
+          {(hasSelectedTableOrView || resultPreview) && (
             <button role="tab" aria-selected={activeTab === "preview"} className={tabCls("preview")} onClick={() => handleTabClick("preview")}>
               <Table2 className="h-3.5 w-3.5" />
-              Preview
+              {resultPreview ? "Result" : "Preview"}
             </button>
           )}
           {queryHistory.length > 0 && (
@@ -543,12 +572,19 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         <div ref={containerRef} className="h-full w-full overflow-hidden" />
       </div>
 
-      {/* Data Preview */}
-      {mode !== "minimized" && activeTab === "preview" && hasSelectedTableOrView && (
+      {/* Data Preview — a `.preview` result (client-paginated, in-memory)
+          takes precedence over the selection-driven table preview. The key
+          forces a clean remount when switching between the two sources. */}
+      {mode !== "minimized" && activeTab === "preview" && (resultPreview || hasSelectedTableOrView) && (
         <div className="flex-1 min-h-0 overflow-hidden bg-card">
-          <DataPreview
-            tablePath={`${selection?.catalog || catalogName}.${selection?.schema || (selectedTable || selectedView)?.schemaName || "main"}.${selection?.name || (selectedTable || selectedView)?.name}`}
-          />
+          {resultPreview ? (
+            <DataPreview key="result" result={resultPreview} />
+          ) : (
+            <DataPreview
+              key="table"
+              tablePath={`${selection?.catalog || catalogName}.${selection?.schema || (selectedTable || selectedView)?.schemaName || "main"}.${selection?.name || (selectedTable || selectedView)?.name}`}
+            />
+          )}
         </div>
       )}
 

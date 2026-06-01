@@ -53,8 +53,14 @@ const AI_CELL_MAX_LEN = 200;
 /**
  * Format one cell for the AI's JSON view.
  *
- * AI-specific tweaks vs. display: NULL stays `null` (not ""), binary blobs collapse to
- * "[binary]" instead of a long hex string, and long strings are capped.
+ * AI-specific tweaks vs. display: NULL stays `null` (not ""), non-geometry binary blobs
+ * collapse to "[binary]" instead of a long hex string, and long strings are capped.
+ *
+ * GEOMETRY columns are an exception to the binary collapse: they arrive as WKB tagged with a
+ * `geoarrow.*` extension name, and `formatCellValue` already renders them as DuckDB-style WKT
+ * (e.g. `POINT (-78.4 38.0)`). Letting that through — then capping — gives the model a truncated
+ * but meaningful geometry (type + coordinates) instead of an opaque `[binary]`, matching what the
+ * user sees in the shell/grid. Only genuine non-geo blobs collapse.
  */
 export function formatCellForAI(column: any, row: number, field: any): any {
   const raw = safeGetArrowValue(column, row, field);
@@ -63,7 +69,12 @@ export function formatCellForAI(column: any, row: number, field: any): any {
   // already converted to tagged objects by safeGetArrowValue, and Decimal128/HUGEINT arrives as
   // a Uint32Array subclass — none of those are `instanceof Uint8Array`, so only real binary hits
   // this branch.
-  if (raw instanceof Uint8Array || raw instanceof ArrayBuffer) return "[binary]";
+  if (raw instanceof Uint8Array || raw instanceof ArrayBuffer) {
+    // Geometry (geoarrow.* WKB) → let formatCellValue render WKT below; everything else is an
+    // opaque blob the model can't use, so collapse it to a short tag.
+    const extName = field?.metadata?.get?.("ARROW:extension:name");
+    if (!(extName && extName.startsWith("geoarrow."))) return "[binary]";
+  }
   const s = formatCellValue(raw, field?.name, field);
   return s.length > AI_CELL_MAX_LEN ? s.slice(0, AI_CELL_MAX_LEN - 1) + "…" : s;
 }
