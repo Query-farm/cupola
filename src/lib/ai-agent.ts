@@ -753,6 +753,12 @@ async function streamOneRequest(
   return { content, stopReason, inputTokens, outputTokens };
 }
 
+// History self-heal lives in ./ai-history (pure, no service/VGI imports) so it
+// stays unit-testable without dragging in the RPC graph. Re-exported so the
+// existing `from "./ai-agent"` import surface keeps working.
+export { sanitizeConversation, sanitizeDanglingToolUse, mergeAdjacentSameRole } from "./ai-history";
+import { sanitizeConversation } from "./ai-history";
+
 // ---------------------------------------------------------------------------
 // Public API — run a full agent turn (may loop for tool calls)
 // ---------------------------------------------------------------------------
@@ -774,8 +780,18 @@ export async function runAgentTurn(
   // Per-turn counter for the repeated-call loop-breaker (see ai-loop-guard).
   const toolCallCounts = new Map<string, number>();
 
+  // Heal any conversation left in an API-invalid shape by an interrupted turn
+  // (e.g. a dangling tool_use, or a trailing user/tool_result message now sat
+  // next to the freshly-appended user question) before we send it — otherwise
+  // the API 400s on every request and the chat is permanently stuck.
+  sanitizeConversation(messages);
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    if (signal?.aborted) return;
+    // Cancellation between rounds: throw (not bare return) so the UI runs its
+    // "stopped" handling and clears the streaming spinner. The trailing
+    // tool_result message is left valid; the next turn's sanitizeConversation
+    // folds the next user question into it to preserve role alternation.
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
     // Shed chart PNGs from earlier in the conversation — only the most recent
     // render needs to ride along for the model to evaluate (see helper doc).
@@ -785,7 +801,7 @@ export async function runAgentTurn(
     // errors (exponential backoff with jitter), and abort-signal short-circuiting.
     // Any error that escapes here is final — do not re-retry, which would
     // multiply attempts and resend the full conversation each time.
-    const { content, stopReason, inputTokens, outputTokens } = await streamOneRequest(
+    const { content, inputTokens, outputTokens } = await streamOneRequest(
       apiKey, model, messages, systemPrompt, callbacks, tools, signal
     );
     totalInputTokens += inputTokens;
@@ -794,89 +810,148 @@ export async function runAgentTurn(
     // Add assistant response to history
     messages.push({ role: "assistant", content });
 
-    if (stopReason !== "tool_use") {
+    // Gate on the PRESENCE of tool_use blocks, NOT on stopReason. A response
+    // can stop with stopReason "max_tokens" (we cap max_tokens at 4096) or
+    // "pause_turn" while still carrying a complete tool_use block. If we keyed
+    // off stopReason === "tool_use" and skipped execution, that tool_use would
+    // be left without a tool_result and EVERY later request would 400 with
+    // "tool_use ids were found without tool_result blocks". So whenever the
+    // model emitted a tool_use, we must respond with a tool_result for it.
+    const toolUseBlocks = content.filter(
+      (b): b is ContentBlock & { id: string; name: string } =>
+        b.type === "tool_use" && !!b.id && !!b.name
+    );
+
+    if (toolUseBlocks.length === 0) {
       callbacks.onDone({ inputTokens: totalInputTokens, outputTokens: totalOutputTokens });
       return;
+    }
+
+    // Collapse the assistant message we just pushed to its text blocks only,
+    // dropping the tool_use blocks. Called when we bail out of a round (user
+    // cancel, or a fatal connection error) before producing a tool_result for
+    // every tool_use. An assistant message carrying an UNMATCHED tool_use
+    // poisons the whole conversation permanently — the API rejects every
+    // subsequent request — so we strip the tool_use rather than leave it
+    // dangling. Keeping it an assistant message (never an empty/omitted one)
+    // also preserves user/assistant alternation for the next turn.
+    const dropToolUseFromLastAssistant = () => {
+      const last = messages[messages.length - 1];
+      const textOnly = (last.content as ContentBlock[]).filter(
+        (b) => b.type === "text" && b.text
+      );
+      last.content = textOnly.length ? textOnly : [{ type: "text", text: "(stopped)" }];
+    };
+
+    // User cancelled before any tool ran this round.
+    if (signal?.aborted) {
+      dropToolUseFromLastAssistant();
+      throw new DOMException("Aborted", "AbortError");
     }
 
     // Execute tool calls. Check signal between tools so a user-initiated
     // cancel takes effect promptly even if some tool finished naturally.
     const toolResults: ToolResultBlock[] = [];
-    for (const block of content) {
-      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      if (block.type === "tool_use" && block.id && block.name) {
-        callbacks.onToolCall(block.name, block.input);
-        if (block.input && typeof block.input === "object" && "__parseError" in block.input) {
-          const raw = String(block.input.__parseError ?? "");
-          const errMsg = `Tool input was not valid JSON. Raw partial input: ${raw.slice(0, 500)}`;
-          callbacks.onToolResult(block.name, `Error: ${errMsg}`);
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: errMsg,
-            is_error: true,
-          });
-          continue;
-        }
-        // Loop-breaker: refuse a deterministic metadata tool (list_tables,
-        // describe_table, read_query_results) once it's been called with
-        // identical args too many times. Stops the agent from spinning on
-        // "Looking up tables…" until it exhausts MAX_TOOL_ROUNDS.
-        const guard = recordToolCall(toolCallCounts, block.name, block.input);
-        if (guard.block) {
-          const msg = repeatedCallMessage(block.name, guard.count);
-          logToolError(block.name, msg);
-          callbacks.onToolResult(block.name, `Error: ${msg}`);
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: msg,
-            is_error: true,
-          });
-          continue;
-        }
-        // Dev-side console trace: shows tool name + input before the
-        // call, plus the result (or error) after. Enables debugging the
-        // agent's behavior from the browser console. Gated by a window
-        // flag so we can leave it on by default without polluting end-
-        // user consoles — set window.__cupolaAiDebug = false to silence.
-        logToolCall(block.name, block.input);
-        try {
-          const result = await executeTool(block.name, block.input, signal);
-          if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-          // Build a short display string for the UI (the array form carries
-          // an image; we summarize using its text parts only). The full
-          // result still goes to the model via toolResults below.
-          const summary = typeof result === "string"
-            ? result
-            : result.filter((p) => p.type === "text").map((p) => (p as { type: "text"; text: string }).text).join(" ");
-          logToolResult(block.name, result);
-          callbacks.onToolResult(block.name, summary.length > 200 ? summary.slice(0, 200) + "…" : summary);
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: result,
-          });
-        } catch (err: any) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          logToolError(block.name, errMsg);
-          callbacks.onToolResult(block.name, `Error: ${errMsg}`);
-
-          // Fatal errors (e.g., VGI server crash) — abort the agent loop entirely
-          if ((err as any).fatal) {
-            callbacks.onError(`Connection error — agent stopped. ${errMsg}`);
-            callbacks.onDone({ inputTokens: totalInputTokens, outputTokens: totalOutputTokens });
-            return;
-          }
-
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: errMsg,
-            is_error: true,
-          });
-        }
+    let fatalMsg: string | null = null;
+    for (const block of toolUseBlocks) {
+      // Cancellation between tools: strip the tool_use so history stays valid,
+      // then rethrow so the UI runs its "stopped" handling.
+      if (signal?.aborted) {
+        dropToolUseFromLastAssistant();
+        throw new DOMException("Aborted", "AbortError");
       }
+      callbacks.onToolCall(block.name, block.input);
+      if (block.input && typeof block.input === "object" && "__parseError" in block.input) {
+        const raw = String(block.input.__parseError ?? "");
+        const errMsg = `Tool input was not valid JSON. Raw partial input: ${raw.slice(0, 500)}`;
+        callbacks.onToolResult(block.name, `Error: ${errMsg}`);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: errMsg,
+          is_error: true,
+        });
+        continue;
+      }
+      // Loop-breaker: refuse a deterministic metadata tool (list_tables,
+      // describe_table, read_query_results) once it's been called with
+      // identical args too many times. Stops the agent from spinning on
+      // "Looking up tables…" until it exhausts MAX_TOOL_ROUNDS.
+      const guard = recordToolCall(toolCallCounts, block.name, block.input);
+      if (guard.block) {
+        const msg = repeatedCallMessage(block.name, guard.count);
+        logToolError(block.name, msg);
+        callbacks.onToolResult(block.name, `Error: ${msg}`);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: msg,
+          is_error: true,
+        });
+        continue;
+      }
+      // Dev-side console trace: shows tool name + input before the
+      // call, plus the result (or error) after. Enables debugging the
+      // agent's behavior from the browser console. Gated by a window
+      // flag so we can leave it on by default without polluting end-
+      // user consoles — set window.__cupolaAiDebug = false to silence.
+      logToolCall(block.name, block.input);
+      try {
+        const result = await executeTool(block.name, block.input, signal);
+        if (signal?.aborted) {
+          dropToolUseFromLastAssistant();
+          throw new DOMException("Aborted", "AbortError");
+        }
+        // Build a short display string for the UI (the array form carries
+        // an image; we summarize using its text parts only). The full
+        // result still goes to the model via toolResults below.
+        const summary = typeof result === "string"
+          ? result
+          : result.filter((p) => p.type === "text").map((p) => (p as { type: "text"; text: string }).text).join(" ");
+        logToolResult(block.name, result);
+        callbacks.onToolResult(block.name, summary.length > 200 ? summary.slice(0, 200) + "…" : summary);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: result,
+        });
+      } catch (err: any) {
+        // Cancellation surfaced as a rejected tool promise (withAbort): strip
+        // the tool_use and rethrow so the conversation isn't left dangling.
+        if (err?.name === "AbortError") {
+          dropToolUseFromLastAssistant();
+          throw err;
+        }
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logToolError(block.name, errMsg);
+        callbacks.onToolResult(block.name, `Error: ${errMsg}`);
+
+        // Fatal errors (e.g., VGI server crash) — abandon the rest of the
+        // round. Recorded here and handled after the loop so we never push a
+        // partial tool_result set (which would leave the remaining tool_use
+        // blocks unmatched).
+        if ((err as any).fatal) {
+          fatalMsg = errMsg;
+          break;
+        }
+
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: errMsg,
+          is_error: true,
+        });
+      }
+    }
+
+    // Fatal connection error mid-round: the model can't continue and we don't
+    // have a result for every tool_use, so strip the tool_use to keep history
+    // valid and stop the agent.
+    if (fatalMsg !== null) {
+      dropToolUseFromLastAssistant();
+      callbacks.onError(`Connection error — agent stopped. ${fatalMsg}`);
+      callbacks.onDone({ inputTokens: totalInputTokens, outputTokens: totalOutputTokens });
+      return;
     }
 
     messages.push({ role: "user", content: toolResults });

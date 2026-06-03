@@ -1,0 +1,5 @@
+# The image only needs the prebuilt dist/ and the Caddyfile. Keep the build
+# context small and avoid leaking source / secrets / local state into it.
+*
+!dist
+!Caddyfile

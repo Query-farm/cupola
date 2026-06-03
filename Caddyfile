@@ -1,0 +1,62 @@
+# Caddy config for the flat single-version Cupola build (Docker / Azure
+# Container Apps). Mirrors the behavior of the Cloudflare Worker
+# (worker/index.ts) for everything that matters to the browser:
+#   - cross-origin isolation headers (REQUIRED for DuckDB-WASM SharedArrayBuffer)
+#   - /npm/* proxy to jsdelivr (ESM transitive deps resolve against our origin)
+#   - correct wasm MIME + long-lived caching for hashed assets
+#
+# Build the bundle with `BASE_PATH=/ bun run build` so assets resolve at root.
+
+{
+	admin off
+	# Azure Container Apps (and most reverse proxies) terminate TLS at the
+	# ingress and forward plain HTTP to the container, so don't try to
+	# provision certs ourselves.
+	auto_https off
+}
+
+:80 {
+	root * /srv
+	encode zstd gzip
+
+	# --- Cross-origin isolation -------------------------------------------
+	# Without these three headers, SharedArrayBuffer is unavailable and the
+	# DuckDB-WASM COI build, query cancellation, the AI agent, and the OAuth
+	# popup->worker code routing all fail to initialize. Matches the Worker's
+	# respond() headers (worker/index.ts).
+	header {
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Embedder-Policy "require-corp"
+		Cross-Origin-Resource-Policy "cross-origin"
+		-Server
+	}
+
+	# Long-lived immutable caching for content-hashed / versioned assets.
+	@immutable path /_astro/* /haybarn/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	# Belt-and-suspenders: guarantee the wasm MIME type for the big DuckDB blobs.
+	@wasm path *.wasm
+	header @wasm Content-Type "application/wasm"
+
+	# --- jsdelivr +esm transitive deps ------------------------------------
+	# DuckDBShell loads apache-arrow / xterm-readline as `+esm` bundles whose
+	# internal imports resolve to /npm/... against THIS origin. Proxy them so
+	# they stay same-origin (required under COEP: require-corp).
+	handle /npm/* {
+		reverse_proxy https://cdn.jsdelivr.net {
+			header_up Host cdn.jsdelivr.net
+			header_down Access-Control-Allow-Origin "*"
+			header_down Cache-Control "public, max-age=31536000, immutable"
+		}
+	}
+
+	# --- Static files ------------------------------------------------------
+	# Astro emits directory-style routes (sign-out/index.html, etc.) and
+	# trailingSlash is "ignore", so resolve extensionless paths to their
+	# index.html / .html file before falling back to a 404.
+	handle {
+		try_files {path} {path}/index.html {path}.html
+		file_server
+	}
+}

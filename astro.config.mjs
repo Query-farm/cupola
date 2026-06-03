@@ -22,7 +22,12 @@ export default defineConfig({
   // in R2 and the browser cache. Without this, /_astro/*, /shell/*, and public/
   // assets resolve at the root and a stale browser cache from a prior version
   // can ship a broken worker.js into a fixed release.
-  base: `/v${pkg.version}/`,
+  //
+  // BASE_PATH override: for a flat single-version deployment (e.g. the Docker /
+  // Azure Container Apps image, see Dockerfile + Caddyfile), build with
+  // `BASE_PATH=/ bun run build` so assets resolve at the root instead of under
+  // /v{version}/. The Cloudflare/R2 publish path leaves this unset.
+  base: process.env.BASE_PATH || `/v${pkg.version}/`,
   trailingSlash: 'ignore',
 
   integrations: [
