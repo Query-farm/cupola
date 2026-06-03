@@ -1,13 +1,18 @@
 /* ── Recent services (localStorage) ──
  *
- * A small store of the most-recently-connected VGI service URLs so the
+ * A store of previously-connected VGI service URLs (most-recent first) so the
  * frontend can offer quick switching between them. Entries are updated on
  * every successful catalog fetch (see `CatalogApp.loadCatalog`) and surfaced
  * by both the welcome page and the header ServiceSwitcher.
+ *
+ * The full history is kept — users can connect to many VGI servers and want
+ * all of them available. Entries are de-duplicated by URL, so the list only
+ * grows with the number of *distinct* servers ever visited (naturally small),
+ * not with the number of connections. The welcome page shows the latest few
+ * and lets the user expand/filter to reach the rest.
  */
 
 const RECENT_SERVICES_KEY = "vgi-recent-services";
-const MAX_RECENT = 10;
 
 export interface RecentService {
   url: string;
@@ -53,7 +58,7 @@ export function saveRecentService(
     }
     const filtered = list.filter((s) => s.url !== url);
     filtered.unshift(next);
-    localStorage.setItem(RECENT_SERVICES_KEY, JSON.stringify(filtered.slice(0, MAX_RECENT)));
+    localStorage.setItem(RECENT_SERVICES_KEY, JSON.stringify(filtered));
   } catch {}
 }
 

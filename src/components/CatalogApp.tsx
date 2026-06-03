@@ -19,6 +19,7 @@ import { loadTheme, getLogoUrl, DEFAULT_LOGO, type ThemeConfig } from "@/lib/the
 import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Header } from "./Header";
+import { BrandMark } from "./BrandMark";
 import { Sidebar } from "./Sidebar";
 import { Button } from "./ui/button";
 import {
@@ -879,28 +880,13 @@ const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
  */
 function BrandShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex flex-col min-h-screen bg-gradient-to-b from-soil-50 via-earth-50 to-soil-100 dark:from-background dark:via-background dark:to-soil-900/30">
-      <header className="sticky top-0 z-40 flex items-center px-4 h-14 border-b border-border bg-card/95 backdrop-blur-sm shadow-sm">
-        <a
-          href="https://query.farm"
-          className="flex items-baseline gap-2 group/brand"
-          target="_blank"
-          rel="noopener noreferrer"
-          title="Cupola — a Query.Farm tool"
-        >
-          <img
-            src={`${import.meta.env.BASE_URL}cupola-icon.png`}
-            alt=""
-            aria-hidden="true"
-            className="w-8 h-8 self-center text-foreground group-hover/brand:text-earth-700 transition-colors"
-          />
-          <span className="font-heading font-bold text-base leading-none text-foreground group-hover/brand:text-earth-700 transition-colors">
-            Cupola
-          </span>
-          <span className="hidden md:inline font-heading text-sm leading-none text-muted-foreground group-hover/brand:text-foreground transition-colors">
-            by <span aria-hidden="true">🚜&nbsp;</span>Query.Farm
-          </span>
-        </a>
+    // h-screen + overflow-y-auto (not min-h-screen): the global <body> is
+    // overflow-hidden for the catalog app's fixed panes, so these brand
+    // surfaces must be their own bounded scroll container or tall content
+    // (welcome form + recents + footer) gets clipped with no way to scroll.
+    <div className="flex flex-col h-screen overflow-y-auto bg-gradient-to-b from-soil-50 via-earth-50 to-soil-100 dark:from-background dark:via-background dark:to-soil-900/30">
+      <header className="sticky top-0 z-40 shrink-0 flex items-center px-4 h-14 border-b border-border bg-card/95 backdrop-blur-sm shadow-sm">
+        <BrandMark />
       </header>
       {children}
     </div>
@@ -1076,6 +1062,10 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
   // hydration. Without this, React #418 fires due to SSR/client mismatch.
   const [recent, setRecent] = useState<RecentService[]>([]);
   const [origin, setOrigin] = useState("");
+  // How many recents to surface before the user expands the full history.
+  const RECENT_PREVIEW = 3;
+  const [showAllRecent, setShowAllRecent] = useState(false);
+  const [recentFilter, setRecentFilter] = useState("");
   const formRef = useRef<ConnectFormHandle>(null);
   useEffect(() => {
     setRecent(getRecentServices());
@@ -1086,6 +1076,19 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
     removeRecentService(url);
     setRecent(getRecentServices());
   };
+
+  // Filter applies to the full history (only used while expanded); the
+  // collapsed view always shows the latest few regardless of filter text.
+  const q = recentFilter.trim().toLowerCase();
+  const filteredRecent = q
+    ? recent.filter(
+        (s) =>
+          s.catalogName.toLowerCase().includes(q) ||
+          s.url.toLowerCase().includes(q) ||
+          (s.attachOptions ?? "").toLowerCase().includes(q),
+      )
+    : recent;
+  const visibleRecent = showAllRecent ? filteredRecent : recent.slice(0, RECENT_PREVIEW);
 
   // Clicking a recent server prefills the form (so the user can review or
   // tweak its options before connecting) rather than auto-navigating.
@@ -1128,9 +1131,36 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
 
         {recent.length > 0 && (
           <div className="bg-card rounded-lg border border-border p-6 mb-6">
-            <h2 className="text-sm font-semibold text-foreground mb-3">Recent servers</h2>
-            <ul className="space-y-2">
-              {recent.map((s) => (
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <h2 className="text-sm font-semibold text-foreground">
+                Recent servers
+                {recent.length > RECENT_PREVIEW && (
+                  <span className="ml-1.5 text-xs font-normal text-muted-foreground">({recent.length})</span>
+                )}
+              </h2>
+              {recent.length > RECENT_PREVIEW && (
+                <button
+                  onClick={() => { setShowAllRecent((v) => !v); setRecentFilter(""); }}
+                  className="text-xs font-medium text-primary hover:underline shrink-0"
+                >
+                  {showAllRecent ? "Show fewer" : `Show all ${recent.length}`}
+                </button>
+              )}
+            </div>
+
+            {showAllRecent && recent.length > RECENT_PREVIEW && (
+              <input
+                type="text"
+                value={recentFilter}
+                onChange={(e) => setRecentFilter(e.target.value)}
+                placeholder="Filter servers…"
+                aria-label="Filter recent servers"
+                className="w-full mb-3 px-3 py-1.5 rounded-md border border-input bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            )}
+
+            <ul className={`space-y-2 ${showAllRecent ? "max-h-80 overflow-y-auto pr-1" : ""}`}>
+              {visibleRecent.map((s) => (
                 <li key={s.url} className="flex items-center gap-2 group">
                   <button
                     onClick={(e) => connectTo(s.url, e)}
@@ -1155,6 +1185,10 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
                 </li>
               ))}
             </ul>
+
+            {showAllRecent && filteredRecent.length === 0 && (
+              <p className="text-sm text-muted-foreground px-1 py-2">No servers match “{recentFilter}”.</p>
+            )}
           </div>
         )}
 
