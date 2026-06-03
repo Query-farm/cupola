@@ -16,7 +16,6 @@ set -euo pipefail
 PROJECT="cupola"
 R2_BUCKET="cupola-assets"
 VERSION=$(node -e "console.log(require('./package.json').version)")
-GIT_HASH=$(git rev-parse --short HEAD)
 
 echo "==> Version: ${VERSION}"
 
@@ -64,6 +63,14 @@ if [ "${1:-}" != "--skip-commit" ]; then
     git push origin "$TAG"
   fi
 fi
+
+# Capture the git hash AFTER any commit above so it matches the hash that
+# astro.config.mjs computes at build time (`git rev-parse --short HEAD`). Both
+# the browser source maps (uploaded by @sentry/astro during the build) and the
+# worker maps (uploaded below) must land under the same release slug
+# `cupola@${VERSION}+${GIT_HASH}`; capturing this before the commit put them
+# under different releases.
+GIT_HASH=$(git rev-parse --short HEAD)
 
 # ---- Build ----
 echo "==> Building..."
