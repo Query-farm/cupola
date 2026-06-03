@@ -13,33 +13,8 @@ import type { ColumnInfo } from "@/lib/service";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 import { safeGetArrowValue } from "@/lib/format";
 import { tableFromIPC } from "apache-arrow";
-import { bridge, onQueryChange } from "@/lib/shell-bridge";
-
-/**
- * Wait until DuckDB can serve the given tablePath:
- *   - bridge.query must be live (worker booted)
- *   - if the table lives in the primary VGI catalog, ATTACH + USE must have
- *     completed (bridge.attached resolved). Tables in memory or
- *     secondary-attached catalogs only need bridge.query.
- *
- * Without the attached gate, a click on a VGI-catalog table immediately after
- * page load fires a query against an unattached DB and caches the resulting
- * ORDER BY ALL fallback as the wrong choice for the table's lifetime.
- */
-function waitForTableReady(tablePath: string): Promise<void> {
-  const firstSegment = tablePath.split(".")[0];
-  const needsAttached = !!bridge.catalogName && firstSegment === bridge.catalogName;
-  const queryReady: Promise<void> = bridge.query
-    ? Promise.resolve()
-    : new Promise((resolve) => {
-        const unsubscribe = onQueryChange(() => {
-          if (bridge.query) { unsubscribe(); resolve(); }
-        });
-      });
-  return needsAttached && bridge.attached
-    ? Promise.all([queryReady, bridge.attached]).then(() => {})
-    : queryReady;
-}
+import { bridge } from "@/lib/shell-bridge";
+import { waitForTableReady } from "@/lib/table-ready";
 
 const PAGE_SIZES = [25, 50, 100, 200];
 const DEFAULT_PAGE_SIZE = 50;
