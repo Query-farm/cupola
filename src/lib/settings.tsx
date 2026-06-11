@@ -16,6 +16,10 @@ export interface Settings {
    *  visual issues (overlapping labels, bad scales). Adds ~1500 input
    *  tokens per chart; disable for long sessions if cost is a concern. */
   aiChartFeedback: boolean;
+  /** Send AI conversation analytics — prompts, responses, tool calls, and
+   *  token usage — to Sentry for monitoring. Read fresh from localStorage by
+   *  isAiTelemetryEnabled() in ai-telemetry.ts; keep the key name in sync. */
+  aiTelemetry: boolean;
 }
 
 const defaultSettings: Settings = {
@@ -28,6 +32,7 @@ const defaultSettings: Settings = {
   aiModel: "claude-sonnet-4-20250514",
   aiMaxToolRounds: 20,
   aiChartFeedback: true,
+  aiTelemetry: true,
 };
 
 const STORAGE_KEY = "vgi-frontend-settings";

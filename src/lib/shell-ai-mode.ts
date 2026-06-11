@@ -10,6 +10,7 @@ import {
   type MessageParam,
 } from "@/lib/ai-agent";
 import { executeRunSql, describeTableWithFallback } from "@/lib/ai-tool-executor";
+import { isAiTelemetryEnabled } from "@/lib/ai-telemetry";
 import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 import { estimateCost, formatCost } from "@/lib/pricing";
 import { bridge, recordQuery } from "@/lib/shell-bridge";
@@ -295,7 +296,7 @@ export async function runAIMode(
   // .ai new → fresh conversation
   if (trimmed === ".ai new") {
     conv.messages = [];
-    conv.conversationId = `ai-${Date.now()}`;
+    conv.conversationId = `ai-${crypto.randomUUID()}`;
     conv.conversationName = "";
     term.writeln("Starting new AI conversation. Type .exit to return to SQL.", "35");
   } else if (conv.messages.length > 0) {
@@ -307,6 +308,9 @@ export async function runAIMode(
   term.writeln("");
 
   bridge.inAiMode = true;
+  // Group this session's gen_ai spans in Sentry's Conversations view. Cleared
+  // in the exit finally so SQL-mode spans don't inherit it.
+  if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
   const systemPrompt = buildSystemPrompt(ops.catalogData, ops.serviceUrl, bridge.memoryCatalog);
   const spinner = createSpinner(term);
 
@@ -343,12 +347,14 @@ export async function runAIMode(
         continue;
       }
       if (aiTrimmed === "/new") {
-        conv.messages = []; conv.conversationId = `ai-${Date.now()}`; conv.conversationName = "";
+        conv.messages = []; conv.conversationId = `ai-${crypto.randomUUID()}`; conv.conversationName = "";
+        if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
         term.writeln("Started new conversation.", "33");
         continue;
       }
       if (aiTrimmed === ".clear" || aiTrimmed === "/clear") {
-        conv.messages = []; conv.conversationId = `ai-${Date.now()}`; conv.conversationName = "";
+        conv.messages = []; conv.conversationId = `ai-${crypto.randomUUID()}`; conv.conversationName = "";
+        if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
         term.writeln("Conversation cleared.", "33");
         continue;
       }
@@ -402,5 +408,6 @@ export async function runAIMode(
   } finally {
     ctrlDDisposable.dispose();
     bridge.inAiMode = false;
+    Sentry.setConversationId(null);
   }
 }

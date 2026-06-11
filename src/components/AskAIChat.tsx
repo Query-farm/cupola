@@ -53,6 +53,13 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const askUserResolve = useRef<((value: string) => void) | null>(null);
+  // Groups this chat session's gen_ai spans in Sentry's Conversations view.
+  const conversationIdRef = useRef<string>(crypto.randomUUID());
+
+  useEffect(() => {
+    if (settings.aiTelemetry) Sentry.setConversationId(conversationIdRef.current);
+    return () => Sentry.setConversationId(null);
+  }, [settings.aiTelemetry]);
 
   // Auto-scroll only if user is already near the bottom
   const userScrolledUp = useRef(false);
@@ -654,6 +661,8 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
   const handleNewConversation = () => {
     setMessages([]);
     agentMessages.current = [];
+    conversationIdRef.current = crypto.randomUUID();
+    if (settings.aiTelemetry) Sentry.setConversationId(conversationIdRef.current);
   };
 
   const handleStop = () => {

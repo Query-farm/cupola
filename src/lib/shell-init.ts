@@ -549,10 +549,12 @@ export function initShell(
     } catch {}
   }
 
-  // Persistent AI conversation state (survives across .ai mode entries)
+  // Persistent AI conversation state (survives across .ai mode entries).
+  // UUID, not Date.now(): the id also groups Sentry AI conversations, where
+  // millisecond timestamps can collide across users in one org.
   const aiConv: AIConversationState = {
     messages: [],
-    conversationId: `ai-${Date.now()}`,
+    conversationId: `ai-${crypto.randomUUID()}`,
     conversationName: "",
   };
 

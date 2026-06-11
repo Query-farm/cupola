@@ -5,10 +5,23 @@
  * ask_user.
  */
 
+import * as Sentry from "@sentry/astro";
+
 import type { CatalogData } from "./service";
 import { getColumns, getForeignKeys } from "./service";
 import { filterTagsForAI, TAG_DESCRIPTION_LLM, TAG_DESCRIPTION_MD, TAG_EXAMPLE_QUERIES } from "./tags";
 import { fetchWithRetry } from "./ai-fetch";
+import {
+  AGENT_NAME,
+  ATTR,
+  isAbortError,
+  isAiTelemetryEnabled,
+  mapUsageAttributes,
+  serializeInputMessages,
+  serializeOutputMessages,
+  serializeToolDefinitions,
+  serializeToolResult,
+} from "./ai-telemetry";
 
 // Keep in sync with the extension list loaded in src/lib/shell-init.ts.
 // Spatial is loaded there, so the spatial-aware prompting below is active.
@@ -661,6 +674,18 @@ async function* parseSSEStream(
 // Agent turn — one full request/response cycle with streaming
 // ---------------------------------------------------------------------------
 
+interface StreamResult {
+  content: ContentBlock[];
+  stopReason: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/** One streamed Messages-API request, wrapped in a gen_ai.chat span when
+ *  telemetry is on. The span covers fetch (including ai-fetch retries) through
+ *  SSE stream end; request content goes on at start, usage/output at end. */
 async function streamOneRequest(
   apiKey: string,
   model: string,
@@ -668,8 +693,53 @@ async function streamOneRequest(
   systemPrompt: string,
   callbacks: AgentCallbacks,
   tools: Tool[],
+  signal: AbortSignal | undefined,
+  telemetry: boolean
+): Promise<StreamResult> {
+  if (!telemetry) {
+    return streamOneRequestInner(apiKey, model, messages, systemPrompt, callbacks, tools, signal);
+  }
+  return Sentry.startSpan(
+    {
+      name: `chat ${model}`,
+      op: "gen_ai.chat",
+      attributes: {
+        [ATTR.OPERATION_NAME]: "chat",
+        [ATTR.REQUEST_MODEL]: model,
+        [ATTR.SYSTEM]: "anthropic",
+        [ATTR.INPUT_MESSAGES]: serializeInputMessages(messages),
+        [ATTR.SYSTEM_INSTRUCTIONS]: systemPrompt,
+        [ATTR.AVAILABLE_TOOLS]: serializeToolDefinitions(tools),
+      },
+    },
+    async (span) => {
+      try {
+        const result = await streamOneRequestInner(
+          apiKey, model, messages, systemPrompt, callbacks, tools, signal
+        );
+        span.setAttributes({
+          ...mapUsageAttributes(result),
+          [ATTR.FINISH_REASONS]: [result.stopReason],
+          [ATTR.OUTPUT_MESSAGES]: serializeOutputMessages(result.content, result.stopReason),
+        });
+        return result;
+      } catch (err) {
+        if (isAbortError(err)) span.setStatus({ code: 2, message: "cancelled" });
+        throw err;
+      }
+    }
+  );
+}
+
+async function streamOneRequestInner(
+  apiKey: string,
+  model: string,
+  messages: MessageParam[],
+  systemPrompt: string,
+  callbacks: AgentCallbacks,
+  tools: Tool[],
   signal?: AbortSignal
-): Promise<{ content: ContentBlock[]; stopReason: string; inputTokens: number; outputTokens: number }> {
+): Promise<StreamResult> {
   const response = await fetchWithRetry(
     "https://api.anthropic.com/v1/messages",
     {
@@ -709,10 +779,16 @@ async function streamOneRequest(
   let stopReason = "end_turn";
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
 
   for await (const event of parseSSEStream(reader, signal)) {
     if (event.type === "message_start" && event.message?.usage) {
-      inputTokens = event.message.usage.input_tokens || 0;
+      // input_tokens is the UNCACHED remainder; the cache counts are disjoint.
+      const usage = event.message.usage;
+      inputTokens = usage.input_tokens || 0;
+      cacheReadTokens = usage.cache_read_input_tokens || 0;
+      cacheWriteTokens = usage.cache_creation_input_tokens || 0;
     } else if (event.type === "content_block_start") {
       if (event.content_block.type === "text") {
         currentBlock = { type: "text", text: "" };
@@ -750,7 +826,7 @@ async function streamOneRequest(
     }
   }
 
-  return { content, stopReason, inputTokens, outputTokens };
+  return { content, stopReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens };
 }
 
 // History self-heal lives in ./ai-history (pure, no service/VGI imports) so it
@@ -774,9 +850,74 @@ export async function runAgentTurn(
   maxToolRounds = 20,
   tools: Tool[] = TOOLS,
 ): Promise<void> {
+  if (!isAiTelemetryEnabled()) {
+    return runAgentTurnInner(
+      apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, null
+    );
+  }
+  // startNewTrace detaches the turn from any active pageload/navigation trace,
+  // making invoke_agent a root span — so the tracesSampler (which keeps AI
+  // traces at 100%) decides its fate instead of the page's sampling decision.
+  return Sentry.startNewTrace(() =>
+    Sentry.startSpan(
+      {
+        name: `invoke_agent ${AGENT_NAME}`,
+        op: "gen_ai.invoke_agent",
+        attributes: {
+          // The op isn't visible to tracesSampler at sampling time; mirror it
+          // as an attribute the sampler can match on.
+          "sentry.op": "gen_ai.invoke_agent",
+          [ATTR.OPERATION_NAME]: "invoke_agent",
+          [ATTR.AGENT_NAME]: AGENT_NAME,
+          [ATTR.REQUEST_MODEL]: model,
+          [ATTR.SYSTEM]: "anthropic",
+        },
+      },
+      async (span) => {
+        try {
+          await runAgentTurnInner(
+            apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, span
+          );
+        } catch (err) {
+          // User cancellations are not internal errors; this status sticks
+          // because startSpan only overwrites an unset/ok status on throw.
+          if (isAbortError(err)) span.setStatus({ code: 2, message: "cancelled" });
+          throw err;
+        }
+      }
+    )
+  );
+}
+
+async function runAgentTurnInner(
+  apiKey: string,
+  model: string,
+  messages: MessageParam[],
+  systemPrompt: string,
+  executeTool: (name: string, input: any, signal?: AbortSignal) => Promise<ToolResult>,
+  callbacks: AgentCallbacks,
+  signal: AbortSignal | undefined,
+  maxToolRounds: number,
+  tools: Tool[],
+  agentSpan: Sentry.Span | null,
+): Promise<void> {
   const MAX_TOOL_ROUNDS = maxToolRounds;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  let totalCacheReadTokens = 0;
+  let totalCacheWriteTokens = 0;
+  // Roll the turn's accumulated usage onto the invoke_agent span before each
+  // onDone exit path.
+  const recordTurnUsage = () => {
+    agentSpan?.setAttributes(
+      mapUsageAttributes({
+        inputTokens: totalInputTokens,
+        cacheReadTokens: totalCacheReadTokens,
+        cacheWriteTokens: totalCacheWriteTokens,
+        outputTokens: totalOutputTokens,
+      })
+    );
+  };
   // Per-turn counter for the repeated-call loop-breaker (see ai-loop-guard).
   const toolCallCounts = new Map<string, number>();
 
@@ -801,11 +942,14 @@ export async function runAgentTurn(
     // errors (exponential backoff with jitter), and abort-signal short-circuiting.
     // Any error that escapes here is final — do not re-retry, which would
     // multiply attempts and resend the full conversation each time.
-    const { content, inputTokens, outputTokens } = await streamOneRequest(
-      apiKey, model, messages, systemPrompt, callbacks, tools, signal
-    );
+    const { content, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } =
+      await streamOneRequest(
+        apiKey, model, messages, systemPrompt, callbacks, tools, signal, agentSpan !== null
+      );
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
+    totalCacheReadTokens += cacheReadTokens;
+    totalCacheWriteTokens += cacheWriteTokens;
 
     // Add assistant response to history
     messages.push({ role: "assistant", content });
@@ -823,6 +967,7 @@ export async function runAgentTurn(
     );
 
     if (toolUseBlocks.length === 0) {
+      recordTurnUsage();
       callbacks.onDone({ inputTokens: totalInputTokens, outputTokens: totalOutputTokens });
       return;
     }
@@ -896,8 +1041,37 @@ export async function runAgentTurn(
       // flag so we can leave it on by default without polluting end-
       // user consoles — set window.__cupolaAiDebug = false to silence.
       logToolCall(block.name, block.input);
+      // gen_ai.execute_tool span around the real tool execution only — the
+      // parse-error and loop-guard short-circuits above never reach the tool.
+      const runTool = (): Promise<ToolResult> => {
+        if (agentSpan === null) return executeTool(block.name, block.input, signal);
+        return Sentry.startSpan(
+          {
+            name: `execute_tool ${block.name}`,
+            op: "gen_ai.execute_tool",
+            attributes: {
+              [ATTR.OPERATION_NAME]: "execute_tool",
+              [ATTR.TOOL_NAME]: block.name,
+              [ATTR.TOOL_TYPE]: "function",
+              [ATTR.TOOL_CALL_ID]: block.id,
+              [ATTR.AGENT_NAME]: AGENT_NAME,
+              [ATTR.TOOL_INPUT]: JSON.stringify(block.input),
+            },
+          },
+          async (toolSpan) => {
+            try {
+              const r = await executeTool(block.name, block.input, signal);
+              toolSpan.setAttribute(ATTR.TOOL_OUTPUT, serializeToolResult(r));
+              return r;
+            } catch (err) {
+              if (isAbortError(err)) toolSpan.setStatus({ code: 2, message: "cancelled" });
+              throw err;
+            }
+          }
+        );
+      };
       try {
-        const result = await executeTool(block.name, block.input, signal);
+        const result = await runTool();
         if (signal?.aborted) {
           dropToolUseFromLastAssistant();
           throw new DOMException("Aborted", "AbortError");
@@ -949,6 +1123,7 @@ export async function runAgentTurn(
     // valid and stop the agent.
     if (fatalMsg !== null) {
       dropToolUseFromLastAssistant();
+      recordTurnUsage();
       callbacks.onError(`Connection error — agent stopped. ${fatalMsg}`);
       callbacks.onDone({ inputTokens: totalInputTokens, outputTokens: totalOutputTokens });
       return;
@@ -957,6 +1132,7 @@ export async function runAgentTurn(
     messages.push({ role: "user", content: toolResults });
   }
 
+  recordTurnUsage();
   callbacks.onError("Too many tool rounds. Try a simpler question.");
   callbacks.onDone();
 }

@@ -234,6 +234,18 @@ export function SettingsModal() {
                   </SelectContent>
                 </Select>
               </SettingRow>
+              <SettingRow>
+                <SettingLabel
+                  htmlFor="ai-telemetry"
+                  title="Share AI conversation analytics"
+                  description="Send AI prompts, responses, and tool calls to Sentry to help monitor and improve the agent."
+                />
+                <Switch
+                  id="ai-telemetry"
+                  checked={settings.aiTelemetry}
+                  onCheckedChange={(checked) => updateSettings({ aiTelemetry: checked })}
+                />
+              </SettingRow>
             </div>
           </TabsContent>
         </Tabs>

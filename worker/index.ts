@@ -19,6 +19,8 @@
 
 import * as Sentry from "@sentry/cloudflare";
 
+import { scrubUrl } from "../src/lib/sentry-scrub";
+
 // Injected by wrangler via --define at deploy time. Local `wrangler dev`
 // gets the literal placeholder, which is fine — the DSN check below skips
 // Sentry init when the version is unset.
@@ -268,6 +270,9 @@ export default Sentry.withSentry(
             event.request.headers[key] = scrubVgiAuthCookie(event.request.headers[key]);
           }
         }
+      }
+      if (typeof event.request?.url === "string") {
+        event.request.url = scrubUrl(event.request.url);
       }
       return event;
     },
