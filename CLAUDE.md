@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-Standalone web frontend for browsing VGI (Vector Gateway Interface) database catalogs. Connects to any VGI HTTP server and displays schemas, tables, views, and functions in a sidebar tree with detail panels. Includes an embedded DuckDB-WASM SQL shell, AI data analysis agent, and pivot tables (Perspective). Built with Astro + React + ShadCN/UI + Tailwind CSS.
+**Cupola** (`@query-farm/cupola`) — standalone web frontend for browsing VGI (Vector Gateway Interface) database catalogs. Connects to any VGI HTTP server and displays schemas, tables, views, and functions in a sidebar tree with detail panels. Includes an embedded DuckDB-WASM SQL shell, AI data analysis agent with charting, and pivot tables (Perspective). Built with Astro + React + ShadCN/UI + Tailwind CSS.
 
-Designed to be shared across all VGI implementations (Python, TypeScript, Go). Hosted on Cloudflare Pages with assets served from R2. VGI servers redirect browsers to this frontend with `?service={url}`.
+Designed to be shared across all VGI implementations (Python, TypeScript, Go). Hosted on a Cloudflare Worker with assets served from R2 (plus a Docker/Caddy kit for self-hosted Azure deployments). VGI servers redirect browsers to this frontend with `?service={url}`.
 
 ## Commands
 
@@ -20,6 +20,12 @@ bun run build
 
 # Preview production build
 bun run preview
+
+# Unit tests (tests/unit/*.test.ts)
+bun run test
+
+# Playwright e2e tests (tests/*.spec.ts)
+bun run test:e2e
 
 # Add a ShadCN component
 bunx --bun shadcn@latest add <component> --yes
@@ -42,37 +48,39 @@ The `?service=` parameter tells the frontend which VGI server to connect to. Wit
 
 ## URL Parameters
 
-The app reads the following parameters from the URL. VGI servers issuing the redirect can populate any of them.
+The app reads the following parameters from the URL. VGI servers issuing the redirect can populate any of them. All readers are consolidated in `src/lib/url-params.ts` (re-exported through `service.ts`, `theme.ts`, etc.).
 
 ### Query string (`?...`)
 
-| Parameter | Purpose | Read by |
-|-----------|---------|---------|
-| `service` | VGI server base URL. When absent, the welcome / connect page is shown instead of attempting to fetch a catalog. | `getServiceUrl()` / `hasExplicitService()` in `src/lib/service.ts` |
-| `attach_options` | Raw SQL fragment spliced into the DuckDB `ATTACH` statement after `LOCATION` (e.g. `opt_string 'hello', opt_int64 42`). Takes precedence over the localStorage value, and is persisted via `saveRecentService` so a later visit without the param keeps it. An explicit empty value clears any saved options. | `getAttachOptionsFromUrl()` in `src/lib/service.ts`, applied in `CatalogApp.tsx` |
-| `ai_key` | Anthropic API key for the AI agent. Also accepted in the URL fragment (see below — fragments aren't sent to servers, so prefer that form). Merged into `settings.anthropicApiKey`, persisted to localStorage, and **stripped from the URL via `replaceState`** on first read so it doesn't linger in browser history or get sent as a referrer. Treat it as one-shot: passing the param overwrites any previously stored key. The query-string form takes precedence if both are set. | `loadSettings()` + `SettingsProvider` in `src/lib/settings.tsx` |
-| `theme` | URL of a theme JSON file (colors + optional logo + terminal theme). Cached in localStorage so subsequent loads can apply it before first paint. | `getThemeUrl()` / `loadTheme()` in `src/lib/theme.ts`; pre-paint application in `src/layouts/Layout.astro` |
-| `fresh` | Presence (no value needed) clears any corrupted DuckDB session snapshot for this service before the worker boots. Use to recover from a bad auto-saved session. | `DuckDBShell.tsx` |
+| Parameter | Purpose |
+|-----------|---------|
+| `service` | VGI server base URL. When absent, the welcome / connect page is shown instead of attempting to fetch a catalog. |
+| `attach_options` | Raw SQL fragment spliced into the DuckDB `ATTACH` statement after `LOCATION` (e.g. `opt_string 'hello', opt_int64 42`). Takes precedence over the localStorage value, and is persisted via `saveRecentService` so a later visit without the param keeps it. An explicit empty value clears any saved options. |
+| `ai_key` | Anthropic API key for the AI agent. Also accepted in the URL fragment (see below — fragments aren't sent to servers, so prefer that form). Merged into `settings.anthropicApiKey`, persisted to localStorage, and **stripped from the URL via `replaceState`** on first read so it doesn't linger in browser history or get sent as a referrer. Treat it as one-shot: passing the param overwrites any previously stored key. The query-string form takes precedence if both are set. |
+| `theme` | URL of a theme JSON file (colors + optional logo + terminal theme). Cached in localStorage so subsequent loads can apply it before first paint (`src/lib/theme.ts`, pre-paint application in `src/layouts/Layout.astro`). |
+| `fresh` | **Vestigial.** Formerly cleared a corrupted DuckDB session snapshot; session persistence was removed in the haybarn-wasm port. The reader (`getFreshFlag()` in `url-params.ts`) remains but has no callers. |
 
 ### URL fragment (`#...`)
 
-| Fragment | Purpose | Read by |
-|----------|---------|---------|
-| `#token=...&refresh_token=...&token_endpoint=...&client_id=...&client_secret=...&use_id_token=true` | OAuth tokens injected by a VGI server's auth redirect. The token is cached in memory and **only these auth keys** are stripped from the fragment — any other key=value pairs (e.g. `ai_key`) are preserved so they can be consumed by their own readers. | `src/lib/auth.ts` |
-| `#ai_key=...` | Anthropic API key. Equivalent to the `?ai_key=` query param but safer (fragments aren't sent to servers / referrer headers). Can be combined with the auth bundle in a single fragment, e.g. `#token=…&refresh_token=…&ai_key=…`. Stripped from the URL after consumption; other fragment keys are preserved. | `src/lib/settings.tsx` |
-| `#/schema/<s>/table/<t>` (and similar) | Selection routing — restores the sidebar selection on load and updates as the user navigates. Supports browser back/forward via `pushState` + `popstate`. | `hashToSelection()` / `pushSelectionToUrl()` in `src/lib/navigation.ts` |
-| `#prefill=<service-url>` | Prefills the welcome page's `ConnectForm` with a URL (and any saved `attachOptions`) without auto-connecting. Used by the "Edit connection options" button on the attach-error modal. The hash is cleared after consumption. | `ConnectForm` in `src/components/CatalogApp.tsx` |
+| Fragment | Purpose |
+|----------|---------|
+| `#token=...&refresh_token=...&token_endpoint=...&client_id=...&client_secret=...&use_id_token=true` | OAuth tokens injected by a VGI server's auth redirect. The token is cached in memory and **only these auth keys** are stripped from the fragment — any other key=value pairs (e.g. `ai_key`) are preserved so they can be consumed by their own readers. Read by `src/lib/auth.ts`. |
+| `#ai_key=...` | Anthropic API key. Equivalent to the `?ai_key=` query param but safer (fragments aren't sent to servers / referrer headers). Can be combined with the auth bundle in a single fragment. Stripped from the URL after consumption; other fragment keys are preserved. |
+| `#/schema/<s>/table/<t>` (and similar) | Selection routing — restores the sidebar selection on load and updates as the user navigates. Supports browser back/forward via `pushState` + `popstate` (`src/lib/navigation.ts`). |
+| `#prefill=<service-url>` | Prefills the welcome page's `ConnectForm` with a URL (and any saved `attachOptions`) without auto-connecting. Used by the "Edit connection options" button on the attach-error modal. The hash is cleared after consumption. |
 
 ## Stack
 
-- **Astro 6** — static site framework, outputs to Cloudflare Pages
+- **Astro 6** — static site framework
 - **React 19** — UI components via `client:load` islands
 - **ShadCN/UI** — component library (Card, Table, Badge, Button, Input, Dialog, Switch, etc.)
 - **Tailwind CSS v4** — styling via `@tailwindcss/vite` plugin
 - **TanStack Table** — column sorting, filtering, expansion in ColumnsTable
-- **xterm.js** — terminal emulator for the DuckDB SQL shell (loaded from CDN)
-- **DuckDB-WASM** — in-browser SQL engine with VGI extension
+- **xterm.js** — terminal emulator for the DuckDB SQL shell
+- **DuckDB-WASM** (`@haybarn/haybarn-wasm`) — in-browser SQL engine with VGI extension
 - **Perspective** — pivot table / data grid visualization
+- **Vega-Lite** — AI agent chart rendering
+- **Sentry** — error reporting + AI agent monitoring (`@sentry/astro` browser, `@sentry/cloudflare` worker)
 - **vgi-typescript** (`vgi/client`) — browser-safe VGI client for Arrow IPC RPC
 - **Bun** — package manager and runtime
 
@@ -84,66 +92,70 @@ src/
     index.astro              # Main page, mounts CatalogApp
     sign-out.astro           # OAuth sign-out with IdP logout
     theme-builder.astro      # Live theme color editor at /theme-builder
-  layouts/Layout.astro       # HTML shell, fonts, favicon
+    brand-preview.astro      # Logo/brand asset preview page
+  layouts/Layout.astro       # HTML shell, fonts, favicon, pre-paint theme
   components/
     CatalogApp.tsx           # Top-level: fetches catalog, manages selection, routing
-    DuckDBShell.tsx          # SQL shell: xterm.js terminal, ATTACH, session mgmt, tabs
+    DuckDBShell.tsx          # SQL shell panel: tabs, query history, Perspective/preview hosts
+    ShellBootScreen.tsx      # Shell boot progress display
     Sidebar.tsx              # Tree view + search + settings
     Header.tsx               # Logo, catalog name, refresh, user info
+    BrandMark.tsx            # Cupola logo mark
     ServiceSwitcher.tsx      # Service URL switcher with recent history + per-catalog identity
     ConnectBox.tsx           # DuckDB ATTACH snippet with copy
-    SettingsModal.tsx        # Settings dialog (types, shell, AI config)
-    UserInfo.tsx             # OAuth user info from JWT cookie
-    AskAIChat.tsx            # Claude AI chat panel with streaming + tool calls
-    ErrorBoundary.tsx        # React error boundary
+    SettingsModal.tsx        # Settings dialog (display, shell, AI config + telemetry opt-out)
+    AskAIChat.tsx            # Claude AI chat panel with streaming, tool calls, charts
+    SignOutPage.tsx          # Sign-out flow UI
+    ErrorBoundary.tsx        # React error boundary (reports to Sentry)
     ThemeBuilder.tsx         # Live theme editor with color pickers
     tree-view.tsx            # Accordion-based tree (from mrlightful/shadcn-tree-view)
-    content/
-      CatalogOverview.tsx    # Default view: connect box + schema list
-      SchemaDetail.tsx       # Schema: table/view/function lists
-      TableDetail.tsx        # Table: columns, constraints, stats, example queries
-      ViewDetail.tsx         # View detail
-      FunctionDetail.tsx     # Function detail
-      MacroDetail.tsx        # Macro detail (scalar + table macros)
-      ColumnsTable.tsx       # Sortable/filterable columns with expand for stats + profiling
-      ColumnProfile.tsx      # On-demand column distribution profiling
-      DataPreview.tsx        # Paginated data browser for table contents
-      DataGrid.tsx           # Compact tabular display
-      GeometryViewer.tsx     # WKB geometry visualization
-      MemoryCatalogOverview.tsx  # View for in-memory DuckDB tables
-      Breadcrumb.tsx         # Navigation breadcrumb
-      ExampleQueries.tsx     # Tagged example queries display
-      DescriptionSection.tsx # Markdown description rendering
-      SqlCodeBlock.tsx       # SQL syntax-highlighted code block
-      TagsTable.tsx          # Custom VGI tags display
-    chat/                    # AI chat sub-components
-      ChatInput.tsx, ChatMessageUser.tsx, ChatMessageAssistant.tsx,
-      ChatMarkdown.tsx, ThinkingIndicator.tsx, SqlToolCallBlock.tsx,
-      AskUserBlock.tsx, QueryResultTable.tsx
+    content/                 # Detail panels: CatalogOverview, SchemaDetail, TableDetail,
+                             #   ViewDetail, FunctionDetail, MacroDetail, ColumnsTable,
+                             #   ColumnProfile, DataPreview, DataGrid, GeometryViewer,
+                             #   MemoryCatalogOverview, Breadcrumb, ExampleQueries,
+                             #   DescriptionSection, SqlCodeBlock, TagsTable, CatalogIcons,
+                             #   CatalogIdentityCard, CatalogListItem, ColumnTypeBadge
+    chat/                    # AI chat sub-components: ChatInput, ChatMessageUser/Assistant,
+                             #   ChatMarkdown, ThinkingIndicator, SqlToolCallBlock,
+                             #   AskUserBlock, QueryResultTable, VegaChartBlock,
+                             #   MaximizedChartDialog, ChartDownloadMenu, chart-embed
     ui/                      # ShadCN generated components (do not edit manually)
   lib/
     # Core
     service.ts               # VgiClient wrapper: connect, fetch catalog/schemas/tables/stats
+    url-params.ts            # Single source of truth for URL query/fragment readers
     auth.ts                  # JWT cookie/fragment token extraction
     tree.ts                  # Build TreeDataItem[] from CatalogData, selection↔ID mapping
+    tree-expansion.ts        # Pure expand/collapse state logic for the sidebar tree
     navigation.ts            # URL hash routing, page title updates
     settings.tsx             # Settings context + localStorage persistence
     utils.ts                 # cn() Tailwind class merge utility
 
     # DuckDB Shell
     shell-bridge.ts          # Typed global bridge singleton for cross-component messaging
-    duckdb-worker-boot.ts    # Eager worker boot at CatalogApp mount (SABs, WASM prefetch)
-    duckdb-query.ts          # Shared helpers for querying DuckDB via bridge
-    shell-commands.ts        # Dot-command dispatcher (.ai, .save, .load, .download, etc.)
+    duckdb-worker-boot.ts    # Eager worker boot at CatalogApp mount (SABs, WASM transfer)
+    duckdb-query.ts          # Shared DuckDB query helpers — every Arrow decode routes here
+    shell-init.ts            # Imperative shell init: terminal, ATTACH flow, read loop
+    shell-commands.ts        # Dot-command dispatcher (.mode, .maxrows, .perspective,
+                             #   .preview, .download, .reset, .help; .ai is dispatched
+                             #   in shell-init → shell-ai-mode)
     shell-input.ts           # Tab completion and Ctrl+R reverse history search
     shell-table-renderer.ts  # Terminal table rendering (box-mode, line-mode, cell formatting)
     shell-ai-mode.ts         # AI conversation loop in terminal with streaming ANSI
-    session-store.ts         # IndexedDB session persistence (compressed DuckDB memory snapshots)
-    prefetch-duckdb.ts       # Prefetch duckdb-coi.wasm bytes during page load
+    table-ready.ts           # Wait until DuckDB can serve a given table path
 
     # AI Agent
-    ai-agent.ts              # Claude agent with tools: run_sql, read_query_results,
-                             #   list_tables, describe_table, ask_user
+    ai-agent.ts              # Claude agent: streaming SSE loop, tools (run_sql,
+                             #   read_query_results, list_tables, describe_table, ask_user),
+                             #   Sentry gen_ai span instrumentation
+    ai-fetch.ts              # HTTP retry policy for the Anthropic API (429/529, backoff)
+    ai-history.ts            # Conversation-history self-heal (dangling tool_use repair)
+    ai-loop-guard.ts         # Repeated-tool-call loop breaker
+    ai-tool-executor.ts      # Shared tool implementations across chat + terminal surfaces
+    ai-telemetry.ts          # Sentry gen_ai attribute mapping + telemetry opt-out check
+    query-results.ts         # Arrow→JSON result serialization + caching for the agent
+    tool-input.ts            # Streamed tool_use input_json_delta parsing
+    chart-rows-store.ts      # Session-scoped row cache for the render_chart tool
     pricing.ts               # Claude model pricing for cost estimation
     markdown-ansi.ts         # Streaming Markdown → ANSI for xterm rendering
 
@@ -151,6 +163,8 @@ src/
     arrow-to-duckdb.ts       # Arrow type → DuckDB type name conversion
     column-profiler.ts       # Column distribution analysis (numeric, string, date, geometry)
     format.ts                # Value formatting for grids/terminals (dates, BigInt, geometry)
+    function-info.ts         # Parse/format VGI function metadata (Arrow schemas)
+    geo-detect.ts            # Detect spatial columns suitable for map visualization
     tags.ts                  # VGI well-known tags (example_queries, description_md, etc.)
     wkb.ts                   # WKB geometry parsing
 
@@ -162,15 +176,22 @@ src/
     oauth-client.ts          # Browser OAuth 2.0 PKCE client (Entra/IdP)
     catalog-identity.ts      # Per-catalog identity fetching
 
-    # Theme & UI
+    # Theme & Observability
     theme.ts                 # Theme loading from ?theme=<url>, localStorage caching
+    sentry-scrub.ts          # Scrub secrets (token, refresh_token, client_secret, ai_key)
+                             #   from URLs before they reach Sentry
     recent-services.ts       # Recently-connected service URLs (localStorage, max 10)
     node-stubs.ts            # Browser stubs for node:stream/zlib/crypto/fs
-    assert-stub.ts           # Node.js assert stub for browser compatibility
   styles/
     global.css               # Tailwind config, VGI color theme, ShadCN variables
-functions/
-  [[path]].ts                # Cloudflare Pages Function: versioned R2 serving, edge caching
+worker/
+  index.ts                   # Cloudflare Worker: versioned R2 serving, edge caching,
+                             #   /latest redirect, Sentry (withSentry)
+tests/
+  unit/                      # bun:test unit tests (bun run test)
+  *.spec.ts                  # Playwright e2e tests (bun run test:e2e)
+.github/workflows/
+  publish.yml                # Manual-dispatch CI publish (inactive until secrets are set)
 ```
 
 ## Key Design Decisions
@@ -187,27 +208,38 @@ functions/
 
 **Shell bridge** (`src/lib/shell-bridge.ts`): A typed global singleton for cross-component messaging. Holds: `query` (DuckDB query function), `worker` reference, terminal state, navigation callbacks, tab handlers (Perspective). Components subscribe to `bridge.query` availability via `onQueryChange`/`notifyQueryChange` so features like column stats can retry after the shell finishes initializing.
 
-**Eager worker boot** (`src/lib/duckdb-worker-boot.ts`): The DuckDB WASM worker is created at CatalogApp mount time (not when the shell panel opens), so the worker is typically ready by the time the user clicks "Open SQL Shell". Pre-allocates SharedArrayBuffers for query cancellation and OAuth. Prefetched WASM bytes are transferred via `postMessage(..., [bytes])` to avoid double-fetch.
+**Eager worker boot** (`src/lib/duckdb-worker-boot.ts`): The DuckDB WASM worker is created at CatalogApp mount time (not when the shell panel opens), so the worker is typically ready by the time the user clicks "Open SQL Shell". Pre-allocates SharedArrayBuffers for query cancellation and OAuth.
 
-**Session persistence** (`src/lib/session-store.ts`): DuckDB WASM memory snapshots are compressed and stored in IndexedDB, keyed by service URL. Auto-saved periodically. Session restore is controlled by the `autoRestoreSession` setting (default: off). Manual restore available via `.sessions` dot command. Use `?fresh` URL param to clear a corrupted snapshot.
-
-**Column stats and profiling**: `fetchColumnStats()` queries DuckDB's `vgi_table_statistics()` for per-column min/max/nulls/distinct counts. If the shell isn't ready yet, `TableDetail` subscribes to bridge query changes and retries. `ColumnProfile` provides deeper on-demand distribution analysis.
+**Column stats and profiling**: `fetchColumnStats()` (in `service.ts`) queries DuckDB's `vgi_table_statistics()` for per-column min/max/nulls/distinct counts; it internally awaits `bridge.attached`, so callers like `TableDetail` can fire it immediately even before the shell finishes attaching. `ColumnProfile` provides deeper on-demand distribution analysis.
 
 **Tags system**: VGI servers can attach metadata tags to tables/schemas/catalogs. Well-known tags include `vgi.example_queries` (JSON array of SQL examples), `vgi.description_md` (Markdown description), and `vgi.description_llm` (AI-facing description). Tags are filtered differently for display vs. AI agent use.
 
 ## Settings
 
-Stored in localStorage (`vgi-frontend-settings`):
+Stored in localStorage (`vgi-frontend-settings` — key name predates the Cupola rename, do not change it or users lose their settings):
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `showDuckDBTypes` | `true` | Show DuckDB type names instead of Arrow types |
 | `hideTableBackingFunctions` | `true` | Hide table-backing functions from sidebar |
+| `hideDollarTables` | `true` | Hide tables whose name contains `$` |
 | `shellFontSize` | `13` | Terminal font size |
-| `autoRestoreSession` | `false` | Auto-restore last DuckDB session on load |
+| `shellThreads` | `0` | DuckDB WASM thread count (0 = auto) |
 | `anthropicApiKey` | `""` | Claude API key for AI features |
 | `aiModel` | `"claude-sonnet-4-20250514"` | Claude model for AI agent |
 | `aiMaxToolRounds` | `20` | Max tool-use rounds per AI conversation |
+| `aiChartFeedback` | `true` | Feed rendered chart PNG back to the agent so it can iterate |
+| `aiTelemetry` | `true` | Send AI conversation analytics to Sentry (user opt-out) |
+
+## Observability (Sentry)
+
+Both runtimes report to one Sentry project (`query-farm-llc/cupola`) under the shared release slug `cupola@{version}+{gitHash}`.
+
+- **Browser** (`sentry.client.config.ts`): `@sentry/astro`, initialized only in PROD builds. `environment` is `window.location.hostname` so each installation (Cloudflare, self-hosted, localhost preview) is distinguishable. `beforeSend`/`beforeSendTransaction`/`beforeBreadcrumb` scrub the `Authorization` header, `_vgi_auth` cookie, and secret URL params via `src/lib/sentry-scrub.ts`.
+- **Worker** (`worker/index.ts`): `@sentry/cloudflare` `withSentry`; version/hash injected at deploy via wrangler `--define`. Same scrubbing.
+- **AI agent monitoring**: manual gen_ai instrumentation in `ai-agent.ts` (the agent uses raw fetch, so no Sentry auto-instrumentation). Span tree: `gen_ai.invoke_agent` root per turn (via `startNewTrace`) → `gen_ai.chat` per API request → `gen_ai.execute_tool` per tool call. Attribute mapping lives in `ai-telemetry.ts`; key rule: `gen_ai.usage.input_tokens` must INCLUDE Anthropic's separately-reported cache tokens (`.cached`/`.cache_write` are subsets) or Sentry computes negative costs. Conversations are grouped via `Sentry.setConversationId` (UUID per chat-panel or `.ai` session). Users opt out via the `aiTelemetry` setting.
+- **Sampling**: `tracesSampler` keeps AI agent traces at 100%, everything else at 10%. `sendDefaultPii: true` + `streamGenAiSpans: true` power the Conversations view.
+- **Source maps**: vite emits `'hidden'` maps (must be set under `vite.environments.client.build` — Astro 6 ignores the top-level setting). With `SENTRY_AUTH_TOKEN` set, `@sentry/astro` uploads them during build and deletes them from `dist/` afterwards. **Gotcha**: the `sentry()` integration options must be top-level — the deprecated `sourceMapsUploadOptions` wrapper silently ignores nested `release`/`sourcemaps` objects (this shipped maps to R2 for ~45 releases before being caught). `publish.sh` fails the publish if maps survive the build or the upload-success log line is missing, and strips client maps before the R2 sync regardless. Worker maps are uploaded by `publish.sh` via `sentry-cli` under the same release.
 
 ## Color Theme
 
@@ -226,14 +258,16 @@ Custom themes can be loaded via `?theme=<url>` parameter. Theme JSON includes co
 When a VGI server has OAuth PKCE enabled:
 1. The frontend reads the JWT token from the URL fragment (`#token=...`) or `_vgi_auth` cookie
 2. Token is sent as `Authorization: Bearer` header on all RPC calls
-3. `UserInfo.tsx` decodes the JWT payload to display email/avatar
+3. `getUserInfo()` in `src/lib/auth.ts` decodes the JWT payload; identity is shown in the header / `ServiceSwitcher`
 4. Token from fragment is cached in memory and cleaned from the URL
 5. The DuckDB extension handles its own PKCE flow for ATTACH — uses SharedArrayBuffer to route auth codes from a popup back to the worker thread
 6. Per-catalog identity is fetched via `catalog-identity.ts` and displayed in `ServiceSwitcher`
 
 ## Testing
 
-Test with Playwright MCP against a running VGI server:
+Unit tests are pure-logic bun tests in `tests/unit/` (`bun run test`); the AI agent's helper modules (`ai-fetch`, `ai-history`, `ai-telemetry`, `sentry-scrub`, etc.) are deliberately free of service/VGI imports so they stay unit-testable.
+
+For end-to-end work, test with Playwright (or Playwright MCP) against a running VGI server:
 ```bash
 # Start VGI server (no auth for testing)
 cd ~/Development/vgi-albemarle-gis && ./run-local-noauth.sh
@@ -247,7 +281,7 @@ http://localhost:4321/?service=http://localhost:9003
 
 ## Publishing & Deployment
 
-Assets are served from Cloudflare R2 via a Pages Function (`functions/[[path]].ts`). The URL scheme is versioned:
+Assets are served from Cloudflare R2 via a Worker (`worker/index.ts`, configured in `wrangler.jsonc`). The URL scheme is versioned:
 - `/` → 302 → `/latest/`
 - `/latest/` → 302 → `/v{current}/` (reads `_latest` marker from R2)
 - `/v{version}/*` → immutable versioned assets from R2
@@ -256,20 +290,21 @@ Assets are served from Cloudflare R2 via a Pages Function (`functions/[[path]].t
 1. Bump `version` in `package.json`
 2. Run `./publish.sh` (or `./publish.sh --skip-commit` if already committed)
 
-`publish.sh` handles: git commit/push/tag, build, upload all assets to R2 under `v{version}/`, update the `_latest` marker, and deploy the Pages Function.
+`publish.sh` handles: git commit/push/tag, build, Sentry source-map upload checks, upload all assets to R2 under `v{version}/`, update the `_latest` marker, and deploy the Worker.
 
 **Key details:**
-- `astro.config.mjs` sets `base: /v{version}/` so all emitted asset paths are versioned
-- Oversized files (>25MB, e.g. WASM) are uploaded to R2 root (shared across versions)
-- Normal files go under the `v{version}/` prefix in R2
-- The Pages Function serves from R2 with edge caching (`caches.default`)
+- `astro.config.mjs` sets `base: /v{version}/` so all emitted asset paths are versioned (`BASE_PATH=/` overrides for the flat Docker/Azure deployment)
+- Haybarn DuckDB-WASM artifacts and the VGI extension wasm are staged into `dist/haybarn/` and ride along with the versioned sync
+- The Worker serves from R2 with edge caching (`caches.default`)
 - `wrangler.jsonc` binds the `cupola-assets` R2 bucket as `ASSETS_BUCKET`
 - `/oauth-callback.html` is served at a stable unversioned URL (Entra SPA redirect URI)
+
+**CI publishing** (`.github/workflows/publish.yml`): manual-dispatch workflow that checks out the sibling repos, runs tests, runs `./publish.sh --skip-commit`, and tags the release. Inactive until the repository secrets listed in the README's Deployment section are configured.
 
 ## Dependencies on Sibling Repos
 
 The `package.json` references local sibling repos:
-- `vgi` → `../vgi-typescript`
-- `@query-farm/vgi-rpc` → `../vgi-rpc-typescript`
+- `vgi` → `../vgi-typescript` (private repo; not published to npm)
+- `@query-farm/vgi-rpc` → `../vgi-rpc-typescript` (public repo; `astro.config.mjs` aliases directly into its source)
 
-For CI/deployment, these need to be published packages or workspace links.
+The CI publish workflow checks these out side-by-side; locally they must exist as sibling directories.

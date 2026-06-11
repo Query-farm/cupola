@@ -15,7 +15,13 @@ if (import.meta.env.PROD) {
     dsn: DSN,
     release: `cupola@${__APP_VERSION__}+${__GIT_HASH__}`,
     dist: __GIT_HASH__,
-    environment: import.meta.env.MODE,
+    // One environment per installation: Cupola is deployed to multiple hosts
+    // (Cloudflare at cupola.query-farm.services, self-hosted Docker/Azure
+    // installs) that all run the same PROD build, so MODE was always
+    // "production" and the deployments were indistinguishable in Sentry.
+    // Hostname (not full URL) keeps the environment set small and filterable;
+    // localhost previews land in their own bucket instead of polluting prod.
+    environment: window.location.hostname || "unknown",
 
     // AI agent traces are sampled at 100% — they're low-volume (interactive
     // chat) and the gen_ai spans power Sentry's AI Agents / Conversations
