@@ -1,5 +1,11 @@
 # Cupola
 
+<p align="center">
+  <a href="https://cupola.query-farm.services">
+    <img src="docs/vgi-logo.png" alt="Vector Gateway Interface logo" width="300">
+  </a>
+</p>
+
 A standalone web frontend for browsing VGI (Vector Gateway Interface) database catalogs. Cupola connects to any VGI HTTP server and presents its schemas, tables, views, and functions in a navigable catalog browser — with an embedded SQL shell, pivot tables, and an AI data analysis agent built in.
 
 Designed to be shared across all VGI server implementations (Python, TypeScript, Go). VGI servers redirect browsers to the hosted frontend with `?service={url}`.
