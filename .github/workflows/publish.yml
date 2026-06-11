@@ -1,0 +1,96 @@
+# Publish Cupola from CI: build, upload assets to R2, deploy the Cloudflare
+# Worker, and upload source maps to Sentry — the same pipeline as a local
+# `./publish.sh`, minus the git commit (CI publishes the commit it runs on).
+#
+# Trigger: manual (workflow_dispatch). Bump `version` in package.json, push to
+# main, then run this workflow. It tags the commit `v{version}` on success.
+#
+# Required repository secrets:
+#   SIBLING_REPOS_TOKEN     PAT with read access to Query-farm/vgi-typescript
+#                           (private sibling dependency; `vgi` is not on npm).
+#   SENTRY_AUTH_TOKEN       Sentry org auth token (source map upload).
+#   CLOUDFLARE_API_TOKEN    Cloudflare token with Workers deploy permission.
+#   R2_ACCESS_KEY_ID        R2 S3-API token id (asset upload).
+#   R2_SECRET_ACCESS_KEY    R2 S3-API token secret.
+#
+# Note: the build needs ~8 GiB of Node heap for source-map generation
+# (NODE_OPTIONS is set inside publish.sh). If the default runner OOMs,
+# switch `runs-on` to a larger runner.
+
+name: Publish
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write # push the release tag
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cupola
+    steps:
+      # The package.json deps `vgi` and `@query-farm/vgi-rpc` point at sibling
+      # directories (../vgi-typescript, ../vgi-rpc-typescript), and
+      # astro.config.mjs aliases into vgi-rpc-typescript's source — so the
+      # three repos must be checked out side by side.
+      - name: Checkout cupola
+        uses: actions/checkout@v4
+        with:
+          path: cupola
+
+      - name: Checkout vgi-typescript (private sibling)
+        uses: actions/checkout@v4
+        with:
+          repository: Query-farm/vgi-typescript
+          token: ${{ secrets.SIBLING_REPOS_TOKEN }}
+          path: vgi-typescript
+
+      - name: Checkout vgi-rpc-typescript (sibling)
+        uses: actions/checkout@v4
+        with:
+          repository: Query-farm/vgi-rpc-typescript
+          path: vgi-rpc-typescript
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      # The aliased vgi-rpc-typescript source imports resolve against that
+      # repo's own node_modules, so the siblings need their deps installed too.
+      - name: Install sibling dependencies
+        run: |
+          bun install --cwd ../vgi-typescript
+          bun install --cwd ../vgi-rpc-typescript
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run unit tests
+        run: bun run test
+
+      - name: Publish
+        run: ./publish.sh --skip-commit
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: bb68a133a66d26a310231495b13479a1
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_REGION: auto
+
+      - name: Tag release
+        run: |
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          TAG="v${VERSION}"
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "$TAG"; then
+            echo "Tag ${TAG} already exists, skipping."
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi

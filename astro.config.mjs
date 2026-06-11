@@ -36,27 +36,38 @@ export default defineConfig({
       // Init lives in sentry.client.config.ts so the runtime DSN/release/scrubbing
       // stay co-located. The integration here exists to inject the SDK into the
       // client bundle and (optionally) upload source maps.
-      sourceMapsUploadOptions: sentryAuthToken
+      //
+      // These options MUST be top-level. The older `sourceMapsUploadOptions`
+      // wrapper only accepted flat keys — nesting `release`/`sourcemaps`
+      // objects inside it was silently ignored (which shipped .js.map files
+      // to R2 and mis-tagged browser uploads through v0.4.81).
+      ...(sentryAuthToken
         ? {
             org: process.env.SENTRY_ORG || 'query-farm-llc',
             project: process.env.SENTRY_PROJECT || 'cupola',
             authToken: sentryAuthToken,
             telemetry: false,
-            release: {
-              name: `cupola@${pkg.version}+${gitHash}`,
-              dist: gitHash,
-            },
             // Pin the upload + cleanup globs to this project's dist layout.
             // The @sentry/astro default auto-delete glob is `dist/**/client/**/*.map`
-            // which doesn't match our `dist/_astro/` Cloudflare adapter layout,
-            // so without these the maps would either not get uploaded or would
-            // ship to R2 alongside the JS (we want them stripped after upload).
+            // which doesn't match our `dist/_astro/` layout, so without these
+            // the maps would either not get uploaded or would ship to R2
+            // alongside the JS (we want them stripped after upload).
             sourcemaps: {
               assets: ['dist/_astro/**/*.js', 'dist/_astro/**/*.js.map'],
               filesToDeleteAfterUpload: ['dist/_astro/**/*.map'],
             },
+            // Astro's integration omits the top-level `release` option; pass it
+            // through the vite-plugin escape hatch so browser artifact bundles
+            // land under the same release slug the SDK reports at runtime (and
+            // that publish.sh uses for the worker maps).
+            unstable_sentryVitePluginOptions: {
+              release: {
+                name: `cupola@${pkg.version}+${gitHash}`,
+                dist: gitHash,
+              },
+            },
           }
-        : { enabled: false },
+        : { sourcemaps: { disable: true } }),
     }),
   ],
 

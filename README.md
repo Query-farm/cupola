@@ -67,10 +67,21 @@ Without `?service=`, a welcome / connect page is shown.
 
 ## Deployment
 
-Assets are served from Cloudflare R2 via a Pages Function with a versioned URL scheme (`/v{version}/...`, with `/latest/` redirecting to the current version). To publish:
+Assets are served from Cloudflare R2 via a Worker with a versioned URL scheme (`/v{version}/...`, with `/latest/` redirecting to the current version).
+
+**Publish locally:**
 
 1. Bump `version` in `package.json`
 2. Run `./publish.sh`
+
+**Publish from GitHub Actions:** run the **Publish** workflow (`.github/workflows/publish.yml`, manual trigger). It checks out the sibling repos (`vgi-typescript`, `vgi-rpc-typescript`), runs the tests, executes `./publish.sh --skip-commit` against the pushed commit, and tags the release. Required repository secrets:
+
+| Secret | Purpose |
+|--------|---------|
+| `SIBLING_REPOS_TOKEN` | PAT with read access to `Query-farm/vgi-typescript` (private; `vgi` is not on npm) |
+| `SENTRY_AUTH_TOKEN` | Sentry source-map upload |
+| `CLOUDFLARE_API_TOKEN` | Worker deploy |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 S3-API asset upload |
 
 ## License
 

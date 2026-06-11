@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "vgi-web-frontend",
+      "name": "@query-farm/cupola",
       "dependencies": {
         "@astrojs/react": "^5.0.4",
         "@base-ui/react": "^1.3.0",
