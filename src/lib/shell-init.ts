@@ -13,7 +13,7 @@
  * so panel/full-screen mode transitions don't tear down the SQL session.
  */
 import { formatCellValue, safeGetArrowValue } from "./format";
-import { printBoxTable, printLineTable, type TerminalOutput } from "./shell-table-renderer";
+import { printBoxTable, printLineTable, cellWidth, type TerminalOutput } from "./shell-table-renderer";
 import { handleDotCommand, type ShellState, type ShellIO } from "./shell-commands";
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "./shell-ai-mode";
 import { attachInputHandlers, type CompletionItem } from "./shell-input";
@@ -80,6 +80,13 @@ export function initShell(
     rl = new Readline();
     term.loadAddon(fitAddon);
     term.loadAddon(new WLA.WebLinksAddon());
+    // Register our string-width-matching width provider before any output so
+    // the result box (laid out by cli-table3) and xterm agree on cell widths
+    // for emoji/wide chars; otherwise the box border misaligns.
+    try {
+      term.unicode.register({ version: "vgi", wcwidth: cellWidth });
+      term.unicode.activeVersion = "vgi";
+    } catch { /* fall back to the default unicode provider */ }
     term.loadAddon(rl);
     term.open(container);
     try { term.loadAddon(new WGA.WebglAddon()); } catch { /* canvas fallback */ }
