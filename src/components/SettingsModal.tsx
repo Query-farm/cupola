@@ -39,8 +39,8 @@ function SettingLabel({ title, description, htmlFor }: { title: string; descript
 
 const AI_MODELS: { value: string; label: string }[] = [
   { value: "claude-haiku-4-5-20251001", label: "Haiku (fast)" },
-  { value: "claude-sonnet-4-20250514", label: "Sonnet (balanced)" },
-  { value: "claude-opus-4-20250514", label: "Opus (best)" },
+  { value: "claude-sonnet-4-6", label: "Sonnet (balanced)" },
+  { value: "claude-opus-4-8", label: "Opus (best)" },
 ];
 
 export function SettingsModal() {

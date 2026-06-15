@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Sparkles, RotateCcw, Settings, FileText, Copy } from "lucide-react";
 import * as Sentry from "@sentry/astro";
-import { useSettings } from "@/lib/settings";
+import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
 import { bridge } from "@/lib/shell-bridge";
 import type { CatalogData } from "@/lib/service";
 import {
@@ -222,7 +222,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
     // guidance (and CHART_TOOL in the tool list below). Terminal `.ai` mode
     // passes a different surface and would set this false.
     const systemPrompt = buildSystemPrompt(catalogData, serviceUrl, bridge.memoryCatalog, true);
-    const model = getSetting("aiModel") || "claude-sonnet-4-20250514";
+    const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
 
     // Mutable blocks array — updated in callbacks, then set into state
@@ -689,7 +689,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
 
   const hasApiKey = !!getSetting("anthropicApiKey");
   const hasMessages = messages.length > 0;
-  const model = getSetting("aiModel") || "claude-sonnet-4-20250514";
+  const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
   // Pass hasChartTool=true so the preview shown to the user matches what
   // the agent actually sees at runtime (see line 128).

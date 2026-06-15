@@ -226,7 +226,7 @@ Stored in localStorage (`vgi-frontend-settings` — key name predates the Cupola
 | `shellFontSize` | `13` | Terminal font size |
 | `shellThreads` | `0` | DuckDB WASM thread count (0 = auto) |
 | `anthropicApiKey` | `""` | Claude API key for AI features |
-| `aiModel` | `"claude-sonnet-4-20250514"` | Claude model for AI agent |
+| `aiModel` | `"claude-sonnet-4-6"` | Claude model for AI agent (retired IDs auto-migrated on load via `RETIRED_MODEL_REPLACEMENTS` in `settings.tsx`) |
 | `aiMaxToolRounds` | `20` | Max tool-use rounds per AI conversation |
 | `aiChartFeedback` | `true` | Feed rendered chart PNG back to the agent so it can iterate |
 | `aiTelemetry` | `true` | Send AI conversation analytics to Sentry (user opt-out) |

@@ -646,7 +646,7 @@ export function initShell(
           setQueryRunning: (running: boolean) => { queryRunning = running; },
           resetCancelFlag: () => { if (bridge.cancelInt32) Atomics.store(bridge.cancelInt32, 0, 0); },
         };
-        await runAIMode(trimmed, aiConv, aiTerm, aiOps, { apiKey: config.aiApiKey || "", model: config.aiModel || "claude-sonnet-4-20250514" });
+        await runAIMode(trimmed, aiConv, aiTerm, aiOps, { apiKey: config.aiApiKey || "", model: config.aiModel || "claude-sonnet-4-6" });
         continue;
       }
 

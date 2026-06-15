@@ -1,8 +1,8 @@
 /** Claude model pricing: [input $/M tokens, output $/M tokens] */
 export const MODEL_PRICING: Record<string, [number, number]> = {
   "claude-haiku-4-5-20251001": [1, 5],
-  "claude-sonnet-4-20250514": [3, 15],
-  "claude-opus-4-20250514": [15, 75],
+  "claude-sonnet-4-6": [3, 15],
+  "claude-opus-4-8": [5, 25],
 };
 
 export function estimateCost(
