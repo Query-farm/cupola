@@ -8,7 +8,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Settings, Database, FunctionSquare, TerminalSquare, Bot } from "lucide-react";
+import { Settings, Database, FunctionSquare, TerminalSquare, Bot, FileCode2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -70,6 +70,10 @@ export function SettingsModal() {
             <TabsTrigger value="shell" className="gap-1.5">
               <TerminalSquare className="h-3.5 w-3.5" />
               Shell
+            </TabsTrigger>
+            <TabsTrigger value="editor" className="gap-1.5">
+              <FileCode2 className="h-3.5 w-3.5" />
+              Editor
             </TabsTrigger>
             <TabsTrigger value="ai" className="gap-1.5">
               <Bot className="h-3.5 w-3.5" />
@@ -175,6 +179,45 @@ export function SettingsModal() {
                   <span className="text-terminal-accent">D</span> &gt; SELECT * FROM parcels LIMIT 5;
                 </div>
               </div>
+            </div>
+          </TabsContent>
+
+          {/* SQL Editor settings */}
+          <TabsContent value="editor">
+            <div className="divide-y divide-border">
+              <SettingRow>
+                <SettingLabel
+                  title="Font size"
+                  description="Font size for the DBeaver-style SQL query editor."
+                />
+                <Select
+                  value={String(settings.editorFontSize)}
+                  onValueChange={(val) => updateSettings({ editorFontSize: Number(val) })}
+                >
+                  <SelectTrigger className="w-20 h-8 text-sm shrink-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[10, 11, 12, 13, 14, 15, 16, 18, 20].map((size) => (
+                      <SelectItem key={size} value={String(size)} className="text-sm">
+                        {size}px
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </SettingRow>
+              <SettingRow>
+                <SettingLabel
+                  title="Autocomplete"
+                  htmlFor="editor-autocomplete"
+                  description="Suggest keywords, tables, and columns as you type (uses DuckDB's sql_auto_complete)."
+                />
+                <Switch
+                  id="editor-autocomplete"
+                  checked={settings.editorAutocomplete}
+                  onCheckedChange={(checked) => updateSettings({ editorAutocomplete: checked })}
+                />
+              </SettingRow>
             </div>
           </TabsContent>
 

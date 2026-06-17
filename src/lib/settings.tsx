@@ -8,6 +8,10 @@ export interface Settings {
   shellFontSize: number;
   /** DuckDB WASM thread count. 0 = auto (1 for Safari, hardwareConcurrency for others). */
   shellThreads: number;
+  /** Font size for the DBeaver-style SQL query editor (CodeMirror). */
+  editorFontSize: number;
+  /** Enable schema-aware autocomplete (CALL sql_auto_complete) in the editor. */
+  editorAutocomplete: boolean;
   anthropicApiKey: string;
   aiModel: string;
   aiMaxToolRounds: number;
@@ -46,6 +50,8 @@ const defaultSettings: Settings = {
   hideDollarTables: true,
   shellFontSize: 13,
   shellThreads: 0,
+  editorFontSize: 13,
+  editorAutocomplete: true,
   anthropicApiKey: "",
   aiModel: DEFAULT_AI_MODEL,
   aiMaxToolRounds: 20,

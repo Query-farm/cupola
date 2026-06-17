@@ -10,8 +10,10 @@ import { readFileSync } from "node:fs";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 export const BASE = `/v${pkg.version}/`;
-export const SERVICE_URL = "http://localhost:9009";
-export const APP_URL = `http://localhost:4321${BASE}?service=${SERVICE_URL}`;
+// Override with VGI_SERVICE_URL to point the suite at a different VGI server
+// (e.g. a hosted haybarn-backed instance) without editing the suite.
+export const SERVICE_URL = process.env.VGI_SERVICE_URL || "http://localhost:9009";
+export const APP_URL = `http://localhost:4321${BASE}?service=${encodeURIComponent(SERVICE_URL)}`;
 
 // Tight timeouts: prefer fast failure over hanging. The real wait is the very
 // first page load (DuckDB-WASM + catalog fetch) handled in gotoApp().
@@ -52,6 +54,22 @@ export async function openShell(page: Page): Promise<void> {
     await page.locator("aside, div").getByRole("button", { name: /^SQL Shell$/ }).first().click();
   }
   await expect(minimize).toBeVisible({ timeout: T_NORMAL });
+}
+
+/** Switch to the full-page SQL editor surface and wait for it to mount. */
+export async function openEditor(page: Page): Promise<void> {
+  await page.getByTestId("view-toggle-editor").click();
+  await page.getByTestId("sql-editor-view").waitFor({ state: "visible", timeout: T_NORMAL });
+}
+
+/** Type SQL into the active CodeMirror editor (replacing existing content). */
+export async function typeInEditor(page: Page, sql: string): Promise<void> {
+  const content = page.locator(".cm-content").first();
+  await content.click();
+  // Select-all + delete so the editor starts clean, then type.
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("Delete");
+  await content.pressSequentially(sql);
 }
 
 /**

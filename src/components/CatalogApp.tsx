@@ -31,7 +31,11 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 const DuckDBShell = lazy(() => import("./DuckDBShell").then(m => ({ default: m.DuckDBShell })));
+const SqlEditorView = lazy(() => import("./editor/SqlEditorView").then(m => ({ default: m.SqlEditorView })));
 import type { ShellMode } from "./DuckDBShell";
+
+/** Catalog browser vs full-page SQL editor. */
+type AppView = "catalog" | "editor";
 import { CatalogOverview } from "./content/CatalogOverview";
 import { MemoryCatalogOverview } from "./content/MemoryCatalogOverview";
 import { SchemaDetail } from "./content/SchemaDetail";
@@ -69,6 +73,16 @@ export function CatalogApp() {
     return "minimized";
   });
   const shellInsertRef = useRef<((text: string) => void) | null>(null);
+  // Catalog browser vs full-page SQL editor. Persisted so a reload returns to
+  // the same surface.
+  const [appView, setAppView] = useState<AppView>(() => {
+    try {
+      if (localStorage.getItem("vgi-app-view") === "editor") return "editor";
+    } catch {}
+    return "catalog";
+  });
+  // SQL pushed into the editor from elsewhere (example queries, shell history).
+  const [pendingEditorSql, setPendingEditorSql] = useState<string | null>(null);
   const [memoryCatalog, setMemoryCatalog] = useState<CatalogData | null>(null);
   const [attachedCatalogs, setAttachedCatalogs] = useState<CatalogData[]>([]);
   // Keep the latest attached list in a ref so syncAttachedCatalogs can diff
@@ -247,6 +261,21 @@ export function CatalogApp() {
   useEffect(() => {
     try { localStorage.setItem("vgi-shell-mode", shellMode); } catch {}
   }, [shellMode]);
+
+  // Persist the active surface (catalog vs editor).
+  useEffect(() => {
+    try { localStorage.setItem("vgi-app-view", appView); } catch {}
+  }, [appView]);
+
+  // bridge.openInEditor: switch to the editor surface and queue the SQL.
+  // Invoked by ExampleQueries' Run button and the shell's history tab.
+  useEffect(() => {
+    bridge.openInEditor = (sql: string) => {
+      setPendingEditorSql(sql);
+      setAppView("editor");
+    };
+    return () => { bridge.openInEditor = null; };
+  }, []);
 
   // Expose refresh globally (navigate is exposed after it's defined below).
   // useEffect + cleanup so unmount clears the slots instead of leaking the
@@ -656,6 +685,8 @@ export function CatalogApp() {
           catalogName={data.catalogName}
           catalogComment={data.catalogComment}
           serviceUrl={serviceUrl}
+          appView={appView}
+          onToggleView={setAppView}
         />
       )}
       <div className="flex flex-1 overflow-hidden">
@@ -669,7 +700,15 @@ export function CatalogApp() {
                 selection={selection}
                 onSelect={(sel) => navigate(sel)}
                 onOpenShell={() => setShellMode("maximized")}
-                onShellInsert={(text) => shellInsertRef.current?.(text)}
+                onShellInsert={(text) => {
+                  // In editor view, route table/column clicks into the SQL
+                  // editor at the cursor; otherwise into the xterm shell.
+                  if (appView === "editor" && bridge.insertIntoEditor) {
+                    bridge.insertIntoEditor(text);
+                  } else {
+                    shellInsertRef.current?.(text);
+                  }
+                }}
                 onRefresh={() => loadCatalog(true)}
                 refreshing={refreshing}
               />
@@ -683,11 +722,27 @@ export function CatalogApp() {
           </>
         )}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Content area — hidden when shell is maximized or fullscreen */}
-          <main className={`overflow-y-auto p-6 min-h-0 ${shellMode === "maximized" || shellMode === "fullscreen" ? "h-0 overflow-hidden" : "flex-1"}`}>
-            <ErrorBoundary>
-              <ContentPanel data={data} memoryCatalog={memoryCatalog} attachedCatalogs={attachedCatalogs} selection={selection} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={navigate} onOpenShell={() => setShellMode((m) => m === "minimized" ? "panel" : m)} shellMode={shellMode} />
-            </ErrorBoundary>
+          {/* Content area — hidden when shell is maximized or fullscreen.
+              In editor view the SQL editor replaces the catalog content panel
+              (no padding, owns its own scroll); the sidebar stays visible. */}
+          <main className={`min-h-0 ${shellMode === "maximized" || shellMode === "fullscreen" ? "h-0 overflow-hidden" : "flex-1"} ${appView === "editor" ? "overflow-hidden" : "overflow-y-auto p-6"}`}>
+            {appView === "editor" ? (
+              <ErrorBoundary>
+                <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading editor…</div>}>
+                  <SqlEditorView
+                    catalogData={data}
+                    serviceUrl={serviceUrl}
+                    onExitEditor={() => setAppView("catalog")}
+                    pendingSql={pendingEditorSql}
+                    onPendingConsumed={() => setPendingEditorSql(null)}
+                  />
+                </Suspense>
+              </ErrorBoundary>
+            ) : (
+              <ErrorBoundary>
+                <ContentPanel data={data} memoryCatalog={memoryCatalog} attachedCatalogs={attachedCatalogs} selection={selection} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={navigate} onOpenShell={() => setShellMode((m) => m === "minimized" ? "panel" : m)} shellMode={shellMode} />
+              </ErrorBoundary>
+            )}
           </main>
 
           {/* Resize handle — only in panel mode */}

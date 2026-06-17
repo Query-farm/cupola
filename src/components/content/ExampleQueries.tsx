@@ -51,6 +51,13 @@ function QueryBlock({ query, index, onOpenShell }: { query: ExampleQuery; index:
   };
 
   const handleRun = () => {
+    // Prefer the DBeaver-style SQL editor (deterministic: it queues + runs the
+    // query without the terminal-paste setTimeout race). Fall back to the
+    // xterm shell if the editor surface isn't available.
+    if (bridge.openInEditor) {
+      bridge.openInEditor(query.sql);
+      return;
+    }
     bridge.activateShell?.();
     setTimeout(() => {
       bridge.runQuery?.(query.sql);
