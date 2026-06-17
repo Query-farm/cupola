@@ -100,6 +100,9 @@ interface Props {
   onUpdateBlock?: (blockId: string, patch: Partial<VegaChartContent>) => void;
   usage?: { inputTokens: number; outputTokens: number };
   model?: string;
+  /** Override how a `run_sql` tool call renders (the editor panel uses this to
+   *  add "apply to editor" actions). Defaults to the plain SqlToolCallBlock. */
+  renderSqlToolCall?: (toolCall: ToolCallEntry, onCancel?: () => void) => React.ReactNode;
 }
 
 /** Small inline cancel button shown next to a running tool indicator. */
@@ -117,7 +120,7 @@ function CancelChip({ onCancel }: { onCancel: () => void }) {
 }
 
 export function ChatMessageAssistant({
-  blocks, isStreaming, onAskUserSelect, onCancel, onUpdateBlock, usage, model,
+  blocks, isStreaming, onAskUserSelect, onCancel, onUpdateBlock, usage, model, renderSqlToolCall,
 }: Props) {
   return (
     <div className="flex gap-2.5">
@@ -133,7 +136,13 @@ export function ChatMessageAssistant({
           if (block.type === "tool_call") {
             const tc = block.toolCall;
             if (tc.name === "run_sql") {
-              return <SqlToolCallBlock key={block.id} toolCall={tc} onCancel={onCancel} />;
+              return (
+                <div key={block.id}>
+                  {renderSqlToolCall
+                    ? renderSqlToolCall(tc, onCancel)
+                    : <SqlToolCallBlock toolCall={tc} onCancel={onCancel} />}
+                </div>
+              );
             }
             if (
               tc.name === "list_tables" || tc.name === "describe_table" ||

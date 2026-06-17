@@ -19,6 +19,8 @@ interface Props {
   onOpenInPerspective: () => void;
   onOpenInShell: () => void;
   onAskAI: () => void;
+  /** Whether the Ask AI panel is currently open (renders the button pressed). */
+  aiActive?: boolean;
   onDownloadSql: () => void;
 }
 
@@ -35,6 +37,7 @@ export function EditorToolbar({
   onOpenInPerspective,
   onOpenInShell,
   onAskAI,
+  aiActive,
   onDownloadSql,
 }: Props) {
   return (
@@ -110,10 +113,11 @@ export function EditorToolbar({
 
       <Button
         size="sm"
-        variant="ghost"
+        variant={aiActive ? "default" : "ghost"}
         onClick={onAskAI}
         className="h-7 gap-1.5"
-        title="Ask AI to write or explain SQL"
+        title="Toggle the Ask AI panel"
+        aria-pressed={aiActive}
         data-testid="editor-ask-ai"
       >
         <Sparkles className="h-3.5 w-3.5" />

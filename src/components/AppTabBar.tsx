@@ -1,6 +1,6 @@
 /**
  * The single top-level tab bar (under the Header). Replaces both the old
- * header "Catalog / SQL Editor" toggle and the bottom shell drawer's own tab
+ * header "Catalog / Query Editor" toggle and the bottom shell drawer's own tab
  * strip — one place to drive the whole UI.
  */
 import { Database, FileCode2, Sparkles, Table2, History, BarChart3, PanelLeftClose, PanelLeftOpen } from "lucide-react";
@@ -18,7 +18,7 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { id: "catalog", label: "Catalog", icon: Database },
-  { id: "editor", label: "SQL Editor", icon: FileCode2 },
+  { id: "editor", label: "Query Editor", icon: FileCode2 },
   { id: "shell", label: "SQL Shell", img: true },
   { id: "askai", label: "Ask AI", icon: Sparkles },
   { id: "preview", label: "Preview", icon: Table2 },

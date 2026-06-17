@@ -112,8 +112,8 @@ export function initShell(
     };
 
     // Tab completion + Ctrl+R reverse search (delegated to shell-input.ts).
-    // sql_auto_complete autoloads on first call against haybarn's default
-    // repository — no explicit INSTALL/LOAD needed.
+    // sql_auto_complete comes from the `autocomplete` extension, which is
+    // explicit-loaded in runPostReady (autoload is disabled at boot).
     shellInputHandlers = attachInputHandlers(term, rl, async (text) => {
       const q = bridge.query;
       if (!q) {
@@ -424,6 +424,10 @@ export function initShell(
         { name: "iceberg" },
         { name: "spatial" },
         { name: "ducklake" },
+        // autocomplete provides sql_auto_complete(), used by both the shell's
+        // Tab completion and the SQL editor's CodeMirror completion source.
+        // Must be explicit-loaded since autoload is disabled above.
+        { name: "autocomplete" },
       ];
       for (const ext of extensions) {
         writeln(`Loading ${ext.name} extension...`, "33");

@@ -43,13 +43,10 @@ test.describe("Unified tab bar", () => {
     expect(download.suggestedFilename()).toMatch(/\.sql$/);
   });
 
-  test("Ask AI dialog opens and reads the live editor query", async ({ page }) => {
+  test("Ask AI panel toggles open from the editor toolbar", async ({ page }) => {
     await openEditor(page);
     await typeInEditor(page, "SELECT count(*) FROM foo");
     await page.getByTestId("editor-ask-ai").click();
-    // The dialog opened (no API key needed to verify the surface).
-    await expect(page.getByRole("heading", { name: "Ask AI" })).toBeVisible({ timeout: T_NORMAL });
-    // Explain is enabled because there's a live query.
-    await expect(page.getByRole("button", { name: /Explain current/i })).toBeEnabled();
+    await expect(page.getByTestId("editor-ai-panel")).toBeVisible({ timeout: T_NORMAL });
   });
 });

@@ -4,7 +4,7 @@
  * with the xterm shell (shared DuckDB session via the bridge) and the catalog
  * sidebar (rendered by CatalogApp alongside this view).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { format as formatSql } from "sql-formatter";
 import { tableFromIPC, tableToIPC } from "apache-arrow";
 import { bridge, recordQuery, onBootChange } from "@/lib/shell-bridge";
@@ -28,7 +28,8 @@ import { CodeMirrorSql, type CodeMirrorSqlHandle } from "./CodeMirrorSql";
 import { SqlEditorTabs } from "./SqlEditorTabs";
 import { EditorToolbar } from "./EditorToolbar";
 import { EditorResultsPane, emptyResult, type ResultState } from "./EditorResultsPane";
-import { AskAiSqlDialog } from "./AskAiSqlDialog";
+import { EditorAiPanel } from "./EditorAiPanel";
+import type { SqlApplyActions } from "./EditorSqlToolCallBlock";
 
 interface Props {
   catalogData: CatalogData;
@@ -46,7 +47,16 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
   const [docState, setDocState] = useState<EditorDocState>(() => loadEditorState());
   const [results, setResults] = useState<Record<string, ResultState>>({});
   const [hasSelection, setHasSelection] = useState(false);
-  const [aiOpen, setAiOpen] = useState(false);
+  // Docked Ask AI panel (right side) — persisted open state + width.
+  const AI_MIN = 320, AI_MAX = 720, AI_DEFAULT = 400;
+  const [aiOpen, setAiOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem("vgi-editor-ai-open") === "1"; } catch { return false; }
+  });
+  const [aiWidth, setAiWidth] = useState<number>(() => {
+    try { const n = parseInt(localStorage.getItem("vgi-editor-ai-width") || "", 10); if (n >= 320 && n <= 720) return n; } catch {}
+    return 400;
+  });
+  useEffect(() => { try { localStorage.setItem("vgi-editor-ai-open", aiOpen ? "1" : "0"); } catch {} }, [aiOpen]);
   // bridge.query availability — re-checked after the shell finishes booting.
   const [queryReady, setQueryReady] = useState<boolean>(() => !!bridge.query);
   // Live engine boot phase (e.g. "Downloading DuckDB") shown in the toolbar
@@ -325,6 +335,33 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
     if (text) smartInsert(text);
   }, [smartInsert]);
 
+  // Apply-back actions handed to the AI panel (it lives inside this component,
+  // so it calls our editor handlers directly).
+  const aiApply = useMemo<SqlApplyActions>(() => ({
+    replaceStatement: applyReplaceStatement,
+    replaceDocument: applyReplaceDocument,
+    insertAtCursor: applyInsertAtCursor,
+    openInNewTab: (sql: string) => bridge.openInEditor?.(sql),
+  }), [applyReplaceStatement, applyReplaceDocument, applyInsertAtCursor]);
+
+  // Right-panel resize (inverted delta vs a left sidebar). Persist on release.
+  const onAiResizeStart = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = aiWidth;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const onMove = (ev: globalThis.PointerEvent) => {
+      setAiWidth(Math.min(AI_MAX, Math.max(AI_MIN, startW - (ev.clientX - startX))));
+    };
+    const onUp = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      setAiWidth((w) => { try { localStorage.setItem("vgi-editor-ai-width", String(w)); } catch {} return w; });
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  }, [aiWidth]);
+
   // ---- sidebar click-to-insert --------------------------------------------
   useEffect(() => {
     bridge.insertIntoEditor = smartInsert;
@@ -373,39 +410,54 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
         onExport={handleExport}
         onOpenInPerspective={handleOpenInPerspective}
         onOpenInShell={handleOpenInShell}
-        onAskAI={() => setAiOpen(true)}
+        onAskAI={() => setAiOpen((o) => !o)}
+        aiActive={aiOpen}
         onDownloadSql={handleDownloadSql}
       />
-      {/* Editor (top) + results (bottom). Fixed 45/55 split for v1. */}
-      <div className="flex flex-col flex-1 min-h-0">
-        <div className="h-[42%] min-h-[120px] border-b border-border overflow-hidden">
-          <CodeMirrorSql
-            key={activeDoc?.id ?? "none"}
-            ref={editorRef}
-            initialDoc={activeDoc?.sql ?? ""}
-            onChange={handleDocChange}
-            onRunStatement={handleRunStatementAtCursor}
-            onSelectionChange={setHasSelection}
-            onDropText={handleDropText}
-            completionSource={completionSource}
-            fontSize={settings.editorFontSize ?? 13}
+      {/* Horizontal split: editor+results on the left, Ask AI panel on the
+          right. The panel stays mounted (display:none when closed) so its
+          per-tab conversations survive open/close toggles. */}
+      <div className="flex flex-1 min-h-0">
+        <div className="flex flex-col flex-1 min-w-0">
+          <div className="h-[42%] min-h-[120px] border-b border-border overflow-hidden">
+            <CodeMirrorSql
+              key={activeDoc?.id ?? "none"}
+              ref={editorRef}
+              initialDoc={activeDoc?.sql ?? ""}
+              onChange={handleDocChange}
+              onRunStatement={handleRunStatementAtCursor}
+              onSelectionChange={setHasSelection}
+              onDropText={handleDropText}
+              completionSource={completionSource}
+              fontSize={settings.editorFontSize ?? 13}
+            />
+          </div>
+          <div className="flex-1 min-h-0">
+            <EditorResultsPane state={activeResult} />
+          </div>
+        </div>
+        {aiOpen && (
+          <div
+            onPointerDown={onAiResizeStart}
+            className="w-1.5 shrink-0 cursor-col-resize bg-border hover:bg-accent/60 active:bg-accent transition-colors"
+          />
+        )}
+        <div
+          className="shrink-0 overflow-hidden"
+          style={aiOpen ? { width: aiWidth } : { width: 0, display: "none" }}
+        >
+          <EditorAiPanel
+            docId={activeDoc?.id ?? "none"}
+            catalogData={catalogData}
+            serviceUrl={serviceUrl}
+            getCurrentSql={getCurrentSql}
+            apply={aiApply}
+            runIdRef={runIdRef}
+            setActiveResult={setActiveResult}
+            onClose={() => setAiOpen(false)}
           />
         </div>
-        <div className="flex-1 min-h-0">
-          <EditorResultsPane state={activeResult} />
-        </div>
       </div>
-
-      <AskAiSqlDialog
-        open={aiOpen}
-        onOpenChange={setAiOpen}
-        catalogData={catalogData}
-        serviceUrl={serviceUrl}
-        getCurrentSql={getCurrentSql}
-        onReplaceStatement={applyReplaceStatement}
-        onReplaceDocument={applyReplaceDocument}
-        onInsertAtCursor={applyInsertAtCursor}
-      />
     </div>
   );
 }
