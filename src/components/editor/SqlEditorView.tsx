@@ -44,7 +44,7 @@ interface Props {
 
 export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSql, onPendingConsumed }: Props) {
   const { settings } = useSettings();
-  const [docState, setDocState] = useState<EditorDocState>(() => loadEditorState());
+  const [docState, setDocState] = useState<EditorDocState>(() => loadEditorState(serviceUrl));
   const [results, setResults] = useState<Record<string, ResultState>>({});
   const [hasSelection, setHasSelection] = useState(false);
   // Docked Ask AI panel (right side) — persisted open state + width.
@@ -99,15 +99,15 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
 
   const persist = useCallback((next: EditorDocState) => {
     setDocState(next);
-    saveEditorState(next);
-  }, []);
+    saveEditorState(next, serviceUrl);
+  }, [serviceUrl]);
 
   // Flush any pending debounced save when the page is hidden/closed or the
   // editor unmounts (e.g. switching back to the catalog view).
   useEffect(() => {
     const flush = () => {
       if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
-      saveEditorState(docStateRef.current);
+      saveEditorState(docStateRef.current, serviceUrl);
     };
     window.addEventListener("pagehide", flush);
     document.addEventListener("visibilitychange", flush);
@@ -116,7 +116,7 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
       document.removeEventListener("visibilitychange", flush);
       flush();
     };
-  }, []);
+  }, [serviceUrl]);
 
   // ---- document model -----------------------------------------------------
   const handleDocChange = useCallback((sql: string) => {
@@ -124,10 +124,10 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
     setDocState((prev) => {
       const next = updateDocSql(prev, activeId, sql);
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => saveEditorState(next), 400);
+      saveTimer.current = setTimeout(() => saveEditorState(next, serviceUrl), 400);
       return next;
     });
-  }, [activeId]);
+  }, [activeId, serviceUrl]);
 
   const handleAddTab = useCallback((sql = "") => {
     persist(addDoc(docState, sql));
@@ -373,7 +373,7 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
     if (!pendingSql) return;
     setDocState((prev) => {
       const next = addDoc(prev, pendingSql);
-      saveEditorState(next);
+      saveEditorState(next, serviceUrl);
       const newId = next.activeId!;
       // Run once the editor remounts with the new active doc.
       setTimeout(() => runSql(pendingSql, newId), 60);

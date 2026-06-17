@@ -18,7 +18,16 @@ export interface EditorState {
   activeId: string | null;
 }
 
-const STORAGE_KEY = "vgi-sql-editor-docs";
+/** Legacy (unscoped) key — predates per-server scoping. Migrated on first
+ *  load for a server, then removed. */
+const LEGACY_KEY = "vgi-sql-editor-docs";
+
+/** Saved queries are scoped to the connected VGI server so each server keeps
+ *  its own set of tabs. Falls back to the legacy unscoped key when no service
+ *  is provided (e.g. unit tests). */
+function storageKey(serviceUrl?: string): string {
+  return serviceUrl ? `${LEGACY_KEY}::${serviceUrl}` : LEGACY_KEY;
+}
 
 /** Best-effort UUID — crypto.randomUUID where available, else a timestamp+rand fallback. */
 export function newId(): string {
@@ -38,11 +47,24 @@ function freshState(): EditorState {
   return { version: 1, docs: [doc], activeId: doc.id };
 }
 
-/** Load persisted editor state, healing/seeding as needed. Never throws. */
-export function loadEditorState(): EditorState {
+/** Load persisted editor state for the given server, healing/seeding as
+ *  needed. On first load for a server, adopts any legacy unscoped docs (then
+ *  removes them) so existing queries aren't lost. Never throws. */
+export function loadEditorState(serviceUrl?: string): EditorState {
   if (typeof localStorage === "undefined") return freshState();
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const key = storageKey(serviceUrl);
+    let raw = localStorage.getItem(key);
+    // One-time migration: the first server to load adopts the legacy
+    // unscoped docs, then the legacy key is cleared.
+    if (!raw && serviceUrl) {
+      const legacy = localStorage.getItem(LEGACY_KEY);
+      if (legacy) {
+        localStorage.setItem(key, legacy);
+        localStorage.removeItem(LEGACY_KEY);
+        raw = legacy;
+      }
+    }
     if (!raw) return freshState();
     const parsed = JSON.parse(raw) as Partial<EditorState>;
     const docs = Array.isArray(parsed.docs)
@@ -56,11 +78,11 @@ export function loadEditorState(): EditorState {
   }
 }
 
-/** Persist editor state. Never throws. */
-export function saveEditorState(state: EditorState): void {
+/** Persist editor state for the given server. Never throws. */
+export function saveEditorState(state: EditorState, serviceUrl?: string): void {
   if (typeof localStorage === "undefined") return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(storageKey(serviceUrl), JSON.stringify(state));
   } catch {}
 }
 

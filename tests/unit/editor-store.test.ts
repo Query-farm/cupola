@@ -90,4 +90,42 @@ describe("editor-store", () => {
     const names = s.docs.map((d) => d.name).sort();
     expect(names).toEqual(["Query 1", "Query 2"]);
   });
+
+  test("scopes docs per server", () => {
+    const a = "https://a.example";
+    const b = "https://b.example";
+    let sa = updateDocSql(loadEditorState(a), loadEditorState(a).activeId!, "SELECT 'a'");
+    // re-derive activeId cleanly
+    sa = loadEditorState(a);
+    sa = updateDocSql(sa, sa.activeId!, "SELECT 'a'");
+    saveEditorState(sa, a);
+
+    let sb = loadEditorState(b);
+    sb = updateDocSql(sb, sb.activeId!, "SELECT 'b'");
+    saveEditorState(sb, b);
+
+    expect(loadEditorState(a).docs[0].sql).toBe("SELECT 'a'");
+    expect(loadEditorState(b).docs[0].sql).toBe("SELECT 'b'");
+    // Distinct storage keys.
+    expect(store.has("vgi-sql-editor-docs::https://a.example")).toBe(true);
+    expect(store.has("vgi-sql-editor-docs::https://b.example")).toBe(true);
+  });
+
+  test("migrates legacy unscoped docs to the first server, once", () => {
+    // Seed a legacy (unscoped) blob.
+    let legacy = loadEditorState();
+    legacy = updateDocSql(legacy, legacy.activeId!, "SELECT 'legacy'");
+    saveEditorState(legacy); // no serviceUrl → legacy key
+    expect(store.has("vgi-sql-editor-docs")).toBe(true);
+
+    // First server adopts it and the legacy key is removed.
+    const adopted = loadEditorState("https://first.example");
+    expect(adopted.docs[0].sql).toBe("SELECT 'legacy'");
+    expect(store.has("vgi-sql-editor-docs")).toBe(false);
+    expect(store.has("vgi-sql-editor-docs::https://first.example")).toBe(true);
+
+    // A second server does NOT inherit it (gets a fresh seed).
+    const second = loadEditorState("https://second.example");
+    expect(second.docs[0].sql).toBe("");
+  });
 });

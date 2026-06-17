@@ -22,7 +22,7 @@ export function SqlApplyBar({ sql, apply }: { sql: string; apply: SqlApplyAction
     <div className="flex items-center gap-1.5 px-0.5">
       <Popover>
         <PopoverTrigger
-          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-border hover:bg-foreground/5 transition-colors"
+          className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-primary text-primary-foreground hover:bg-accent shadow-sm transition-colors"
           title="Apply this SQL to the editor"
           data-testid="ai-apply-menu"
         >

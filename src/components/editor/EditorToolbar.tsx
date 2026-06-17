@@ -58,7 +58,7 @@ export function EditorToolbar({
           size="sm"
           onClick={onRun}
           disabled={!queryReady}
-          className="h-7 gap-1.5"
+          className="h-7 gap-1.5 bg-accent text-white hover:bg-accent/90 shadow-sm"
           title={hasSelection ? "Run selection (⌘/Ctrl+Enter for statement)" : "Run statement at cursor (⌘/Ctrl+Enter)"}
           data-testid="editor-run"
         >
