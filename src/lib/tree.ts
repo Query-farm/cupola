@@ -20,7 +20,10 @@ interface TreeDataItem {
   actions?: React.ReactNode;
   onClick?: () => void;
   disabled?: boolean;
+  draggable?: boolean;
   className?: string;
+  /** Hover tooltip for the node's label (e.g. a column's comment). */
+  title?: string;
 }
 
 export type { TreeDataItem };
@@ -62,6 +65,29 @@ export function parseSelection(id: string): Selection | null {
       const colParts = rest.slice(2).split("/");
       return { type: "table", name: colParts[0], schema, catalog };
     }
+  }
+  return null;
+}
+
+/**
+ * Convert a tree item ID into text suitable for inserting into a SQL surface
+ * (shell or editor). Tables/views → dotted `catalog.schema.name`; columns →
+ * the bare column name; functions → the function name. Returns null for
+ * non-leaf ids. Shared by the shell drop target and the editor drop target.
+ */
+export function treeIdToShellText(id: string): string | null {
+  const parts = id.split("::");
+  if (parts.length === 3) {
+    const catalog = parts[0];
+    const schema = parts[1];
+    const rest = parts[2];
+    if (rest.startsWith("t:")) return `${catalog}.${schema}.${rest.slice(2)}`;
+    if (rest.startsWith("c:")) {
+      const colParts = rest.slice(2).split("/");
+      return colParts[1] || colParts[0];
+    }
+    if (rest.startsWith("v:")) return `${catalog}.${schema}.${rest.slice(2)}`;
+    if (rest.startsWith("f:")) return rest.slice(2);
   }
   return null;
 }
@@ -140,6 +166,9 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
         icon: isPK ? Key : Columns3,
         className: "text-muted-foreground text-xs",
         draggable: !!onTableAction,
+        // Column comment as a hover tooltip — fall back to the type so the
+        // row always has something useful on hover.
+        title: col.comment ? `${col.name} — ${col.comment}` : undefined,
         actions: React.createElement("span", {
           className: `tree-col-type text-[10px] font-mono ml-1 truncate px-1 py-0.5 rounded ${typeColorClass(typeLabel)}`,
           title: displayType !== typeLabel ? typeLabel : undefined,

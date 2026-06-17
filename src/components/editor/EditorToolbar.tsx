@@ -1,4 +1,4 @@
-import { Play, Square, Sparkles, WandSparkles, TerminalSquare } from "lucide-react";
+import { Play, Square, Sparkles, WandSparkles, TerminalSquare, Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ExportMenu } from "./ExportMenu";
 import type { ExportFormat } from "@/lib/editor/result-export";
@@ -7,6 +7,8 @@ interface Props {
   running: boolean;
   /** bridge.query is available (DuckDB booted). */
   queryReady: boolean;
+  /** Human-readable boot phase shown while the engine initializes. */
+  bootPhase?: string | null;
   hasResult: boolean;
   /** True when text is selected in the editor (Run targets the selection). */
   hasSelection: boolean;
@@ -17,11 +19,13 @@ interface Props {
   onOpenInPerspective: () => void;
   onOpenInShell: () => void;
   onAskAI: () => void;
+  onDownloadSql: () => void;
 }
 
 export function EditorToolbar({
   running,
   queryReady,
+  bootPhase,
   hasResult,
   hasSelection,
   onRun,
@@ -31,6 +35,7 @@ export function EditorToolbar({
   onOpenInPerspective,
   onOpenInShell,
   onAskAI,
+  onDownloadSql,
 }: Props) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0">
@@ -59,6 +64,16 @@ export function EditorToolbar({
         </Button>
       )}
 
+      {!queryReady && !running && (
+        <span
+          className="flex items-center gap-1.5 text-xs text-muted-foreground"
+          data-testid="editor-engine-initializing"
+        >
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          {bootPhase ? `${bootPhase}…` : "Initializing SQL engine…"}
+        </span>
+      )}
+
       <span className="h-5 w-px bg-border" aria-hidden="true" />
 
       <Button
@@ -78,6 +93,18 @@ export function EditorToolbar({
         onOpenInPerspective={onOpenInPerspective}
         disabled={!hasResult}
       />
+
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={onDownloadSql}
+        className="h-7 gap-1.5"
+        title="Download this tab's SQL as a .sql file"
+        data-testid="editor-download-sql"
+      >
+        <Download className="h-3.5 w-3.5" />
+        .sql
+      </Button>
 
       <div className="flex-1" />
 

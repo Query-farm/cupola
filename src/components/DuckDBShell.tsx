@@ -4,10 +4,12 @@
  * Shell logic adapted from public/shell/index.html.
  */
 import { useEffect, useRef, useState, useCallback, lazy, Suspense } from "react";
-import { Maximize2, Minimize2, ChevronDown, ChevronUp, BarChart3, History, Table2, Sparkles, Loader2 } from "lucide-react";
+import { Loader2, Table2 } from "lucide-react";
+import type { TabId } from "./AppTabBar";
 const AskAIChat = lazy(() => import("./AskAIChat").then(m => ({ default: m.AskAIChat })));
 import { DataPreview } from "./content/DataPreview";
 import { getColumns } from "@/lib/service";
+import { treeIdToShellText } from "@/lib/tree";
 import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
 import { getAuthToken, getAuthTokenForService, getOAuthMeta, redirectToAuth } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
@@ -28,13 +30,15 @@ import type { CatalogData } from "@/lib/service";
 
 export type { QueryHistoryEntry } from "@/lib/shell-bridge";
 
-export type ShellMode = "minimized" | "panel" | "maximized" | "fullscreen";
-
 interface Props {
   serviceUrl: string;
   catalogName: string;
-  mode: ShellMode;
-  onModeChange: (mode: ShellMode) => void;
+  /** The active top-level tab (controlled by CatalogApp's single tab bar). */
+  activeTab: TabId;
+  /** Switch the active top-level tab (used by bridge slots / history re-run). */
+  onTabChange: (tab: TabId) => void;
+  /** Notifies the parent of the query-history entry count (for the tab badge). */
+  onQueryHistoryCountChange?: (count: number) => void;
   /** Called when the shell is ready, with a function to insert text into the terminal. */
   onShellReady?: (insertText: (text: string) => void) => void;
   /** Catalog metadata for AI agent tools. */
@@ -107,7 +111,10 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShellReady, catalogData, selection, onAuthError, onAttachError, attachOptions }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, onQueryHistoryCountChange, onShellReady, catalogData, selection, onAuthError, onAttachError, attachOptions }: Props) {
+  // The parent controls the active tab; expose a local alias so the existing
+  // setActiveTab(...) call sites (history re-run, bridge slots) keep working.
+  const setActiveTab = onTabChange;
   const rootRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const perspectiveRef = useRef<HTMLDivElement>(null);
@@ -123,7 +130,6 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   }, []);
   const [error, setError] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
-  const [activeTab, setActiveTab] = useState<"shell" | "askai" | "preview" | "perspective" | "queries">("shell");
   // In-memory Arrow table to show in the Preview tab when the user runs
   // `.preview` in the shell. Takes precedence over the selection-driven table
   // preview, and is cleared when the sidebar selection changes (see below).
@@ -131,23 +137,20 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   const [termSize, setTermSize] = useState<{ rows: number; cols: number } | null>(null);
   const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
 
-  // Defer heavy DuckDB WASM initialization until the user actually opens the
-  // shell (mode leaves "minimized"). This avoids fetching the large WASM
-  // binary and booting the worker on page load, which causes issues in Safari.
-  const [shellActivated, setShellActivated] = useState(mode !== "minimized");
-  useEffect(() => {
-    if (mode !== "minimized") setShellActivated(true);
-  }, [mode]);
+  // CatalogApp only mounts this component once an engine-backed tab has been
+  // visited, so the heavy DuckDB WASM boot is already deferred upstream — the
+  // shell is "activated" for its whole lifetime here.
+  const shellActivated = true;
 
   // Expose query history setter for the initShell closure. Inside useEffect
   // with cleanup so React's strict-mode mount/unmount/remount doesn't leave a
   // stale closure pointing at the previous component instance's setState.
   useEffect(() => {
     bridge.addQueryHistoryEntry = (entry: QueryHistoryEntry) => {
-      setQueryHistory(prev => [...prev, entry]);
+      setQueryHistory(prev => { const next = [...prev, entry]; onQueryHistoryCountChange?.(next.length); return next; });
     };
     return () => { bridge.addQueryHistoryEntry = null; };
-  }, []);
+  }, [onQueryHistoryCountChange]);
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
   const [perspectiveHasData, setPerspectiveHasData] = useState(false);
 
@@ -167,16 +170,11 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   const selectedView = selection?.type === "view" ? findInCatalogs("view", selection.name, selection.schema) : null;
   const hasSelectedTableOrView = !!(selectedTable || selectedView || (selection && (selection.type === "table" || selection.type === "view")));
 
-  // Expose a function to switch to the shell tab and ensure it's visible.
-  // useEffect + cleanup so unmount doesn't leave a callback closed over a
-  // stale mode/onModeChange.
+  // Expose a function to switch to the shell tab.
   useEffect(() => {
-    bridge.activateShell = () => {
-      setActiveTab("shell");
-      if (mode === "minimized") onModeChange("panel");
-    };
+    bridge.activateShell = () => setActiveTab("shell");
     return () => { bridge.activateShell = null; };
-  }, [mode, onModeChange]);
+  }, [setActiveTab]);
 
   // Expose a callback for the shell to trigger Perspective view
   useEffect(() => {
@@ -196,7 +194,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
     return () => {
       bridge.showPerspective = null;
     };
-  }, []);
+  }, [setActiveTab]);
 
   // Expose a callback for the shell's `.preview` command to open the last
   // query result in the Data Preview tab. The Arrow IPC buffer is decoded
@@ -206,14 +204,13 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
       try {
         setResultPreview(tableFromIPC(arrowBuffer));
         setActiveTab("preview");
-        if (mode === "minimized") onModeChange("panel");
       } catch (e: any) {
         console.error("Preview decode error:", e);
         Sentry.captureException(e, { tags: { component: "preview", path: "showPreview" } });
       }
     };
     return () => { bridge.showPreview = null; };
-  }, [mode, onModeChange]);
+  }, [setActiveTab]);
 
   // A result preview belongs to a specific query, not to the sidebar. When the
   // user navigates to a different table/view, drop it so the Preview tab falls
@@ -294,7 +291,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
   // and masked real bugs — replaced by rAF + a single 0ms tick to cover
   // the case where layout finishes after rAF on Safari.
   useEffect(() => {
-    if (mode !== "minimized" && activeTab === "shell" && bridge.shellFitAddon) {
+    if (activeTab === "shell" && bridge.shellFitAddon) {
       const fitAndRefresh = () => {
         bridge.shellFitAddon?.fit();
         updateTermSize();
@@ -305,25 +302,25 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
       const t = setTimeout(fitAndRefresh, 0);
       return () => { clearTimeout(t); };
     }
-  }, [mode, activeTab, updateTermSize]);
+  }, [activeTab, updateTermSize]);
 
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      if (mode !== "minimized" && activeTab === "shell" && bridge.shellFitAddon) {
+      if (activeTab === "shell" && bridge.shellFitAddon) {
         bridge.shellFitAddon.fit();
         updateTermSize();
       }
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [mode, activeTab, updateTermSize]);
+  }, [activeTab, updateTermSize]);
 
   // Auto-load Perspective virtual server when tab is active and a table is selected
   const perspectiveTableRef = useRef<string | null>(null);
   useEffect(() => {
-    if (mode === "minimized" || activeTab !== "perspective" || !selectedTable) return;
+    if (activeTab !== "perspective" || !selectedTable) return;
     // Schema name lives on different fields depending on the catalog source:
     // attached/memory catalogs (built in duckdb-catalog.ts) expose it as
     // `schemaName`, while VGI primary-catalog tables come straight off the
@@ -441,118 +438,21 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
     })();
 
     return () => { cancelled = true; };
-  }, [mode, activeTab, selectedTable, selection, catalogName]);
-
-  const tabCls = (tab: string) => {
-    const active = activeTab === tab;
-    return `inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium cursor-pointer transition-colors rounded-t-md ${
-      active
-        ? "bg-card text-primary border border-border border-b-0 relative z-10"
-        : "text-muted-foreground hover:text-foreground border border-transparent hover:bg-secondary"
-    }`;
-  };
-
-  const handleTabClick = (tab: typeof activeTab) => {
-    if (tab === activeTab && mode !== "minimized") {
-      onModeChange("minimized");
-    } else {
-      setActiveTab(tab);
-      if (mode === "minimized") onModeChange("panel");
-    }
-  };
+  }, [activeTab, selectedTable, selection, catalogName]);
 
   return (
     <div ref={rootRef} className="flex flex-col h-full bg-terminal-bg">
-      {/* Header bar — always visible, acts as minimized view */}
-      <div
-        className="flex items-center justify-between px-2 pt-1 bg-secondary shrink-0 border-b border-border"
-        onDragOver={(e) => {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "copy";
-          if (mode === "minimized") onModeChange("panel");
-        }}
-        onDrop={(e) => {
-          e.preventDefault();
-          const data = e.dataTransfer.getData("text/plain");
-          if (data) {
-            const text = treeIdToShellText(data);
-            if (text) bridge.insertText?.(text);
-          }
-        }}
-      >
-        <div className="flex items-end gap-0.5 -mb-px">
-          <button role="tab" aria-selected={activeTab === "shell"} className={tabCls("shell")} onClick={() => handleTabClick("shell")}>
-            <img src={`${import.meta.env.BASE_URL}duckdb-icon-light.svg`} alt="" className="h-4 w-4" />
-            SQL Shell
-          </button>
-          <button role="tab" aria-selected={activeTab === "askai"} className={tabCls("askai")} onClick={() => handleTabClick("askai")}>
-            <Sparkles className="h-3.5 w-3.5" />
-            Ask AI
-          </button>
-          {(hasSelectedTableOrView || resultPreview) && (
-            <button role="tab" aria-selected={activeTab === "preview"} className={tabCls("preview")} onClick={() => handleTabClick("preview")}>
-              <Table2 className="h-3.5 w-3.5" />
-              {resultPreview ? "Result" : "Preview"}
-            </button>
-          )}
-          {queryHistory.length > 0 && (
-            <button role="tab" aria-selected={activeTab === "queries"} className={tabCls("queries")} onClick={() => handleTabClick("queries")}>
-              <History className="h-3.5 w-3.5" />
-              Query History ({queryHistory.length})
-            </button>
-          )}
-          <button
-            role="tab" aria-selected={activeTab === "perspective"}
-            className={`${tabCls("perspective")} ${!hasSelectedTableOrView && !perspectiveHasData ? "opacity-30 cursor-not-allowed" : ""}`}
-            onClick={() => { if (hasSelectedTableOrView || perspectiveHasData) handleTabClick("perspective"); }}
-          >
-            <BarChart3 className="h-3.5 w-3.5" />
-            Perspective
-          </button>
-        </div>
-        <div className="flex items-center gap-1 pb-1">
-          {mode === "minimized" && (
-            <button
-              onClick={() => onModeChange("panel")}
-              className="p-1 text-muted-foreground hover:text-foreground transition-colors"
-              title="Expand"
-              aria-label="Expand shell panel"
-            >
-              <ChevronUp className="h-3.5 w-3.5" />
-            </button>
-          )}
-          {mode !== "minimized" && (
-            <button
-              onClick={() => onModeChange("minimized")}
-              className="p-1 text-muted-foreground hover:text-foreground transition-colors"
-              title="Minimize"
-              aria-label="Minimize shell panel"
-            >
-              <ChevronDown className="h-3.5 w-3.5" />
-            </button>
-          )}
-          <button
-            onClick={() => onModeChange(mode === "fullscreen" ? "panel" : "fullscreen")}
-            className="p-1 text-muted-foreground hover:text-foreground transition-colors"
-            title={mode === "fullscreen" ? "Restore" : "Full Screen"}
-            aria-label={mode === "fullscreen" ? "Exit full screen" : "Enter full screen"}
-          >
-            {mode === "fullscreen" ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-          </button>
-        </div>
-      </div>
-
       {/* Terminal container */}
-      {mode !== "minimized" && bootActive && !error && activeTab === "shell" && (
+      {bootActive && !error && activeTab === "shell" && (
         <ShellBootScreen />
       )}
-      {mode !== "minimized" && error && activeTab === "shell" && (
+      {error && activeTab === "shell" && (
         <div className="flex-1 flex items-center justify-center text-red-400 text-sm">
           {error}
         </div>
       )}
       <div
-        className={`flex-1 min-h-0 overflow-hidden relative ${mode === "minimized" || bootActive ? "hidden" : ""}`}
+        className={`flex-1 min-h-0 overflow-hidden relative ${bootActive && activeTab === "shell" ? "hidden" : ""}`}
         style={{
           padding: "8px 12px 0 12px",
           ...(activeTab !== "shell" ? { visibility: "hidden" as const, position: "absolute" as const, inset: 0, zIndex: -1 } : {}),
@@ -572,18 +472,24 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
         <div ref={containerRef} className="h-full w-full overflow-hidden" />
       </div>
 
-      {/* Data Preview — a `.preview` result (client-paginated, in-memory)
-          takes precedence over the selection-driven table preview. The key
-          forces a clean remount when switching between the two sources. */}
-      {mode !== "minimized" && activeTab === "preview" && (resultPreview || hasSelectedTableOrView) && (
+      {/* Data Preview — a `.preview`/editor result (client-paginated,
+          in-memory) takes precedence over the selection-driven table preview.
+          The key forces a clean remount when switching between the two
+          sources. Shows an empty state when there's nothing to preview. */}
+      {activeTab === "preview" && (
         <div className="flex-1 min-h-0 overflow-hidden bg-card">
           {resultPreview ? (
             <DataPreview key="result" result={resultPreview} />
-          ) : (
+          ) : hasSelectedTableOrView ? (
             <DataPreview
               key="table"
               tablePath={`${selection?.catalog || catalogName}.${selection?.schema || (selectedTable || selectedView)?.schemaName || "main"}.${selection?.name || (selectedTable || selectedView)?.name}`}
             />
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full text-center p-8">
+              <Table2 className="h-8 w-8 text-muted-foreground/30 mb-3" />
+              <p className="text-sm text-muted-foreground">Select a table in the sidebar, or run a query, to preview it here.</p>
+            </div>
           )}
         </div>
       )}
@@ -591,7 +497,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
       {/* Perspective viewer */}
       <div
         ref={perspectiveRef}
-        className={`flex-1 min-h-0 overflow-hidden bg-white ${mode === "minimized" || activeTab !== "perspective" ? "hidden" : ""}`}
+        className={`flex-1 min-h-0 overflow-hidden bg-white ${activeTab !== "perspective" ? "hidden" : ""}`}
       >
         {perspectiveLoading && (
           <div className="flex items-center justify-center gap-2 h-full text-terminal-accent text-sm">
@@ -610,7 +516,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
 
       {/* Ask AI chat panel — always mounted to preserve conversation state */}
       <div
-        className={`flex-1 min-h-0 overflow-hidden ${mode === "minimized" ? "hidden" : ""}`}
+        className="flex-1 min-h-0 overflow-hidden"
         style={activeTab !== "askai" ? { visibility: "hidden", position: "absolute", inset: 0, zIndex: -1 } : {}}
       >
         <Suspense fallback={
@@ -628,7 +534,7 @@ export function DuckDBShell({ serviceUrl, catalogName, mode, onModeChange, onShe
       </div>
 
       {/* Query History panel */}
-      {mode !== "minimized" && activeTab === "queries" && (() => {
+      {activeTab === "queries" && (() => {
         const handleRerun = (sql: string) => {
           setActiveTab("shell");
           const run = () => {
@@ -865,24 +771,3 @@ async function loadPerspective(container: HTMLElement, arrowBuffer: Uint8Array) 
   await viewer.load(table);
 }
 
-/**
- * Convert a tree item ID to text suitable for pasting into the shell.
- * IDs: "catalog::schema::t:table" → "schema.table"
- *      "catalog::schema::c:table/column" → "column"
- */
-function treeIdToShellText(id: string): string | null {
-  const parts = id.split("::");
-  if (parts.length === 3) {
-    const catalog = parts[0];
-    const schema = parts[1];
-    const rest = parts[2];
-    if (rest.startsWith("t:")) return `${catalog}.${schema}.${rest.slice(2)}`;
-    if (rest.startsWith("c:")) {
-      const colParts = rest.slice(2).split("/");
-      return colParts[1] || colParts[0];
-    }
-    if (rest.startsWith("v:")) return `${catalog}.${schema}.${rest.slice(2)}`;
-    if (rest.startsWith("f:")) return rest.slice(2);
-  }
-  return null;
-}

@@ -21,15 +21,13 @@ export const T_FAST = 2_000;
 export const T_NORMAL = 5_000;
 export const T_SHELL_BOOT = 20_000;
 
-/** Navigate to the app and wait for the sidebar tree to render. */
+/** Navigate to the app and wait for the sidebar tree to render. The engine
+ *  host is mounted for the whole session, so the DuckDB bridge boots on load
+ *  regardless of the active tab. */
 export async function gotoApp(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    try {
-      // Force shell into "panel" mode so DuckDBShell mounts and wires up the
-      // bridge — minimized mode defers terminal/worker init.
-      localStorage.setItem("vgi-shell-mode", "panel");
-    } catch {}
-  });
+  // No init script: the app defaults to the Catalog tab, and the engine host
+  // boots on load regardless of tab. (Forcing a tab here would run on every
+  // navigation incl. reloads and clobber persistence specs.)
   await page.goto(APP_URL);
   await page.getByRole("tree").first().waitFor({ state: "visible", timeout: T_SHELL_BOOT });
 }
@@ -43,22 +41,15 @@ export async function waitForShellBridge(page: Page, timeoutMs = T_SHELL_BOOT): 
   );
 }
 
-/** Idempotently open the shell panel. Safe to call when already open. */
+/** Switch to the SQL Shell tab. Idempotent. */
 export async function openShell(page: Page): Promise<void> {
-  const minimize = page.getByRole("button", { name: "Minimize shell panel" });
-  if (await minimize.isVisible({ timeout: 200 }).catch(() => false)) return;
-  const expandBtn = page.getByRole("button", { name: "Expand shell panel" });
-  if (await expandBtn.isVisible({ timeout: 200 }).catch(() => false)) {
-    await expandBtn.click();
-  } else {
-    await page.locator("aside, div").getByRole("button", { name: /^SQL Shell$/ }).first().click();
-  }
-  await expect(minimize).toBeVisible({ timeout: T_NORMAL });
+  await page.getByTestId("tab-shell").click();
+  await expect(page.getByTestId("tab-shell")).toHaveAttribute("aria-selected", "true", { timeout: T_NORMAL });
 }
 
-/** Switch to the full-page SQL editor surface and wait for it to mount. */
+/** Switch to the SQL editor tab and wait for it to mount. */
 export async function openEditor(page: Page): Promise<void> {
-  await page.getByTestId("view-toggle-editor").click();
+  await page.getByTestId("tab-editor").click();
   await page.getByTestId("sql-editor-view").waitFor({ state: "visible", timeout: T_NORMAL });
 }
 

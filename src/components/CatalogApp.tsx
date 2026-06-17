@@ -32,10 +32,7 @@ import {
 } from "./ui/dialog";
 const DuckDBShell = lazy(() => import("./DuckDBShell").then(m => ({ default: m.DuckDBShell })));
 const SqlEditorView = lazy(() => import("./editor/SqlEditorView").then(m => ({ default: m.SqlEditorView })));
-import type { ShellMode } from "./DuckDBShell";
-
-/** Catalog browser vs full-page SQL editor. */
-type AppView = "catalog" | "editor";
+import { AppTabBar, type TabId } from "./AppTabBar";
 import { CatalogOverview } from "./content/CatalogOverview";
 import { MemoryCatalogOverview } from "./content/MemoryCatalogOverview";
 import { SchemaDetail } from "./content/SchemaDetail";
@@ -65,22 +62,29 @@ export function CatalogApp() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
-  const [shellMode, setShellMode] = useState<ShellMode>(() => {
-    try {
-      const stored = localStorage.getItem("vgi-shell-mode");
-      if (stored === "minimized" || stored === "panel" || stored === "maximized" || stored === "fullscreen") return stored;
-    } catch {}
-    return "minimized";
-  });
   const shellInsertRef = useRef<((text: string) => void) | null>(null);
-  // Catalog browser vs full-page SQL editor. Persisted so a reload returns to
-  // the same surface.
-  const [appView, setAppView] = useState<AppView>(() => {
+  // The single source of truth for which top-level surface is showing. Replaces
+  // the old appView toggle + shell-drawer mode. Persisted (migrating the old
+  // vgi-app-view key) so a reload returns to the same tab.
+  const [activeTab, setActiveTab] = useState<TabId>(() => {
     try {
+      const stored = localStorage.getItem("vgi-active-tab") as TabId | null;
+      if (stored && ["catalog", "editor", "shell", "askai", "preview", "queries", "perspective"].includes(stored)) return stored;
       if (localStorage.getItem("vgi-app-view") === "editor") return "editor";
     } catch {}
     return "catalog";
   });
+  // Collapsible catalog sidebar (persisted).
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem("vgi-sidebar-collapsed") === "1"; } catch { return false; }
+  });
+  const [queryHistoryCount, setQueryHistoryCount] = useState(0);
+  // The engine host (shell/askai/preview/queries/perspective) is mounted for
+  // the whole session — hidden behind the catalog/editor when not active — so
+  // (a) DuckDB boots + ATTACHes once (column stats, previews work on the
+  // catalog tab), and (b) terminal / chat / perspective state survives tab
+  // switches. It's visible only on an engine-backed tab.
+  const engineVisible = activeTab !== "catalog" && activeTab !== "editor";
   // SQL pushed into the editor from elsewhere (example queries, shell history).
   const [pendingEditorSql, setPendingEditorSql] = useState<string | null>(null);
   const [memoryCatalog, setMemoryCatalog] = useState<CatalogData | null>(null);
@@ -111,7 +115,7 @@ export function CatalogApp() {
 
     try {
       const colRows = await readRows(
-        `SELECT schema_name, table_name, column_name, data_type, CASE WHEN is_nullable = 'YES' THEN true ELSE false END as nullable
+        `SELECT schema_name, table_name, column_name, data_type, comment, CASE WHEN is_nullable = 'YES' THEN true ELSE false END as nullable
          FROM duckdb_columns()
          WHERE database_name = 'memory'
          ORDER BY schema_name, table_name, column_index`
@@ -142,18 +146,19 @@ export function CatalogApp() {
       }
 
       // Group by schema → table → columns
-      const schemaMap = new Map<string, Map<string, { name: string; type: string; nullable: boolean }[]>>();
+      const schemaMap = new Map<string, Map<string, { name: string; type: string; nullable: boolean; comment?: string }[]>>();
       for (const row of colRows) {
         const schema = String(row.schema_name ?? "main");
         const tbl = String(row.table_name ?? "");
         const col = String(row.column_name ?? "");
         const dtype = String(row.data_type ?? "VARCHAR");
         const nullable = Boolean(row.nullable ?? true);
+        const comment = row.comment ? String(row.comment) : undefined;
 
         if (!schemaMap.has(schema)) schemaMap.set(schema, new Map());
         const tableMap = schemaMap.get(schema)!;
         if (!tableMap.has(tbl)) tableMap.set(tbl, []);
-        tableMap.get(tbl)!.push({ name: col, type: dtype, nullable });
+        tableMap.get(tbl)!.push({ name: col, type: dtype, nullable, comment });
       }
 
       // Build CatalogData structure — separate tables from views
@@ -181,6 +186,7 @@ export function CatalogApp() {
               arrowType: c.type,
               duckdbType: c.type,
               nullable: c.nullable,
+              comment: c.comment,
             })),
           };
           if (isView) {
@@ -257,22 +263,22 @@ export function CatalogApp() {
     }
     setAttachedCatalogs(additions);
   }, []);
-  // Persist shell mode to localStorage
+  // Persist the active tab.
   useEffect(() => {
-    try { localStorage.setItem("vgi-shell-mode", shellMode); } catch {}
-  }, [shellMode]);
+    try { localStorage.setItem("vgi-active-tab", activeTab); } catch {}
+  }, [activeTab]);
 
-  // Persist the active surface (catalog vs editor).
+  // Persist sidebar collapse.
   useEffect(() => {
-    try { localStorage.setItem("vgi-app-view", appView); } catch {}
-  }, [appView]);
+    try { localStorage.setItem("vgi-sidebar-collapsed", sidebarCollapsed ? "1" : "0"); } catch {}
+  }, [sidebarCollapsed]);
 
-  // bridge.openInEditor: switch to the editor surface and queue the SQL.
+  // bridge.openInEditor: switch to the editor tab and queue the SQL.
   // Invoked by ExampleQueries' Run button and the shell's history tab.
   useEffect(() => {
     bridge.openInEditor = (sql: string) => {
       setPendingEditorSql(sql);
-      setAppView("editor");
+      setActiveTab("editor");
     };
     return () => { bridge.openInEditor = null; };
   }, []);
@@ -292,76 +298,15 @@ export function CatalogApp() {
   }, [fetchMemoryTables, syncAttachedCatalogs, memoryCatalog]);
 
 
-  // Escape key exits fullscreen
+  // Refit the terminal when the shell tab becomes active (it may have been
+  // hidden/zero-sized while another tab was showing).
   useEffect(() => {
-    if (shellMode !== "fullscreen") return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setShellMode("panel");
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [shellMode]);
-
-  // Shell panel vertical resize
-  const SHELL_MIN = 150;
-  const SHELL_MAX = 600;
-  const SHELL_DEFAULT = 300;
-  const SHELL_HEIGHT_KEY = "vgi-shell-height";
-  const [shellHeight, setShellHeight] = useState(() => {
-    try {
-      // Try new key first, then migrate from old key
-      let stored = localStorage.getItem(SHELL_HEIGHT_KEY);
-      if (!stored) {
-        stored = localStorage.getItem("vgi-table-shell-height");
-        if (stored) {
-          localStorage.setItem(SHELL_HEIGHT_KEY, stored);
-          localStorage.removeItem("vgi-table-shell-height");
-        }
-      }
-      if (stored) {
-        const n = parseInt(stored, 10);
-        if (n >= SHELL_MIN && n <= SHELL_MAX) return n;
-      }
-    } catch {}
-    return SHELL_DEFAULT;
-  });
-  const shellResizing = useRef(false);
-
-  const onShellResizeStart = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    shellResizing.current = true;
-    const startY = e.clientY;
-    const startHeight = shellHeight;
-    const target = e.currentTarget;
-    target.setPointerCapture(e.pointerId);
-
-    let rafId = 0;
-    const onMove = (ev: globalThis.PointerEvent) => {
-      const newHeight = Math.min(SHELL_MAX, Math.max(SHELL_MIN, startHeight - (ev.clientY - startY)));
-      setShellHeight(newHeight);
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        bridge.shellFitAddon?.fit();
-      });
-    };
-    const onUp = () => {
-      shellResizing.current = false;
-      cancelAnimationFrame(rafId);
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onUp);
-      setShellHeight((h) => {
-        localStorage.setItem(SHELL_HEIGHT_KEY, String(h));
-        return h;
-      });
-      // Double-fit: once after React render, once after layout settles
-      requestAnimationFrame(() => {
-        bridge.shellFitAddon?.fit();
-        setTimeout(() => bridge.shellFitAddon?.fit(), 50);
-      });
-    };
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onUp);
-  }, [shellHeight]);
+    if (activeTab !== "shell") return;
+    requestAnimationFrame(() => {
+      bridge.shellFitAddon?.fit();
+      setTimeout(() => bridge.shellFitAddon?.fit(), 50);
+    });
+  }, [activeTab]);
 
   const serviceUrl = useMemo(() => getServiceUrl(), []);
   // `?attach_options=` URL param wins over the localStorage value and is
@@ -680,17 +625,20 @@ export function CatalogApp() {
   return (
     <SettingsProvider>
     <div className="flex flex-col h-screen">
-      {shellMode !== "fullscreen" && (
-        <Header
-          catalogName={data.catalogName}
-          catalogComment={data.catalogComment}
-          serviceUrl={serviceUrl}
-          appView={appView}
-          onToggleView={setAppView}
-        />
-      )}
+      <Header
+        catalogName={data.catalogName}
+        catalogComment={data.catalogComment}
+        serviceUrl={serviceUrl}
+      />
+      <AppTabBar
+        activeTab={activeTab}
+        onSelect={setActiveTab}
+        queryHistoryCount={queryHistoryCount}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
+      />
       <div className="flex flex-1 overflow-hidden">
-        {shellMode !== "fullscreen" && (
+        {!sidebarCollapsed && (
           <>
             <div style={{ width: sidebarWidth, minWidth: sidebarWidth }}>
               <Sidebar
@@ -699,11 +647,11 @@ export function CatalogApp() {
                 attachedCatalogs={attachedCatalogs}
                 selection={selection}
                 onSelect={(sel) => navigate(sel)}
-                onOpenShell={() => setShellMode("maximized")}
+                onOpenShell={() => setActiveTab("shell")}
                 onShellInsert={(text) => {
-                  // In editor view, route table/column clicks into the SQL
+                  // In editor mode, route table/column clicks into the SQL
                   // editor at the cursor; otherwise into the xterm shell.
-                  if (appView === "editor" && bridge.insertIntoEditor) {
+                  if (activeTab === "editor" && bridge.insertIntoEditor) {
                     bridge.insertIntoEditor(text);
                   } else {
                     shellInsertRef.current?.(text);
@@ -721,77 +669,59 @@ export function CatalogApp() {
             </div>
           </>
         )}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Content area — hidden when shell is maximized or fullscreen.
-              In editor view the SQL editor replaces the catalog content panel
-              (no padding, owns its own scroll); the sidebar stays visible. */}
-          <main className={`min-h-0 ${shellMode === "maximized" || shellMode === "fullscreen" ? "h-0 overflow-hidden" : "flex-1"} ${appView === "editor" ? "overflow-hidden" : "overflow-y-auto p-6"}`}>
-            {appView === "editor" ? (
+        {/* Content area — one tab visible at a time. Catalog & Editor are
+            conditionally rendered; the engine host (shell/askai/preview/
+            queries/perspective) is mounted once activated and kept sized via
+            visibility (so the xterm terminal survives tab switches). */}
+        <div className="flex-1 relative overflow-hidden">
+          {activeTab === "catalog" && (
+            <main className="absolute inset-0 overflow-y-auto p-6">
+              <ErrorBoundary>
+                <ContentPanel data={data} memoryCatalog={memoryCatalog} attachedCatalogs={attachedCatalogs} selection={selection} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={navigate} onOpenShell={() => setActiveTab("shell")} />
+              </ErrorBoundary>
+            </main>
+          )}
+          {activeTab === "editor" && (
+            <div className="absolute inset-0 overflow-hidden">
               <ErrorBoundary>
                 <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading editor…</div>}>
                   <SqlEditorView
                     catalogData={data}
                     serviceUrl={serviceUrl}
-                    onExitEditor={() => setAppView("catalog")}
+                    onExitEditor={() => setActiveTab("catalog")}
                     pendingSql={pendingEditorSql}
                     onPendingConsumed={() => setPendingEditorSql(null)}
                   />
                 </Suspense>
               </ErrorBoundary>
-            ) : (
-              <ErrorBoundary>
-                <ContentPanel data={data} memoryCatalog={memoryCatalog} attachedCatalogs={attachedCatalogs} selection={selection} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={navigate} onOpenShell={() => setShellMode((m) => m === "minimized" ? "panel" : m)} shellMode={shellMode} />
-              </ErrorBoundary>
-            )}
-          </main>
-
-          {/* Resize handle — only in panel mode */}
-          {shellMode === "panel" && (
-            <div
-              onPointerDown={onShellResizeStart}
-              className="h-2 z-10 cursor-row-resize group flex-shrink-0 flex items-center justify-center bg-muted-foreground/20 hover:bg-muted-foreground/30 active:bg-muted-foreground/40 transition-colors"
-            >
-              <div className="flex gap-1 items-center">
-                <div className="h-0.5 w-8 rounded-full bg-muted-foreground/50 group-hover:bg-muted-foreground/70 transition-colors" />
-                <div className="h-0.5 w-2 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/60 transition-colors" />
-                <div className="h-0.5 w-2 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/60 transition-colors" />
-              </div>
             </div>
           )}
-
-          {/* Shell panel — always rendered */}
-          <ErrorBoundary>
-            <Suspense fallback={
-              <div style={{ height: shellMode === "minimized" ? 36 : shellMode === "panel" ? shellHeight : undefined }}
-                   className={`flex items-center justify-center bg-terminal-bg text-terminal-accent shrink-0 border-t border-border ${shellMode === "maximized" || shellMode === "fullscreen" ? "flex-1" : ""}`}>
-                {shellMode !== "minimized" && "Loading..."}
-              </div>
-            }>
-              <div
-                className={`shrink-0 border-t border-border overflow-hidden ${shellMode === "maximized" || shellMode === "fullscreen" ? "flex-1" : ""}`}
-                style={
-                  shellMode === "panel"
-                    ? { height: shellHeight }
-                    : shellMode === "minimized"
-                    ? { height: 36 }
-                    : undefined
-                }
-              >
-                <DuckDBShell
-                  serviceUrl={serviceUrl}
-                  catalogName={data.catalogName}
-                  mode={shellMode}
-                  onModeChange={setShellMode}
-                  onShellReady={(insert) => { shellInsertRef.current = insert; fetchMemoryTables(); syncAttachedCatalogs(); }}
-                  catalogData={data}
-                  selection={selection}
-                  onAuthError={(title, message) => setAuthError({ title, message })}
-                  onAttachError={(title, message) => setAttachError({ title, message })}
-                  attachOptions={attachOptions}
-                />
-              </div>
-            </Suspense>
-          </ErrorBoundary>
+          {(
+            <div
+              className="absolute inset-0 overflow-hidden"
+              style={engineVisible ? undefined : { visibility: "hidden", zIndex: -1 }}
+            >
+              <ErrorBoundary>
+                <Suspense fallback={
+                  <div className="flex items-center justify-center h-full bg-terminal-bg text-terminal-accent text-sm">Loading…</div>
+                }>
+                  <DuckDBShell
+                    serviceUrl={serviceUrl}
+                    catalogName={data.catalogName}
+                    activeTab={activeTab}
+                    onTabChange={setActiveTab}
+                    onQueryHistoryCountChange={setQueryHistoryCount}
+                    onShellReady={(insert) => { shellInsertRef.current = insert; fetchMemoryTables(); syncAttachedCatalogs(); }}
+                    catalogData={data}
+                    selection={selection}
+                    onAuthError={(title, message) => setAuthError({ title, message })}
+                    onAttachError={(title, message) => setAttachError({ title, message })}
+                    attachOptions={attachOptions}
+                  />
+                </Suspense>
+              </ErrorBoundary>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1308,7 +1238,6 @@ function ContentPanel({
   attachOptions,
   onNavigate,
   onOpenShell,
-  shellMode,
 }: {
   data: CatalogData;
   memoryCatalog?: CatalogData | null;
@@ -1318,7 +1247,6 @@ function ContentPanel({
   attachOptions?: string;
   onNavigate: (selection: Selection) => void;
   onOpenShell?: () => void;
-  shellMode?: string;
 }) {
   if (!selection || selection.type === "catalog") {
     if (selection?.catalog && memoryCatalog && selection.catalog === memoryCatalog.catalogName) {
@@ -1346,7 +1274,7 @@ function ContentPanel({
 
   if (selection.type === "table") {
     const table = schema.tables.find((t) => t.name === selection.name);
-    if (table) return <TableDetail table={table} catalogName={catalog.catalogName} onNavigate={onNavigate} onOpenShell={onOpenShell} shellMode={shellMode} />;
+    if (table) return <TableDetail table={table} catalogName={catalog.catalogName} onNavigate={onNavigate} onOpenShell={onOpenShell} />;
   }
 
   if (selection.type === "view") {

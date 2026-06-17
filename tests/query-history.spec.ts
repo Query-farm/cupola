@@ -32,7 +32,7 @@ test.describe("Query history", () => {
       });
     });
 
-    const historyTab = page.getByRole("tab", { name: /^Query History \(\d+\)$/ });
+    const historyTab = page.getByTestId("tab-queries");
     await expect(historyTab).toBeVisible({ timeout: T_NORMAL });
     await historyTab.click();
     await expect(page.getByText("SELECT 7 * 6 AS answer", { exact: false })).toBeVisible({

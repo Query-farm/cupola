@@ -17,10 +17,9 @@ interface Props {
   catalogName: string;
   onNavigate?: (selection: Selection) => void;
   onOpenShell?: () => void;
-  shellMode?: string;
 }
 
-export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shellMode }: Props) {
+export function TableDetail({ table, catalogName, onNavigate, onOpenShell }: Props) {
   const columns = getColumns(table);
   const foreignKeys = getForeignKeys(table);
   const defaultSql = `SELECT * FROM ${catalogName}.${table.schema_name}.${table.name} LIMIT 10;`;
@@ -70,7 +69,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, shell
         itemName={table.name}
         itemType="table"
         onNavigate={onNavigate}
-        trailing={onOpenShell && (shellMode === "minimized" || !shellMode) ? (
+        trailing={onOpenShell ? (
           <Button
             variant="outline"
             size="sm"

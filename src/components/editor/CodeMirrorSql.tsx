@@ -28,6 +28,10 @@ interface Props {
   onRunStatement?: () => void;
   /** Fires when the selection emptiness changes (true = non-empty selection). */
   onSelectionChange?: (hasSelection: boolean) => void;
+  /** Handle a drop of `text/plain` (e.g. a sidebar tree id) — the cursor is
+   *  first moved to the drop point, then this is called with the raw payload.
+   *  Return value ignored; CodeMirror's default insert is suppressed. */
+  onDropText?: (raw: string) => void;
   completionSource?: CompletionSource | null;
   fontSize?: number;
 }
@@ -40,7 +44,7 @@ interface Props {
  * recreating the editor.
  */
 export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function CodeMirrorSql(
-  { initialDoc, onChange, onRunStatement, onSelectionChange, completionSource, fontSize },
+  { initialDoc, onChange, onRunStatement, onSelectionChange, onDropText, completionSource, fontSize },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -48,9 +52,11 @@ export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function Cod
   const onChangeRef = useRef(onChange);
   const onRunRef = useRef(onRunStatement);
   const onSelRef = useRef(onSelectionChange);
+  const onDropRef = useRef(onDropText);
   onChangeRef.current = onChange;
   onRunRef.current = onRunStatement;
   onSelRef.current = onSelectionChange;
+  onDropRef.current = onDropText;
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -70,6 +76,27 @@ export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function Cod
           if (u.selectionSet || u.docChanged) {
             onSelRef.current?.(!u.state.selection.main.empty);
           }
+        }),
+        // Intercept drops (sidebar tree ids) so CodeMirror doesn't insert the
+        // raw payload — move the cursor to the drop point, then delegate.
+        EditorView.domEventHandlers({
+          dragover(e) {
+            if (!onDropRef.current) return false;
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+            return true;
+          },
+          drop(e, view) {
+            if (!onDropRef.current) return false;
+            const raw = e.dataTransfer?.getData("text/plain");
+            if (!raw) return false;
+            e.preventDefault();
+            const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+            if (pos != null) view.dispatch({ selection: { anchor: pos } });
+            view.focus();
+            onDropRef.current(raw);
+            return true;
+          },
         }),
       ],
     });

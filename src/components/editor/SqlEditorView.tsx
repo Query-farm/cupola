@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format as formatSql } from "sql-formatter";
 import { tableFromIPC, tableToIPC } from "apache-arrow";
-import { bridge, recordQuery } from "@/lib/shell-bridge";
+import { bridge, recordQuery, onBootChange } from "@/lib/shell-bridge";
 import { useSettings } from "@/lib/settings";
 import type { CatalogData } from "@/lib/service";
 import {
@@ -21,7 +21,9 @@ import {
   type EditorState as EditorDocState,
 } from "@/lib/editor/editor-store";
 import { sqlAutoCompleteSource } from "@/lib/editor/sql-autocomplete";
-import { exportResult, type ExportFormat } from "@/lib/editor/result-export";
+import { buildTableSelect, isTableRef } from "@/lib/sql/table-select";
+import { treeIdToShellText } from "@/lib/tree";
+import { exportResult, triggerDownload, safeFileStem, type ExportFormat } from "@/lib/editor/result-export";
 import { CodeMirrorSql, type CodeMirrorSqlHandle } from "./CodeMirrorSql";
 import { SqlEditorTabs } from "./SqlEditorTabs";
 import { EditorToolbar } from "./EditorToolbar";
@@ -47,6 +49,10 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
   const [aiOpen, setAiOpen] = useState(false);
   // bridge.query availability — re-checked after the shell finishes booting.
   const [queryReady, setQueryReady] = useState<boolean>(() => !!bridge.query);
+  // Live engine boot phase (e.g. "Downloading DuckDB") shown in the toolbar
+  // while the WASM engine initializes — the user can't see the shell boot
+  // screen when the editor is the active surface.
+  const [bootPhase, setBootPhase] = useState<string | null>(() => bridge.bootPhase);
 
   const editorRef = useRef<CodeMirrorSqlHandle | null>(null);
   const runIdRef = useRef(0);
@@ -72,6 +78,13 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
       if (bridge.query) { setQueryReady(true); clearInterval(t); }
     }, 400);
     return () => clearInterval(t);
+  }, [queryReady]);
+
+  // Track the live boot phase while the engine initializes.
+  useEffect(() => {
+    if (queryReady) return;
+    setBootPhase(bridge.bootPhase);
+    return onBootChange(() => setBootPhase(bridge.bootPhase));
   }, [queryReady]);
 
   const persist = useCallback((next: EditorDocState) => {
@@ -251,6 +264,38 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
     bridge.showPerspective(ab);
   }, [activeResult.table]);
 
+  const handleDownloadSql = useCallback(() => {
+    const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";
+    triggerDownload(new Blob([sql], { type: "text/plain;charset=utf-8" }), `${safeFileStem(activeDoc?.name ?? "query")}.sql`);
+  }, [activeDoc?.name, activeDoc?.sql]);
+
+  // ---- Ask AI: live query getter + apply-back actions ---------------------
+  // Read the LIVE buffer at call time (CodeMirror edits don't re-render us, so
+  // a render-time snapshot would be stale).
+  const getCurrentSql = useCallback(() => {
+    const ed = editorRef.current;
+    if (!ed) return activeDoc?.sql ?? "";
+    return ed.getSelectionText().trim() || ed.getStatementAtCursor()?.text || ed.getDoc();
+  }, [activeDoc?.sql]);
+
+  const applyReplaceStatement = useCallback((sql: string) => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    const stmt = ed.getStatementAtCursor();
+    if (stmt) {
+      ed.selectRange(stmt.from, stmt.to); // insertAtCursor replaces the selection
+    }
+    ed.insertAtCursor(sql);
+  }, []);
+
+  const applyReplaceDocument = useCallback((sql: string) => {
+    editorRef.current?.setDoc(sql);
+  }, []);
+
+  const applyInsertAtCursor = useCallback((sql: string) => {
+    editorRef.current?.insertAtCursor(sql);
+  }, []);
+
   const handleOpenInShell = useCallback(() => {
     const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";
     bridge.activateShell?.();
@@ -261,12 +306,30 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
     onExitEditor?.();
   }, [activeDoc?.sql, onExitEditor]);
 
+  // Smart insert (matches the shell): a bare table reference dropped/clicked
+  // into an empty editor expands to a SELECT (geometry excluded); otherwise the
+  // raw text is inserted at the cursor. A column/expression inserts verbatim.
+  const smartInsert = useCallback((text: string) => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    if (isTableRef(text) && ed.getDoc().trim() === "") {
+      ed.insertAtCursor(buildTableSelect(text, [catalogData, bridge.memoryCatalog]));
+    } else {
+      ed.insertAtCursor(text);
+    }
+  }, [catalogData]);
+
+  // Drop of a sidebar tree id onto the editor — decode to a name, then insert.
+  const handleDropText = useCallback((raw: string) => {
+    const text = treeIdToShellText(raw) ?? (raw.includes("::") ? null : raw);
+    if (text) smartInsert(text);
+  }, [smartInsert]);
+
   // ---- sidebar click-to-insert --------------------------------------------
   useEffect(() => {
-    const fn = (text: string) => editorRef.current?.insertAtCursor(text);
-    bridge.insertIntoEditor = fn;
-    return () => { if (bridge.insertIntoEditor === fn) bridge.insertIntoEditor = null; };
-  }, []);
+    bridge.insertIntoEditor = smartInsert;
+    return () => { if (bridge.insertIntoEditor === smartInsert) bridge.insertIntoEditor = null; };
+  }, [smartInsert]);
 
   // ---- externally-pushed SQL (example queries, shell history) -------------
   useEffect(() => {
@@ -301,6 +364,7 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
       <EditorToolbar
         running={activeResult.running}
         queryReady={queryReady}
+        bootPhase={bootPhase}
         hasResult={!!activeResult.table}
         hasSelection={hasSelection}
         onRun={handleRun}
@@ -310,6 +374,7 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
         onOpenInPerspective={handleOpenInPerspective}
         onOpenInShell={handleOpenInShell}
         onAskAI={() => setAiOpen(true)}
+        onDownloadSql={handleDownloadSql}
       />
       {/* Editor (top) + results (bottom). Fixed 45/55 split for v1. */}
       <div className="flex flex-col flex-1 min-h-0">
@@ -321,6 +386,7 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
             onChange={handleDocChange}
             onRunStatement={handleRunStatementAtCursor}
             onSelectionChange={setHasSelection}
+            onDropText={handleDropText}
             completionSource={completionSource}
             fontSize={settings.editorFontSize ?? 13}
           />
@@ -335,8 +401,10 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
         onOpenChange={setAiOpen}
         catalogData={catalogData}
         serviceUrl={serviceUrl}
-        currentSql={(editorRef.current?.getSelectionText()?.trim() || editorRef.current?.getStatementAtCursor()?.text || activeDoc?.sql) ?? ""}
-        onInsert={(sql) => editorRef.current?.insertAtCursor(sql)}
+        getCurrentSql={getCurrentSql}
+        onReplaceStatement={applyReplaceStatement}
+        onReplaceDocument={applyReplaceDocument}
+        onInsertAtCursor={applyInsertAtCursor}
       />
     </div>
   );

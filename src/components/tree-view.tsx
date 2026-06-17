@@ -34,6 +34,8 @@ interface TreeDataItem {
     droppable?: boolean
     disabled?: boolean
     className?: string
+    /** Hover tooltip for the node's label (e.g. a column's comment). */
+    title?: string
 }
 
 type TreeRenderItemParams = {
@@ -379,7 +381,7 @@ const TreeNode = ({
                                 isOpen={isOpen}
                                 default={defaultNodeIcon}
                             />
-                            <span className="text-sm truncate">{item.name}</span>
+                            <span className="text-sm truncate" title={item.title}>{item.name}</span>
                             <TreeActions isSelected={isSelected}>
                                 {item.actions}
                             </TreeActions>
@@ -491,7 +493,7 @@ const TreeLeaf = React.forwardRef<
                             isSelected={isSelected}
                             default={defaultLeafIcon}
                         />
-                        <span className="flex-grow text-sm truncate">{item.name}</span>
+                        <span className="flex-grow text-sm truncate" title={item.title}>{item.name}</span>
                         <TreeActions isSelected={isSelected && !item.disabled}>
                             {item.actions}
                         </TreeActions>

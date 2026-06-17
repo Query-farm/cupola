@@ -37,10 +37,16 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   catalogData: CatalogData;
   serviceUrl: string;
-  /** The current statement, used as context for "explain". */
-  currentSql: string;
-  /** Insert generated SQL into the editor at the cursor. */
-  onInsert: (sql: string) => void;
+  /** Read the LIVE current query (selection → statement-at-cursor → whole doc)
+   *  at call time — a value prop would be stale (CodeMirror edits don't
+   *  re-render the parent). */
+  getCurrentSql: () => string;
+  /** Apply the AI's SQL by replacing the statement the cursor is in. */
+  onReplaceStatement: (sql: string) => void;
+  /** Apply by replacing the entire editor document. */
+  onReplaceDocument: (sql: string) => void;
+  /** Apply by inserting at the cursor (additive). */
+  onInsertAtCursor: (sql: string) => void;
 }
 
 /** Pull the last fenced ```sql block (or any fenced block) out of markdown. */
@@ -50,25 +56,27 @@ function extractSql(text: string): string | null {
   return null;
 }
 
-export function AskAiSqlDialog({ open, onOpenChange, catalogData, serviceUrl, currentSql, onInsert }: Props) {
+export function AskAiSqlDialog({ open, onOpenChange, catalogData, serviceUrl, getCurrentSql, onReplaceStatement, onReplaceDocument, onInsertAtCursor }: Props) {
   const { settings } = useSettings();
   const [prompt, setPrompt] = useState("");
-  const [mode, setMode] = useState<"write" | "explain">("write");
   const [output, setOutput] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const outputRef = useRef<HTMLDivElement | null>(null);
+  // Snapshot the current query when the dialog opens (the editor is modal-
+  // covered while open, so this stays accurate) — drives the Explain button.
+  const [currentSql, setCurrentSql] = useState("");
 
   useEffect(() => {
     if (open) {
       setOutput("");
       setError(null);
-      setMode(currentSql.trim() ? "write" : "write");
+      setCurrentSql(getCurrentSql());
     } else {
       abortRef.current?.abort();
     }
-  }, [open, currentSql]);
+  }, [open, getCurrentSql]);
 
   useEffect(() => {
     if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight;
@@ -80,8 +88,10 @@ export function AskAiSqlDialog({ open, onOpenChange, catalogData, serviceUrl, cu
       setError("No Anthropic API key configured. Add one in Settings → AI.");
       return;
     }
+    // Read the live query fresh at run time (not the open-time snapshot).
+    const liveSql = getCurrentSql();
     if (!explainMode && !prompt.trim()) return;
-    if (explainMode && !currentSql.trim()) {
+    if (explainMode && !liveSql.trim()) {
       setError("No SQL in the editor to explain.");
       return;
     }
@@ -93,8 +103,8 @@ export function AskAiSqlDialog({ open, onOpenChange, catalogData, serviceUrl, cu
     abortRef.current = controller;
 
     const instruction = explainMode
-      ? `Explain this SQL query in clear prose. Describe what it returns, the tables/joins involved, and any notable filters or aggregations. Do not rewrite it unless asked.\n\n\`\`\`sql\n${currentSql}\n\`\`\``
-      : `Write a single DuckDB SQL query for the following request. Return ONLY the query inside a \`\`\`sql code block, preceded by at most one short sentence. Request: ${prompt.trim()}`;
+      ? `Explain this SQL query in clear prose. Describe what it returns, the tables/joins involved, and any notable filters or aggregations. Do not rewrite it unless asked.\n\n\`\`\`sql\n${liveSql}\n\`\`\``
+      : `Write a single DuckDB SQL query for the following request. Use the current editor query as context if relevant. Return ONLY the query inside a \`\`\`sql code block, preceded by at most one short sentence.${liveSql.trim() ? `\n\nCurrent editor query:\n\`\`\`sql\n${liveSql}\n\`\`\`` : ""}\n\nRequest: ${prompt.trim()}`;
 
     const system =
       buildSystemPrompt(catalogData, serviceUrl, bridge.memoryCatalog, false) +
@@ -145,7 +155,7 @@ export function AskAiSqlDialog({ open, onOpenChange, catalogData, serviceUrl, cu
     } finally {
       setRunning(false);
     }
-  }, [settings, prompt, currentSql, catalogData, serviceUrl]);
+  }, [settings, prompt, getCurrentSql, catalogData, serviceUrl]);
 
   const extracted = extractSql(output);
 
@@ -204,16 +214,33 @@ export function AskAiSqlDialog({ open, onOpenChange, catalogData, serviceUrl, cu
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="flex-wrap gap-2">
           {extracted && (
-            <Button
-              onClick={() => { onInsert(extracted); onOpenChange(false); }}
-              className="gap-1.5"
-            >
-              Insert SQL into editor
-            </Button>
+            <>
+              <Button
+                onClick={() => { onReplaceStatement(extracted); onOpenChange(false); }}
+                className="gap-1.5"
+                data-testid="ai-apply-replace-statement"
+              >
+                Replace statement
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => { onReplaceDocument(extracted); onOpenChange(false); }}
+                data-testid="ai-apply-replace-document"
+              >
+                Replace document
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => { onInsertAtCursor(extracted); onOpenChange(false); }}
+                data-testid="ai-apply-insert"
+              >
+                Insert at cursor
+              </Button>
+            </>
           )}
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

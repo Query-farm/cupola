@@ -22,7 +22,8 @@ import { bridge, recordQuery, notifyQueryChange, setBootPhase } from "./shell-br
 import { getOAuthMeta, redirectToAuth } from "./auth";
 import { ensureDuckDB } from "./duckdb-worker-boot";
 import { getTerminalTheme } from "./theme";
-import { getColumns, type CatalogData } from "./service";
+import { type CatalogData } from "./service";
+import { buildTableSelect, isTableRef } from "./sql/table-select";
 
 export interface ShellConfig {
   serviceUrl: string;
@@ -873,36 +874,13 @@ export function initShell(
     bridge.runQuery = runQuery;
   }
 
-  // Find geometry columns for a fully-qualified table name so they can be excluded.
-  // Returns comma-separated geometry column names, or null if none found.
-  function getGeometryExclude(dottedName: string): string | null {
-    const parts = dottedName.split(".");
-    if (parts.length !== 3) return null;
-    const [cat, schema, table] = parts;
-    const catalogs = [config.catalogData, bridge.memoryCatalog].filter(Boolean);
-    for (const catData of catalogs) {
-      if (catData.catalogName !== cat) continue;
-      const s = catData.schemas.find((s: any) => s.info.name === schema);
-      const t = s?.tables.find((t: any) => t.name === table);
-      if (!t) continue;
-      const geomCols = getColumns(t).filter((c) => c.duckdbType === "GEOMETRY").map((c) => c.name);
-      return geomCols.length > 0 ? geomCols.join(", ") : null;
-    }
-    return null;
-  }
-
   // Insert text into the terminal's current input line.
-  // If the input is empty and the text looks like a table name, wrap it in SELECT * FROM.
-  // Geometry columns are excluded via EXCLUDE since they have no shell representation.
+  // If the input is empty and the text looks like a table name, wrap it in a
+  // SELECT (geometry columns excluded). Shared with the SQL editor via
+  // buildTableSelect/isTableRef so both surfaces behave identically.
   function insertText(text: string) {
-    const isTable = text.includes(".") && !text.includes(" ") && !text.includes("(");
-    if (isTable && promptInputEmpty) {
-      const exclude = getGeometryExclude(text);
-      if (exclude) {
-        term.paste(`SELECT * EXCLUDE (${exclude}) FROM ${text} LIMIT 100;`);
-      } else {
-        term.paste(`SELECT * FROM ${text} LIMIT 100;`);
-      }
+    if (isTableRef(text) && promptInputEmpty) {
+      term.paste(buildTableSelect(text, [config.catalogData, bridge.memoryCatalog]) + ";");
     } else {
       term.paste(text);
     }
