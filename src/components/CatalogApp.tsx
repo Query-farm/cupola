@@ -47,6 +47,14 @@ import {
   type RecentService,
 } from "@/lib/recent-services";
 
+/** A recoverable auth error: one the SPA login redirect (below) handles by
+ *  bouncing the user back through the IdP. These happen routinely (expired
+ *  token) and are deliberately NOT reported to Sentry. Hard failures (e.g.
+ *  "token exchange failed", connection errors) don't match and ARE reported. */
+function isRecoverableAuthMessage(message: string): boolean {
+  return message.toLowerCase().includes("auth") || message.includes("401");
+}
+
 export function CatalogApp() {
   const [data, setData] = useState<CatalogData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -494,7 +502,17 @@ export function CatalogApp() {
           await syncAttachedCatalogs();
         }
       } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Failed to connect");
+        const message = err instanceof Error ? err.message : "Failed to connect";
+        // Report connection errors and hard auth failures. Recoverable auth
+        // errors (handled by the SPA login redirect below) are routine, so
+        // we skip them to keep the dashboard signal clean.
+        if (!isRecoverableAuthMessage(message)) {
+          Sentry.captureException(err instanceof Error ? err : new Error(message), {
+            tags: { component: "catalog", path: "load" },
+            extra: { serviceUrl },
+          });
+        }
+        setError(message);
       } finally {
         setLoading(false);
         setRefreshing(false);
@@ -519,6 +537,10 @@ export function CatalogApp() {
         // Surface it as a permanent error so we don't loop back into
         // startLoginFlow → same IdP error → redirect → loop.
         console.error("[catalog] consumePendingCallback threw", err);
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+          tags: { component: "auth", path: "oauth-callback" },
+          extra: { serviceUrl },
+        });
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Authentication failed");
           setLoading(false);
@@ -560,18 +582,28 @@ export function CatalogApp() {
   // trap the user in an infinite redirect.
   useEffect(() => {
     if (!error) return;
-    const isAuthError = error.toLowerCase().includes("auth") || error.includes("401");
-    if (isAuthError) {
+    if (isRecoverableAuthMessage(error)) {
       const lastRedirect = Number(sessionStorage.getItem("_vgi_auth_redirect_ts") || "0");
       const now = Date.now();
       if (now - lastRedirect < 10_000) {
         console.warn("[catalog] Auth redirect loop detected — last redirect was", now - lastRedirect, "ms ago. Stopping.");
+        // A stuck user (re-auth loop) is a genuine hard failure worth surfacing —
+        // it's no longer a "routine redirect".
+        Sentry.captureMessage("Auth redirect loop detected", {
+          level: "warning",
+          tags: { component: "auth", path: "redirect-loop" },
+          extra: { serviceUrl, sinceLastRedirectMs: now - lastRedirect },
+        });
         return;
       }
       sessionStorage.setItem("_vgi_auth_redirect_ts", String(now));
       console.log("[catalog] Auth error detected, starting SPA login. error:", error);
       startLoginFlow(serviceUrl).catch((err) => {
         console.error("[catalog] startLoginFlow failed:", err);
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+          tags: { component: "auth", path: "start-login" },
+          extra: { serviceUrl },
+        });
         setError(err instanceof Error ? err.message : "Failed to start login");
       });
     }

@@ -27,6 +27,18 @@ export function scrubUrl(url: string): string {
   return `${base}#${scrubKvString(url.slice(hashIdx + 1))}`;
 }
 
+/** Scrub sensitive params out of any URLs embedded in free text.
+ *
+ * Exception messages and breadcrumb text can carry URLs verbatim (e.g. an
+ * OAuth error like `Token endpoint https://idp/token?...#token=… returned …`).
+ * `beforeSend` only scrubs `event.request`, so without this those URLs would
+ * ship unscrubbed. We find each `http(s)://…` run and route it through
+ * `scrubUrl`. A trailing delimiter (`,` `)` etc.) is left outside the match so
+ * it isn't mistaken for part of the URL. */
+export function scrubText(text: string): string {
+  return text.replace(/https?:\/\/[^\s)>\]"']+/g, (m) => scrubUrl(m));
+}
+
 /** Filter sensitive values out of an `a=1&b=2` style key/value string.
  * Non-kv content (e.g. selection-routing fragments like `/schema/x/table/y`)
  * passes through untouched. */

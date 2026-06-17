@@ -1,6 +1,6 @@
 import * as Sentry from "@sentry/astro";
 
-import { scrubUrl } from "./src/lib/sentry-scrub";
+import { scrubText, scrubUrl } from "./src/lib/sentry-scrub";
 
 declare const __APP_VERSION__: string;
 declare const __GIT_HASH__: string;
@@ -79,6 +79,18 @@ function scrubAuth(event: Sentry.ErrorEvent | Sentry.TransactionEvent): void {
     }
     if (typeof event.request.url === "string") {
       event.request.url = scrubUrl(event.request.url);
+    }
+  }
+  // Exception messages (and the top-level message) can embed endpoint URLs —
+  // e.g. captured OAuth/auth errors. beforeSend never sees these otherwise.
+  if (typeof event.message === "string") {
+    event.message = scrubText(event.message);
+  }
+  if (event.exception?.values) {
+    for (const value of event.exception.values) {
+      if (typeof value.value === "string") {
+        value.value = scrubText(value.value);
+      }
     }
   }
 }

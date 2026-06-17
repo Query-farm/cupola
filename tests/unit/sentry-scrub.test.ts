@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { scrubUrl } from "../../src/lib/sentry-scrub";
+import { scrubText, scrubUrl } from "../../src/lib/sentry-scrub";
 
 describe("scrubUrl", () => {
   test("filters the OAuth token fragment", () => {
@@ -48,6 +48,44 @@ describe("scrubUrl", () => {
   test("handles a fragment that mixes kv pairs and non-kv segments", () => {
     expect(scrubUrl("https://app.example/#foo&token=abc")).toBe(
       "https://app.example/#foo&token=[Filtered]",
+    );
+  });
+});
+
+describe("scrubText", () => {
+  test("filters a sensitive param in a URL embedded in a message", () => {
+    expect(
+      scrubText("Token endpoint https://idp/token#refresh_token=def failed"),
+    ).toBe("Token endpoint https://idp/token#refresh_token=[Filtered] failed");
+  });
+
+  test("filters ai_key in a query string inside free text", () => {
+    expect(scrubText("redirect to https://app.example/?ai_key=sk-ant-xyz now")).toBe(
+      "redirect to https://app.example/?ai_key=[Filtered] now",
+    );
+  });
+
+  test("does not swallow a trailing delimiter into the URL", () => {
+    expect(scrubText("see (https://app.example/#token=abc), then retry")).toBe(
+      "see (https://app.example/#token=[Filtered]), then retry",
+    );
+  });
+
+  test("scrubs multiple URLs in one message", () => {
+    expect(
+      scrubText("from https://a/#token=x to https://b/?ai_key=y end"),
+    ).toBe("from https://a/#token=[Filtered] to https://b/?ai_key=[Filtered] end");
+  });
+
+  test("leaves messages without URLs untouched", () => {
+    expect(scrubText("invalid_grant: refresh token expired")).toBe(
+      "invalid_grant: refresh token expired",
+    );
+  });
+
+  test("leaves a URL with no sensitive params untouched", () => {
+    expect(scrubText("failed to reach https://idp/.well-known/openid-configuration")).toBe(
+      "failed to reach https://idp/.well-known/openid-configuration",
     );
   });
 });

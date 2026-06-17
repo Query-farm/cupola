@@ -12,6 +12,7 @@
  * once (first call) and reattached to the new container on subsequent calls,
  * so panel/full-screen mode transitions don't tear down the SQL session.
  */
+import * as Sentry from "@sentry/astro";
 import { formatCellValue, safeGetArrowValue } from "./format";
 import { printBoxTable, printLineTable, cellWidth, type TerminalOutput } from "./shell-table-renderer";
 import { handleDotCommand, type ShellState, type ShellIO } from "./shell-commands";
@@ -364,6 +365,10 @@ export function initShell(
     const isUnrecoverable = /token exchange failed|token refresh failed|invalid_grant|AADSTS\d+/i.test(errStr);
     if (isUnrecoverable) {
       console.log("[shell] Unrecoverable auth error, surfacing to modal:", errStr);
+      Sentry.captureException(new Error(errStr), {
+        tags: { component: "shell", path: "attach", auth_kind: "unrecoverable" },
+        extra: { serviceUrl: config.serviceUrl, title },
+      });
       onAuthError?.(title, errStr);
       return "surfaced";
     }
@@ -378,6 +383,10 @@ export function initShell(
     // Non-auth ATTACH failure (typically a malformed user-supplied option).
     // Surface via modal so users notice with the shell minimized; the
     // terminal also receives the error via the caller's writeln fallback.
+    Sentry.captureException(new Error(errStr), {
+      tags: { component: "shell", path: "attach", auth_kind: "non-auth" },
+      extra: { serviceUrl: config.serviceUrl, title },
+    });
     onAttachError?.(title, errStr);
     return "unhandled";
   }

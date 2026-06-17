@@ -48,11 +48,20 @@
  * credentials across sessions would outlive their usefulness.
  */
 
+import * as Sentry from "@sentry/astro";
+
 const PENDING_KEY_PREFIX = "vgi.oauth.pending.";
 const TOKENS_KEY_PREFIX = "vgi.oauth.tokens.";
 
 /** Seconds before `exp` that we treat a token as "about to expire". */
 const EXPIRY_GRACE_SECONDS = 60;
+
+/** Add a token-lifecycle breadcrumb. These cost nothing until an event is
+ *  captured, then they ride along to make a 401 diagnosable as "token issued
+ *  N min ago → refresh fired → refresh failed". */
+function authCrumb(message: string, data?: Record<string, unknown>): void {
+  Sentry.addBreadcrumb({ category: "auth", level: "info", message, data });
+}
 
 /** OAuth protected-resource metadata (RFC 9728). Subset we care about. */
 interface ResourceMetadata {
@@ -341,6 +350,12 @@ function storeTokenResponse(ctx: AuthContext, resp: TokenResponse, fallbackRefre
     end_session_endpoint: ctx.endSessionEndpoint ?? fallbackEndSessionEndpoint,
   };
   writeTokens(ctx.serviceOrigin, stored);
+  authCrumb("token stored", {
+    expires_in,
+    expires_at: stored.expires_at,
+    hasRefreshToken: !!stored.refresh_token,
+    useIdToken: stored.use_id_token,
+  });
   return stored;
 }
 
@@ -468,6 +483,15 @@ async function refreshAccessToken(serviceOrigin: string): Promise<StoredTokens |
     return storeTokenResponse(ctx, resp, stored.refresh_token, stored.end_session_endpoint);
   } catch (err) {
     console.warn("[oauth] refresh failed for", serviceOrigin, err);
+    // A swallowed refresh failure is the silent root cause of many user-facing
+    // "Authentication Error"s: the caller goes tokenless and the server 401s.
+    // Surface it (warning level — the token store isn't cleared, so a fresh
+    // login can still recover) so token-expiration spikes are visible.
+    Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+      level: "warning",
+      tags: { component: "auth", path: "token-refresh" },
+      extra: { serviceOrigin },
+    });
     // Don't clear tokens on a transient failure — the caller can decide
     // whether to force a fresh login.
     return null;
@@ -484,13 +508,28 @@ async function refreshAccessToken(serviceOrigin: string): Promise<StoredTokens |
 export async function getAccessToken(serviceUrl: string): Promise<string | null> {
   const serviceOrigin = extractOrigin(serviceUrl);
   let stored = readTokens(serviceOrigin);
-  if (!stored) return null;
+  if (!stored) {
+    authCrumb("no stored tokens for service", { serviceOrigin });
+    return null;
+  }
 
   const now = Math.floor(Date.now() / 1000);
   if (stored.expires_at - EXPIRY_GRACE_SECONDS <= now) {
+    authCrumb("access token near/at expiry, refreshing", {
+      serviceOrigin,
+      expiresAt: stored.expires_at,
+      secondsPastGrace: now - (stored.expires_at - EXPIRY_GRACE_SECONDS),
+      hasRefreshToken: !!stored.refresh_token,
+    });
     const refreshed = await refreshAccessToken(serviceOrigin);
     if (refreshed) stored = refreshed;
-    else return null;
+    else {
+      authCrumb(
+        "no valid access token after refresh attempt — request will be unauthenticated",
+        { serviceOrigin },
+      );
+      return null;
+    }
   }
 
   return stored.use_id_token && stored.id_token ? stored.id_token : stored.access_token;
