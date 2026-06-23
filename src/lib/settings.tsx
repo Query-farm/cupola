@@ -12,6 +12,11 @@ export interface Settings {
   editorFontSize: number;
   /** Enable schema-aware autocomplete (CALL sql_auto_complete) in the editor. */
   editorAutocomplete: boolean;
+  /** Remembered rows-per-page for the data preview grid (editor results +
+   *  catalog Preview Data tab). One of the PAGE_SIZES in DataPreview. */
+  previewRowsPerPage: number;
+  /** Render geometry columns as WKT text instead of a clickable map preview. */
+  geometryAsText: boolean;
   anthropicApiKey: string;
   aiModel: string;
   aiMaxToolRounds: number;
@@ -52,6 +57,8 @@ const defaultSettings: Settings = {
   shellThreads: 0,
   editorFontSize: 13,
   editorAutocomplete: true,
+  previewRowsPerPage: 50,
+  geometryAsText: false,
   anthropicApiKey: "",
   aiModel: DEFAULT_AI_MODEL,
   aiMaxToolRounds: 20,

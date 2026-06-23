@@ -120,6 +120,18 @@ export function SettingsModal() {
                   onCheckedChange={(checked) => updateSettings({ hideDollarTables: checked })}
                 />
               </SettingRow>
+              <SettingRow>
+                <SettingLabel
+                  htmlFor="geometry-as-text"
+                  title="Show geometry as text"
+                  description="Render geometry columns as WKT text instead of a clickable map preview."
+                />
+                <Switch
+                  id="geometry-as-text"
+                  checked={settings.geometryAsText}
+                  onCheckedChange={(checked) => updateSettings({ geometryAsText: checked })}
+                />
+              </SettingRow>
             </div>
           </TabsContent>
 

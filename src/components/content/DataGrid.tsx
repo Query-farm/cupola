@@ -15,9 +15,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ChevronUp, ChevronDown } from "lucide-react";
 import { formatCellValue, isNullValue } from "@/lib/format";
 import type { ColumnInfo } from "@/lib/service";
 import { GeometryViewer } from "./GeometryViewer";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+
+type SortState = { col: string; dir: "asc" | "desc" } | null;
 
 interface Props {
   columnNames: string[];
@@ -41,6 +50,68 @@ interface Props {
    */
   canLoadMore?: boolean;
   onLoadMore?: () => void;
+  /** Render geometry columns as WKT text instead of the clickable map viewer. */
+  geometryAsText?: boolean;
+  /** Active column sort (rendered as a chevron on the header). */
+  sort?: SortState;
+  /** Called when a column header is clicked. Absent → headers aren't sortable. */
+  onSort?: (col: string) => void;
+}
+
+/** A column header: hover shows the column comment (when present), click cycles
+ *  the sort. Falls back to a plain label when the grid isn't sortable. */
+function HeaderCell({
+  col,
+  numeric,
+  comment,
+  sortDir,
+  onSort,
+}: {
+  col: string;
+  numeric: boolean;
+  comment?: string;
+  sortDir: "asc" | "desc" | null;
+  onSort?: (col: string) => void;
+}) {
+  const chevron =
+    sortDir === "asc" ? <ChevronUp className="h-3 w-3 shrink-0" /> :
+    sortDir === "desc" ? <ChevronDown className="h-3 w-3 shrink-0" /> : null;
+  const inner = (
+    <>
+      <span className="truncate">{col}</span>
+      {chevron}
+    </>
+  );
+  const layout = `flex items-center gap-1 max-w-full ${numeric ? "flex-row-reverse" : ""}`;
+
+  if (!onSort) {
+    // Not sortable: plain label, optionally with a hover tooltip for the comment.
+    const label = <span className={numeric ? "text-right block" : ""}>{col}</span>;
+    if (!comment) return label;
+    return (
+      <Tooltip>
+        <TooltipTrigger className="cursor-default">{label}</TooltipTrigger>
+        <TooltipContent>{comment}</TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  const btnClass = `${layout} cursor-pointer hover:text-accent transition-colors`;
+  if (!comment) {
+    return (
+      <button type="button" onClick={() => onSort(col)} className={btnClass}>
+        {inner}
+      </button>
+    );
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger onClick={() => onSort(col)} className={btnClass}>
+        {inner}
+      </TooltipTrigger>
+      <TooltipContent>{comment}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 /** DuckDB types that should be right-aligned. */
@@ -74,6 +145,9 @@ export function DataGrid({
   cellNavigation,
   canLoadMore,
   onLoadMore,
+  geometryAsText,
+  sort,
+  onSort,
 }: Props) {
   // Build maps for type lookups
   const infoByName = useMemo(() => {
@@ -108,8 +182,9 @@ export function DataGrid({
             if (isNullValue(val)) {
               return <span className={`text-muted-foreground/30 italic ${numeric ? "text-right block" : ""}`}>NULL</span>;
             }
-            // Geometry: render clickable map viewer
-            if (isGeometry && val instanceof Uint8Array) {
+            // Geometry: render clickable map viewer, unless the user prefers
+            // the WKT text representation (handled by formatCellValue below).
+            if (isGeometry && val instanceof Uint8Array && !geometryAsText) {
               const rowIdx = startRow + row.index + 1;
               return <GeometryViewer wkb={val} label={`Row ${rowIdx}`} />;
             }
@@ -119,7 +194,7 @@ export function DataGrid({
           },
         };
       }),
-    [columnNames, infoByName]
+    [columnNames, infoByName, fieldByName, startRow, geometryAsText]
   );
 
   const table = useReactTable({
@@ -338,6 +413,7 @@ export function DataGrid({
   );
 
   return (
+    <TooltipProvider>
     <Table
       containerRef={scrollRef}
       containerClassName={`${borderless ? "h-full overflow-auto" : "border rounded-md max-h-full overflow-auto"}${cellNavigation ? " focus:outline-none" : ""}`}
@@ -355,11 +431,17 @@ export function DataGrid({
         {table.getHeaderGroups().map((headerGroup) => (
           <TableRow key={headerGroup.id} className={borderless ? "border-none" : ""}>
             <TableHead style={headStyle} className={`sticky top-0 z-10 text-xs w-10 text-right pr-3 font-mono ${headBg} ${borderless ? "text-primary/60" : "text-muted-foreground"}`}>#</TableHead>
-            {headerGroup.headers.map((header) => (
-              <TableHead key={header.id} style={headStyle} className={`sticky top-0 z-10 text-xs font-mono whitespace-nowrap ${headBg} ${borderless ? "text-primary/80 font-semibold" : ""}`}>
-                {flexRender(header.column.columnDef.header, header.getContext())}
-              </TableHead>
-            ))}
+            {headerGroup.headers.map((header) => {
+              const col = header.column.id;
+              const info = infoByName.get(col);
+              const numeric = info ? isNumericType(info.duckdbType) : false;
+              const sortDir = sort?.col === col ? sort.dir : null;
+              return (
+                <TableHead key={header.id} style={headStyle} className={`sticky top-0 z-10 text-xs font-mono whitespace-nowrap ${headBg} ${borderless ? "text-primary/80 font-semibold" : ""}`}>
+                  <HeaderCell col={col} numeric={numeric} comment={info?.comment} sortDir={sortDir} onSort={onSort} />
+                </TableHead>
+              );
+            })}
           </TableRow>
         ))}
       </TableHeader>
@@ -381,5 +463,6 @@ export function DataGrid({
         )}
       </TableBody>
     </Table>
+    </TooltipProvider>
   );
 }

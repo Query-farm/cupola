@@ -225,6 +225,8 @@ Stored in localStorage (`vgi-frontend-settings` — key name predates the Cupola
 | `hideDollarTables` | `true` | Hide tables whose name contains `$` |
 | `shellFontSize` | `13` | Terminal font size |
 | `shellThreads` | `0` | DuckDB WASM thread count (0 = auto) |
+| `previewRowsPerPage` | `50` | Remembered rows-per-page for the data preview grid (editor results + catalog Preview Data). One of DataPreview's `PAGE_SIZES`. |
+| `geometryAsText` | `false` | Render geometry columns as WKT text instead of a clickable map preview (`GeometryViewer`) |
 | `anthropicApiKey` | `""` | Claude API key for AI features |
 | `aiModel` | `"claude-sonnet-4-6"` | Claude model for AI agent (retired IDs auto-migrated on load via `RETIRED_MODEL_REPLACEMENTS` in `settings.tsx`) |
 | `aiMaxToolRounds` | `20` | Max tool-use rounds per AI conversation |

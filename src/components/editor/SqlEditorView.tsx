@@ -57,6 +57,14 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
     return 400;
   });
   useEffect(() => { try { localStorage.setItem("vgi-editor-ai-open", aiOpen ? "1" : "0"); } catch {} }, [aiOpen]);
+  // Vertical editor/results split (fraction of the left column the editor pane
+  // gets). Persisted; clamped so neither pane collapses.
+  const SPLIT_MIN = 0.2, SPLIT_MAX = 0.8;
+  const [editorFrac, setEditorFrac] = useState<number>(() => {
+    try { const n = parseFloat(localStorage.getItem("vgi-editor-split") || ""); if (n >= SPLIT_MIN && n <= SPLIT_MAX) return n; } catch {}
+    return 0.42;
+  });
+  const splitColRef = useRef<HTMLDivElement>(null);
   // bridge.query availability — re-checked after the shell finishes booting.
   const [queryReady, setQueryReady] = useState<boolean>(() => !!bridge.query);
   // Live engine boot phase (e.g. "Downloading DuckDB") shown in the toolbar
@@ -362,6 +370,28 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
     document.addEventListener("pointerup", onUp);
   }, [aiWidth]);
 
+  // Vertical split resize between the editor and results panes. Clamp so each
+  // keeps at least ~120px; persist the fraction on release.
+  const onSplitResizeStart = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const col = splitColRef.current;
+    if (!col) return;
+    const rect = col.getBoundingClientRect();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const onMove = (ev: globalThis.PointerEvent) => {
+      const frac = (ev.clientY - rect.top) / rect.height;
+      const minFrac = 120 / rect.height;
+      setEditorFrac(Math.min(Math.min(SPLIT_MAX, 1 - minFrac), Math.max(Math.max(SPLIT_MIN, minFrac), frac)));
+    };
+    const onUp = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      setEditorFrac((f) => { try { localStorage.setItem("vgi-editor-split", String(f)); } catch {} return f; });
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  }, []);
+
   // ---- sidebar click-to-insert --------------------------------------------
   useEffect(() => {
     bridge.insertIntoEditor = smartInsert;
@@ -418,8 +448,8 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
           right. The panel stays mounted (display:none when closed) so its
           per-tab conversations survive open/close toggles. */}
       <div className="flex flex-1 min-h-0">
-        <div className="flex flex-col flex-1 min-w-0">
-          <div className="h-[42%] min-h-[120px] border-b border-border overflow-hidden">
+        <div ref={splitColRef} className="flex flex-col flex-1 min-w-0">
+          <div className="min-h-[120px] overflow-hidden" style={{ height: `${editorFrac * 100}%` }}>
             <CodeMirrorSql
               key={activeDoc?.id ?? "none"}
               ref={editorRef}
@@ -432,6 +462,10 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
               fontSize={settings.editorFontSize ?? 13}
             />
           </div>
+          <div
+            onPointerDown={onSplitResizeStart}
+            className="h-1.5 shrink-0 cursor-row-resize bg-border hover:bg-accent/60 active:bg-accent transition-colors"
+          />
           <div className="flex-1 min-h-0">
             <EditorResultsPane state={activeResult} />
           </div>

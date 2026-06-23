@@ -43,16 +43,25 @@ export function EditorToolbar({
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0">
       {running ? (
-        <Button
-          size="sm"
-          variant="destructive"
-          onClick={onStop}
-          className="h-7 gap-1.5"
-          data-testid="editor-stop"
-        >
-          <Square className="h-3.5 w-3.5" />
-          Stop
-        </Button>
+        <>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={onStop}
+            className="h-7 gap-1.5"
+            data-testid="editor-stop"
+          >
+            <Square className="h-3.5 w-3.5" />
+            Stop
+          </Button>
+          <span
+            className="flex items-center gap-1.5 text-xs text-muted-foreground"
+            data-testid="editor-running"
+          >
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
+            Running…
+          </span>
+        </>
       ) : (
         <Button
           size="sm"

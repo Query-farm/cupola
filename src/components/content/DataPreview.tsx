@@ -15,6 +15,7 @@ import { safeGetArrowValue } from "@/lib/format";
 import { tableFromIPC } from "apache-arrow";
 import { bridge } from "@/lib/shell-bridge";
 import { waitForTableReady } from "@/lib/table-ready";
+import { useSettings } from "@/lib/settings";
 
 const PAGE_SIZES = [25, 50, 100, 200];
 const DEFAULT_PAGE_SIZE = 50;
@@ -113,7 +114,7 @@ async function resolveOrderBy(tablePath: string): Promise<string> {
   return "ALL ASC NULLS LAST";
 }
 
-function arrowTableToRows(table: any): { columns: string[]; columnInfo: ColumnInfo[]; arrowFields: any[]; rows: Record<string, any>[] } {
+function arrowTableMeta(table: any): { columns: string[]; columnInfo: ColumnInfo[]; arrowFields: any[] } {
   const fields = table.schema.fields;
   const columns = fields.map((f: any) => f.name);
   const columnInfo: ColumnInfo[] = fields.map((f: any) => ({
@@ -121,21 +122,82 @@ function arrowTableToRows(table: any): { columns: string[]; columnInfo: ColumnIn
     arrowType: f.type?.toString() || "unknown",
     duckdbType: arrowFieldToDuckDB(f),
     nullable: f.nullable,
+    comment: f.metadata?.get("comment") ?? undefined,
   }));
+  return { columns, columnInfo, arrowFields: fields };
+}
 
+function arrowTableToRows(table: any): { columns: string[]; columnInfo: ColumnInfo[]; arrowFields: any[]; rows: Record<string, any>[] } {
+  const meta = arrowTableMeta(table);
+  const fields = meta.arrowFields;
   const rows: Record<string, any>[] = [];
   for (let r = 0; r < table.numRows; r++) {
     const row: Record<string, any> = {};
     for (let c = 0; c < fields.length; c++) {
-      row[columns[c]] = safeGetArrowValue(table.getChildAt(c), r, fields[c]);
+      row[meta.columns[c]] = safeGetArrowValue(table.getChildAt(c), r, fields[c]);
     }
     rows.push(row);
   }
+  return { ...meta, rows };
+}
 
-  return { columns, columnInfo, arrowFields: fields, rows };
+/** Materialize specific row indices from a full Arrow table (used to page over
+ *  a client-side sort permutation without slicing). */
+function arrowRowsByIndices(table: any, indices: number[]): Record<string, any>[] {
+  const fields = table.schema.fields;
+  const names = fields.map((f: any) => f.name);
+  const children = fields.map((_: any, c: number) => table.getChildAt(c));
+  return indices.map((idx) => {
+    const row: Record<string, any> = {};
+    for (let c = 0; c < fields.length; c++) {
+      row[names[c]] = safeGetArrowValue(children[c], idx, fields[c]);
+    }
+    return row;
+  });
+}
+
+type SortState = { col: string; dir: "asc" | "desc" } | null;
+
+/** Comparator over row indices of an in-memory Arrow table for the given sort.
+ *  Nulls always sort last; numbers/bigints numeric, dates by time, else string. */
+function makeIndexComparator(table: any, col: string, dir: "asc" | "desc"): (a: number, b: number) => number {
+  const fields = table.schema.fields;
+  const cIdx = fields.findIndex((f: any) => f.name === col);
+  const child = table.getChildAt(cIdx);
+  const field = fields[cIdx];
+  const sign = dir === "desc" ? -1 : 1;
+  return (a, b) => {
+    const va = safeGetArrowValue(child, a, field);
+    const vb = safeGetArrowValue(child, b, field);
+    const na = va === null || va === undefined;
+    const nb = vb === null || vb === undefined;
+    if (na && nb) return 0;
+    if (na) return 1; // nulls last, independent of direction
+    if (nb) return -1;
+    let cmp: number;
+    if (typeof va === "bigint" || typeof vb === "bigint") {
+      const ba = typeof va === "bigint" ? va : BigInt(Math.trunc(Number(va)));
+      const bb = typeof vb === "bigint" ? vb : BigInt(Math.trunc(Number(vb)));
+      cmp = ba < bb ? -1 : ba > bb ? 1 : 0;
+    } else if (typeof va === "number" && typeof vb === "number") {
+      cmp = va - vb;
+    } else if (va instanceof Date && vb instanceof Date) {
+      cmp = va.getTime() - vb.getTime();
+    } else {
+      cmp = String(va).localeCompare(String(vb));
+    }
+    return sign * cmp;
+  };
+}
+
+/** ORDER BY body for a server-side sort on a single column. */
+function sortOrderByClause(sort: NonNullable<SortState>): string {
+  const ident = `"${sort.col.replace(/"/g, '""')}"`;
+  return `${ident} ${sort.dir === "desc" ? "DESC" : "ASC"} NULLS LAST`;
 }
 
 export function DataPreview({ tablePath, result }: Props) {
+  const { settings, updateSettings } = useSettings();
   const [columns, setColumns] = useState<string[]>([]);
   const [columnInfo, setColumnInfo] = useState<ColumnInfo[]>([]);
   const [arrowFields, setArrowFields] = useState<any[]>([]);
@@ -153,7 +215,14 @@ export function DataPreview({ tablePath, result }: Props) {
   // `page` is the base chunk the loaded window starts at. The footer pager
   // jumps it (replacing the window); infinite scroll appends below it.
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [pageSize, setPageSize] = useState<number>(() =>
+    PAGE_SIZES.includes(settings.previewRowsPerPage) ? settings.previewRowsPerPage : DEFAULT_PAGE_SIZE,
+  );
+  // Active column sort. null = source's natural/stable order.
+  const [sort, setSort] = useState<SortState>(null);
+  // Cached sort permutation for the in-memory `result` path (computed once per
+  // table+column+direction so paging doesn't re-sort every window).
+  const sortedIndicesRef = useRef<{ table: any; col: string; dir: string; indices: number[] } | null>(null);
   const requestIdRef = useRef(0);
   // Live row count for async append offset math, kept off `rows` so loadMore
   // doesn't need `rows` in its deps (which would re-subscribe scroll handlers).
@@ -177,6 +246,19 @@ export function DataPreview({ tablePath, result }: Props) {
     return orderBy;
   }, []);
 
+  // Sorted row-index permutation for the in-memory result, cached per
+  // (table, column, direction).
+  const getSortedIndices = useCallback((table: any, s: NonNullable<SortState>): number[] => {
+    const cached = sortedIndicesRef.current;
+    if (cached && cached.table === table && cached.col === s.col && cached.dir === s.dir) {
+      return cached.indices;
+    }
+    const indices = Array.from({ length: table.numRows as number }, (_, i) => i);
+    indices.sort(makeIndexComparator(table, s.col, s.dir));
+    sortedIndicesRef.current = { table, col: s.col, dir: s.dir, indices };
+    return indices;
+  }, []);
+
   // Load a fresh window of `size` rows starting at chunk `pageNum`, REPLACING
   // the current rows. Used for the initial load, pager jumps, and page-size
   // changes. Bumps requestId so any in-flight append for the old window is
@@ -191,8 +273,16 @@ export function DataPreview({ tablePath, result }: Props) {
       if (result) {
         const total = result.numRows as number;
         const offset = pageNum * size;
-        const slice = result.slice(offset, Math.min(offset + size, total));
-        const { columns: cols, columnInfo: info, arrowFields: fields, rows: data } = arrowTableToRows(slice);
+        const { columns: cols, columnInfo: info, arrowFields: fields } = arrowTableMeta(result);
+        let data: Record<string, any>[];
+        if (sort) {
+          // Page over the sorted permutation, gathering rows by index.
+          const pageIdx = getSortedIndices(result, sort).slice(offset, offset + size);
+          data = arrowRowsByIndices(result, pageIdx);
+        } else {
+          // Natural order — slice the contiguous Arrow table (fast path).
+          data = arrowTableToRows(result.slice(offset, Math.min(offset + size, total))).rows;
+        }
         setColumns(cols);
         setColumnInfo(info);
         setArrowFields(fields);
@@ -209,7 +299,7 @@ export function DataPreview({ tablePath, result }: Props) {
       await waitForTableReady(tablePath);
       if (thisRequest !== requestIdRef.current) return; // stale, tablePath changed while waiting
 
-      const orderBy = await ensureOrderBy(tablePath);
+      const orderBy = sort ? sortOrderByClause(sort) : await ensureOrderBy(tablePath);
       if (thisRequest !== requestIdRef.current) return; // stale, changed mid-resolve
 
       const offset = pageNum * size;
@@ -246,7 +336,7 @@ export function DataPreview({ tablePath, result }: Props) {
     } finally {
       if (thisRequest === requestIdRef.current) setLoading(false);
     }
-  }, [tablePath, result, ensureOrderBy]);
+  }, [tablePath, result, ensureOrderBy, sort, getSortedIndices]);
 
   // Infinite scroll: APPEND the next `pageSize` rows below the loaded window.
   // Offset = base chunk (page*pageSize) + rows already loaded. Guarded so
@@ -262,14 +352,15 @@ export function DataPreview({ tablePath, result }: Props) {
       if (result) {
         const total = result.numRows as number;
         if (offset >= total) { setHasMore(false); return; }
-        const slice = result.slice(offset, Math.min(offset + pageSize, total));
-        const { rows: data } = arrowTableToRows(slice);
+        const data = sort
+          ? arrowRowsByIndices(result, getSortedIndices(result, sort).slice(offset, offset + pageSize))
+          : arrowTableToRows(result.slice(offset, Math.min(offset + pageSize, total))).rows;
         setRows((prev) => [...prev, ...data]);
         setHasMore(offset + pageSize < total);
         return;
       }
       if (!tablePath) return;
-      const orderBy = orderByCacheRef.current.get(tablePath);
+      const orderBy = sort ? sortOrderByClause(sort) : orderByCacheRef.current.get(tablePath);
       if (!orderBy) return; // window not loaded yet; nothing to extend
       const { table, error: queryError } = await queryDuckDB(
         `SELECT * FROM ${tablePath} ORDER BY ${orderBy} LIMIT ${pageSize + 1} OFFSET ${offset}`
@@ -288,7 +379,7 @@ export function DataPreview({ tablePath, result }: Props) {
       appendingRef.current = false;
       setAppending(false);
     }
-  }, [tablePath, result, page, pageSize]);
+  }, [tablePath, result, page, pageSize, sort, getSortedIndices]);
 
   // Reset and load the first window when the source or pageSize changes.
   useEffect(() => {
@@ -311,8 +402,19 @@ export function DataPreview({ tablePath, result }: Props) {
     setPageSize(newSize);
     setPage(0);
     setRows([]);
+    updateSettings({ previewRowsPerPage: newSize });
     loadWindow(0, newSize);
-  }, [loadWindow]);
+  }, [loadWindow, updateSettings]);
+
+  // Cycle a column's sort: none → asc → desc → none. The reset effect (keyed on
+  // loadWindow, which depends on `sort`) reloads from page 0.
+  const handleSort = useCallback((col: string) => {
+    setSort((prev) => {
+      if (!prev || prev.col !== col) return { col, dir: "asc" };
+      if (prev.dir === "asc") return { col, dir: "desc" };
+      return null;
+    });
+  }, []);
 
   const startRow = page * pageSize;
 
@@ -374,6 +476,9 @@ export function DataPreview({ tablePath, result }: Props) {
           cellNavigation
           canLoadMore={hasMore && !loading}
           onLoadMore={loadMore}
+          geometryAsText={settings.geometryAsText}
+          sort={sort}
+          onSort={handleSort}
         />
       </div>
 
