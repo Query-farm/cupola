@@ -183,7 +183,7 @@ done
 # bootable if haybarn-extensions.query.farm has an outage. The frontend sets
 # `SET custom_extension_repository = '${origin}/haybarn/extensions'` before
 # `INSTALL vgi FROM community;` so DuckDB fetches from our mirror.
-HAYBARN_EXT_VERSION="v1.5.3"
+HAYBARN_EXT_VERSION="v1.5.4"
 mkdir -p "dist/haybarn/extensions/${HAYBARN_EXT_VERSION}"
 for variant in wasm_mvp wasm_eh wasm_threads; do
   mkdir -p "dist/haybarn/extensions/${HAYBARN_EXT_VERSION}/${variant}"
