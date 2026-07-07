@@ -9,7 +9,7 @@ import * as Sentry from "@sentry/astro";
 
 import type { CatalogData } from "./service";
 import { getColumns, getForeignKeys } from "./service";
-import { filterTagsForAI, TAG_DESCRIPTION_LLM, TAG_DESCRIPTION_MD, TAG_EXAMPLE_QUERIES } from "./tags";
+import { filterTagsForAI, getTag, TAG_DOC_LLM } from "./tags";
 import { fetchWithRetry } from "./ai-fetch";
 import {
   AGENT_NAME,
@@ -415,21 +415,20 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `Loaded extensions: icu, json, httpfs, iceberg, spatial, ducklake`,
   ];
 
-  // Catalog-level description for AI context
-  if (catalog.catalogTags?.[TAG_DESCRIPTION_LLM]) {
+  // Catalog-level description for AI context (canonical doc_llm, deprecated fallback)
+  const catalogDoc = getTag(catalog.catalogTags, TAG_DOC_LLM);
+  if (catalogDoc) {
     lines.push(`## Catalog Description`);
-    lines.push(catalog.catalogTags[TAG_DESCRIPTION_LLM]);
+    lines.push(catalogDoc);
     lines.push(``);
   }
 
   // Dynamic catalog content
   for (const schema of catalog.schemas) {
     const schemaComment = schema.info.comment ? ` — ${schema.info.comment}` : "";
-    const filteredTags = schema.info.tags
-      ? Object.entries(schema.info.tags).filter(([k]) => ![TAG_EXAMPLE_QUERIES, TAG_DESCRIPTION_MD].includes(k))
-      : [];
-    const schemaTags = filteredTags.length > 0
-      ? ` [${filteredTags.map(([k, v]) => `${k}: ${v}`).join(", ")}]` : "";
+    const aiTags = filterTagsForAI(schema.info.tags);
+    const schemaTags = aiTags
+      ? ` [${Object.entries(aiTags).map(([k, v]) => `${k}: ${v}`).join(", ")}]` : "";
     lines.push(`**Schema: ${cat}.${schema.info.name}**${schemaComment}${schemaTags}`);
 
     for (const table of schema.tables) {

@@ -6,8 +6,10 @@ import type { CatalogData } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
 import { CatalogListItem } from "./CatalogListItem";
 import { TagsTable } from "./TagsTable";
-import { filterDisplayTags, TAG_DESCRIPTION_MD } from "@/lib/tags";
+import { filterDisplayTags, getTag, parseKeywords, TAG_DOC_MD, TAG_TITLE } from "@/lib/tags";
 import { DescriptionSection } from "./DescriptionSection";
+import { MetaChips } from "./MetaChips";
+import { ProvenanceCard } from "./ProvenanceCard";
 import { useCatalogIdentity } from "@/lib/catalog-identity";
 import { CatalogIdentityCard } from "./CatalogIdentityCard";
 
@@ -36,12 +38,17 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate
     return sum + s.functions.length;
   }, 0);
 
+  const title = getTag(catalog.catalogTags, TAG_TITLE);
+  const docMd = getTag(catalog.catalogTags, TAG_DOC_MD);
+  const keywords = parseKeywords(catalog.catalogTags);
+
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
         <Database className="h-8 w-8 text-primary" />
         <div>
-          <h1 className="text-2xl font-bold text-primary">{catalog.catalogName}</h1>
+          <h1 className="text-2xl font-bold text-primary">{title || catalog.catalogName}</h1>
+          {title && <p className="text-xs font-mono text-muted-foreground/70">{catalog.catalogName}</p>}
           <p className="text-sm text-muted-foreground">
             {catalog.schemas.length} schemas, {totalTables} tables
             {totalViews > 0 && `, ${totalViews} views`}
@@ -54,9 +61,9 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate
         <p className="text-muted-foreground mb-6">{catalog.catalogComment}</p>
       )}
 
-      {catalog.catalogTags?.[TAG_DESCRIPTION_MD] && (
-        <DescriptionSection markdown={catalog.catalogTags[TAG_DESCRIPTION_MD]} defaultOpen />
-      )}
+      {docMd && <DescriptionSection markdown={docMd} defaultOpen />}
+
+      <MetaChips keywords={keywords} />
 
       <CatalogIdentityCard identity={identity} loading={identityLoading} />
 
@@ -92,6 +99,8 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate
           </div>
         </>
       )}
+
+      <ProvenanceCard tags={catalog.catalogTags} />
 
       {(() => {
         const filtered = filterDisplayTags(catalog.catalogTags);

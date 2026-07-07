@@ -14,7 +14,9 @@ import { ColumnTypeBadge } from "./ColumnTypeBadge";
 import { DescriptionSection } from "./DescriptionSection";
 import { ExampleQueries } from "./ExampleQueries";
 import { TagsTable } from "./TagsTable";
-import { filterDisplayTags, TAG_EXAMPLE_QUERIES, TAG_DESCRIPTION_MD } from "@/lib/tags";
+import { ObjectMeta } from "./ObjectMeta";
+import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
+import { filterDisplayTags, getTag, parseExecutableExamples, TAG_EXAMPLE_QUERIES, TAG_DOC_MD, TAG_TITLE, TAG_RESULT_COLUMNS_MD } from "@/lib/tags";
 
 interface Props {
   func: FunctionInfo;
@@ -70,17 +72,19 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOp
   const signature = useMemo(() => formatFunctionSignature(func), [func]);
   const tableFn = isTableFunction(func);
 
-  const descriptionMd = func.tags?.[TAG_DESCRIPTION_MD];
+  const title = getTag(func.tags, TAG_TITLE);
+  const descriptionMd = getTag(func.tags, TAG_DOC_MD);
   const plainDescription = func.description || func.comment;
+  const resultColumnsMd = getTag(func.tags, TAG_RESULT_COLUMNS_MD);
 
   // FunctionInfo has TWO example channels — a structured first-class
   // `examples: CatalogExample[]` (server-defined) and an optional
-  // `vgi.example_queries` JSON tag (user-defined). Pass both to
-  // ExampleQueries, which merges and de-dupes by SQL.
-  const structuredExamples = (func.examples || []).map((e) => ({
-    description: e.description || null,
-    sql: e.sql,
-  }));
+  // `vgi.example_queries` JSON tag (user-defined). Also merge in any
+  // `vgi.executable_examples`. ExampleQueries merges and de-dupes by SQL.
+  const structuredExamples = useMemo(() => [
+    ...(func.examples || []).map((e) => ({ description: e.description || null, sql: e.sql })),
+    ...parseExecutableExamples(func.tags),
+  ], [func.examples, func.tags]);
 
   const hasProperties = Boolean(func.stability || func.null_handling || func.categories?.length);
 
@@ -89,6 +93,8 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOp
       {catalogName && schemaName && (
         <Breadcrumb catalogName={catalogName} schemaName={schemaName} itemName={func.name} itemType="function" onNavigate={onNavigate} />
       )}
+
+      {title && <h1 className="text-xl font-semibold mt-1 mb-2">{title}</h1>}
 
       {/* Type badges */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -112,6 +118,8 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOp
       ) : (
         plainDescription && <p className="text-muted-foreground mb-4">{plainDescription}</p>
       )}
+
+      <ObjectMeta tags={func.tags} />
 
       {/* Parameters */}
       {args.length > 0 && (
@@ -168,6 +176,8 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOp
               </tbody>
             </table>
           </div>
+        ) : resultColumnsMd ? (
+          <div className="mb-4"><ChatMarkdown content={resultColumnsMd} /></div>
         ) : (
           <p className="text-muted-foreground mb-4">A table whose columns are determined at query time.</p>
         )

@@ -9,8 +9,9 @@ import { Breadcrumb } from "./Breadcrumb";
 import { ColumnsTable } from "./ColumnsTable";
 import { TagsTable } from "./TagsTable";
 import { ExampleQueries } from "./ExampleQueries";
-import { filterDisplayTags, TAG_DESCRIPTION_MD, TAG_EXAMPLE_QUERIES } from "@/lib/tags";
+import { filterDisplayTags, getTag, parseExecutableExamples, TAG_DOC_MD, TAG_EXAMPLE_QUERIES, TAG_TITLE } from "@/lib/tags";
 import { DescriptionSection } from "./DescriptionSection";
+import { ObjectMeta } from "./ObjectMeta";
 
 interface Props {
   table: TableInfo;
@@ -24,6 +25,9 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell }: Pro
   const foreignKeys = getForeignKeys(table);
   const defaultSql = `SELECT * FROM ${catalogName}.${table.schema_name}.${table.name} LIMIT 10;`;
   const displayTags = useMemo(() => filterDisplayTags(table.tags), [table.tags]);
+  const title = getTag(table.tags, TAG_TITLE);
+  const docMd = getTag(table.tags, TAG_DOC_MD);
+  const executableExamples = useMemo(() => parseExecutableExamples(table.tags), [table.tags]);
 
   // Lazily fetch column statistics from DuckDB WASM shell.
   // undefined = loading, Map = loaded, null = unavailable.
@@ -82,13 +86,15 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell }: Pro
         ) : undefined}
       />
 
+      {title && <h1 className="text-xl font-semibold mt-1 mb-1">{title}</h1>}
+
       {table.comment && (
         <p className="text-muted-foreground mb-3">{table.comment}</p>
       )}
 
-      {table.tags?.[TAG_DESCRIPTION_MD] && (
-        <DescriptionSection markdown={table.tags[TAG_DESCRIPTION_MD]} />
-      )}
+      {docMd && <DescriptionSection markdown={docMd} />}
+
+      <ObjectMeta tags={table.tags} />
 
       {/* Columns */}
       <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mt-4 mb-2">
@@ -175,6 +181,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell }: Pro
 
       <ExampleQueries
         exampleQueriesJson={table.tags?.[TAG_EXAMPLE_QUERIES]}
+        queries={executableExamples}
         defaultSql={defaultSql}
         onOpenShell={onOpenShell}
       />

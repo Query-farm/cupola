@@ -9,8 +9,9 @@ import { Breadcrumb } from "./Breadcrumb";
 import { SqlCodeBlock } from "./SqlCodeBlock";
 import { TagsTable } from "./TagsTable";
 import { ExampleQueries } from "./ExampleQueries";
-import { filterDisplayTags, TAG_DESCRIPTION_MD, TAG_EXAMPLE_QUERIES } from "@/lib/tags";
+import { filterDisplayTags, getTag, parseExecutableExamples, TAG_DOC_MD, TAG_EXAMPLE_QUERIES, TAG_TITLE } from "@/lib/tags";
 import { DescriptionSection } from "./DescriptionSection";
+import { ObjectMeta } from "./ObjectMeta";
 import { bridge } from "@/lib/shell-bridge";
 
 interface ViewColumn {
@@ -30,6 +31,9 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate, onOpenSh
   const [columns, setColumns] = useState<ViewColumn[] | null>(null);
   const [copied, setCopied] = useState(false);
   const displayTags = useMemo(() => filterDisplayTags(view.tags), [view.tags]);
+  const title = getTag(view.tags, TAG_TITLE);
+  const docMd = getTag(view.tags, TAG_DOC_MD);
+  const executableExamples = useMemo(() => parseExecutableExamples(view.tags), [view.tags]);
 
   // Fetch columns from DuckDB if shell is available
   useEffect(() => {
@@ -69,13 +73,15 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate, onOpenSh
     <div>
       <Breadcrumb catalogName={catalogName || ""} schemaName={schemaName || view.schema_name} itemName={view.name} itemType="view" onNavigate={onNavigate} />
 
+      {title && <h1 className="text-xl font-semibold mt-1 mb-1">{title}</h1>}
+
       {view.comment && (
         <p className="text-muted-foreground mb-4">{view.comment}</p>
       )}
 
-      {view.tags?.[TAG_DESCRIPTION_MD] && (
-        <DescriptionSection markdown={view.tags[TAG_DESCRIPTION_MD]} />
-      )}
+      {docMd && <DescriptionSection markdown={docMd} />}
+
+      <ObjectMeta tags={view.tags} />
 
       {/* Columns */}
       {columns && columns.length > 0 && (
@@ -135,7 +141,7 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate, onOpenSh
       )}
 
       {/* Example Queries */}
-      <ExampleQueries exampleQueriesJson={view.tags?.[TAG_EXAMPLE_QUERIES]} onOpenShell={onOpenShell} />
+      <ExampleQueries exampleQueriesJson={view.tags?.[TAG_EXAMPLE_QUERIES]} queries={executableExamples} onOpenShell={onOpenShell} />
     </div>
   );
 }

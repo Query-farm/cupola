@@ -4,7 +4,9 @@ import { Breadcrumb } from "./Breadcrumb";
 import { SqlCodeBlock } from "./SqlCodeBlock";
 import { TagsTable } from "./TagsTable";
 import { ExampleQueries } from "./ExampleQueries";
-import { filterDisplayTags, TAG_EXAMPLE_QUERIES } from "@/lib/tags";
+import { filterDisplayTags, getTag, parseExecutableExamples, TAG_DOC_MD, TAG_EXAMPLE_QUERIES, TAG_TITLE } from "@/lib/tags";
+import { DescriptionSection } from "./DescriptionSection";
+import { ObjectMeta } from "./ObjectMeta";
 import { useMemo } from "react";
 
 interface Props {
@@ -17,13 +19,21 @@ interface Props {
 
 export function MacroDetail({ macro, catalogName, schemaName, onNavigate, onOpenShell }: Props) {
   const displayTags = useMemo(() => filterDisplayTags(macro.tags), [macro.tags]);
+  const title = getTag(macro.tags, TAG_TITLE);
+  const docMd = getTag(macro.tags, TAG_DOC_MD);
+  const executableExamples = useMemo(() => parseExecutableExamples(macro.tags), [macro.tags]);
 
   return (
     <div>
       <Breadcrumb catalogName={catalogName} schemaName={schemaName || macro.schema_name} itemName={macro.name} itemType="macro" onNavigate={onNavigate} />
+      {title && <h1 className="text-xl font-semibold mt-1 mb-1">{title}</h1>}
       {macro.comment && (
         <p className="text-muted-foreground mb-4">{macro.comment}</p>
       )}
+
+      {docMd && <DescriptionSection markdown={docMd} />}
+
+      <ObjectMeta tags={macro.tags} />
 
       {/* Parameters */}
       {macro.parameters.length > 0 && (
@@ -65,6 +75,7 @@ export function MacroDetail({ macro, catalogName, schemaName, onNavigate, onOpen
 
       <ExampleQueries
         exampleQueriesJson={macro.tags?.[TAG_EXAMPLE_QUERIES]}
+        queries={executableExamples}
         onOpenShell={onOpenShell}
       />
     </div>
