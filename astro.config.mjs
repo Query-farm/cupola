@@ -211,6 +211,12 @@ export default defineConfig({
         // Use the client-only connect module directly to avoid bundling
         // Node.js server-side code (node:crypto, node:zlib, etc.)
         '@query-farm/vgi-rpc/connect': resolve('../vgi-rpc-typescript/src/client/connect.ts'),
+        // Resolve vgi/client to its browser-safe source, matching the `bun`
+        // export condition dev uses. The package's `import` condition points at
+        // dist/client-entry.js, which bun's bundler mis-emits as a binding-less
+        // re-export barrel; Rollup then fails ("deserializeSchema is not
+        // defined"). Building from source avoids the broken prebuilt dist.
+        'vgi/client': resolve('../vgi-typescript/src/client-entry.ts'),
         'node:stream': resolve('src/lib/node-stubs.ts'),
         'node:zlib': resolve('src/lib/node-stubs.ts'),
         'node:crypto': resolve('src/lib/node-stubs.ts'),
