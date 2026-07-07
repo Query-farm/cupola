@@ -2,7 +2,7 @@
   "name": "@query-farm/cupola",
   "private": true,
   "type": "module",
-  "version": "0.4.90",
+  "version": "0.4.91",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.12.0"
@@ -26,7 +26,7 @@
     "@codemirror/language": "^6.12.3",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.43.1",
-    "@haybarn/haybarn-wasm": "^1.5.3-rc13",
+    "@haybarn/haybarn-wasm": "^1.5.4-rc1",
     "@perspective-dev/client": "^4.3.0",
     "@perspective-dev/viewer": "^4.3.0",
     "@perspective-dev/viewer-d3fc": "^4.3.0",
