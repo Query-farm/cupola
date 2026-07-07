@@ -105,6 +105,12 @@ export const win32 = posix;
 export function spawn() { throw new Error("child_process.spawn stub: not available in browser"); }
 export function execSync() { throw new Error("child_process.execSync stub: not available in browser"); }
 export function createServer() { throw new Error("net.createServer stub: not available in browser"); }
+// node:net client stubs — vgi-rpc's TCP (`connect`) and AF_UNIX
+// (`createConnection`) launchers are bundled into vgi-rpc's dist and statically
+// imported, but neither code path is reachable from the browser. Throwing on
+// call is fine; these exist only so Rollup's static analysis resolves them.
+export function connect() { throw new Error("net.connect stub: not available in browser"); }
+export function createConnection() { throw new Error("net.createConnection stub: not available in browser"); }
 export type Server = any;
 export type Socket = any;
 
@@ -123,5 +129,5 @@ export default {
   sep, delimiter, join, resolve, dirname, basename, extname, normalize, isAbsolute, relative, parse,
   posix, win32,
   spawn, execSync,
-  createServer,
+  createServer, connect, createConnection,
 };

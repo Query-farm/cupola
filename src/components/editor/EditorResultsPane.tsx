@@ -1,5 +1,6 @@
 import { Loader2, AlertCircle, TableProperties, CheckCircle2 } from "lucide-react";
 import { DataPreview } from "@/components/content/DataPreview";
+import { ExplainView } from "@/components/editor/ExplainView";
 
 export interface ResultState {
   table: any | null;
@@ -45,6 +46,8 @@ export function EditorResultsPane({ state }: Props) {
             <Loader2 className="h-4 w-4 animate-spin" />
             <span className="text-sm">Running…</span>
           </div>
+        ) : state.table && isExplainTable(state.table) ? (
+          <ExplainView table={state.table} />
         ) : state.table ? (
           // Re-key by the result identity so DataPreview resets its paging
           // window when a new result arrives.
@@ -91,6 +94,12 @@ function StatusBar({ state }: Props) {
       )}
     </div>
   );
+}
+
+/** True when an Arrow result is a DuckDB EXPLAIN output (explain_key/explain_value). */
+function isExplainTable(table: any): boolean {
+  const names: string[] = table?.schema?.fields?.map((f: any) => f.name) ?? [];
+  return names.includes("explain_key") && names.includes("explain_value");
 }
 
 let keyCounter = 0;
