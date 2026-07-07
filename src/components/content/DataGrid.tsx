@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/table";
 import { ChevronUp, ChevronDown } from "lucide-react";
 import { formatCellValue, isNullValue } from "@/lib/format";
+import { buildGridClipboard, writeGridClipboard, type CellRect } from "@/lib/grid-clipboard";
 import type { ColumnInfo } from "@/lib/service";
 import { GeometryViewer } from "./GeometryViewer";
 import {
@@ -27,6 +28,21 @@ import {
 } from "@/components/ui/tooltip";
 
 type SortState = { col: string; dir: "asc" | "desc" } | null;
+
+/** A grid cell coordinate: row index within the loaded window + data-column index. */
+type Cell = { row: number; col: number };
+/** A rectangular selection: `anchor` is fixed, `focus` moves (the active cell). */
+type Selection = { anchor: Cell; focus: Cell };
+
+/** Inclusive min/max rectangle spanned by a selection's anchor and focus. */
+function rectOf(sel: Selection): CellRect {
+  return {
+    rowMin: Math.min(sel.anchor.row, sel.focus.row),
+    rowMax: Math.max(sel.anchor.row, sel.focus.row),
+    colMin: Math.min(sel.anchor.col, sel.focus.col),
+    colMax: Math.max(sel.anchor.col, sel.focus.col),
+  };
+}
 
 interface Props {
   columnNames: string[];
@@ -59,19 +75,23 @@ interface Props {
 }
 
 /** A column header: hover shows the column comment (when present), click cycles
- *  the sort. Falls back to a plain label when the grid isn't sortable. */
+ *  the sort (or, with a modifier held, selects the whole column via `onHeaderClick`).
+ *  Falls back to a plain label when the grid isn't sortable. */
 function HeaderCell({
   col,
   numeric,
   comment,
   sortDir,
   onSort,
+  onHeaderClick,
 }: {
   col: string;
   numeric: boolean;
   comment?: string;
   sortDir: "asc" | "desc" | null;
   onSort?: (col: string) => void;
+  /** Receives the raw click; a modifier+click here selects the column instead of sorting. */
+  onHeaderClick?: (e: React.MouseEvent) => void;
 }) {
   const chevron =
     sortDir === "asc" ? <ChevronUp className="h-3 w-3 shrink-0" /> :
@@ -84,8 +104,17 @@ function HeaderCell({
   );
   const layout = `flex items-center gap-1 max-w-full ${numeric ? "flex-row-reverse" : ""}`;
 
-  if (!onSort) {
-    // Not sortable: plain label, optionally with a hover tooltip for the comment.
+  // A modifier+click selects the whole column (onHeaderClick); a plain click sorts.
+  const handleClick = (e: React.MouseEvent) => {
+    if (onHeaderClick && (e.altKey || e.metaKey || e.ctrlKey)) {
+      onHeaderClick(e);
+      return;
+    }
+    onSort?.(col);
+  };
+
+  if (!onSort && !onHeaderClick) {
+    // Not interactive: plain label, optionally with a hover tooltip for the comment.
     const label = <span className={numeric ? "text-right block" : ""}>{col}</span>;
     if (!comment) return label;
     return (
@@ -99,14 +128,14 @@ function HeaderCell({
   const btnClass = `${layout} cursor-pointer hover:text-accent transition-colors`;
   if (!comment) {
     return (
-      <button type="button" onClick={() => onSort(col)} className={btnClass}>
+      <button type="button" onClick={handleClick} className={btnClass}>
         {inner}
       </button>
     );
   }
   return (
     <Tooltip>
-      <TooltipTrigger onClick={() => onSort(col)} className={btnClass}>
+      <TooltipTrigger onClick={handleClick} className={btnClass}>
         {inner}
       </TooltipTrigger>
       <TooltipContent>{comment}</TooltipContent>
@@ -258,14 +287,46 @@ export function DataGrid({
     ? rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end
     : 0;
 
-  // --- Keyboard cell navigation --------------------------------------------
-  // The active cell is identified by its (row index within the loaded window,
-  // data-column index). The scroll container is the focus + keydown target.
-  const [active, setActive] = useState<{ row: number; col: number } | null>(null);
+  // --- Selection & keyboard navigation -------------------------------------
+  // A selection is an anchor + focus cell. The focus is the "active" cell that
+  // moves with the arrow keys and is kept scrolled into view; the rectangle
+  // between anchor and focus is highlighted and is what Cmd/Ctrl+C copies. A
+  // single-cell selection has anchor === focus. Whole-column / select-all cover
+  // the LOADED rows only — infinite scroll may not have fetched the whole result.
+  // The scroll container is the focus + keydown target.
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const active = selection?.focus ?? null;
+  const selRect = selection ? rectOf(selection) : null;
+
+  // Collapse the selection onto a single cell (plain click / plain arrow move).
+  const selectCell = useCallback((cell: Cell) => setSelection({ anchor: cell, focus: cell }), []);
+  // Keep the anchor, move the focus (shift+move / shift+click / drag).
+  const extendTo = useCallback((focus: Cell) => {
+    setSelection((prev) => (prev ? { anchor: prev.anchor, focus } : { anchor: focus, focus }));
+  }, []);
+  // Select an entire loaded row (all columns); shift keeps the anchor's row.
+  const selectRow = useCallback((row: number, extend: boolean) => {
+    setSelection((prev) => {
+      const anchorRow = extend && prev ? prev.anchor.row : row;
+      return { anchor: { row: anchorRow, col: 0 }, focus: { row, col: numCols - 1 } };
+    });
+  }, [numCols]);
+  // Select an entire column across all loaded rows.
+  const selectColumn = useCallback((col: number) => {
+    setSelection({ anchor: { row: 0, col }, focus: { row: Math.max(0, rows.length - 1), col } });
+  }, [rows.length]);
+  // Select every loaded cell.
+  const selectAll = useCallback(() => {
+    setSelection({ anchor: { row: 0, col: 0 }, focus: { row: Math.max(0, rows.length - 1), col: numCols - 1 } });
+  }, [rows.length, numCols]);
+
   // Set when an arrow-Down at the last loaded row triggers an infinite-scroll
   // load: once the appended rows arrive, advance the cursor onto the first new
-  // row. (Wheel-driven loads don't set this, so the cursor stays put.)
-  const pendingAdvanceRef = useRef(false);
+  // row. `extend` remembers whether Shift was held so we keep the anchor.
+  // (Wheel-driven loads don't set this, so the cursor stays put.)
+  const pendingAdvanceRef = useRef<{ extend: boolean } | null>(null);
+  // True while a mouse drag-select is in progress (mousedown on a cell).
+  const draggingRef = useRef(false);
   const autoFocusedRef = useRef(false);
   // Classify a `rows` change as a window reset (startRow moved — pager jump /
   // new dataset) vs. an append (same startRow, more rows — infinite scroll).
@@ -280,16 +341,29 @@ export function DataGrid({
     prevLenRef.current = rows.length;
     if (startRow !== prevStart) {
       // Window reset (pager jump, page-size change, new table/result).
-      pendingAdvanceRef.current = false;
-      setActive(null);
+      pendingAdvanceRef.current = null;
+      setSelection(null);
     } else if (rows.length > prevLen && pendingAdvanceRef.current) {
       // Infinite-scroll append driven by arrow-Down: step onto the first
-      // newly-loaded row (prevLen is its index).
-      pendingAdvanceRef.current = false;
-      setActive((prev) => ({ row: prevLen, col: prev ? prev.col : 0 }));
+      // newly-loaded row (prevLen is its index), extending if Shift was held.
+      const { extend } = pendingAdvanceRef.current;
+      pendingAdvanceRef.current = null;
+      setSelection((prev) => {
+        const col = prev ? prev.focus.col : 0;
+        const focus = { row: prevLen, col };
+        return { anchor: extend && prev ? prev.anchor : focus, focus };
+      });
       scrollRef.current?.focus({ preventScroll: true });
     }
   }, [rows, startRow, cellNavigation]);
+
+  // End any drag-select when the mouse is released anywhere on the page.
+  useEffect(() => {
+    if (!cellNavigation) return;
+    const onUp = () => { draggingRef.current = false; };
+    window.addEventListener("mouseup", onUp);
+    return () => window.removeEventListener("mouseup", onUp);
+  }, [cellNavigation]);
 
   // Infinite scroll: load the next chunk as the user nears the bottom.
   const maybeLoadMore = useCallback(() => {
@@ -339,41 +413,63 @@ export function DataGrid({
     }
   }, [cellNavigation, rows.length]);
 
+  // Copy the current selection rectangle to the clipboard (TSV + HTML table).
+  const copySelection = useCallback(() => {
+    if (!selection) return;
+    void writeGridClipboard(
+      buildGridClipboard(rows, columnNames, fieldByName, infoByName, rectOf(selection)),
+    );
+  }, [selection, rows, columnNames, fieldByName, infoByName]);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (!cellNavigation || numCols === 0) return;
+    const mod = e.metaKey || e.ctrlKey;
+    // Cmd/Ctrl+C — copy the selection.
+    if (mod && (e.key === "c" || e.key === "C")) {
+      if (selection) { e.preventDefault(); copySelection(); }
+      return;
+    }
+    // Cmd/Ctrl+A — select all loaded cells.
+    if (mod && (e.key === "a" || e.key === "A")) {
+      e.preventDefault();
+      selectAll();
+      return;
+    }
     const navKeys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"];
     if (!navKeys.includes(e.key)) return;
     e.preventDefault();
-    if (!active) { setActive({ row: 0, col: 0 }); return; }
+    if (!active) { selectCell({ row: 0, col: 0 }); return; }
+    // Shift keeps the anchor and extends; a plain move collapses the selection.
+    const move = e.shiftKey ? extendTo : selectCell;
     switch (e.key) {
       case "ArrowLeft":
-        setActive({ row: active.row, col: Math.max(0, active.col - 1) });
+        move({ row: active.row, col: Math.max(0, active.col - 1) });
         break;
       case "ArrowRight":
-        setActive({ row: active.row, col: Math.min(numCols - 1, active.col + 1) });
+        move({ row: active.row, col: Math.min(numCols - 1, active.col + 1) });
         break;
       case "Home":
-        setActive({ row: active.row, col: 0 });
+        move({ row: active.row, col: 0 });
         break;
       case "End":
-        setActive({ row: active.row, col: numCols - 1 });
+        move({ row: active.row, col: numCols - 1 });
         break;
       case "ArrowUp":
         // Top of the loaded window — stop. (Infinite scroll only grows down;
         // use the footer's Prev to jump to an earlier page.)
-        if (active.row > 0) setActive({ row: active.row - 1, col: active.col });
+        if (active.row > 0) move({ row: active.row - 1, col: active.col });
         break;
       case "ArrowDown":
         if (active.row < rows.length - 1) {
-          setActive({ row: active.row + 1, col: active.col });
+          move({ row: active.row + 1, col: active.col });
         } else if (canLoadMore && onLoadMore) {
           // At the last loaded row: pull the next chunk and advance onto it.
-          pendingAdvanceRef.current = true;
+          pendingAdvanceRef.current = { extend: e.shiftKey };
           onLoadMore();
         }
         break;
     }
-  }, [cellNavigation, numCols, active, rows.length, canLoadMore, onLoadMore]);
+  }, [cellNavigation, numCols, active, selection, rows.length, canLoadMore, onLoadMore, extendTo, selectCell, selectAll, copySelection]);
 
   // Sticky background applied per-<th> (not the <thead>) so the header pins
   // reliably across browsers and the cell backgrounds fully cover scrolled
@@ -393,17 +489,31 @@ export function DataGrid({
       className={`hover:bg-accent/5 ${index % 2 === 1 ? "bg-muted/15" : ""}`}
       style={metrics ? { height: metrics.rowHeight } : undefined}
     >
-      <TableCell className="text-xs text-muted-foreground/40 text-right pr-3 font-mono py-1 w-10">
+      <TableCell
+        onMouseDown={cellNavigation ? (e) => { selectRow(index, e.shiftKey); scrollRef.current?.focus({ preventScroll: true }); } : undefined}
+        title={cellNavigation ? "Select row" : undefined}
+        className={`text-xs text-muted-foreground/40 text-right pr-3 font-mono py-1 w-10 ${cellNavigation ? "cursor-pointer select-none" : ""}`}
+      >
         {startRow + index + 1}
       </TableCell>
       {row.getVisibleCells().map((cell, ci) => {
-        const isActive = cellNavigation && active?.row === index && active?.col === ci;
+        const inSelection = cellNavigation && !!selRect &&
+          index >= selRect.rowMin && index <= selRect.rowMax &&
+          ci >= selRect.colMin && ci <= selRect.colMax;
+        const isFocus = cellNavigation && active?.row === index && active?.col === ci;
         return (
           <TableCell
             key={cell.id}
             {...(cellNavigation ? { "data-row": index, "data-col": ci } : {})}
-            onClick={cellNavigation ? () => { setActive({ row: index, col: ci }); scrollRef.current?.focus({ preventScroll: true }); } : undefined}
-            className={`text-xs py-1 whitespace-nowrap max-w-[400px] truncate ${cellNavigation ? "cursor-default" : ""} ${isActive ? "ring-2 ring-inset ring-primary bg-primary/10" : ""}`}
+            onMouseDown={cellNavigation ? (e) => {
+              const c = { row: index, col: ci };
+              // Shift+click extends the range; a plain press starts a drag-select.
+              if (e.shiftKey) { extendTo(c); }
+              else { selectCell(c); draggingRef.current = true; }
+              scrollRef.current?.focus({ preventScroll: true });
+            } : undefined}
+            onMouseEnter={cellNavigation ? () => { if (draggingRef.current) extendTo({ row: index, col: ci }); } : undefined}
+            className={`text-xs py-1 whitespace-nowrap max-w-[400px] truncate ${cellNavigation ? "cursor-default select-none" : ""} ${inSelection ? "bg-primary/10" : ""} ${isFocus ? "ring-2 ring-inset ring-primary" : ""}`}
           >
             {flexRender(cell.column.columnDef.cell, cell.getContext())}
           </TableCell>
@@ -430,15 +540,27 @@ export function DataGrid({
       <TableHeader>
         {table.getHeaderGroups().map((headerGroup) => (
           <TableRow key={headerGroup.id} className={borderless ? "border-none" : ""}>
-            <TableHead style={headStyle} className={`sticky top-0 z-10 text-xs w-10 text-right pr-3 font-mono ${headBg} ${borderless ? "text-primary/60" : "text-muted-foreground"}`}>#</TableHead>
-            {headerGroup.headers.map((header) => {
+            <TableHead
+              style={headStyle}
+              onMouseDown={cellNavigation ? () => { selectAll(); scrollRef.current?.focus({ preventScroll: true }); } : undefined}
+              title={cellNavigation ? "Select all" : undefined}
+              className={`sticky top-0 z-10 text-xs w-10 text-right pr-3 font-mono ${headBg} ${cellNavigation ? "cursor-pointer select-none" : ""} ${borderless ? "text-primary/60" : "text-muted-foreground"}`}
+            >#</TableHead>
+            {headerGroup.headers.map((header, hi) => {
               const col = header.column.id;
               const info = infoByName.get(col);
               const numeric = info ? isNumericType(info.duckdbType) : false;
               const sortDir = sort?.col === col ? sort.dir : null;
               return (
                 <TableHead key={header.id} style={headStyle} className={`sticky top-0 z-10 text-xs font-mono whitespace-nowrap ${headBg} ${borderless ? "text-primary/80 font-semibold" : ""}`}>
-                  <HeaderCell col={col} numeric={numeric} comment={info?.comment} sortDir={sortDir} onSort={onSort} />
+                  <HeaderCell
+                    col={col}
+                    numeric={numeric}
+                    comment={info?.comment}
+                    sortDir={sortDir}
+                    onSort={onSort}
+                    onHeaderClick={cellNavigation ? () => { selectColumn(hi); scrollRef.current?.focus({ preventScroll: true }); } : undefined}
+                  />
                 </TableHead>
               );
             })}

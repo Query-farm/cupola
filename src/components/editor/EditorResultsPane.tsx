@@ -31,7 +31,6 @@ interface Props {
 export function EditorResultsPane({ state }: Props) {
   return (
     <div className="flex flex-col h-full min-h-0">
-      <StatusBar state={state} />
       <div className="flex-1 min-h-0">
         {state.error ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-8">
@@ -69,29 +68,18 @@ export function EditorResultsPane({ state }: Props) {
           </div>
         )}
       </div>
+      <QueryTimeBar state={state} />
     </div>
   );
 }
 
-function StatusBar({ state }: Props) {
-  if (!state.ran && !state.running) return null;
+function QueryTimeBar({ state }: Props) {
+  // Row count lives in the DataPreview footer; here we only surface the
+  // elapsed time, and only once a statement has completed successfully.
+  if (state.running || !state.ran || state.error) return null;
   return (
-    <div className="flex items-center gap-3 px-3 py-1 border-b border-border bg-muted/30 text-xs text-muted-foreground shrink-0">
-      {state.running ? (
-        <span className="flex items-center gap-1.5">
-          <Loader2 className="h-3 w-3 animate-spin" /> Running…
-        </span>
-      ) : state.error ? (
-        <span className="text-destructive">Error</span>
-      ) : (
-        <>
-          <span>
-            {state.table ? `${state.rowCount.toLocaleString()} row${state.rowCount === 1 ? "" : "s"}` : "OK"}
-          </span>
-          <span>·</span>
-          <span>{state.elapsedMs} ms</span>
-        </>
-      )}
+    <div className="flex items-center justify-end px-3 py-1 border-t border-border bg-muted/30 text-xs text-muted-foreground shrink-0">
+      <span>{state.elapsedMs} ms</span>
     </div>
   );
 }
