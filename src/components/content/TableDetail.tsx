@@ -1,7 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import { Key, Link2, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button"
 import type { TableInfo } from "vgi/client";
 import { getColumns, getForeignKeys, fetchColumnStats, type ForeignKeyInfo, type ColumnStats } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
@@ -12,6 +11,7 @@ import { ExampleQueries } from "./ExampleQueries";
 import { filterDisplayTags, getTag, parseExecutableExamples, TAG_DOC_MD, TAG_EXAMPLE_QUERIES, TAG_TITLE } from "@/lib/tags";
 import { DescriptionSection } from "./DescriptionSection";
 import { ObjectMeta } from "./ObjectMeta";
+import { TableQueryButton } from "./TableQueryButton";
 
 interface Props {
   table: TableInfo;
@@ -23,7 +23,7 @@ interface Props {
 export function TableDetail({ table, catalogName, onNavigate, onOpenShell }: Props) {
   const columns = getColumns(table);
   const foreignKeys = getForeignKeys(table);
-  const defaultSql = `SELECT * FROM ${catalogName}.${table.schema_name}.${table.name} LIMIT 10;`;
+  const defaultSql = `SELECT * FROM ${catalogName}.${table.schema_name}.${table.name} LIMIT 100;`;
   const displayTags = useMemo(() => filterDisplayTags(table.tags), [table.tags]);
   const title = getTag(table.tags, TAG_TITLE);
   const docMd = getTag(table.tags, TAG_DOC_MD);
@@ -73,17 +73,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell }: Pro
         itemName={table.name}
         itemType="table"
         onNavigate={onNavigate}
-        trailing={onOpenShell ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onOpenShell}
-            className="h-7 text-xs gap-1.5"
-          >
-            <img src={`${import.meta.env.BASE_URL}duckdb-icon-light.svg`} alt="" className="h-3.5 w-3.5" />
-            Open SQL Shell
-          </Button>
-        ) : undefined}
+        trailing={<TableQueryButton sql={defaultSql} onOpenShell={onOpenShell} withMenu />}
       />
 
       {title && <h1 className="text-xl font-semibold mt-1 mb-1">{title}</h1>}
@@ -185,6 +175,11 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell }: Pro
         defaultSql={defaultSql}
         onOpenShell={onOpenShell}
       />
+
+      {/* Bottom convenience control — jump into a query without scrolling up. */}
+      <div className="mt-6">
+        <TableQueryButton sql={defaultSql} onOpenShell={onOpenShell} primaryVariant="outline" />
+      </div>
 
     </div>
   );
