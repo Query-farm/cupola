@@ -457,46 +457,18 @@ export function initShell(
         }
       }
 
-      if (config.serviceUrl && config.catalogName) {
-        writeln(`Connecting to ${config.catalogName}...`, "33");
-        setBootPhase(`Connecting to ${config.catalogName}`);
-        const attachSql = buildAttachSql();
-        console.log("[shell] ATTACH SQL:", attachSql.replace(/(oauth_refresh_token|bearer_token) '[^']*'/g, "$1 '***'"));
-        const result = await bridge.query!(attachSql);
-        if (result.ok) {
-          await bridge.query!(`USE ${config.catalogName}`);
-          writeln(`Connected to ${config.catalogName}`, "32");
-          // Wake up consumers (column stats, data preview) that were awaiting
-          // ATTACH completion. They block on bridge.attached so they don't
-          // race the boot-phase exposure of bridge.query.
-          bridge.markAttached?.();
-        } else {
-          const errStr = result.error ?? "";
-          console.log("[shell] ATTACH failed:", errStr);
-          const handled = handleAttachError(errStr, "Attach failed");
-          if (handled === "redirected") return;
-          if (handled !== "surfaced") {
-            writeln(`Attach failed: ${errStr}`, "31");
-          }
-          // Resolve attached even on failure so downstream consumers fail
-          // fast with their own "catalog not found" error instead of hanging.
-          bridge.markAttached?.();
-        }
-        writeln("");
-      } else {
-        // No VGI catalog configured — resolve attached immediately so any
-        // consumer that races here (shouldn't, but be defensive) doesn't hang.
-        bridge.markAttached?.();
-        writeln("");
-        writeln("Type SQL queries below.", "33");
-        writeln("");
-      }
-
-      // Sync timezone: push the browser's IANA zone (e.g. "America/New_York")
-      // into DuckDB and into the format renderer. DuckDB-WASM defaults to a
-      // fixed-offset zone like "Etc/GMT+5" which doesn't observe DST, so
-      // timestamp_tz values render off by an hour during DST. The browser's
-      // Intl-resolved zone is the one users expect to see.
+      // Sync timezone BEFORE attaching. Push the browser's IANA zone (e.g.
+      // "America/New_York") into DuckDB and the format renderer while the worker
+      // is still idle. DuckDB-WASM defaults to a fixed-offset zone like
+      // "Etc/GMT+5" that doesn't observe DST, so timestamp_tz values would
+      // render an hour off during DST; the browser's Intl zone is what users
+      // expect. Named zones need ICU, which is loaded in the extension loop
+      // above. Doing this before ATTACH — and before markAttached() releases the
+      // column-stats / preview consumers that then flood the single worker
+      // connection — keeps the SET from queueing behind those queries and
+      // blowing the timeout (the "timezone sync did not complete within 5s"
+      // warning, most visible in Safari). Still time-boxed so a stall can't hold
+      // up boot; the display path falls back to the browser zone regardless.
       console.log("[shell] syncing timezone…");
       setBootPhase("Syncing timezone");
       const tzSync = (async () => {
@@ -532,6 +504,41 @@ export function initShell(
           }, 5000);
         }),
       ]);
+
+      if (config.serviceUrl && config.catalogName) {
+        writeln(`Connecting to ${config.catalogName}...`, "33");
+        setBootPhase(`Connecting to ${config.catalogName}`);
+        const attachSql = buildAttachSql();
+        console.log("[shell] ATTACH SQL:", attachSql.replace(/(oauth_refresh_token|bearer_token) '[^']*'/g, "$1 '***'"));
+        const result = await bridge.query!(attachSql);
+        if (result.ok) {
+          await bridge.query!(`USE ${config.catalogName}`);
+          writeln(`Connected to ${config.catalogName}`, "32");
+          // Wake up consumers (column stats, data preview) that were awaiting
+          // ATTACH completion. They block on bridge.attached so they don't
+          // race the boot-phase exposure of bridge.query.
+          bridge.markAttached?.();
+        } else {
+          const errStr = result.error ?? "";
+          console.log("[shell] ATTACH failed:", errStr);
+          const handled = handleAttachError(errStr, "Attach failed");
+          if (handled === "redirected") return;
+          if (handled !== "surfaced") {
+            writeln(`Attach failed: ${errStr}`, "31");
+          }
+          // Resolve attached even on failure so downstream consumers fail
+          // fast with their own "catalog not found" error instead of hanging.
+          bridge.markAttached?.();
+        }
+        writeln("");
+      } else {
+        // No VGI catalog configured — resolve attached immediately so any
+        // consumer that races here (shouldn't, but be defensive) doesn't hang.
+        bridge.markAttached?.();
+        writeln("");
+        writeln("Type SQL queries below.", "33");
+        writeln("");
+      }
 
       // Shell is fully ready — expose runQuery for external callers
       console.log("[shell] post-ready: handing off to readLoop");
