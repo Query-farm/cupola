@@ -29,6 +29,7 @@ import { SqlEditorTabs } from "./SqlEditorTabs";
 import { EditorToolbar } from "./EditorToolbar";
 import { EditorResultsPane, emptyResult, type ResultState } from "./EditorResultsPane";
 import { EditorAiPanel } from "./EditorAiPanel";
+import { openPopout, updateLatest } from "@/lib/editor/result-popout";
 import type { SqlApplyActions } from "./EditorSqlToolCallBlock";
 
 interface Props {
@@ -287,6 +288,22 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
     triggerDownload(new Blob([sql], { type: "text/plain;charset=utf-8" }), `${safeFileStem(activeDoc?.name ?? "query")}.sql`);
   }, [activeDoc?.name, activeDoc?.sql]);
 
+  // Pop the current result out into a snapshot window. Must run synchronously in
+  // the click gesture (openPopout does the window.open) or the popup is blocked.
+  // Returns false when blocked so the results pane can fall back to Maximize.
+  const handlePopout = useCallback((): boolean => {
+    const table = activeResult.table;
+    if (!table) return false;
+    const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";
+    return openPopout({ table, sql, capturedAt: new Date() });
+  }, [activeResult.table, activeDoc?.sql]);
+
+  // Keep any open pop-out window aware of the editor's current result so it can
+  // offer "Sync". Not tied to unmount — the window persists across tab switches.
+  useEffect(() => {
+    updateLatest(activeResult.table ? { table: activeResult.table, sql: activeDoc?.sql ?? "" } : null);
+  }, [activeResult.table, activeDoc?.sql]);
+
   // ---- Ask AI: live query getter + apply-back actions ---------------------
   // Read the LIVE buffer at call time (CodeMirror edits don't re-render us, so
   // a render-time snapshot would be stale).
@@ -467,7 +484,7 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
             className="h-1.5 shrink-0 cursor-row-resize bg-border hover:bg-accent/60 active:bg-accent transition-colors"
           />
           <div className="flex-1 min-h-0">
-            <EditorResultsPane state={activeResult} />
+            <EditorResultsPane state={activeResult} onPopout={handlePopout} />
           </div>
         </div>
         {aiOpen && (

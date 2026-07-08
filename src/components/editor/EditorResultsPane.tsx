@@ -1,6 +1,9 @@
-import { Loader2, AlertCircle, TableProperties, CheckCircle2 } from "lucide-react";
+import { useState } from "react";
+import { Loader2, AlertCircle, TableProperties, CheckCircle2, Maximize2, SquareArrowOutUpRight } from "lucide-react";
 import { DataPreview } from "@/components/content/DataPreview";
 import { ExplainView } from "@/components/editor/ExplainView";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 export interface ResultState {
   table: any | null;
@@ -26,11 +29,43 @@ export const emptyResult: ResultState = {
 
 interface Props {
   state: ResultState;
+  /** Detach the current result into a snapshot pop-out window. Returns false if the
+   *  browser blocked the popup (caller falls back to Maximize). Absent → no button. */
+  onPopout?: () => boolean;
 }
 
-export function EditorResultsPane({ state }: Props) {
+export function EditorResultsPane({ state, onPopout }: Props) {
+  const [maximized, setMaximized] = useState(false);
+  // The header + maximize/pop-out only apply to an actual data grid, not to
+  // error / running / EXPLAIN / DDL-success states.
+  const isGrid = !!state.table && !isExplainTable(state.table);
+
   return (
     <div className="flex flex-col h-full min-h-0">
+      {isGrid && (
+        <div className="flex items-center justify-end gap-0.5 px-2 py-1 border-b border-border bg-muted/20 shrink-0">
+          {onPopout && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => { if (!onPopout()) setMaximized(true); }}
+              title="Pop out results to a new window"
+              data-testid="results-popout"
+            >
+              <SquareArrowOutUpRight className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setMaximized(true)}
+            title="Maximize results"
+            data-testid="results-maximize"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      )}
       <div className="flex-1 min-h-0">
         {state.error ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-8">
@@ -69,6 +104,18 @@ export function EditorResultsPane({ state }: Props) {
         )}
       </div>
       <QueryTimeBar state={state} />
+
+      {/* Maximize overlay — an independent dialog; does not touch the editor/
+          results split. Its own DataPreview instance (distinct key) slices the
+          same in-memory Arrow table. */}
+      <Dialog open={maximized} onOpenChange={setMaximized}>
+        <DialogContent className="!w-[92vw] !max-w-[92vw] !h-[88vh] flex flex-col p-3 gap-2">
+          <DialogTitle className="text-sm px-1 shrink-0">Results</DialogTitle>
+          <div className="flex-1 min-h-0 border border-border rounded-md overflow-hidden">
+            {isGrid && <DataPreview key={`max-${resultKey(state)}`} result={state.table} />}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
