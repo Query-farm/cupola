@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
 import { fetchCatalog, type CatalogData, type ResolvedSchema } from "@/lib/service";
-import { getServiceUrl, getAttachOptionsFromUrl, hasExplicitService, consumePrefillFromHash } from "@/lib/url-params";
+import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash } from "@/lib/url-params";
 import { fetchAttachedCatalog } from "@/lib/duckdb-catalog";
 import { readRows } from "@/lib/duckdb-query";
 import { type Selection } from "@/lib/tree";
@@ -314,11 +314,22 @@ export function CatalogApp() {
   // An explicit empty value clears them.
   const attachOptions = useMemo(() => {
     const fromUrl = getAttachOptionsFromUrl();
+    let base: string | undefined;
     if (fromUrl !== undefined && hasExplicitService()) {
       saveRecentService(serviceUrl, "", fromUrl);
-      return fromUrl || undefined;
+      base = fromUrl || undefined;
+    } else {
+      base = getAttachOptionsFor(serviceUrl);
     }
-    return getAttachOptionsFor(serviceUrl);
+    // `?data_version_spec=` pins the catalog's data version at ATTACH time
+    // (the VGI extension reads a `data_version_spec` ATTACH option). The worker
+    // landing page emits it when a user selects a non-latest version.
+    const dvs = getDataVersionSpecFromUrl();
+    if (dvs) {
+      const opt = `data_version_spec '${dvs.replace(/'/g, "''")}'`;
+      return base ? `${base}, ${opt}` : opt;
+    }
+    return base;
   }, [serviceUrl]);
 
   // Tag every Sentry event with the service URL and (when known) the catalog

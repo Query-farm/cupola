@@ -90,6 +90,16 @@ export function getAttachOptionsFromUrl(): string | undefined {
   return params.get("attach_options") ?? "";
 }
 
+/** `?data_version_spec=<spec>` — pins the catalog's served data version at
+ *  ATTACH time. The VGI DuckDB extension reads a `data_version_spec` ATTACH
+ *  option (see vgi_extension.cpp); the worker landing page emits this param
+ *  when a user pins a non-latest version. `undefined` = absent. */
+export function getDataVersionSpecFromUrl(): string | undefined {
+  if (!hasWindow()) return undefined;
+  const v = new URLSearchParams(window.location.search).get("data_version_spec");
+  return v ? v : undefined;
+}
+
 /** `?theme=<url>`. */
 export function getThemeUrl(): string | null {
   if (!hasWindow()) return null;
