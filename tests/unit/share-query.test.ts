@@ -5,6 +5,7 @@ import {
   compressSql,
   decodeSqlParams,
   decompressSql,
+  toLatestBaseUrl,
 } from "../../src/lib/share-query";
 
 const BASE = "https://cupola.example/v1/";
@@ -99,6 +100,42 @@ describe("buildShareQueryUrl", () => {
     }));
     expect(url.searchParams.get("service")).toBe("http://localhost:9003");
     expect(await decodeSqlParams(fragmentParams(url))).toBe("SELECT * FROM t WHERE x = 'a#b'");
+  });
+});
+
+describe("toLatestBaseUrl", () => {
+  test("repoints a versioned base at /latest/ so links don't pin a stale build", () => {
+    expect(toLatestBaseUrl("https://cupola.query-farm.services/v0.4.96/"))
+      .toBe("https://cupola.query-farm.services/latest/");
+  });
+
+  test("handles a prerelease version", () => {
+    expect(toLatestBaseUrl("https://c.example/v1.2.3-rc.1/")).toBe("https://c.example/latest/");
+  });
+
+  test("leaves a flat base (BASE_PATH=/ self-hosted deploy) alone", () => {
+    expect(toLatestBaseUrl("https://vgi.internal/")).toBe("https://vgi.internal/");
+  });
+
+  test("leaves an already-latest base alone", () => {
+    expect(toLatestBaseUrl("https://c.example/latest/")).toBe("https://c.example/latest/");
+  });
+
+  test("only rewrites the leading path segment", () => {
+    expect(toLatestBaseUrl("https://c.example/apps/v1.2.3/")).toBe("https://c.example/apps/v1.2.3/");
+  });
+
+  test("does not mistake a non-version path for one", () => {
+    expect(toLatestBaseUrl("https://c.example/venue/")).toBe("https://c.example/venue/");
+    expect(toLatestBaseUrl("https://c.example/v1/")).toBe("https://c.example/v1/");
+  });
+
+  test("preserves the origin, including a nonstandard port", () => {
+    expect(toLatestBaseUrl("http://localhost:4322/v0.4.96/")).toBe("http://localhost:4322/latest/");
+  });
+
+  test("returns a malformed input unchanged rather than throwing", () => {
+    expect(toLatestBaseUrl("not a url")).toBe("not a url");
   });
 });
 

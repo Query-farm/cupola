@@ -93,14 +93,40 @@ export interface ShareQueryLinkOptions {
   /** `true` forces `sql_z`, `false` forces `sql`. Default: compress only when
    *  the plain encoding exceeds AUTO_COMPRESS_THRESHOLD. */
   compress?: boolean;
-  /** Link base (origin + path). Defaults to the current page, minus its query
-   *  string and fragment. */
+  /** Link base (origin + path). Defaults to the current page minus its query
+   *  string and fragment, with a `/v{version}/` base repointed at `/latest/`.
+   *  An explicit value is used verbatim. */
   baseUrl?: string;
+}
+
+/** Matches the `/v{version}/` base path that `astro.config.mjs` bakes into
+ *  every emitted asset URL. Anchored to the start of the path so a `/v1.2.3/`
+ *  deeper in the path (or a service URL that happens to look like one) is left
+ *  alone. Tolerates a prerelease/build suffix (`0.5.0-rc.1`). */
+const VERSIONED_BASE_PATH = /^\/v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?(?=\/|$)/;
+
+/** Repoint a versioned base path at `/latest/`.
+ *
+ *  A share link outlives the release that produced it. Pinning it to
+ *  `/v0.4.96/` means the recipient — possibly months later — runs that exact
+ *  build, missing every fix since, and keeps an old version alive in R2 long
+ *  after it should have aged out. `/latest/` 302s to the current version, and
+ *  the worker preserves the query string across the hop.
+ *
+ *  Leaves a flat base (`/`, the Docker/Azure `BASE_PATH=/` deployment) alone. */
+export function toLatestBaseUrl(baseUrl: string): string {
+  try {
+    const u = new URL(baseUrl);
+    u.pathname = u.pathname.replace(VERSIONED_BASE_PATH, "/latest");
+    return u.toString();
+  } catch {
+    return baseUrl;
+  }
 }
 
 function currentBaseUrl(): string {
   if (typeof window === "undefined") return "";
-  return window.location.origin + window.location.pathname;
+  return toLatestBaseUrl(window.location.origin + window.location.pathname);
 }
 
 /** Build a shareable URL that opens `sql` in a new, unexecuted editor tab.
