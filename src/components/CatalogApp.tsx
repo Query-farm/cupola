@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
 import { fetchCatalog, type CatalogData, type ResolvedSchema } from "@/lib/service";
-import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash } from "@/lib/url-params";
+import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql } from "@/lib/url-params";
+import type { PendingEditorSql } from "./editor/SqlEditorView";
 import { fetchAttachedCatalog } from "@/lib/duckdb-catalog";
 import { readRows } from "@/lib/duckdb-query";
 import { type Selection } from "@/lib/tree";
@@ -85,8 +86,10 @@ export function CatalogApp() {
   // catalog tab), and (b) terminal / chat / perspective state survives tab
   // switches. It's visible only on an engine-backed tab.
   const engineVisible = activeTab !== "catalog" && activeTab !== "editor";
-  // SQL pushed into the editor from elsewhere (example queries, shell history).
-  const [pendingEditorSql, setPendingEditorSql] = useState<string | null>(null);
+  // SQL pushed into the editor from elsewhere (example queries, shell history,
+  // shared query links). `autoRun` is false for shared links: the recipient
+  // gets the query staged and ready, but chooses when to execute it.
+  const [pendingEditorSql, setPendingEditorSql] = useState<PendingEditorSql | null>(null);
   const [memoryCatalog, setMemoryCatalog] = useState<CatalogData | null>(null);
   const [attachedCatalogs, setAttachedCatalogs] = useState<CatalogData[]>([]);
   // Keep the latest attached list in a ref so syncAttachedCatalogs can diff
@@ -276,11 +279,25 @@ export function CatalogApp() {
   // bridge.openInEditor: switch to the editor tab and queue the SQL.
   // Invoked by ExampleQueries' Run button and the shell's history tab.
   useEffect(() => {
-    bridge.openInEditor = (sql: string) => {
-      setPendingEditorSql(sql);
+    bridge.openInEditor = (sql: string, opts?: { autoRun?: boolean }) => {
+      setPendingEditorSql({ sql, autoRun: opts?.autoRun ?? true });
       setActiveTab("editor");
     };
     return () => { bridge.openInEditor = null; };
+  }, []);
+
+  // `?sql=` / `?sql_z=` — a shared query link. Stage it in a new editor tab
+  // without running it. The param is stripped from the URL on read, so a
+  // reload won't re-open the tab. The editor mounts only once the catalog has
+  // loaded; `pendingEditorSql` waits in state until then.
+  useEffect(() => {
+    let cancelled = false;
+    consumeSharedSql().then((sql) => {
+      if (cancelled || !sql) return;
+      setPendingEditorSql({ sql, autoRun: false });
+      setActiveTab("editor");
+    });
+    return () => { cancelled = true; };
   }, []);
 
   // Expose refresh globally (navigate is exposed after it's defined below).
@@ -699,6 +716,7 @@ export function CatalogApp() {
                   <SqlEditorView
                     catalogData={data}
                     serviceUrl={serviceUrl}
+                    attachOptions={attachOptions}
                     onExitEditor={() => setActiveTab("catalog")}
                     pendingSql={pendingEditorSql}
                     onPendingConsumed={() => setPendingEditorSql(null)}

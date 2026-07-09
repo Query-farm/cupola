@@ -1,4 +1,4 @@
-import { Play, Square, Sparkles, WandSparkles, TerminalSquare, Download, Loader2 } from "lucide-react";
+import { Play, Square, Sparkles, WandSparkles, TerminalSquare, Download, Loader2, Link2, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ExportMenu } from "./ExportMenu";
 import type { ExportFormat } from "@/lib/editor/result-export";
@@ -22,6 +22,10 @@ interface Props {
   /** Whether the Ask AI panel is currently open (renders the button pressed). */
   aiActive?: boolean;
   onDownloadSql: () => void;
+  /** Copy a link that reopens this tab's SQL (unexecuted) against this catalog. */
+  onShareLink: () => void;
+  /** Renders the share button in its just-copied state. */
+  shareCopied?: boolean;
 }
 
 export function EditorToolbar({
@@ -39,6 +43,8 @@ export function EditorToolbar({
   onAskAI,
   aiActive,
   onDownloadSql,
+  onShareLink,
+  shareCopied,
 }: Props) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0">
@@ -116,6 +122,18 @@ export function EditorToolbar({
       >
         <Download className="h-3.5 w-3.5" />
         .sql
+      </Button>
+
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={onShareLink}
+        className="h-7 gap-1.5"
+        title="Copy a link that opens this SQL in a new editor tab"
+        data-testid="editor-share-link"
+      >
+        {shareCopied ? <Check className="h-3.5 w-3.5 text-accent" /> : <Link2 className="h-3.5 w-3.5" />}
+        {shareCopied ? "Copied" : "Share"}
       </Button>
 
       <div className="flex-1" />

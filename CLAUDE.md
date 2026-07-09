@@ -57,6 +57,7 @@ The app reads the following parameters from the URL. VGI servers issuing the red
 | `service` | VGI server base URL. When absent, the welcome / connect page is shown instead of attempting to fetch a catalog. |
 | `attach_options` | Raw SQL fragment spliced into the DuckDB `ATTACH` statement after `LOCATION` (e.g. `opt_string 'hello', opt_int64 42`). Takes precedence over the localStorage value, and is persisted via `saveRecentService` so a later visit without the param keeps it. An explicit empty value clears any saved options. |
 | `ai_key` | Anthropic API key for the AI agent. Also accepted in the URL fragment (see below — fragments aren't sent to servers, so prefer that form). Merged into `settings.anthropicApiKey`, persisted to localStorage, and **stripped from the URL via `replaceState`** on first read so it doesn't linger in browser history or get sent as a referrer. Treat it as one-shot: passing the param overwrites any previously stored key. The query-string form takes precedence if both are set. |
+| `sql` / `sql_z` | SQL for a shared query link. Accepted here for links a VGI server or a human composes server-side, but the Share button emits the fragment form (see below) — prefer that, since fragments aren't sent to servers. The query-string form takes precedence if both are set. |
 | `theme` | URL of a theme JSON file (colors + optional logo + terminal theme). Cached in localStorage so subsequent loads can apply it before first paint (`src/lib/theme.ts`, pre-paint application in `src/layouts/Layout.astro`). |
 | `fresh` | **Vestigial.** Formerly cleared a corrupted DuckDB session snapshot; session persistence was removed in the haybarn-wasm port. The reader (`getFreshFlag()` in `url-params.ts`) remains but has no callers. |
 
@@ -66,6 +67,7 @@ The app reads the following parameters from the URL. VGI servers issuing the red
 |----------|---------|
 | `#token=...&refresh_token=...&token_endpoint=...&client_id=...&client_secret=...&use_id_token=true` | OAuth tokens injected by a VGI server's auth redirect. The token is cached in memory and **only these auth keys** are stripped from the fragment — any other key=value pairs (e.g. `ai_key`) are preserved so they can be consumed by their own readers. Read by `src/lib/auth.ts`. |
 | `#ai_key=...` | Anthropic API key. Equivalent to the `?ai_key=` query param but safer (fragments aren't sent to servers / referrer headers). Can be combined with the auth bundle in a single fragment. Stripped from the URL after consumption; other fragment keys are preserved. |
+| `#sql=...` / `#sql_z=...` | SQL for a shared query link. Opens in a **new Query Editor tab, made active but not executed** — the recipient chooses when to run it. This is what the editor toolbar's Share button emits: a fragment never reaches the worker's request log, the redirect chain's `Location` headers, or an outbound `Referer`, and share links routinely carry literals (a table function's `api_key :=` argument, an email in a `WHERE`) the author never thought of as secret. `sql_z` is raw-deflate + base64url, used automatically past `AUTO_COMPRESS_THRESHOLD` (1500 chars) or forced via `buildShareQueryUrl({compress: true})`; a corrupt token decodes to null rather than throwing. Consumed and stripped by `consumeSharedSql()` (other fragment keys preserved); links are built by `buildShareQueryUrl()` in `src/lib/share-query.ts`. Connection context (`service`, `attach_options`) stays in the query string. **Not** a Sentry hiding place — the browser SDK captures `location.href` hash included, which is why `sentry-scrub.ts` scrubs both halves. |
 | `#/schema/<s>/table/<t>` (and similar) | Selection routing — restores the sidebar selection on load and updates as the user navigates. Supports browser back/forward via `pushState` + `popstate` (`src/lib/navigation.ts`). |
 | `#prefill=<service-url>` | Prefills the welcome page's `ConnectForm` with a URL (and any saved `attachOptions`) without auto-connecting. Used by the "Edit connection options" button on the attach-error modal. The hash is cleared after consumption. |
 
@@ -128,6 +130,7 @@ src/
     tree.ts                  # Build TreeDataItem[] from CatalogData, selection↔ID mapping
     tree-expansion.ts        # Pure expand/collapse state logic for the sidebar tree
     navigation.ts            # URL hash routing, page title updates
+    share-query.ts           # Shareable query links: ?sql= / ?sql_z= codec + builder
     settings.tsx             # Settings context + localStorage persistence
     utils.ts                 # cn() Tailwind class merge utility
 

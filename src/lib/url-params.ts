@@ -16,6 +16,8 @@
  * routing, prefill, peer consumer's secrets) are preserved by construction.
  */
 
+import { decodeSqlParams, SQL_PARAM, SQL_Z_PARAM } from "./share-query";
+
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
@@ -137,6 +139,27 @@ export function consumeAiKey(): string | null {
   const value = inSearch ? (search.get("ai_key") ?? "") : (fragParams!.get("ai_key") ?? "");
   rewriteUrl(["ai_key"], ["ai_key"]);
   return value;
+}
+
+/** Read a shared query link and strip it from the URL, so a reload doesn't
+ *  re-open the tab and the SQL doesn't linger in history.
+ *
+ *  Accepts `#sql=` / `#sql_z=` (what the Share button emits — a fragment is
+ *  never sent to a server) and `?sql=` / `?sql_z=` (for server-composed
+ *  links). The query string wins when both are present, matching `ai_key`.
+ *
+ *  Async because the `sql_z` form is decompressed — but the read and the URL
+ *  rewrite both happen synchronously, before the first await, so a concurrent
+ *  hash write by `navigation.ts` can't race us. Returns null when unset. */
+export async function consumeSharedSql(): Promise<string | null> {
+  if (!hasWindow()) return null;
+  const search = new URLSearchParams(window.location.search);
+  const fragParams = parseFragmentParams();
+  const hasSql = (p: URLSearchParams | null) => !!p && (p.has(SQL_PARAM) || p.has(SQL_Z_PARAM));
+  const source = hasSql(search) ? search : hasSql(fragParams) ? fragParams! : null;
+  if (!source) return null;
+  rewriteUrl([SQL_PARAM, SQL_Z_PARAM], [SQL_PARAM, SQL_Z_PARAM]);
+  return decodeSqlParams(source);
 }
 
 export interface AuthFragment {

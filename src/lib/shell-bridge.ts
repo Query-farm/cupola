@@ -79,8 +79,10 @@ export const bridge = {
 
   // Open the SQL editor surface with the given SQL in a new tab (and run it).
   // Set by CatalogApp; invoked by ExampleQueries and the shell's Query History
-  // "Open in editor" action.
-  openInEditor: null as ((sql: string) => void) | null,
+  // "Open in editor" action. Always opens a new tab and brings it to the front;
+  // `autoRun` (default true) decides whether it also executes. Shared query
+  // links stage the SQL without running it.
+  openInEditor: null as ((sql: string, opts?: { autoRun?: boolean }) => void) | null,
   // Insert text at the cursor of the active editor tab. Set by SqlEditorView
   // while the editor surface is mounted; used by the sidebar's click-to-insert.
   insertIntoEditor: null as ((text: string) => void) | null,

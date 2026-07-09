@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { format as formatSql } from "sql-formatter";
+import * as Sentry from "@sentry/astro";
 import { tableFromIPC, tableToIPC } from "apache-arrow";
 import { bridge, recordQuery, onBootChange } from "@/lib/shell-bridge";
 import { useSettings } from "@/lib/settings";
@@ -31,20 +32,33 @@ import { EditorResultsPane, emptyResult, type ResultState } from "./EditorResult
 import { EditorAiPanel } from "./EditorAiPanel";
 import { openPopout, updateLatest } from "@/lib/editor/result-popout";
 import type { SqlApplyActions } from "./EditorSqlToolCallBlock";
+import { buildShareQueryUrl } from "@/lib/share-query";
+import { hasExplicitService } from "@/lib/url-params";
+
+/** SQL pushed into the editor from outside. Always lands in a new tab, which
+ *  becomes the active one; `autoRun` decides whether it also executes. */
+export interface PendingEditorSql {
+  sql: string;
+  autoRun: boolean;
+}
 
 interface Props {
   catalogData: CatalogData;
   serviceUrl: string;
+  /** Resolved ATTACH options fragment, propagated into share links. */
+  attachOptions?: string;
   /** Switch back to the catalog browser (used after "Open in shell"). */
   onExitEditor?: () => void;
-  /** SQL pushed in from elsewhere (example queries, shell history). Opens a
-   *  new tab and runs it; call onPendingConsumed once handled. */
-  pendingSql?: string | null;
+  /** SQL pushed in from elsewhere (example queries, shell history, shared
+   *  links). Opens a new tab; call onPendingConsumed once handled. */
+  pendingSql?: PendingEditorSql | null;
   onPendingConsumed?: () => void;
 }
 
-export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSql, onPendingConsumed }: Props) {
+export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEditor, pendingSql, onPendingConsumed }: Props) {
   const { settings } = useSettings();
+  // Transient "Copied" confirmation on the Share button.
+  const [shareCopied, setShareCopied] = useState(false);
   const [docState, setDocState] = useState<EditorDocState>(() => loadEditorState(serviceUrl));
   const [results, setResults] = useState<Record<string, ResultState>>({});
   const [hasSelection, setHasSelection] = useState(false);
@@ -283,6 +297,29 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
     bridge.showPerspective(ab);
   }, [activeResult.table]);
 
+  // Copy a share link for the active tab. The link carries the connection
+  // context (service + ATTACH options) so the recipient lands on the same
+  // catalog; the SQL opens staged but unexecuted.
+  const handleShareLink = useCallback(async () => {
+    const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";
+    if (!sql.trim()) return;
+    // Only propagate `service` when this page was itself opened with one —
+    // otherwise getServiceUrl() has fallen back to the Cupola origin, which is
+    // not a VGI server.
+    const url = await buildShareQueryUrl({
+      sql,
+      serviceUrl: hasExplicitService() ? serviceUrl : undefined,
+      attachOptions,
+    });
+    try {
+      await navigator.clipboard.writeText(url);
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2000);
+    } catch (err) {
+      Sentry.captureException(err, { tags: { feature: "share-query-link" } });
+    }
+  }, [activeDoc?.sql, serviceUrl, attachOptions]);
+
   const handleDownloadSql = useCallback(() => {
     const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";
     triggerDownload(new Blob([sql], { type: "text/plain;charset=utf-8" }), `${safeFileStem(activeDoc?.name ?? "query")}.sql`);
@@ -415,15 +452,16 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
     return () => { if (bridge.insertIntoEditor === smartInsert) bridge.insertIntoEditor = null; };
   }, [smartInsert]);
 
-  // ---- externally-pushed SQL (example queries, shell history) -------------
+  // ---- externally-pushed SQL (example queries, shell history, share links) --
   useEffect(() => {
     if (!pendingSql) return;
+    const { sql, autoRun } = pendingSql;
     setDocState((prev) => {
-      const next = addDoc(prev, pendingSql);
+      const next = addDoc(prev, sql);
       saveEditorState(next, serviceUrl);
       const newId = next.activeId!;
       // Run once the editor remounts with the new active doc.
-      setTimeout(() => runSql(pendingSql, newId), 60);
+      if (autoRun) setTimeout(() => runSql(sql, newId), 60);
       return next;
     });
     onPendingConsumed?.();
@@ -460,6 +498,8 @@ export function SqlEditorView({ catalogData, serviceUrl, onExitEditor, pendingSq
         onAskAI={() => setAiOpen((o) => !o)}
         aiActive={aiOpen}
         onDownloadSql={handleDownloadSql}
+        onShareLink={handleShareLink}
+        shareCopied={shareCopied}
       />
       {/* Horizontal split: editor+results on the left, Ask AI panel on the
           right. The panel stays mounted (display:none when closed) so its
