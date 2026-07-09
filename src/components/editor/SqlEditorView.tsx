@@ -33,7 +33,6 @@ import { EditorAiPanel } from "./EditorAiPanel";
 import { openPopout, updateLatest } from "@/lib/editor/result-popout";
 import type { SqlApplyActions } from "./EditorSqlToolCallBlock";
 import { buildShareQueryUrl } from "@/lib/share-query";
-import { hasExplicitService } from "@/lib/url-params";
 
 /** SQL pushed into the editor from outside. Always lands in a new tab, which
  *  becomes the active one; `autoRun` decides whether it also executes. */
@@ -303,14 +302,11 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
   const handleShareLink = useCallback(async () => {
     const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";
     if (!sql.trim()) return;
-    // Only propagate `service` when this page was itself opened with one —
-    // otherwise getServiceUrl() has fallen back to the Cupola origin, which is
-    // not a VGI server.
-    const url = await buildShareQueryUrl({
-      sql,
-      serviceUrl: hasExplicitService() ? serviceUrl : undefined,
-      attachOptions,
-    });
+    // Always name the service, even when it's the origin fallback (a flat
+    // self-hosted deploy where Cupola and the VGI server share an origin).
+    // A share link without `?service=` lands the recipient on the welcome
+    // page, where no editor ever mounts to receive the SQL.
+    const url = await buildShareQueryUrl({ sql, serviceUrl, attachOptions });
     try {
       await navigator.clipboard.writeText(url);
       setShareCopied(true);

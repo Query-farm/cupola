@@ -57,6 +57,34 @@ function isRecoverableAuthMessage(message: string): boolean {
   return message.toLowerCase().includes("auth") || message.includes("401");
 }
 
+/** Minimum spacing between two login redirects before we call it a loop. */
+const AUTH_REDIRECT_LOOP_WINDOW_MS = 10_000;
+
+/** Start an OAuth login redirect, refusing to do so twice in quick succession.
+ *
+ *  Both entry points into the login flow — the `loadCatalog` pre-check and the
+ *  auth-error effect — must go through here. When only the error path recorded
+ *  the timestamp, a service that authenticates but then fails the pre-check
+ *  could bounce the user to the IdP without limit. Returns false when the
+ *  redirect was suppressed, so callers can surface the failure instead. */
+function beginLoginFlow(serviceUrl: string, path: string): boolean {
+  const lastRedirect = Number(sessionStorage.getItem("_vgi_auth_redirect_ts") || "0");
+  const sinceLastRedirectMs = Date.now() - lastRedirect;
+  if (sinceLastRedirectMs < AUTH_REDIRECT_LOOP_WINDOW_MS) {
+    console.warn("[catalog] Auth redirect loop detected — last redirect was", sinceLastRedirectMs, "ms ago. Stopping.");
+    // A stuck user (re-auth loop) is a genuine hard failure worth surfacing —
+    // it's no longer a "routine redirect".
+    Sentry.captureMessage("Auth redirect loop detected", {
+      level: "warning",
+      tags: { component: "auth", path: "redirect-loop" },
+      extra: { serviceUrl, sinceLastRedirectMs, entryPoint: path },
+    });
+    return false;
+  }
+  sessionStorage.setItem("_vgi_auth_redirect_ts", String(Date.now()));
+  return true;
+}
+
 export function CatalogApp() {
   const [data, setData] = useState<CatalogData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -464,6 +492,11 @@ export function CatalogApp() {
       const haveTokenNow = await getAuthTokenForService(serviceUrl);
       if (!haveTokenNow && hadAuthToken() && hasOAuthTokens(serviceUrl)) {
         console.log("[catalog] Token expired but SPA tokens existed for this service, re-auth");
+        if (!beginLoginFlow(serviceUrl, "load-catalog-precheck")) {
+          setError("Sign-in did not complete. Please try connecting again.");
+          setLoading(false);
+          return;
+        }
         startLoginFlow(serviceUrl).catch((err) => {
           console.error("[catalog] startLoginFlow failed:", err);
           setError(err instanceof Error ? err.message : "Failed to start login");
@@ -585,20 +618,7 @@ export function CatalogApp() {
   useEffect(() => {
     if (!error) return;
     if (isRecoverableAuthMessage(error)) {
-      const lastRedirect = Number(sessionStorage.getItem("_vgi_auth_redirect_ts") || "0");
-      const now = Date.now();
-      if (now - lastRedirect < 10_000) {
-        console.warn("[catalog] Auth redirect loop detected — last redirect was", now - lastRedirect, "ms ago. Stopping.");
-        // A stuck user (re-auth loop) is a genuine hard failure worth surfacing —
-        // it's no longer a "routine redirect".
-        Sentry.captureMessage("Auth redirect loop detected", {
-          level: "warning",
-          tags: { component: "auth", path: "redirect-loop" },
-          extra: { serviceUrl, sinceLastRedirectMs: now - lastRedirect },
-        });
-        return;
-      }
-      sessionStorage.setItem("_vgi_auth_redirect_ts", String(now));
+      if (!beginLoginFlow(serviceUrl, "auth-error")) return;
       console.log("[catalog] Auth error detected, starting SPA login. error:", error);
       startLoginFlow(serviceUrl).catch((err) => {
         console.error("[catalog] startLoginFlow failed:", err);
@@ -626,8 +646,22 @@ export function CatalogApp() {
 
   // Loading state — animated connect screen with brand chrome so the user
   // sees the page is alive while the catalog round-trip is in flight.
-  if (loading) {
-    return <ConnectingScreen logoUrl={logoUrl} serviceUrl={serviceUrl} />;
+  //
+  // Gated on `hasExplicitService()` as well as `loading`: before mount we
+  // can't read window.location, so `loading` starts true and this branch used
+  // to render on the very first paint of a no-service visit — flashing
+  // "Connecting to <cupola's own origin>" (ConnectingScreen falls back to
+  // getServiceUrl()) before the effect flipped `mounted` and the welcome page
+  // above took over. With no service there is nothing to connect to, so there
+  // is nothing to report progress on.
+  if (loading && (!mounted || hasExplicitService())) {
+    // Pre-mount (SSR + first client paint) we can't read window.location, so
+    // we don't yet know whether a service was named. Say something true and
+    // neutral; the heading firms up to "Connecting to <service>" one commit
+    // later, or gives way to the welcome page.
+    return mounted
+      ? <ConnectingScreen logoUrl={logoUrl} serviceUrl={serviceUrl} />
+      : <ConnectingScreen logoUrl={logoUrl} serviceUrl="" message="Loading" />;
   }
 
   // Error state
@@ -959,9 +993,11 @@ function ConnectingScreen({
   useEffect(() => { setReady(true); }, []);
 
   // Compute on every render (cheap). Falls back to reading window directly
-  // if the prop is empty (happens during SSR/initial hydration tick).
+  // if the prop is empty (happens during SSR/initial hydration tick) — but
+  // only when a service was actually named. Without `?service=`, getServiceUrl()
+  // returns cupola's own origin, and we'd claim to be connecting to ourselves.
   let displayUrl = serviceUrl?.replace(/^https?:\/\//, "") || "";
-  if (!displayUrl && typeof window !== "undefined") {
+  if (!displayUrl && typeof window !== "undefined" && hasExplicitService()) {
     displayUrl = getServiceUrl().replace(/^https?:\/\//, "");
   }
 
@@ -984,7 +1020,7 @@ function ConnectingScreen({
           {message}
           <span className="inline-block ml-0.5 align-baseline text-harvest-600 dark:text-harvest-400 animate-cs-ellipsis" aria-hidden="true">…</span>
         </h1>
-        {ready && (
+        {ready && displayUrl && (
           <p className="font-mono text-sm text-soil-600 dark:text-soil-400 break-all max-w-md">
             {displayUrl}
           </p>

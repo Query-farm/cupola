@@ -410,7 +410,10 @@ export async function startLoginFlow(serviceUrl: string, returnTo?: string): Pro
   });
   const authorizeUrl = `${ctx.authorizationEndpoint}?${params.toString()}`;
   console.log("[oauth] startLoginFlow → redirect", ctx.authorizationEndpoint, "scope=", ctx.scope);
-  window.location.href = authorizeUrl;
+  // `replace`, not `href`: the pre-auth app URL we're leaving is the one the
+  // user should return to when they press Back after signing in — not the IdP,
+  // which would immediately bounce them forward again.
+  window.location.replace(authorizeUrl);
   // Never actually returns because we navigated away. Typed as `never` so
   // callers don't try to use a return value.
   return await new Promise<never>(() => {});

@@ -153,6 +153,11 @@ export function consumeAiKey(): string | null {
  *  hash write by `navigation.ts` can't race us. Returns null when unset. */
 export async function consumeSharedSql(): Promise<string | null> {
   if (!hasWindow()) return null;
+  // Without a service there's no catalog, so CatalogApp renders the welcome
+  // page and never mounts the editor. Consuming here would strip the SQL from
+  // the URL and drop it on the floor, unrecoverably — leave it for a later
+  // load that actually has somewhere to put it.
+  if (!hasExplicitService()) return null;
   const search = new URLSearchParams(window.location.search);
   const fragParams = parseFragmentParams();
   const hasSql = (p: URLSearchParams | null) => !!p && (p.has(SQL_PARAM) || p.has(SQL_Z_PARAM));

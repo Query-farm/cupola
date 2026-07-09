@@ -173,17 +173,24 @@
     } catch (e) {
       console.warn("[oauth-callback] failed to persist callback to sessionStorage", e);
     }
+    var pending = null;
     if (pendingRaw) {
-      try {
-        var pending = JSON.parse(pendingRaw);
-        if (pending && typeof pending.return_to === "string") {
-          returnTo = pending.return_to;
-        }
-      } catch (e) { /* fall through to fallback */ }
+      try { pending = JSON.parse(pendingRaw); } catch (e) { /* fall through to fallback */ }
+      if (pending && typeof pending.return_to === "string") {
+        returnTo = pending.return_to;
+      }
     }
-    // Fallback if the pending flow is missing (session cleared, tab swap,
-    // etc.): just go to cupola's root and let CatalogApp figure it out.
-    if (!returnTo) returnTo = window.location.origin + "/";
+    // Fallback if return_to is missing (session cleared, tab swap, etc.).
+    // Carry `service` through when we still know it — landing on a bare "/"
+    // sends a just-authenticated user to the welcome page, having lost the
+    // very service they signed in to. The worker preserves the query string
+    // across its / -> /latest/ -> /v{version}/ redirects.
+    if (!returnTo) {
+      returnTo = window.location.origin + "/";
+      if (pending && typeof pending.service_url === "string" && pending.service_url) {
+        returnTo += "?service=" + encodeURIComponent(pending.service_url);
+      }
+    }
   }
 
   // Update UI
@@ -198,10 +205,11 @@
     iconCircle.className = "icon-circle icon-circle-error";
     iconSvg.className = "icon-error";
     iconSvg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>';
-    // Top-level error: navigate back so the user sees the modal instead of
-    // being stuck on this page.
+    // Top-level error: navigate back so the user sees the error modal in the
+    // app rather than being stuck on this page. The delay lets them read what
+    // went wrong; `replace` keeps this dead end out of the back stack.
     if (!isPopup && returnTo) {
-      setTimeout(function () { window.location.href = returnTo; }, 2000);
+      setTimeout(function () { window.location.replace(returnTo); }, 2000);
     }
   } else {
     title.textContent = "Authentication Successful";
@@ -209,8 +217,13 @@
     if (isPopup) {
       setTimeout(function () { window.close(); }, 1500);
     } else if (returnTo) {
-      // Short delay so the user gets visual confirmation before the bounce.
-      setTimeout(function () { window.location.href = returnTo; }, 300);
+      // Bounce immediately. This page is a mechanical waypoint in a redirect
+      // chain, not something the user asked to see: any delay here is a flash
+      // of an unthemed interstitial (this file's palette is hardcoded, so a
+      // branded install would flash the default VGI green). `replace` keeps it
+      // out of the back stack — the pending record is consumed on exchange, so
+      // navigating Back into this page would strand the user on a dead screen.
+      window.location.replace(returnTo);
     }
   }
 })();

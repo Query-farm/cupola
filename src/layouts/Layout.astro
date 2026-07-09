@@ -20,7 +20,20 @@ const { title = "Cupola" } = Astro.props;
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    {/* Leaflet styles only matter once GeometryViewer opens a map, but as a
+        plain stylesheet they block first paint on a third-party DNS+TLS
+        handshake — on every hop of the OAuth redirect chain. `media="print"`
+        makes the fetch non-blocking; onload promotes it to `all`. The
+        <noscript> keeps maps styled when JS is off. */}
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      media="print"
+      onload="this.media='all'; this.onload=null;"
+    />
+    <noscript>
+      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    </noscript>
     <title>{title}</title>
     <!-- Apply cached theme before first paint to prevent flash -->
     <script is:inline>
