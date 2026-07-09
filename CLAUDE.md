@@ -163,7 +163,10 @@ src/
     arrow-to-duckdb.ts       # Arrow type → DuckDB type name conversion
     column-profiler.ts       # Column distribution analysis (numeric, string, date, geometry)
     format.ts                # Value formatting for grids/terminals (dates, BigInt, geometry)
-    function-info.ts         # Parse/format VGI function metadata (Arrow schemas)
+    function-info.ts         # Parse/format VGI function metadata (Arrow schemas):
+                             #   per-arg name/type/kind + vgi_doc description and
+                             #   vgi_default/choices/range/pattern constraints (the
+                             #   same field metadata vgi_function_arguments() surfaces)
     geo-detect.ts            # Detect spatial columns suitable for map visualization
     tags.ts                  # Reserved vgi.* tag vocabulary + helpers (getTag with
                              #   deprecated-alias fallback, JSON parsers, category grouping,

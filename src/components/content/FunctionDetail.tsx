@@ -9,6 +9,7 @@ import {
   type FunctionArg,
 } from "@/lib/function-info";
 import { Badge } from "@/components/ui/badge";
+import { useSettings } from "@/lib/settings";
 import { Breadcrumb } from "./Breadcrumb";
 import { ColumnTypeBadge } from "./ColumnTypeBadge";
 import { DescriptionSection } from "./DescriptionSection";
@@ -45,29 +46,96 @@ function functionTypeLabel(type: FunctionInfo["function_type"]): string {
   }
 }
 
-/** Small badges describing an argument's kind (named / table / any / varargs / const). */
+// Color-coded pills for an argument's kind. Calling convention (positional/named)
+// reads as a neutral/blue base; the modifiers (const/varargs/table input/any) get
+// their own tint from the same palette family as typeColorClass, so the Kind column
+// scans as fast as the Type column.
+const KIND_PILL: Record<string, string> = {
+  positional: "bg-soil-100 text-soil-600 dark:bg-soil-800 dark:text-soil-300",
+  named: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+  const: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+  varargs: "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
+  "table input": "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300",
+  any: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300",
+};
+
+/** Color-coded pills describing an argument's kind (positional / named + any modifiers). */
 function ArgKindBadges({ arg }: { arg: FunctionArg }) {
-  const kinds: string[] = [];
-  if (arg.named) kinds.push("named");
+  // Calling convention is always shown (positional or named); modifiers append after.
+  const kinds: string[] = [arg.named ? "named" : "positional"];
+  if (arg.isConst) kinds.push("const");
+  if (arg.isVarargs) kinds.push("varargs");
   if (arg.isTableInput) kinds.push("table input");
   if (arg.isAnyType) kinds.push("any");
-  if (arg.isVarargs) kinds.push("varargs");
-  if (arg.isConst) kinds.push("const");
-  if (kinds.length === 0) return <span className="text-muted-foreground">positional</span>;
   return (
     <span className="flex flex-wrap gap-1">
       {kinds.map((k) => (
-        <Badge key={k} variant="outline" className="font-normal">
+        <span
+          key={k}
+          className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${KIND_PILL[k] ?? KIND_PILL.positional}`}
+        >
           {k}
-        </Badge>
+        </span>
       ))}
     </span>
   );
 }
 
+/** True when the argument carries any discovery constraint (default/choices/range/pattern). */
+function hasArgConstraints(arg: FunctionArg): boolean {
+  return (
+    arg.defaultValue !== undefined ||
+    (arg.choices?.length ?? 0) > 0 ||
+    arg.range !== undefined ||
+    arg.pattern !== undefined
+  );
+}
+
+/** Stacked constraint lines for one argument (default / allowed values / range / pattern).
+ *  Renders nothing when the argument is unconstrained — callers gate on hasArgConstraints. */
+function ArgConstraints({ arg }: { arg: FunctionArg }) {
+  return (
+    <div className="flex flex-col gap-1 text-xs">
+      {arg.defaultValue !== undefined && (
+        <div>
+          <span className="text-muted-foreground">default </span>
+          <code className="font-mono text-foreground/80">{arg.defaultValue}</code>
+        </div>
+      )}
+      {arg.range !== undefined && (
+        <div>
+          <span className="text-muted-foreground">range </span>
+          <code className="font-mono text-foreground/80">{arg.range}</code>
+        </div>
+      )}
+      {arg.choices && arg.choices.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-muted-foreground">one of</span>
+          {arg.choices.map((c) => (
+            <Badge key={c} variant="secondary" className="font-mono font-normal">
+              {c}
+            </Badge>
+          ))}
+        </div>
+      )}
+      {arg.pattern !== undefined && (
+        <div>
+          <span className="text-muted-foreground">matches </span>
+          <code className="font-mono text-foreground/80 break-all">{arg.pattern}</code>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOpenShell }: Props) {
+  const { settings } = useSettings();
   const displayTags = useMemo(() => filterDisplayTags(func.tags), [func.tags]);
   const args = useMemo(() => getFunctionArgs(func), [func]);
+  // Only render the Constraints / Description columns when at least one argument
+  // declares them — keeps simple functions' argument tables uncluttered.
+  const anyConstraints = useMemo(() => args.some(hasArgConstraints), [args]);
+  const anyDescriptions = useMemo(() => args.some((a) => Boolean(a.description)), [args]);
   const ret = useMemo(() => getFunctionReturn(func), [func]);
   const signature = useMemo(() => formatFunctionSignature(func), [func]);
   const tableFn = isTableFunction(func);
@@ -121,31 +189,61 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOp
 
       <ObjectMeta tags={func.tags} />
 
-      {/* Parameters */}
+      {/* Arguments */}
       {args.length > 0 && (
         <>
-          <h2 className={SECTION_HEADING}>Parameters</h2>
+          <h2 className={SECTION_HEADING}>Arguments</h2>
           <div className="border rounded-md overflow-hidden mb-4">
             <table className="text-sm" style={{ tableLayout: "auto", width: "100%" }}>
               <thead className="bg-muted/50">
                 <tr>
-                  <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground">Name</th>
-                  <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground">Type</th>
-                  <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground">Kind</th>
-                  <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground">Nullable</th>
+                  <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground align-top">Name</th>
+                  <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground align-top">Type</th>
+                  <th className="text-center px-3 py-1.5 text-xs font-medium text-muted-foreground align-top">Not Null</th>
+                  <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground align-top">Kind</th>
+                  {anyConstraints && (
+                    <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground align-top">Constraints</th>
+                  )}
+                  {anyDescriptions && (
+                    <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground align-top">Description</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {args.map((arg, i) => (
-                  <tr key={i} className="border-t border-border">
+                  <tr key={i} className="border-t border-border align-top">
                     <td className="px-3 py-1.5 font-mono font-medium text-foreground/80">{arg.name}</td>
                     <td className="px-3 py-1.5 font-mono text-foreground/70">
-                      {arg.isAnyType ? "ANY" : arg.isTableInput ? "TABLE" : <ColumnTypeBadge type={arg.duckdbType} />}
+                      <ColumnTypeBadge
+                        type={arg.isAnyType ? "ANY" : arg.isTableInput ? "TABLE" : settings.showDuckDBTypes ? arg.duckdbType : arg.arrowType}
+                      />
+                    </td>
+                    <td className="px-3 py-1.5 text-center">
+                      {arg.nullable ? null : (
+                        <span className="block text-center text-[10px] font-medium text-primary/60" title="Not null">✓</span>
+                      )}
                     </td>
                     <td className="px-3 py-1.5 text-xs">
                       <ArgKindBadges arg={arg} />
                     </td>
-                    <td className="px-3 py-1.5 text-muted-foreground">{arg.nullable ? "yes" : "no"}</td>
+                    {anyConstraints && (
+                      <td className="px-3 py-1.5">
+                        {hasArgConstraints(arg) ? (
+                          <ArgConstraints arg={arg} />
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                    )}
+                    {anyDescriptions && (
+                      <td className="px-3 py-1.5 text-muted-foreground max-w-md">
+                        {arg.description ? (
+                          <span className="whitespace-pre-wrap break-words">{arg.description}</span>
+                        ) : (
+                          <span>—</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

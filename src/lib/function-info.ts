@@ -28,6 +28,19 @@ export interface FunctionArg {
   isVarargs: boolean;
   /** Must be a constant expression. */
   isConst: boolean;
+  /** Per-argument description (the `vgi_doc` field metadata). Empty when undocumented. */
+  description?: string;
+  /** Default value, decoded from the `vgi_default` JSON scalar. Undefined when the
+   *  argument is required / has no declared default. */
+  defaultValue?: string;
+  /** Closed set of allowed values, decoded from the `vgi_choices` JSON array.
+   *  Undefined when the argument is unconstrained. */
+  choices?: string[];
+  /** Numeric bound in interval notation (e.g. `"[0, 100]"`, `"(0, +inf)"`) from
+   *  `vgi_range`. Undefined when unbounded. */
+  range?: string;
+  /** Regex the value must match, from `vgi_pattern`. Undefined when no pattern. */
+  pattern?: string;
 }
 
 /** Parsed return shape from a FunctionInfo's serialized `output_schema`. */
@@ -48,6 +61,40 @@ const VGI_TYPE_TABLE = "table";
 const VGI_TYPE_ANY = "any";
 const VGI_VARARGS_KEY = "vgi_varargs";
 const VGI_CONST_KEY = "vgi_const";
+// Per-argument description + discovery constraints. Source of truth:
+// vgi/src/include/vgi_protocol_constants.hpp (VGI_DOC_METADATA_KEY et al.).
+// All presence-only and value-encoded as UTF-8 (vgi_default/vgi_choices are JSON
+// text; vgi_range is interval notation; vgi_pattern is a raw regex).
+const VGI_DOC_KEY = "vgi_doc";
+const VGI_DEFAULT_KEY = "vgi_default";
+const VGI_CHOICES_KEY = "vgi_choices";
+const VGI_RANGE_KEY = "vgi_range";
+const VGI_PATTERN_KEY = "vgi_pattern";
+
+/** Decode a `vgi_default` JSON scalar into a display string; falls back to the raw
+ *  text when it isn't valid JSON. Undefined for an empty/absent value. */
+function parseArgDefault(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const value = JSON.parse(raw);
+    return typeof value === "string" ? value : String(value);
+  } catch {
+    return raw;
+  }
+}
+
+/** Decode a `vgi_choices` JSON array into display strings. Returns undefined when
+ *  absent or unparseable (never throws — a malformed constraint just hides). */
+function parseArgChoices(raw: string | null | undefined): string[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const value = JSON.parse(raw);
+    if (!Array.isArray(value) || value.length === 0) return undefined;
+    return value.map((v) => (typeof v === "string" ? v : String(v)));
+  } catch {
+    return undefined;
+  }
+}
 
 /** Whether a function returns a table. Compares the uppercase wire value directly —
  *  do NOT use the lowercase `FunctionType` enum from `vgi/client`; it never matches. */
@@ -65,6 +112,9 @@ export function getFunctionArgs(func: FunctionInfo): FunctionArg[] {
     return schema.fields.map((f) => {
       const m = f.metadata;
       const vgiType = m?.get(VGI_TYPE_KEY);
+      const doc = m?.get(VGI_DOC_KEY);
+      const range = m?.get(VGI_RANGE_KEY);
+      const pattern = m?.get(VGI_PATTERN_KEY);
       return {
         name: f.name,
         arrowType: f.type.toString(),
@@ -75,6 +125,11 @@ export function getFunctionArgs(func: FunctionInfo): FunctionArg[] {
         isAnyType: vgiType === VGI_TYPE_ANY,
         isVarargs: m?.get(VGI_VARARGS_KEY) === "true",
         isConst: m?.get(VGI_CONST_KEY) === "true",
+        description: doc || undefined,
+        defaultValue: parseArgDefault(m?.get(VGI_DEFAULT_KEY)),
+        choices: parseArgChoices(m?.get(VGI_CHOICES_KEY)),
+        range: range || undefined,
+        pattern: pattern || undefined,
       };
     });
   } catch {

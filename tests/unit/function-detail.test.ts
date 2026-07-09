@@ -74,6 +74,56 @@ describe("getFunctionArgs", () => {
     });
   });
 
+  test("parses per-argument description and discovery constraints", () => {
+    const args = getFunctionArgs(
+      fn({
+        arguments: ser([
+          f("mode", new Utf8(), {
+            vgi_arg: "named",
+            vgi_doc: "Rounding mode to apply.",
+            vgi_default: '"half_up"',
+            vgi_choices: '["half_up", "floor", "ceil"]',
+          }),
+          f("pct", new Float64(), {
+            vgi_doc: "Percentage in [0, 100].",
+            vgi_range: "[0, 100]",
+          }),
+          f("code", new Utf8(), { vgi_pattern: "^[A-Z]{3}$" }),
+          f("plain", new Int64()),
+        ]),
+      }),
+    );
+
+    expect(args[0]).toMatchObject({
+      description: "Rounding mode to apply.",
+      defaultValue: "half_up",
+      choices: ["half_up", "floor", "ceil"],
+    });
+    expect(args[1]).toMatchObject({ description: "Percentage in [0, 100].", range: "[0, 100]" });
+    expect(args[2].pattern).toBe("^[A-Z]{3}$");
+
+    // Non-string JSON defaults stringify; unconstrained args leave the fields undefined.
+    expect(args[3]).toMatchObject({
+      description: undefined,
+      defaultValue: undefined,
+      choices: undefined,
+      range: undefined,
+      pattern: undefined,
+    });
+  });
+
+  test("numeric JSON default is stringified; malformed choices are dropped", () => {
+    const args = getFunctionArgs(
+      fn({
+        arguments: ser([
+          f("limit", new Int64(), { vgi_default: "42", vgi_choices: "not-json" }),
+        ]),
+      }),
+    );
+    expect(args[0].defaultValue).toBe("42");
+    expect(args[0].choices).toBeUndefined();
+  });
+
   test("returns [] for a no-arg function (zero-length bytes)", () => {
     expect(getFunctionArgs(fn({ arguments: new Uint8Array(0) }))).toEqual([]);
   });
