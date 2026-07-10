@@ -141,12 +141,46 @@ export function consumeAiKey(): string | null {
   return value;
 }
 
+/** Where a shared query's SQL waits between the URL read and the moment the
+ *  editor actually mounts. See `consumeSharedSql`. */
+const SHARED_SQL_STORAGE_KEY = "vgi-pending-share-sql";
+
+function stashSharedSql(sql: string): void {
+  try { window.sessionStorage.setItem(SHARED_SQL_STORAGE_KEY, sql); } catch {}
+}
+
+function readStashedSharedSql(): string | null {
+  try { return window.sessionStorage.getItem(SHARED_SQL_STORAGE_KEY); } catch { return null; }
+}
+
+/** Drop the stashed shared SQL. Call once the editor has taken it — until then
+ *  it must survive reloads and the OAuth round trip. */
+export function clearSharedSql(): void {
+  if (!hasWindow()) return;
+  try { window.sessionStorage.removeItem(SHARED_SQL_STORAGE_KEY); } catch {}
+}
+
 /** Read a shared query link and strip it from the URL, so a reload doesn't
  *  re-open the tab and the SQL doesn't linger in history.
  *
  *  Accepts `#sql=` / `#sql_z=` (what the Share button emits — a fragment is
  *  never sent to a server) and `?sql=` / `?sql_z=` (for server-composed
  *  links). The query string wins when both are present, matching `ai_key`.
+ *
+ *  The decoded SQL is stashed in sessionStorage until `clearSharedSql()`, and
+ *  a load with no SQL in the URL falls back to that stash. Two things would
+ *  otherwise eat the query outright, since stripping the URL is the only copy
+ *  we destroy synchronously:
+ *
+ *    - An auth-protected service. `loadCatalog` 401s, `startLoginFlow` does a
+ *      top-level `location.replace` to the IdP, and both the URL fragment (we
+ *      just stripped it) and the React state holding the SQL are gone before
+ *      the user ever sees the editor.
+ *    - A service that fails to attach at all: the editor never mounts, so
+ *      nothing consumes the SQL, and it isn't in the URL to try again with.
+ *
+ *  sessionStorage is the right shelf for it: same-tab, survives navigation and
+ *  reload, dies with the tab, and never travels to a server.
  *
  *  Async because the `sql_z` form is decompressed — but the read and the URL
  *  rewrite both happen synchronously, before the first await, so a concurrent
@@ -162,9 +196,14 @@ export async function consumeSharedSql(): Promise<string | null> {
   const fragParams = parseFragmentParams();
   const hasSql = (p: URLSearchParams | null) => !!p && (p.has(SQL_PARAM) || p.has(SQL_Z_PARAM));
   const source = hasSql(search) ? search : hasSql(fragParams) ? fragParams! : null;
-  if (!source) return null;
+  if (!source) return readStashedSharedSql();
   rewriteUrl([SQL_PARAM, SQL_Z_PARAM], [SQL_PARAM, SQL_Z_PARAM]);
-  return decodeSqlParams(source);
+  const sql = await decodeSqlParams(source);
+  // A corrupt `sql_z` decodes to null; don't let it shadow an earlier stash
+  // we haven't handed to the editor yet.
+  if (sql === null) return readStashedSharedSql();
+  stashSharedSql(sql);
+  return sql;
 }
 
 export interface AuthFragment {

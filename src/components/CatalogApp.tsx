@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
 import { fetchCatalog, type CatalogData, type ResolvedSchema } from "@/lib/service";
-import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql } from "@/lib/url-params";
+import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql, clearSharedSql } from "@/lib/url-params";
 import type { PendingEditorSql } from "./editor/SqlEditorView";
 import { fetchAttachedCatalog } from "@/lib/duckdb-catalog";
 import { readRows } from "@/lib/duckdb-query";
@@ -317,7 +317,9 @@ export function CatalogApp() {
   // `?sql=` / `?sql_z=` — a shared query link. Stage it in a new editor tab
   // without running it. The param is stripped from the URL on read, so a
   // reload won't re-open the tab. The editor mounts only once the catalog has
-  // loaded; `pendingEditorSql` waits in state until then.
+  // loaded; `pendingEditorSql` waits in state until then, and `consumeSharedSql`
+  // keeps a sessionStorage copy so a sign-in redirect or a failed attach in
+  // between doesn't lose the query.
   useEffect(() => {
     let cancelled = false;
     consumeSharedSql().then((sql) => {
@@ -753,7 +755,7 @@ export function CatalogApp() {
                     attachOptions={attachOptions}
                     onExitEditor={() => setActiveTab("catalog")}
                     pendingSql={pendingEditorSql}
-                    onPendingConsumed={() => setPendingEditorSql(null)}
+                    onPendingConsumed={() => { setPendingEditorSql(null); clearSharedSql(); }}
                   />
                 </Suspense>
               </ErrorBoundary>

@@ -20,9 +20,17 @@ const fakeHistory = {
     currentHash = u.hash;
   },
 };
+const store = new Map<string, string>();
+const fakeSessionStorage = {
+  getItem: (k: string) => store.get(k) ?? null,
+  setItem: (k: string, v: string) => { store.set(k, v); },
+  removeItem: (k: string) => { store.delete(k); },
+};
+
 (globalThis as any).window = {
   get location() { return { hash: currentHash, pathname: currentPath, search: currentSearch }; },
   history: fakeHistory,
+  sessionStorage: fakeSessionStorage,
 };
 (globalThis as any).history = fakeHistory;
 
@@ -30,6 +38,8 @@ const {
   consumeAiKey,
   consumeAuthFragment,
   consumePrefillFromHash,
+  consumeSharedSql,
+  clearSharedSql,
   getServiceUrl,
   getThemeUrl,
 } = await import("../../src/lib/url-params");
@@ -38,6 +48,7 @@ beforeEach(() => {
   currentPath = "/";
   currentSearch = "";
   currentHash = "";
+  store.clear();
 });
 
 describe("getters", () => {
@@ -116,6 +127,65 @@ describe("composition: consumeAuthFragment + consumeAiKey on the same load", () 
     expect(currentHash).toBe("#token=t&refresh_token=r");
     expect(consumeAuthFragment()?.token).toBe("t");
     expect(currentHash).toBe("");
+  });
+});
+
+describe("consumeSharedSql", () => {
+  const SERVICE = "service=https%3A%2F%2Fhost%3A9003";
+
+  test("reads #sql=, strips it, preserves other fragment keys", async () => {
+    currentSearch = `?${SERVICE}`;
+    currentHash = "#sql=SELECT+1%3B&token=t";
+    expect(await consumeSharedSql()).toBe("SELECT 1;");
+    expect(currentHash).toBe("#token=t");
+    expect(currentSearch).toBe(`?${SERVICE}`);
+  });
+
+  test("query-string form wins when both present", async () => {
+    currentSearch = `?${SERVICE}&sql=SELECT+2%3B`;
+    currentHash = "#sql=SELECT+3%3B";
+    expect(await consumeSharedSql()).toBe("SELECT 2;");
+  });
+
+  test("no ?service= → left in the URL for a later load", async () => {
+    currentHash = "#sql=SELECT+1%3B";
+    expect(await consumeSharedSql()).toBe(null);
+    expect(currentHash).toBe("#sql=SELECT+1%3B");
+  });
+
+  // The bug this stash exists for: an auth-protected service 401s, we redirect
+  // to the IdP, and the reload lands here with a fragment-free URL and no React
+  // state. The SQL has to come back from somewhere.
+  test("survives a reload with no SQL in the URL, until cleared", async () => {
+    currentSearch = `?${SERVICE}`;
+    currentHash = "#sql=SELECT+1%3B";
+    expect(await consumeSharedSql()).toBe("SELECT 1;");
+
+    currentHash = "";
+    expect(await consumeSharedSql()).toBe("SELECT 1;");
+
+    clearSharedSql();
+    expect(await consumeSharedSql()).toBe(null);
+  });
+
+  test("a fresh link replaces an uncleared stash", async () => {
+    currentSearch = `?${SERVICE}`;
+    currentHash = "#sql=SELECT+1%3B";
+    expect(await consumeSharedSql()).toBe("SELECT 1;");
+
+    currentHash = "#sql=SELECT+2%3B";
+    expect(await consumeSharedSql()).toBe("SELECT 2;");
+    currentHash = "";
+    expect(await consumeSharedSql()).toBe("SELECT 2;");
+  });
+
+  test("a corrupt sql_z doesn't shadow an unconsumed stash", async () => {
+    currentSearch = `?${SERVICE}`;
+    currentHash = "#sql=SELECT+1%3B";
+    expect(await consumeSharedSql()).toBe("SELECT 1;");
+
+    currentHash = "#sql_z=!!!not-base64!!!";
+    expect(await consumeSharedSql()).toBe("SELECT 1;");
   });
 });
 
