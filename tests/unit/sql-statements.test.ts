@@ -61,6 +61,22 @@ describe("splitStatements", () => {
   test("empty document → no statements", () => {
     expect(splitStatements("   \n  ")).toEqual([]);
   });
+
+  test("drops comment-only segments", () => {
+    expect(splitStatements("-- just a note\n")).toEqual([]);
+    expect(splitStatements("/* block */")).toEqual([]);
+    const doc = "SELECT 1;\n-- SELECT 2;\n-- SELECT 3;\n";
+    expect(splitStatements(doc).map((s) => s.text)).toEqual(["SELECT 1"]);
+  });
+
+  test("a comment above a statement stays part of it", () => {
+    const doc = "-- header\nSELECT 1;";
+    expect(splitStatements(doc).map((s) => s.text)).toEqual(["-- header\nSELECT 1"]);
+  });
+
+  test("a `--` inside a string literal is code, not a comment", () => {
+    expect(splitStatements("SELECT '--'").map((s) => s.text)).toEqual(["SELECT '--'"]);
+  });
 });
 
 describe("statementAtCursor", () => {
@@ -87,5 +103,42 @@ describe("statementAtCursor", () => {
 
   test("empty document → null", () => {
     expect(statementAtCursor("  ", 1)).toBeNull();
+  });
+
+  test("comment-only document → null", () => {
+    const doc = "-- nothing to run here\n";
+    expect(statementAtCursor(doc, doc.length)).toBeNull();
+  });
+
+  // The reported bug: commented-out variants parked below the live query made
+  // the trailing segment look runnable, so Ctrl+Enter with the cursor at the
+  // end shipped nothing but comments to DuckDB and drew an empty grid.
+  test("cursor in a trailing comment block falls back to the live statement", () => {
+    const doc = [
+      "-- Sparrow Trap: Exec Rec",
+      "-- Stock queries below; the live one runs first.",
+      "SELECT * FROM harbor.executions WHERE _partition_date='2026-07-06' LIMIT 100;",
+      "-- SELECT * FROM harbor.executions WHERE bb_yellow_key LIKE '%AAPL%';",
+      "-- SELECT COUNT(*) FROM harbor.executions GROUP BY execution_type;",
+      "",
+    ].join("\n");
+    const stmt = statementAtCursor(doc, doc.length);
+    expect(stmt?.text).toContain("LIMIT 100");
+    expect(stmt?.text.endsWith("LIMIT 100")).toBe(true);
+    // Same answer with the cursor parked mid-way through the dead comments.
+    expect(statementAtCursor(doc, doc.indexOf("AAPL"))?.text).toBe(stmt?.text);
+  });
+
+  // A comment sitting above a statement is inside that statement's segment (a
+  // `;` in a comment doesn't terminate anything), so it runs the statement
+  // below it rather than falling back to the one above.
+  test("cursor in a comment above a statement runs that statement", () => {
+    const doc = "SELECT 1;\n-- dead code;\nSELECT 2;";
+    expect(statementAtCursor(doc, doc.indexOf("dead"))?.text).toBe("-- dead code;\nSELECT 2");
+  });
+
+  test("comment-only segment between two statements falls back to the one above", () => {
+    const doc = "SELECT 1;\n-- orphan\n;\nSELECT 2;";
+    expect(statementAtCursor(doc, doc.indexOf("orphan"))?.text).toBe("SELECT 1");
   });
 });

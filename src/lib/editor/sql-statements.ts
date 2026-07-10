@@ -21,14 +21,15 @@ export interface SqlStatement {
 }
 
 /**
- * Split `sql` into top-level statements. Empty/whitespace-only segments
- * between semicolons are dropped. Offsets are into the original string.
+ * Split `sql` into top-level statements. Segments with no executable code —
+ * blank, or nothing but comments — are dropped. Offsets are into the original
+ * string.
  */
 export function splitStatements(sql: string): SqlStatement[] {
   const segments = rawSegments(sql);
   const out: SqlStatement[] = [];
   for (const seg of segments) {
-    const trimmed = trimRange(sql, seg.from, seg.to);
+    const trimmed = runnableRange(sql, seg.from, seg.to);
     if (trimmed) out.push(trimmed);
   }
   return out;
@@ -36,10 +37,10 @@ export function splitStatements(sql: string): SqlStatement[] {
 
 /**
  * Return the statement the cursor at `pos` belongs to. Semicolons attach to
- * the statement they terminate. If the cursor sits in a blank segment (e.g.
- * trailing whitespace), the nearest non-empty statement (preferring the one
- * before the cursor) is returned. Returns null if the document has no
- * runnable statement.
+ * the statement they terminate. If the cursor sits in a segment with nothing
+ * to run — trailing whitespace, or a block of commented-out SQL below the last
+ * semicolon — the nearest runnable statement (preferring the one before the
+ * cursor) is returned. Returns null if the document has no runnable statement.
  */
 export function statementAtCursor(sql: string, pos: number): SqlStatement | null {
   const segments = rawSegments(sql);
@@ -50,16 +51,16 @@ export function statementAtCursor(sql: string, pos: number): SqlStatement | null
   let idx = segments.findIndex((s) => pos >= s.from && pos <= s.to);
   if (idx === -1) idx = segments.length - 1;
 
-  const containing = trimRange(sql, segments[idx].from, segments[idx].to);
+  const containing = runnableRange(sql, segments[idx].from, segments[idx].to);
   if (containing) return containing;
 
-  // Blank segment — scan backward then forward for a non-empty statement.
+  // Nothing to run here — scan backward then forward for a real statement.
   for (let i = idx - 1; i >= 0; i--) {
-    const s = trimRange(sql, segments[i].from, segments[i].to);
+    const s = runnableRange(sql, segments[i].from, segments[i].to);
     if (s) return s;
   }
   for (let i = idx + 1; i < segments.length; i++) {
-    const s = trimRange(sql, segments[i].from, segments[i].to);
+    const s = runnableRange(sql, segments[i].from, segments[i].to);
     if (s) return s;
   }
   return null;
@@ -146,12 +147,44 @@ function matchDollarTag(sql: string, i: number): string | null {
   return null;
 }
 
-/** Trim whitespace from a [from, to) range, returning trimmed text + offsets, or null if blank. */
-function trimRange(sql: string, from: number, to: number): SqlStatement | null {
+/**
+ * Trim whitespace from a [from, to) range, returning trimmed text + offsets —
+ * or null when the range holds nothing DuckDB would execute.
+ *
+ * "Nothing to execute" means blank OR comments only. Sending a comment-only
+ * string to DuckDB is not an error; it just yields no result, so a document
+ * that parks commented-out variants below the live query would answer
+ * Ctrl+Enter with an empty grid. Leading comments are kept in the returned
+ * text — a header above a statement belongs to it, and DuckDB ignores them.
+ */
+function runnableRange(sql: string, from: number, to: number): SqlStatement | null {
   let s = from;
   let e = to;
   while (s < e && /\s/.test(sql[s])) s++;
   while (e > s && /\s/.test(sql[e - 1])) e--;
   if (s >= e) return null;
+  if (!hasCode(sql, s, e)) return null;
   return { text: sql.slice(s, e), from: s, to: e };
+}
+
+/** Whether [from, to) contains any character outside whitespace and comments. */
+function hasCode(sql: string, from: number, to: number): boolean {
+  let i = from;
+  while (i < to) {
+    const ch = sql[i];
+    if (ch === "-" && sql[i + 1] === "-") {
+      i += 2;
+      while (i < to && sql[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && sql[i + 1] === "*") {
+      i += 2;
+      while (i < to && !(sql[i] === "*" && sql[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    if (!/\s/.test(ch)) return true;
+    i++;
+  }
+  return false;
 }
