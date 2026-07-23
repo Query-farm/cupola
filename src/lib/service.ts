@@ -7,7 +7,6 @@
 import { httpConnect } from "@query-farm/vgi-rpc/connect";
 import { VgiClient, Arguments, deserializeSchema, deserializeBatch, iterRows } from "vgi/client";
 import type {
-  AttachId,
   SchemaInfo,
   TableInfo,
   ViewInfo,

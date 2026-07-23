@@ -217,6 +217,12 @@ export default defineConfig({
         // re-export barrel; Rollup then fails ("deserializeSchema is not
         // defined"). Building from source avoids the broken prebuilt dist.
         'vgi/client': resolve('../vgi-typescript/src/client-entry.ts'),
+        // Same mis-emit on the root barrel: vgi/client's error module imports
+        // RpcError from "@query-farm/vgi-rpc", whose dist/index.js exports
+        // launcher symbols (tryAcquireLock) that bun dropped from the bundle.
+        // Rollup fails on the dangling export; source resolution tree-shakes
+        // the Node-only launcher away instead.
+        '@query-farm/vgi-rpc': resolve('../vgi-rpc-typescript/src/index.ts'),
         'node:stream': resolve('src/lib/node-stubs.ts'),
         'node:zlib': resolve('src/lib/node-stubs.ts'),
         'node:crypto': resolve('src/lib/node-stubs.ts'),
