@@ -304,7 +304,9 @@ export async function printBoxTable(table: Table, out: TerminalOutput, maxDispla
   try {
     const Table = (await import(/* @vite-ignore */ "cli-table3")).default;
 
-    type CellContent = string | { content: string; hAlign: "left" | "right" | "center" };
+    type CellContent =
+      | string
+      | { content: string; hAlign: "left" | "right" | "center"; wordWrap?: boolean };
     const colWidths: number[] = [];
     const colAligns: ("left" | "right" | "center")[] = [];
     const headerRow: CellContent[] = [];
@@ -378,8 +380,17 @@ export async function printBoxTable(table: Table, out: TerminalOutput, maxDispla
         const val = grid[r][ci];
         // No manual truncation: cli-table3 wordWrap renders the full value
         // across as many lines as the column width needs (duckbox style).
-        const display = val === "NULL" ? `\x1b[2mNULL\x1b[0m` : val;
-        row.push(isNumeric[ci] ? { content: display, hAlign: "right" as const } : display);
+        const hAlign = isNumeric[ci] ? ("right" as const) : ("left" as const);
+        if (val === "NULL") {
+          // The dim wrapper makes this cell 12 raw chars; cli-table3's
+          // wrapOnWordBoundary:false path wraps on String.length (ANSI-blind)
+          // and would slice mid-escape in any column narrower than that,
+          // spilling a literal "[0m" onto a second line. Padding/truncation
+          // are ANSI-aware, so opting this cell out of wrapping is safe.
+          row.push({ content: `\x1b[2mNULL\x1b[0m`, hAlign, wordWrap: false });
+        } else {
+          row.push(isNumeric[ci] ? { content: val, hAlign } : val);
+        }
       }
       if (ellipsisPos === shownCount) row.push({ content: "…", hAlign: "center" as const });
       dataTbl.push(row);
