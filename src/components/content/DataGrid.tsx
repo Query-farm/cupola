@@ -93,9 +93,14 @@ function HeaderCell({
   /** Receives the raw click; a modifier+click here selects the column instead of sorting. */
   onHeaderClick?: (e: React.MouseEvent) => void;
 }) {
-  const chevron =
+  // Sortable headers always reserve the chevron's space (invisible when the
+  // column isn't the sort key) so the frozen column widths measured below
+  // already account for it — otherwise sorting would truncate the header label
+  // on a content-sized column, and shift the layout on an oversized one.
+  const chevron = !onSort ? null :
     sortDir === "asc" ? <ChevronUp className="h-3 w-3 shrink-0" /> :
-    sortDir === "desc" ? <ChevronDown className="h-3 w-3 shrink-0" /> : null;
+    sortDir === "desc" ? <ChevronDown className="h-3 w-3 shrink-0" /> :
+    <ChevronUp className="h-3 w-3 shrink-0 invisible" aria-hidden="true" />;
   const inner = (
     <>
       <span className="truncate">{col}</span>
@@ -162,6 +167,30 @@ function isNumericType(duckdbType: string): boolean {
 interface GridMetrics {
   colWidths: number[];
   rowHeight: number;
+}
+
+/** Content-sizing bounds for a data column, in px. Desktop DB grids (DBeaver,
+ *  DataGrip) size columns to their content and leave the leftover width empty
+ *  rather than stretching a column to fill the panel — a one-column result
+ *  otherwise gets a single 900px column of five-character values. MIN keeps
+ *  short columns clickable; MAX matches the cells' truncation width. */
+const MIN_COL_WIDTH = 48;
+const MAX_COL_WIDTH = 400;
+/** ...but never let one column eat the whole viewport on a narrow panel. */
+const MAX_COL_FRACTION = 0.6;
+/** Width the sort chevron + its gap take out of a sortable header. */
+const CHEVRON_ALLOWANCE = 16;
+
+/** Shared offscreen 2D context for measuring text during autofit (see
+ *  `autofitColumn`). Lazily created; `null` outside a browser. */
+let textCanvas: CanvasRenderingContext2D | null | undefined;
+function measureCtx(): CanvasRenderingContext2D | null {
+  if (textCanvas === undefined) {
+    textCanvas = typeof document === "undefined"
+      ? null
+      : document.createElement("canvas").getContext("2d");
+  }
+  return textCanvas;
 }
 
 export function DataGrid({
@@ -243,11 +272,26 @@ export function DataGrid({
   // naturally, snapshot the column widths + a row height, then switch to a
   // fixed <colgroup> layout and virtualize. `metrics === null` means
   // "measuring pass" (render rows un-virtualized so the snapshot is accurate).
+  //
+  // The measuring pass lays the table out at `width: max-content`, NOT the
+  // default `w-full`: at 100% the browser hands every spare pixel to the
+  // columns (a single-column result got one column the full width of the
+  // panel), and the snapshot froze that. max-content asks each column only for
+  // what its content needs; the widths are then clamped below, and the
+  // leftover width goes to a trailing spacer column instead of the data.
   const [metrics, setMetrics] = useState<GridMetrics | null>(null);
+
+  // Widths the user set by hand (drag / double-click autofit), keyed by column
+  // NAME so they survive the re-measure that a pager jump or a sort triggers —
+  // those hand back a fresh `columnNames` array of the same columns. Cleared
+  // only when the column set itself changes.
+  const userWidths = useRef(new Map<string, number>());
+  const columnKey = columnNames.join(" ");
 
   // Re-measure whenever the column set changes (new table/result, pager jump).
   // Appends keep the same columns, so the frozen layout persists across them.
   useLayoutEffect(() => { setMetrics(null); }, [columnNames]);
+  useLayoutEffect(() => { userWidths.current.clear(); }, [columnKey]);
 
   useLayoutEffect(() => {
     if (metrics || rows.length === 0) return;
@@ -256,10 +300,98 @@ export function DataGrid({
     const headRow = container.querySelector("thead tr");
     const bodyRow = container.querySelector("tbody tr");
     if (!headRow || !bodyRow) return;
-    const colWidths = Array.from(headRow.children).map((c) => (c as HTMLElement).getBoundingClientRect().width);
+    const maxWidth = Math.max(
+      MIN_COL_WIDTH,
+      Math.min(MAX_COL_WIDTH, Math.round(container.clientWidth * MAX_COL_FRACTION)),
+    );
+    const colWidths = Array.from(headRow.children).map((c, i) => {
+      // Index 0 is the "#" gutter — it's already sized by its own class.
+      if (i === 0) return Math.ceil((c as HTMLElement).getBoundingClientRect().width);
+      const chosen = userWidths.current.get(columnNames[i - 1]);
+      if (chosen) return chosen;
+      const w = Math.ceil((c as HTMLElement).getBoundingClientRect().width);
+      return Math.min(maxWidth, Math.max(MIN_COL_WIDTH, w));
+    });
     const rowHeight = (bodyRow as HTMLElement).getBoundingClientRect().height || 25;
     if (colWidths.length) setMetrics({ colWidths, rowHeight });
   }, [metrics, rows.length, columnNames]);
+
+  // --- Column resizing ------------------------------------------------------
+  // Widths live in `metrics.colWidths` and are rendered through the <colgroup>,
+  // so resizing is just a state edit — no reflow of the virtualizer needed.
+  // `colIndex` indexes colWidths (0 is the "#" gutter, which has no handle).
+  const [resizing, setResizing] = useState<
+    { colIndex: number; startX: number; startWidth: number } | null
+  >(null);
+
+  const setColWidth = useCallback((colIndex: number, width: number) => {
+    const w = Math.max(MIN_COL_WIDTH, Math.round(width));
+    userWidths.current.set(columnNames[colIndex - 1], w);
+    setMetrics((m) =>
+      m ? { ...m, colWidths: m.colWidths.map((cw, i) => (i === colIndex ? w : cw)) } : m
+    );
+  }, [columnNames]);
+
+  useEffect(() => {
+    if (!resizing) return;
+    // Not the module's `window`/`document`: the pop-out results window renders
+    // this component from the OPENER's realm into a child document, so a drag
+    // there delivers its pointer events to the child's view.
+    const doc = scrollRef.current?.ownerDocument ?? document;
+    const view = doc.defaultView ?? window;
+    const onMove = (e: PointerEvent) => {
+      setColWidth(resizing.colIndex, resizing.startWidth + e.clientX - resizing.startX);
+    };
+    const onUp = () => setResizing(null);
+    view.addEventListener("pointermove", onMove);
+    view.addEventListener("pointerup", onUp);
+    // Keep the resize cursor while the pointer is off the handle, and stop the
+    // drag from selecting text across the page.
+    const prevCursor = doc.body.style.cursor;
+    const prevSelect = doc.body.style.userSelect;
+    doc.body.style.cursor = "col-resize";
+    doc.body.style.userSelect = "none";
+    return () => {
+      view.removeEventListener("pointermove", onMove);
+      view.removeEventListener("pointerup", onUp);
+      doc.body.style.cursor = prevCursor;
+      doc.body.style.userSelect = prevSelect;
+    };
+  }, [resizing, setColWidth]);
+
+  // Double-click a handle: size the column to its widest rendered value.
+  // The frozen layout clips cells, so the DOM can't be asked for a natural
+  // width — measure the text directly with a canvas instead. Only the
+  // virtualized (visible) rows are in the DOM, which matches how desktop grids
+  // autofit: to the rows you can currently see.
+  const autofitColumn = useCallback((colIndex: number) => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const head = container.querySelector<HTMLElement>(`thead th:nth-child(${colIndex + 1})`);
+    if (!head) return;
+    const cells = container.querySelectorAll<HTMLElement>(
+      `tbody tr:not([aria-hidden]) > td:nth-child(${colIndex + 1})`
+    );
+    const ctx = measureCtx();
+    if (!ctx) return;
+    // The element's own view — see the pop-out note in the resize effect.
+    const view = container.ownerDocument.defaultView ?? window;
+    const measure = (cell: HTMLElement, text: string) => {
+      const cs = view.getComputedStyle(cell);
+      // The text sits in an inner element that sets its own font (font-mono on
+      // values, the header's label span) — measure with THAT font, pad with the
+      // cell's own padding.
+      const fs = view.getComputedStyle(cell.firstElementChild ?? cell);
+      ctx.font = `${fs.fontStyle} ${fs.fontWeight} ${fs.fontSize} ${fs.fontFamily}`;
+      return ctx.measureText(text).width
+        + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+    };
+    // The header also has to fit its sort chevron (reserved in HeaderCell).
+    let width = measure(head, head.textContent ?? "") + (onSort ? CHEVRON_ALLOWANCE : 0);
+    for (const cell of cells) width = Math.max(width, measure(cell, cell.textContent ?? ""));
+    // Fitting wider than the panel would defeat the purpose.
+    setColWidth(colIndex, Math.min(Math.ceil(width) + 2, container.clientWidth - MIN_COL_WIDTH));
+  }, [onSort, setColWidth]);
 
   const totalWidth = useMemo(
     () => (metrics ? metrics.colWidths.reduce((a, b) => a + b, 0) : 0),
@@ -483,6 +615,12 @@ export function DataGrid({
     ? { backgroundColor: "color-mix(in oklab, var(--color-primary) 12%, var(--color-card))" }
     : undefined;
 
+  // Vertical rules between columns, so the column a value belongs to (and the
+  // boundary you grab to resize it) is visible without hovering. Kept lighter
+  // in the body than in the header, and never drawn after the trailing spacer.
+  const headSep = "border-r border-primary/35";
+  const cellSep = "border-r border-border";
+
   const renderRow = (row: Row<Record<string, any>>, index: number) => (
     <TableRow
       key={row.id}
@@ -492,7 +630,7 @@ export function DataGrid({
       <TableCell
         onMouseDown={cellNavigation ? (e) => { selectRow(index, e.shiftKey); scrollRef.current?.focus({ preventScroll: true }); } : undefined}
         title={cellNavigation ? "Select row" : undefined}
-        className={`text-xs text-muted-foreground/40 text-right pr-3 font-mono py-1 w-10 ${cellNavigation ? "cursor-pointer select-none" : ""}`}
+        className={`text-xs text-muted-foreground/40 text-right pr-3 font-mono py-1 w-10 ${cellSep} ${cellNavigation ? "cursor-pointer select-none" : ""}`}
       >
         {startRow + index + 1}
       </TableCell>
@@ -513,12 +651,14 @@ export function DataGrid({
               scrollRef.current?.focus({ preventScroll: true });
             } : undefined}
             onMouseEnter={cellNavigation ? () => { if (draggingRef.current) extendTo({ row: index, col: ci }); } : undefined}
-            className={`text-xs py-1 whitespace-nowrap max-w-[400px] truncate ${cellNavigation ? "cursor-default select-none" : ""} ${inSelection ? "bg-primary/10" : ""} ${isFocus ? "ring-2 ring-inset ring-primary" : ""}`}
+            className={`text-xs py-1 whitespace-nowrap max-w-[400px] truncate ${cellSep} ${cellNavigation ? "cursor-default select-none" : ""} ${inSelection ? "bg-primary/10" : ""} ${isFocus ? "ring-2 ring-inset ring-primary" : ""}`}
           >
             {flexRender(cell.column.columnDef.cell, cell.getContext())}
           </TableCell>
         );
       })}
+      {/* Spacer cell — carries the row's stripe/hover across the empty width. */}
+      {metrics && <TableCell aria-hidden="true" className="p-0" />}
     </TableRow>
   );
 
@@ -528,13 +668,19 @@ export function DataGrid({
       containerRef={scrollRef}
       containerClassName={`${borderless ? "h-full overflow-auto" : "border rounded-md max-h-full overflow-auto"}${cellNavigation ? " focus:outline-none" : ""}`}
       containerProps={cellNavigation ? { tabIndex: 0, onKeyDown: handleKeyDown, onScroll: maybeLoadMore, role: "grid", "aria-label": "Data preview" } : undefined}
-      style={metrics ? { tableLayout: "fixed", width: totalWidth, minWidth: "100%" } : undefined}
+      style={metrics
+        ? { tableLayout: "fixed", width: totalWidth, minWidth: "100%" }
+        : { width: "max-content" }}
     >
       {metrics && (
         <colgroup>
           {metrics.colWidths.map((w, i) => (
             <col key={i} style={{ width: w }} />
           ))}
+          {/* Spacer: the only auto-width column, so `minWidth: 100%` above
+              spends its leftover pixels here instead of inflating the data
+              columns. Zero-width when the table already overflows. */}
+          <col />
         </colgroup>
       )}
       <TableHeader>
@@ -544,7 +690,7 @@ export function DataGrid({
               style={headStyle}
               onMouseDown={cellNavigation ? () => { selectAll(); scrollRef.current?.focus({ preventScroll: true }); } : undefined}
               title={cellNavigation ? "Select all" : undefined}
-              className={`sticky top-0 z-10 text-xs w-10 text-right pr-3 font-mono ${headBg} ${cellNavigation ? "cursor-pointer select-none" : ""} ${borderless ? "text-primary/60" : "text-muted-foreground"}`}
+              className={`sticky top-0 z-10 text-xs w-10 text-right pr-3 font-mono ${headBg} ${headSep} ${cellNavigation ? "cursor-pointer select-none" : ""} ${borderless ? "text-primary/60" : "text-muted-foreground"}`}
             >#</TableHead>
             {headerGroup.headers.map((header, hi) => {
               const col = header.column.id;
@@ -552,7 +698,7 @@ export function DataGrid({
               const numeric = info ? isNumericType(info.duckdbType) : false;
               const sortDir = sort?.col === col ? sort.dir : null;
               return (
-                <TableHead key={header.id} style={headStyle} className={`sticky top-0 z-10 text-xs font-mono whitespace-nowrap ${headBg} ${borderless ? "text-primary/80 font-semibold" : ""}`}>
+                <TableHead key={header.id} style={headStyle} className={`sticky top-0 z-10 text-xs font-mono whitespace-nowrap ${headBg} ${headSep} ${borderless ? "text-primary/80 font-semibold" : ""}`}>
                   <HeaderCell
                     col={col}
                     numeric={numeric}
@@ -561,9 +707,38 @@ export function DataGrid({
                     onSort={onSort}
                     onHeaderClick={cellNavigation ? () => { selectColumn(hi); scrollRef.current?.focus({ preventScroll: true }); } : undefined}
                   />
+                  {metrics && (
+                    <div
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label={`Resize ${col}`}
+                      title="Drag to resize · double-click to fit contents"
+                      // Sits INSIDE its own header cell rather than straddling
+                      // the boundary: each <th> is its own stacking context, so
+                      // an overhang would be painted over (and hit-tested away)
+                      // by the next header. Above the header's own click target,
+                      // so a drag here never sorts or selects the column.
+                      className={`absolute top-0 right-0 z-20 h-full w-3 cursor-col-resize touch-none
+                        after:absolute after:inset-y-1 after:right-0 after:w-px after:bg-primary
+                        after:opacity-0 hover:after:opacity-60 ${resizing?.colIndex === hi + 1 ? "after:opacity-100" : ""}`}
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setResizing({ colIndex: hi + 1, startX: e.clientX, startWidth: metrics.colWidths[hi + 1] });
+                      }}
+                      onDoubleClick={(e) => { e.stopPropagation(); autofitColumn(hi + 1); }}
+                    />
+                  )}
                 </TableHead>
               );
             })}
+            {metrics && (
+              <TableHead
+                aria-hidden="true"
+                style={headStyle}
+                className={`sticky top-0 z-10 ${headBg}`}
+              />
+            )}
           </TableRow>
         ))}
       </TableHeader>
@@ -571,11 +746,11 @@ export function DataGrid({
         {metrics ? (
           <>
             {paddingTop > 0 && (
-              <tr aria-hidden="true"><td colSpan={numCols + 1} style={{ height: paddingTop, padding: 0, border: 0 }} /></tr>
+              <tr aria-hidden="true"><td colSpan={numCols + 2} style={{ height: paddingTop, padding: 0, border: 0 }} /></tr>
             )}
             {virtualItems.map((vi) => renderRow(modelRows[vi.index], vi.index))}
             {paddingBottom > 0 && (
-              <tr aria-hidden="true"><td colSpan={numCols + 1} style={{ height: paddingBottom, padding: 0, border: 0 }} /></tr>
+              <tr aria-hidden="true"><td colSpan={numCols + 2} style={{ height: paddingBottom, padding: 0, border: 0 }} /></tr>
             )}
           </>
         ) : (
