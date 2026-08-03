@@ -125,7 +125,9 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
   }, [serviceUrl]);
 
   // Flush any pending debounced save when the page is hidden/closed or the
-  // editor unmounts (e.g. switching back to the catalog view).
+  // editor unmounts. CatalogApp keeps this view mounted across tab switches
+  // (so results survive), so unmount now means page teardown — the 400ms
+  // debounce is what covers a switch away mid-edit.
   useEffect(() => {
     const flush = () => {
       if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }

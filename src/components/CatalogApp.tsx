@@ -114,6 +114,16 @@ export function CatalogApp() {
   // catalog tab), and (b) terminal / chat / perspective state survives tab
   // switches. It's visible only on an engine-backed tab.
   const engineVisible = activeTab !== "catalog" && activeTab !== "editor";
+  // The editor mounts on its first visit and then stays mounted (hidden the
+  // same way as the engine host) for the rest of the session. Its result grid
+  // holds a decoded Arrow table in component state, so unmounting on every tab
+  // switch threw away the query result — along with the scroll position, sort,
+  // and column widths. Mounting lazily rather than always keeps the CodeMirror
+  // chunk off the critical path for someone who only browses the catalog.
+  const [editorMounted, setEditorMounted] = useState(activeTab === "editor");
+  useEffect(() => {
+    if (activeTab === "editor") setEditorMounted(true);
+  }, [activeTab]);
   // SQL pushed into the editor from elsewhere (example queries, shell history,
   // shared query links). `autoRun` is false for shared links: the recipient
   // gets the query staged and ready, but chooses when to execute it.
@@ -733,10 +743,12 @@ export function CatalogApp() {
             </div>
           </>
         )}
-        {/* Content area — one tab visible at a time. Catalog & Editor are
-            conditionally rendered; the engine host (shell/askai/preview/
-            queries/perspective) is mounted once activated and kept sized via
-            visibility (so the xterm terminal survives tab switches). */}
+        {/* Content area — one tab visible at a time. Only the catalog is
+            conditionally rendered; the editor and the engine host (shell/askai/
+            preview/queries/perspective) are mounted once activated and then
+            kept sized via visibility (not display:none), so the xterm terminal,
+            the chat, and the editor's result grid all survive tab switches and
+            still have a layout box to measure against while hidden. */}
         <div className="flex-1 relative overflow-hidden">
           {activeTab === "catalog" && (
             <main className="absolute inset-0 overflow-y-auto p-6">
@@ -745,8 +757,11 @@ export function CatalogApp() {
               </ErrorBoundary>
             </main>
           )}
-          {activeTab === "editor" && (
-            <div className="absolute inset-0 overflow-hidden">
+          {editorMounted && (
+            <div
+              className="absolute inset-0 overflow-hidden"
+              style={activeTab === "editor" ? undefined : { visibility: "hidden", zIndex: -1 }}
+            >
               <ErrorBoundary>
                 <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading editor…</div>}>
                   <SqlEditorView
