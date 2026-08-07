@@ -40,6 +40,19 @@ export function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
+/** Decode an Arrow IPC buffer the caller already holds — e.g. one taken
+ *  straight off a `QueryResult.arrowBuffers`.
+ *
+ *  Use this instead of calling `tableFromIPC` directly. The
+ *  `buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf` shuffle was
+ *  copy-pasted at eight call sites; it lives here once now. It is also no
+ *  longer strictly needed — `duckdb-worker-boot` copies every result into a
+ *  plain, non-shared ArrayBuffer — but is kept so the helper still accepts the
+ *  Uint8Array views some paths carry. */
+export function decodeArrowBuffer(buf: ArrayBuffer | Uint8Array): Table {
+  return tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+}
+
 /** Run SQL and decode the result to an Apache Arrow `Table`. Returns null if
  *  the query failed, the bridge isn't ready, or no Arrow buffer came back. */
 export async function readTable(sql: string): Promise<Table | null> {
@@ -47,8 +60,7 @@ export async function readTable(sql: string): Promise<Table | null> {
   if (!q) return null;
   const r = await q(sql);
   if (!r.ok || !r.arrowBuffers?.length) return null;
-  const buf = r.arrowBuffers[0];
-  return tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+  return decodeArrowBuffer(r.arrowBuffers[0]);
 }
 
 /** Read an Arrow-encoded query result into an array of plain-object rows.

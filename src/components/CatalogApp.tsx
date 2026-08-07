@@ -3,7 +3,8 @@ import { fetchCatalog, type CatalogData, type ResolvedSchema } from "@/lib/servi
 import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql, clearSharedSql } from "@/lib/url-params";
 import type { PendingEditorSql } from "./editor/SqlEditorView";
 import { fetchAttachedCatalog } from "@/lib/duckdb-catalog";
-import { readRows } from "@/lib/duckdb-query";
+import { readRows, quoteLiteral } from "@/lib/duckdb-query";
+import { isRecoverableAuthError } from "@/lib/auth-errors";
 import { type Selection } from "@/lib/tree";
 import { getAuthToken, getAuthTokenForService, getUserInfo, hadAuthToken, redirectToAuth } from "@/lib/auth";
 import * as Sentry from "@sentry/astro";
@@ -52,10 +53,12 @@ import {
 /** A recoverable auth error: one the SPA login redirect (below) handles by
  *  bouncing the user back through the IdP. These happen routinely (expired
  *  token) and are deliberately NOT reported to Sentry. Hard failures (e.g.
- *  "token exchange failed", connection errors) don't match and ARE reported. */
-function isRecoverableAuthMessage(message: string): boolean {
-  return message.toLowerCase().includes("auth") || message.includes("401");
-}
+ *  "token exchange failed", connection errors) don't match and ARE reported.
+ *
+ *  The rule lives in ./auth-errors so this file, the render branch below, and
+ *  shell-init all classify identically — they previously had three different
+ *  inline rules, each keying off a bare "auth" substring. */
+const isRecoverableAuthMessage = isRecoverableAuthError;
 
 /** Minimum spacing between two login redirects before we call it a loop. */
 const AUTH_REDIRECT_LOOP_WINDOW_MS = 10_000;
@@ -383,7 +386,7 @@ export function CatalogApp() {
     // landing page emits it when a user selects a non-latest version.
     const dvs = getDataVersionSpecFromUrl();
     if (dvs) {
-      const opt = `data_version_spec '${dvs.replace(/'/g, "''")}'`;
+      const opt = `data_version_spec ${quoteLiteral(dvs)}`;
       return base ? `${base}, ${opt}` : opt;
     }
     return base;
@@ -678,7 +681,8 @@ export function CatalogApp() {
 
   // Error state
   if (error) {
-    const isAuthError = error.toLowerCase().includes("auth") || error.includes("401");
+    // Same rule as the effect above — was a separate inline copy.
+    const isAuthError = isRecoverableAuthMessage(error);
     const explicitService = hasExplicitService();
 
     // Auth redirect is in progress

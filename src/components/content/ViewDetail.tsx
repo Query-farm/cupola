@@ -13,6 +13,7 @@ import { filterDisplayTags, getTag, parseExecutableExamples, TAG_DOC_MD, TAG_EXA
 import { DescriptionSection } from "./DescriptionSection";
 import { ObjectMeta } from "./ObjectMeta";
 import { bridge } from "@/lib/shell-bridge";
+import { readRows, quoteLiteral } from "@/lib/duckdb-query";
 
 interface ViewColumn {
   name: string;
@@ -42,21 +43,23 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate, onOpenSh
 
     (async () => {
       try {
-        const result = await queryFn(
-          `SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = '${catalogName}' AND schema_name = '${schemaName}' AND table_name = '${view.name}' ORDER BY column_index`
+        // These are VALUE comparisons — quoteLiteral, not raw interpolation.
+        // Unescaped, any name containing an apostrophe terminated the literal
+        // early and produced a parse error instead of the column list.
+        const rows = await readRows(
+          `SELECT column_name, data_type FROM duckdb_columns()` +
+            ` WHERE database_name = ${quoteLiteral(catalogName)}` +
+            ` AND schema_name = ${quoteLiteral(schemaName)}` +
+            ` AND table_name = ${quoteLiteral(view.name)}` +
+            ` ORDER BY column_index`
         );
-        if (!result.ok || !result.arrowBuffers?.length) return;
-        const { tableFromIPC } = await import("apache-arrow");
-        const buf = result.arrowBuffers[0];
-        const table = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
-        const cols: ViewColumn[] = [];
-        for (let i = 0; i < table.numRows; i++) {
-          cols.push({
-            name: String(table.getChildAt(0)?.get(i) ?? ""),
-            type: String(table.getChildAt(1)?.get(i) ?? "VARCHAR"),
-          });
-        }
-        setColumns(cols);
+        if (!rows) return;
+        setColumns(
+          rows.map((r) => ({
+            name: String(r.column_name ?? ""),
+            type: String(r.data_type ?? "VARCHAR"),
+          }))
+        );
       } catch (e) {
         console.error("Failed to fetch view columns:", e);
       }

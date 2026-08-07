@@ -4,6 +4,7 @@
  */
 
 import { bridge } from "./shell-bridge";
+import { quoteIdent, quoteLiteral, decodeArrowBuffer } from "./duckdb-query";
 import type { ColumnStats } from "./service";
 
 // ============================================================================
@@ -108,13 +109,9 @@ export type ProfileData = NumericProfile | StringProfile | DateProfile | Boolean
 // Query helpers
 // ============================================================================
 
-function quoteIdent(name: string): string {
-  return `"${name.replace(/"/g, '""')}"`;
-}
-
-function quoteLiteral(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
+// quoteIdent / quoteLiteral come from ./duckdb-query — the single home for
+// both. Local copies used to live here; keeping one definition is what stops
+// the two from drifting (mixing them up is a silent bug, see quoteLiteral).
 
 function tablePath(catalog: string, schema: string, table: string): string {
   return `${quoteIdent(catalog)}.${quoteIdent(schema)}.${quoteIdent(table)}`;
@@ -141,9 +138,7 @@ async function runQuery(sql: string): Promise<any[] | null> {
   const result = await queryFn(sql);
   if (!result.ok || !result.arrowBuffers?.length) return null;
 
-  const { tableFromIPC } = await import("apache-arrow");
-  const buf = result.arrowBuffers[0];
-  const table = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+  const table = decodeArrowBuffer(result.arrowBuffers[0]);
 
   const rows: any[] = [];
   const fields = table.schema.fields;

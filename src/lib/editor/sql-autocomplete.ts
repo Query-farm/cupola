@@ -10,6 +10,7 @@
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import { tableFromIPC } from "@query-farm/apache-arrow";
 import { bridge } from "@/lib/shell-bridge";
+import { quoteLiteral } from "@/lib/duckdb-query";
 
 export async function sqlAutoCompleteSource(
   context: CompletionContext,
@@ -26,7 +27,7 @@ export async function sqlAutoCompleteSource(
 
   let result;
   try {
-    result = await q(`CALL sql_auto_complete('${textToCursor.replace(/'/g, "''")}')`);
+    result = await q(`CALL sql_auto_complete(${quoteLiteral(textToCursor)})`);
   } catch {
     return null;
   }

@@ -12,8 +12,8 @@ import { DataGrid } from "./DataGrid";
 import type { ColumnInfo } from "@/lib/service";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 import { safeGetArrowValue } from "@/lib/format";
-import { tableFromIPC } from "@query-farm/apache-arrow";
 import { bridge } from "@/lib/shell-bridge";
+import { quoteLiteral, decodeArrowBuffer } from "@/lib/duckdb-query";
 import { waitForTableReady } from "@/lib/table-ready";
 import { useSettings } from "@/lib/settings";
 
@@ -43,7 +43,7 @@ async function queryDuckDB(sql: string): Promise<{ table: any; error?: string }>
   if (!result.ok) return { table: null, error: result.error || "Query failed" };
   const buf = result.arrowBuffers?.[0];
   if (!buf) return { table: null };
-  return { table: tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf) };
+  return { table: decodeArrowBuffer(buf) };
 }
 
 /**
@@ -85,7 +85,7 @@ async function resolveOrderBy(tablePath: string): Promise<string> {
   // the PK (0 = not part of PK). Sort by ordinal to compose the ORDER BY
   // in PK-declaration order.
   try {
-    const { table, error } = await queryDuckDB(`PRAGMA table_info('${tablePath.replace(/'/g, "''")}')`);
+    const { table, error } = await queryDuckDB(`PRAGMA table_info(${quoteLiteral(tablePath)})`);
     if (!error && table && table.numRows > 0) {
       const nameCol = table.getChild("name");
       const pkCol = table.getChild("pk");

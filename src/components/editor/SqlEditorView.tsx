@@ -7,7 +7,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { format as formatSql } from "sql-formatter";
 import * as Sentry from "@sentry/astro";
-import { tableFromIPC, tableToIPC } from "@query-farm/apache-arrow";
+import { tableToIPC } from "@query-farm/apache-arrow";
+import { decodeArrowBuffer } from "@/lib/duckdb-query";
 import { bridge, recordQuery, onBootChange } from "@/lib/shell-bridge";
 import { useSettings } from "@/lib/settings";
 import type { CatalogData } from "@/lib/service";
@@ -214,7 +215,7 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
       recordQuery({ sql: trimmed, executionTimeMs: elapsedMs, success: true });
       return;
     }
-    const table = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+    const table = decodeArrowBuffer(buf);
     // DDL/INSERT etc. come back as a single "Count" column.
     const fields = table.schema.fields;
     const isCount = fields.length === 1 && fields[0].name === "Count" && table.numRows <= 1;

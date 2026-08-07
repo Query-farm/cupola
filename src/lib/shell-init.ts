@@ -19,6 +19,8 @@ import { handleDotCommand, type ShellState, type ShellIO } from "./shell-command
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "./shell-ai-mode";
 import { attachInputHandlers, type CompletionItem } from "./shell-input";
 import { bridge, recordQuery, notifyQueryChange, setBootPhase } from "./shell-bridge";
+import { quoteLiteral, quoteIdent } from "./duckdb-query";
+import { isRecoverableAuthError, isUnrecoverableAuthError } from "./auth-errors";
 import { getOAuthMeta, redirectToAuth } from "./auth";
 import { ensureDuckDB } from "./duckdb-worker-boot";
 import { getTerminalTheme } from "./theme";
@@ -120,7 +122,7 @@ export function initShell(
         shellInputHandlers?.onCompletions([]);
         return;
       }
-      const sql = `CALL sql_auto_complete('${text.replace(/'/g, "''")}')`;
+      const sql = `CALL sql_auto_complete(${quoteLiteral(text)})`;
       const result = await q(sql);
       const completions: CompletionItem[] = [];
       if (result.ok && result.arrowBuffers?.length) {
@@ -324,17 +326,16 @@ export function initShell(
    *  the VGI extension (vgi_extension.cpp:701) — refresh wins.
    */
   function buildAttachSql(): string {
-    const esc = (s: string) => s.replace(/'/g, "''");
     const oauthMeta = getOAuthMeta(config.serviceUrl);
     // config.token is whichever bearer the catalog fetch ended up using
     // (SPA access token, cookie, or fragment) — captured by CatalogApp
     // when it constructed the shell config.
     const accessToken = config.token;
-    let sql = `ATTACH OR REPLACE '${esc(config.catalogName)}' AS "${config.catalogName.replace(/"/g, '""')}" (TYPE vgi, LOCATION '${esc(config.serviceUrl)}'`;
+    let sql = `ATTACH OR REPLACE ${quoteLiteral(config.catalogName)} AS ${quoteIdent(config.catalogName)} (TYPE vgi, LOCATION ${quoteLiteral(config.serviceUrl)}`;
     if (oauthMeta?.refreshToken) {
-      sql += `, oauth_refresh_token '${esc(oauthMeta.refreshToken)}'`;
+      sql += `, oauth_refresh_token ${quoteLiteral(oauthMeta.refreshToken)}`;
     } else if (accessToken) {
-      sql += `, bearer_token '${esc(accessToken)}'`;
+      sql += `, bearer_token ${quoteLiteral(accessToken)}`;
     }
     const userOpts = config.attachOptions?.trim().replace(/^,\s*/, "");
     if (userOpts) {
@@ -365,7 +366,7 @@ export function initShell(
   function handleAttachError(errStr: string, title: string): "surfaced" | "redirected" | "unhandled" {
     // Unrecoverable IdP rejections — the tokens we have are bad and the
     // front-end can't fix them by retrying. Surface via modal, don't loop.
-    const isUnrecoverable = /token exchange failed|token refresh failed|invalid_grant|AADSTS\d+/i.test(errStr);
+    const isUnrecoverable = isUnrecoverableAuthError(errStr);
     if (isUnrecoverable) {
       console.log("[shell] Unrecoverable auth error, surfacing to modal:", errStr);
       Sentry.captureException(new Error(errStr), {
@@ -376,7 +377,7 @@ export function initShell(
       return "surfaced";
     }
     // Recoverable pre-exchange auth state — we need fresh credentials.
-    const isRecoverableAuth = /oauth|auth|401|403|token.*expired/i.test(errStr);
+    const isRecoverableAuth = isRecoverableAuthError(errStr);
     if (isRecoverableAuth) {
       console.log("[shell] Recoverable auth error, redirecting. config.token:",
                   config.token ? config.token.substring(0, 20) + "..." : "NONE");
@@ -478,7 +479,7 @@ export function initShell(
           const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
           const { setDuckDBTimezone } = await import("./format");
           if (browserTz) {
-            const r = await bridge.query!(`SET TimeZone='${browserTz.replace(/'/g, "''")}'`);
+            const r = await bridge.query!(`SET TimeZone=${quoteLiteral(browserTz)}`);
             if (!r.ok) console.warn("[shell] SET TimeZone failed:", r.error);
             setDuckDBTimezone(browserTz);
             console.log("[shell] timezone set to", browserTz);

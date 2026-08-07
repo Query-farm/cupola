@@ -18,9 +18,9 @@
  * the in-catalog describe_table) are already shared via their direct
  * exports from `./ai-agent` — both surfaces import them as-is.
  */
-import { tableFromIPC, type Table } from "@query-farm/apache-arrow";
+import type { Table } from "@query-farm/apache-arrow";
 import { formatArrowTableAsJson, executeDescribeTable } from "./ai-agent";
-import { quoteLiteral } from "./duckdb-query";
+import { quoteLiteral, decodeArrowBuffer } from "./duckdb-query";
 import type { CatalogData } from "./service";
 import type { QueryResult } from "./shell-bridge";
 
@@ -107,7 +107,7 @@ export async function executeRunSql(
     return JSON.stringify({ ok: true, message: "Query executed successfully" });
   }
 
-  const table = tableFromIPC(firstBuf instanceof ArrayBuffer ? new Uint8Array(firstBuf) : firstBuf);
+  const table = decodeArrowBuffer(firstBuf);
 
   // DDL: DuckDB returns a single "Count" column with ≤1 row for
   // CREATE/DROP/ALTER and similar statements that don't produce a row set.
@@ -156,7 +156,7 @@ async function fetchColumnsViaSql(
   const r = await env.query(colSql);
   if (!r.ok || !r.arrowBuffers?.length) return null;
   const buf = r.arrowBuffers[0];
-  const t = tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+  const t = decodeArrowBuffer(buf);
   if (t.numRows === 0) return null;
   const cols: any[] = [];
   for (let i = 0; i < t.numRows; i++) {
@@ -237,7 +237,7 @@ export async function describeTableWithFallback(
   let tableComment: string | null = null;
   if (commentR.ok && commentR.arrowBuffers?.length) {
     const cbuf = commentR.arrowBuffers[0];
-    const ct = tableFromIPC(cbuf instanceof ArrayBuffer ? new Uint8Array(cbuf) : cbuf);
+    const ct = decodeArrowBuffer(cbuf);
     if (ct.numRows > 0) tableComment = String(ct.getChildAt(0)?.get(0) ?? "") || null;
   }
 
@@ -247,7 +247,7 @@ export async function describeTableWithFallback(
   const uniqueConstraints: string[][] = [];
   if (constraintR.ok && constraintR.arrowBuffers?.length) {
     const cbuf2 = constraintR.arrowBuffers[0];
-    const ct2 = tableFromIPC(cbuf2 instanceof ArrayBuffer ? new Uint8Array(cbuf2) : cbuf2);
+    const ct2 = decodeArrowBuffer(cbuf2);
     for (let i = 0; i < ct2.numRows; i++) {
       const ctype = String(ct2.getChildAt(0)?.get(i));
       const ccols = ct2.getChildAt(1)?.get(i);
