@@ -12,7 +12,7 @@ import {
   makeData, Vector, Table, vectorFromArray,
   Decimal, Timestamp, TimeUnit, TimeMicrosecond,
   Int32, Int64, Float64, Binary,
-} from "apache-arrow";
+} from "@query-farm/apache-arrow";
 import { formatArrowTableAsJson } from "../../src/lib/query-results";
 
 /** First-cell value from a column built out of JS values (strings, booleans, …). */

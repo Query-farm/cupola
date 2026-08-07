@@ -14,7 +14,7 @@ import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
 import { getAuthToken, getAuthTokenForService, getOAuthMeta, redirectToAuth } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
 import { formatCellValue, safeGetArrowValue } from "@/lib/format";
-import { tableFromIPC } from "apache-arrow";
+import { tableFromIPC, RecordBatchFileReader, Table as ArrowTable } from "@query-farm/apache-arrow";
 import { printBoxTable, printLineTable, type TerminalOutput } from "@/lib/shell-table-renderer";
 import { handleDotCommand, type ShellState, type ShellIO } from "@/lib/shell-commands";
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "@/lib/shell-ai-mode";
@@ -28,7 +28,11 @@ import { initShell } from "@/lib/shell-init";
 
 import type { CatalogData } from "@/lib/service";
 
-export type { QueryHistoryEntry } from "@/lib/shell-bridge";
+// Imported (not just re-exported) because this module uses the type itself —
+// `export type { X } from "..."` forwards the name without binding it locally,
+// so the four annotations below were unresolved.
+import type { QueryHistoryEntry } from "@/lib/shell-bridge";
+export type { QueryHistoryEntry };
 
 interface Props {
   serviceUrl: string;
@@ -72,9 +76,32 @@ const CDN_SCRIPTS = [
 ];
 const CDN_CSS = "https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css";
 
-// Module imports loaded dynamically
-const ARROW_CDN = "https://cdn.jsdelivr.net/npm/apache-arrow@18.1.0/+esm";
+// Module imports loaded dynamically.
+//
+// Arrow is NOT loaded from a CDN. It used to be (apache-arrow@18.1.0), which
+// put a THIRD Arrow build on the page alongside the bundled copy and the one
+// vgi/client uses — three implementations exchanging Field/Table objects. The
+// dictionary-aware reader below is now built from the single bundled
+// @query-farm/apache-arrow instead.
 const READLINE_CDN = "https://cdn.jsdelivr.net/npm/xterm-readline@1.1.2/+esm";
+
+/** `tableFromIPC` that preserves dictionary batches.
+ *
+ *  Arrow's plain `tableFromIPC` doesn't populate dictionary data from the IPC
+ *  *file* format, which is what DuckDB returns — DICTIONARY-encoded columns
+ *  (e.g. low-cardinality VARCHAR) come back with empty values. Reading the
+ *  record batches explicitly and constructing the Table keeps them. Falls back
+ *  to the plain path for anything the file reader can't parse. */
+function tableFromIPCWithDictionaries(buf: any): any {
+  try {
+    const reader = RecordBatchFileReader.from(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+    const batches = [...reader];
+    if (batches.length === 0) return tableFromIPC(buf);
+    return new ArrowTable(batches);
+  } catch {
+    return tableFromIPC(buf);
+  }
+}
 
 let scriptsLoaded = false;
 let scriptsLoading: Promise<void> | null = null;
@@ -178,7 +205,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
 
   // Expose a callback for the shell to trigger Perspective view
   useEffect(() => {
-    bridge.showPerspective = async (arrowBuffer: Uint8Array) => {
+    bridge.showPerspective = async (arrowBuffer: ArrayBuffer) => {
       setActiveTab("perspective");
       setPerspectiveLoading(true);
       setPerspectiveHasData(true);
@@ -200,7 +227,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   // query result in the Data Preview tab. The Arrow IPC buffer is decoded
   // here and handed to DataPreview's client-side (result) pagination mode.
   useEffect(() => {
-    bridge.showPreview = (arrowBuffer: Uint8Array) => {
+    bridge.showPreview = (arrowBuffer: ArrayBuffer) => {
       try {
         setResultPreview(tableFromIPC(arrowBuffer));
         setActiveTab("preview");
@@ -232,26 +259,9 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         await loadScripts();
         if (cancelled || !containerRef.current) return;
 
-        // Dynamic ESM imports
-        const [arrowModule, { Readline }] = await Promise.all([
-          import(/* @vite-ignore */ ARROW_CDN),
-          import(/* @vite-ignore */ READLINE_CDN),
-        ]);
+        // Arrow is bundled; only xterm-readline still comes over the wire.
+        const { Readline } = await import(/* @vite-ignore */ READLINE_CDN);
         if (cancelled || !containerRef.current) return;
-
-        // Use RecordBatchFileReader for proper dictionary batch handling.
-        // tableFromIPC doesn't populate dictionary data from IPC file format.
-        const { tableFromIPC: _origTableFromIPC, RecordBatchFileReader, Table: ArrowTable } = arrowModule;
-        const tableFromIPC = (buf: any) => {
-          try {
-            const reader = RecordBatchFileReader.from(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
-            const batches = [...reader];
-            if (batches.length === 0) return _origTableFromIPC(buf);
-            return new ArrowTable(batches);
-          } catch {
-            return _origTableFromIPC(buf);
-          }
-        };
 
         // Use the service-aware async path so we see SPA / sessionStorage
         // tokens (synchronous `getAuthToken()` only checks the URL fragment
@@ -262,7 +272,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         const { cleanup, insertText } = initShell(
           containerRef.current,
           { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, threadCount: resolveThreadCount(settings.shellThreads), catalogData, aiApiKey: settings.anthropicApiKey, aiModel: settings.aiModel, attachOptions },
-          { tableFromIPC, Readline },
+          { tableFromIPC: tableFromIPCWithDictionaries, Readline },
           { onAuthError, onAttachError }
         );
         cleanupRef.current = cleanup;
@@ -321,12 +331,10 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   const perspectiveTableRef = useRef<string | null>(null);
   useEffect(() => {
     if (activeTab !== "perspective" || !selectedTable) return;
-    // Schema name lives on different fields depending on the catalog source:
-    // attached/memory catalogs (built in duckdb-catalog.ts) expose it as
-    // `schemaName`, while VGI primary-catalog tables come straight off the
-    // wire with `schema_name`. The active selection always has it as
-    // `schema`, so prefer that and fall back for safety.
-    const schemaName = selection?.schema ?? selectedTable.schemaName ?? selectedTable.schema_name;
+    // Every catalog source now exposes `schema_name` (VGI wire format; the
+    // memory + attached builders match it). The active selection always has it
+    // as `schema`, so prefer that and fall back for safety.
+    const schemaName = selection?.schema ?? selectedTable.schema_name;
     const tableId = `${selection?.catalog || catalogName}.${schemaName}.${selectedTable.name}`;
     // Don't reload if already showing this table
     if (perspectiveTableRef.current === tableId) return;
@@ -401,7 +409,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
           restoreConfig = { table: tableId, title: tableId };
           if (selectedTable) {
             const cols = getColumns(selectedTable);
-            const pkIndices = new Set((selectedTable.primaryKeyConstraints ?? []).flatMap((pk: number[]) => pk));
+            const pkIndices = new Set<number>((selectedTable.primary_key_constraints ?? []).flatMap((pk: number[]) => pk));
             if (pkIndices.size > 0) {
               // Set PK columns to "any_value" aggregate so they don't get summed when grouping
               const aggregates: Record<string, string> = {};
@@ -483,7 +491,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
           ) : hasSelectedTableOrView ? (
             <DataPreview
               key="table"
-              tablePath={`${selection?.catalog || catalogName}.${selection?.schema || (selectedTable || selectedView)?.schemaName || "main"}.${selection?.name || (selectedTable || selectedView)?.name}`}
+              tablePath={`${selection?.catalog || catalogName}.${selection?.schema || (selectedTable || selectedView)?.schema_name || "main"}.${selection?.name || (selectedTable || selectedView)?.name}`}
             />
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-center p-8">
@@ -752,7 +760,7 @@ async function ensurePerspectiveLoaded(): Promise<void> {
   }
 }
 
-async function loadPerspective(container: HTMLElement, arrowBuffer: Uint8Array) {
+async function loadPerspective(container: HTMLElement, arrowBuffer: ArrayBuffer) {
   await ensurePerspectiveLoaded();
 
   // Create or reuse the viewer element
@@ -765,8 +773,14 @@ async function loadPerspective(container: HTMLElement, arrowBuffer: Uint8Array) 
     container.appendChild(viewer);
   }
 
-  // Load Arrow data
-  const copy = new Uint8Array(arrowBuffer);
+  // Load Arrow data. This MUST be a real copy, not a view: perspective's
+  // table() may take ownership of (and detach) the buffer it is handed, and
+  // the caller's buffer is the shell's cached `lastArrowBuffer`, which
+  // `.preview` and a second `.perspective` still need to read.
+  // `new Uint8Array(someArrayBuffer)` aliases rather than copies, so allocate
+  // and set explicitly.
+  const copy = new Uint8Array(arrowBuffer.byteLength);
+  copy.set(new Uint8Array(arrowBuffer));
   const table = await perspectiveWorker.table(copy.buffer);
   await viewer.load(table);
 }

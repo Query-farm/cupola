@@ -7,6 +7,12 @@
 
 import * as Sentry from "@sentry/astro";
 
+/** The span object Sentry hands to a `startSpan` callback. Derived from the
+ *  API we actually call rather than written as `Sentry.Span` — @sentry/astro
+ *  re-exports `Span` as a value only, so naming it directly is a type error,
+ *  and the concrete type has moved between SDK majors. */
+type AgentSpan = Parameters<Parameters<typeof Sentry.startSpan>[1]>[0];
+
 import type { CatalogData } from "./service";
 import { getColumns, getForeignKeys } from "./service";
 import { filterTagsForAI, getTag, TAG_DOC_LLM } from "./tags";
@@ -33,7 +39,12 @@ const SPATIAL_ENABLED = true;
 
 interface MessageParam {
   role: "user" | "assistant";
-  content: string | ContentBlock[] | ToolResultBlock[];
+  /** A single array may legitimately MIX block kinds — `mergeAdjacentSameRole`
+   *  folds a trailing user question into the preceding tool_result message, so
+   *  the result holds `tool_result` and `text` blocks side by side. The older
+   *  `ContentBlock[] | ToolResultBlock[]` couldn't express that and forced a
+   *  false cast at the merge site. */
+  content: string | Array<ContentBlock | ToolResultBlock>;
 }
 
 interface ContentBlock {
@@ -898,7 +909,7 @@ async function runAgentTurnInner(
   signal: AbortSignal | undefined,
   maxToolRounds: number,
   tools: Tool[],
-  agentSpan: Sentry.Span | null,
+  agentSpan: AgentSpan | null,
 ): Promise<void> {
   const MAX_TOOL_ROUNDS = maxToolRounds;
   let totalInputTokens = 0;

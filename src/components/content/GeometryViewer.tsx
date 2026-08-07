@@ -19,11 +19,14 @@ export function GeometryViewer({ wkb, label }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <button className="inline-flex items-center gap-1 text-xs text-primary hover:text-accent transition-colors cursor-pointer font-mono">
-          <MapPin className="h-3 w-3" />
-          View
-        </button>
+      {/* base-ui's Trigger renders its own <button> and merges the element
+          given via `render`. `asChild` is the Radix idiom and is silently
+          ignored here, which nested our <button> inside base-ui's. */}
+      <DialogTrigger
+        render={<button className="inline-flex items-center gap-1 text-xs text-primary hover:text-accent transition-colors cursor-pointer font-mono" />}
+      >
+        <MapPin className="h-3 w-3" />
+        View
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
@@ -69,7 +72,10 @@ function LeafletMap({ wkb }: { wkb: Uint8Array }) {
       }).addTo(map);
 
       const layer = L.geoJSON(
-        { type: "Feature", geometry: geojson, properties: {} },
+        // wkbToGeoJSON returns our own structural GeoJSON geometry union,
+        // which is shape-compatible with (but nominally distinct from)
+        // @types/geojson's Geometry that Leaflet is typed against.
+        { type: "Feature", geometry: geojson, properties: {} } as GeoJSON.Feature,
         {
           style: {
             color: "#2d5016",

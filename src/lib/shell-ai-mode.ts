@@ -255,7 +255,8 @@ function createAgentCallbacks(
         term.writeln(`Error: ${error}`, "31");
         term.println("");
       },
-      onRetry: (message?: string) => {
+      // AgentCallbacks passes `null` to signal "countdown over", not undefined.
+      onRetry: (message: string | null) => {
         spinner.start(message || "Thinking...");
       },
     },

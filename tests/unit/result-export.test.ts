@@ -2,7 +2,7 @@
  * Tests for the editor's client-side result export (CSV / Arrow / Excel).
  */
 import { test, expect, describe, mock } from "bun:test";
-import { tableFromArrays, tableFromIPC } from "apache-arrow";
+import { tableFromArrays, tableFromIPC } from "@query-farm/apache-arrow";
 
 // format.ts / arrow-to-duckdb pull the service graph transitively; stub the
 // browser-only RPC connect entry so the import resolves under bun.

@@ -12,7 +12,7 @@ import { DataGrid } from "./DataGrid";
 import type { ColumnInfo } from "@/lib/service";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 import { safeGetArrowValue } from "@/lib/format";
-import { tableFromIPC } from "apache-arrow";
+import { tableFromIPC } from "@query-farm/apache-arrow";
 import { bridge } from "@/lib/shell-bridge";
 import { waitForTableReady } from "@/lib/table-ready";
 import { useSettings } from "@/lib/settings";

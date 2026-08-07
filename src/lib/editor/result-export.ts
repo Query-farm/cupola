@@ -7,7 +7,7 @@
  * Cell values are pulled with the same `safeGetArrowValue` + `formatCellValue`
  * pipeline the grid uses, so exports match exactly what the user sees.
  */
-import { tableToIPC } from "apache-arrow";
+import { tableToIPC } from "@query-farm/apache-arrow";
 import { safeGetArrowValue, formatCellValue } from "@/lib/format";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 

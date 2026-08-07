@@ -10,7 +10,8 @@ export interface ShellState {
   maxDisplayRows: number;
   outputMode: "box" | "line";
   lastTable: any;
-  lastArrowBuffer: Uint8Array | null;
+  /** Raw Arrow IPC bytes of the last result, as delivered by QueryResult. */
+  lastArrowBuffer: ArrayBuffer | null;
   currentWasmVersion: string;
 }
 

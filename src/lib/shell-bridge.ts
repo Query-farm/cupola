@@ -97,7 +97,7 @@ export const bridge = {
   showPerspective: null as ((arrowBuf: ArrayBuffer) => void) | null,
   // Open the last shell query result (Arrow IPC buffer) in the Data Preview
   // tab. Set by DuckDBShell, invoked by the `.preview` dot-command.
-  showPreview: null as ((arrowBuf: Uint8Array) => void) | null,
+  showPreview: null as ((arrowBuf: ArrayBuffer) => void) | null,
   addQueryHistoryEntry: null as ((entry: QueryHistoryEntry) => void) | null,
 
   // Sentry identity for the shell worker. Stored here so duckdb-worker-boot

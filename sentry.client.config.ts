@@ -62,7 +62,14 @@ if (import.meta.env.PROD) {
   });
 }
 
-function scrubAuth(event: Sentry.ErrorEvent | Sentry.TransactionEvent): void {
+/** The event shape passed to beforeSend / beforeSendTransaction. Derived from
+ *  the hooks themselves — @sentry/astro exports `ErrorEvent` but not
+ *  `TransactionEvent`, and both names have moved between SDK majors. */
+type ScrubbableEvent =
+  | Parameters<NonNullable<Parameters<typeof Sentry.init>[0]>["beforeSend"] & {}>[0]
+  | Parameters<NonNullable<Parameters<typeof Sentry.init>[0]>["beforeSendTransaction"] & {}>[0];
+
+function scrubAuth(event: ScrubbableEvent): void {
   if (event.request) {
     if (event.request.headers) {
       for (const key of Object.keys(event.request.headers)) {
@@ -71,8 +78,11 @@ function scrubAuth(event: Sentry.ErrorEvent | Sentry.TransactionEvent): void {
         }
       }
     }
+    // Sentry types `cookies` as a Record, but the browser SDK can populate it
+    // with the raw Cookie header string. Handle both; the cast keeps the
+    // defensive string branch compiling against the declared Record type.
     if (typeof event.request.cookies === "string") {
-      event.request.cookies = stripVgiCookie(event.request.cookies);
+      event.request.cookies = stripVgiCookie(event.request.cookies) as unknown as Record<string, string>;
     } else if (event.request.cookies && typeof event.request.cookies === "object") {
       const c = event.request.cookies as Record<string, string>;
       if ("_vgi_auth" in c) c._vgi_auth = "[Filtered]";

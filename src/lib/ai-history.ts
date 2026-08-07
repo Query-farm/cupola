@@ -89,7 +89,7 @@ export function mergeAdjacentSameRole(messages: MessageParam[]): void {
     if (cur.role !== prev.role) continue;
     const merged = [...toBlocks(prev.content), ...toBlocks(cur.content)];
     // Guard against an all-empty merge producing an invalid empty content array.
-    prev.content = (merged.length ? merged : [{ type: "text", text: "(empty)" }]) as ContentBlock[];
+    prev.content = merged.length ? merged : [{ type: "text", text: "(empty)" }];
     messages.splice(i, 1);
     i--; // re-check the merged message against the next one (handles 3+ in a row)
   }

@@ -2,7 +2,7 @@
  * Terminal table rendering for DuckDB query results.
  * Box-mode (cli-table3) and line-mode output matching DuckDB CLI style.
  */
-import type { Table, Field } from "apache-arrow";
+import type { Table, Field } from "@query-farm/apache-arrow";
 import { formatCellValue, safeGetArrowValue } from "@/lib/format";
 
 /** Minimal terminal output interface needed by the renderers. */

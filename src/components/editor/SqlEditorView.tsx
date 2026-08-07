@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { format as formatSql } from "sql-formatter";
 import * as Sentry from "@sentry/astro";
-import { tableFromIPC, tableToIPC } from "apache-arrow";
+import { tableFromIPC, tableToIPC } from "@query-farm/apache-arrow";
 import { bridge, recordQuery, onBootChange } from "@/lib/shell-bridge";
 import { useSettings } from "@/lib/settings";
 import type { CatalogData } from "@/lib/service";

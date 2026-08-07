@@ -281,7 +281,9 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
     // Tool executor. Heavy lifting (error classification, DDL detection,
     // describe_table SQL fallback) lives in ai-tool-executor.ts; this file
     // wires the UI-specific callbacks (progress, history entry, navigation).
-    const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<string> => {
+    // Returns ToolResult, not string: render_chart replies with the multi-part
+    // [text, image] form so the model can see the chart it just drew.
+    const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<ToolResult> => {
       if (name === "run_sql") {
         const queryFn = bridge.query;
         if (!queryFn) throw new Error("DuckDB shell not initialized — open SQL Shell first");

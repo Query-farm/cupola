@@ -18,8 +18,9 @@
  * the in-catalog describe_table) are already shared via their direct
  * exports from `./ai-agent` — both surfaces import them as-is.
  */
-import { tableFromIPC, type Table } from "apache-arrow";
+import { tableFromIPC, type Table } from "@query-farm/apache-arrow";
 import { formatArrowTableAsJson, executeDescribeTable } from "./ai-agent";
+import { quoteLiteral } from "./duckdb-query";
 import type { CatalogData } from "./service";
 import type { QueryResult } from "./shell-bridge";
 
@@ -74,14 +75,16 @@ export async function executeRunSql(
   callbacks.onStart?.();
   const t0 = performance.now();
   let result: QueryResult;
+  // onEnd must run even when env.query REJECTS (worker died, bridge torn down
+  // mid-flight) — otherwise the surface's spinner / queryRunning flag never
+  // clears and the shell looks permanently busy. It previously sat after an
+  // empty try/finally, so only the resolve path ever reached it.
   try {
     result = await env.query(sql);
   } finally {
-    // onEnd runs even on thrown query errors so spinners/flags get cleared.
-    // The classification below still happens against the captured result.
+    callbacks.onEnd?.();
   }
   const elapsedMs = performance.now() - t0;
-  callbacks.onEnd?.();
 
   if (!result.ok) {
     const errMsg = result.error || "Query failed";
@@ -129,9 +132,15 @@ export interface DescribeTableInput {
   catalog?: string;
 }
 
-/** Quote a SQL identifier (double-quote with embedded "" escaping). */
-function quoteIdent(name: string): string {
-  return '"' + name.replace(/"/g, '""') + '"';
+/** WHERE clause shared by every duckdb_* introspection query below.
+ *
+ *  These are VALUE comparisons, so the names must be SQL string literals.
+ *  They were double-quoted (identifier syntax) through v0.4.103, which made
+ *  DuckDB read `database_name = "memory"` as a reference to a column named
+ *  `memory` and fail the binder — see the note on `quoteLiteral`. Every caller
+ *  treats a failed query as "not found", so the breakage was silent. */
+function relationFilter(database: string, schema: string, table: string): string {
+  return `database_name = ${quoteLiteral(database)} AND schema_name = ${quoteLiteral(schema)} AND table_name = ${quoteLiteral(table)}`;
 }
 
 /** Fetch column rows for any DuckDB-attached relation (table OR view) via
@@ -143,7 +152,7 @@ async function fetchColumnsViaSql(
   schema: string,
   table: string,
 ): Promise<any[] | null> {
-  const colSql = `SELECT column_name, data_type, is_nullable, column_default, comment FROM duckdb_columns() WHERE database_name = ${quoteIdent(database)} AND schema_name = ${quoteIdent(schema)} AND table_name = ${quoteIdent(table)} ORDER BY column_index`;
+  const colSql = `SELECT column_name, data_type, is_nullable, column_default, comment FROM duckdb_columns() WHERE ${relationFilter(database, schema, table)} ORDER BY column_index`;
   const r = await env.query(colSql);
   if (!r.ok || !r.arrowBuffers?.length) return null;
   const buf = r.arrowBuffers[0];
@@ -151,10 +160,17 @@ async function fetchColumnsViaSql(
   if (t.numRows === 0) return null;
   const cols: any[] = [];
   for (let i = 0; i < t.numRows; i++) {
+    // duckdb_columns().is_nullable is a BOOLEAN, not the information_schema
+    // 'YES'/'NO' string (that's `information_schema.columns`). Comparing it to
+    // "YES" reported every column as NOT NULL. Accept both so this keeps
+    // working if the source is ever swapped for information_schema.
+    const rawNullable = t.getChildAt(2)?.get(i);
     const col: any = {
       name: String(t.getChildAt(0)?.get(i)),
       type: String(t.getChildAt(1)?.get(i)),
-      nullable: String(t.getChildAt(2)?.get(i)) === "YES",
+      nullable: typeof rawNullable === "boolean"
+        ? rawNullable
+        : String(rawNullable).toUpperCase() === "YES",
     };
     const def = t.getChildAt(3)?.get(i);
     if (def) col.default = String(def);
@@ -217,7 +233,7 @@ export async function describeTableWithFallback(
                        : JSON.stringify({ error: `Table ${input.schema}.${input.table} not found` });
   }
 
-  const commentR = await env.query(`SELECT comment FROM duckdb_tables() WHERE database_name = ${quoteIdent(input.catalog!)} AND schema_name = ${quoteIdent(input.schema)} AND table_name = ${quoteIdent(input.table)}`);
+  const commentR = await env.query(`SELECT comment FROM duckdb_tables() WHERE ${relationFilter(input.catalog!, input.schema, input.table)}`);
   let tableComment: string | null = null;
   if (commentR.ok && commentR.arrowBuffers?.length) {
     const cbuf = commentR.arrowBuffers[0];
@@ -225,7 +241,7 @@ export async function describeTableWithFallback(
     if (ct.numRows > 0) tableComment = String(ct.getChildAt(0)?.get(0) ?? "") || null;
   }
 
-  const constraintR = await env.query(`SELECT constraint_type, constraint_column_names FROM duckdb_constraints() WHERE database_name = ${quoteIdent(input.catalog!)} AND schema_name = ${quoteIdent(input.schema)} AND table_name = ${quoteIdent(input.table)}`);
+  const constraintR = await env.query(`SELECT constraint_type, constraint_column_names FROM duckdb_constraints() WHERE ${relationFilter(input.catalog!, input.schema, input.table)}`);
   let primaryKey: string[] | null = null;
   const checkConstraints: string[] = [];
   const uniqueConstraints: string[][] = [];

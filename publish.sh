@@ -72,6 +72,20 @@ fi
 # under different releases.
 GIT_HASH=$(git rev-parse --short HEAD)
 
+# ---- Quality gates ----
+# Both must pass before we build anything. `astro check` is the typecheck; it
+# is kept at zero errors deliberately, so any new error fails the publish
+# rather than shipping. Set SKIP_CHECKS=1 only for an emergency rollout.
+if [ "${SKIP_CHECKS:-0}" != "1" ]; then
+  echo "==> Typechecking (astro check)..."
+  bun run check
+
+  echo "==> Running unit tests..."
+  bun run test
+else
+  echo "==> SKIP_CHECKS=1 — skipping typecheck + unit tests."
+fi
+
 # ---- Build ----
 echo "==> Building..."
 # 8 GiB of old-space heap. With source maps enabled, the perspective +

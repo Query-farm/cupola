@@ -8,13 +8,36 @@
  * (e.g. the empty-result handling, the dynamic-vs-static import) had to be
  * repeated N times. These helpers are the only correct way to decode.
  */
-import { tableFromIPC, type Table } from "apache-arrow";
+import { tableFromIPC, type Table } from "@query-farm/apache-arrow";
 import { bridge } from "./shell-bridge";
 
 /** SQL-escape a string for inlining into a literal. DuckDB uses SQL-standard
- *  single-quote doubling. */
+ *  single-quote doubling. Returns the escaped *body* — callers supply the
+ *  surrounding quotes (`'${esc(x)}'`). Prefer `quoteLiteral` for new code. */
 export function esc(s: string): string {
   return s.replace(/'/g, "''");
+}
+
+/** Quote a VALUE as a SQL string literal: `foo'bar` → `'foo''bar'`.
+ *
+ *  Use this anywhere a string is COMPARED or passed as an argument —
+ *  `WHERE database_name = quoteLiteral(db)`, `vgi_table_statistics(...)`.
+ *  Do NOT use `quoteIdent` there: DuckDB reads a double-quoted token as an
+ *  identifier, so `WHERE database_name = "memory"` is a reference to a column
+ *  named `memory` and fails with `Binder Error: Referenced column "memory" not
+ *  found in FROM clause!`. That mistake silently disabled describe_table for
+ *  memory/attached catalogs, which is why both helpers now live here together. */
+export function quoteLiteral(s: string): string {
+  return `'${s.replace(/'/g, "''")}'`;
+}
+
+/** Quote an IDENTIFIER: `we"ird` → `"we""ird"`.
+ *
+ *  Use this only where a table/column/catalog NAME appears in the grammar —
+ *  `FROM quoteIdent(cat).quoteIdent(schema).quoteIdent(table)`, `ORDER BY`.
+ *  See `quoteLiteral` for the value case. */
+export function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
 }
 
 /** Run SQL and decode the result to an Apache Arrow `Table`. Returns null if

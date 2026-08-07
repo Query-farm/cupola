@@ -17,7 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { useSettings } from "@/lib/settings";
+import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
 import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
 
 function SettingRow({ children, className }: { children: React.ReactNode; className?: string }) {
@@ -256,7 +256,9 @@ export function SettingsModal() {
                 />
                 <Select
                   value={settings.aiModel}
-                  onValueChange={(val) => updateSettings({ aiModel: val })}
+                  // base-ui emits null when the selection is cleared; the
+                  // setting is a plain string, so fall back to the default.
+                  onValueChange={(val) => updateSettings({ aiModel: val ?? DEFAULT_AI_MODEL })}
                 >
                   <SelectTrigger className="w-44 h-8 text-sm shrink-0">
                     <span className="truncate">{selectedModel?.label ?? settings.aiModel}</span>

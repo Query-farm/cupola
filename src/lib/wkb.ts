@@ -70,6 +70,21 @@ class WKBReader {
     return rings;
   }
 
+  /** Read one member of a Multi* geometry and return its `coordinates`.
+   *
+   *  WKB stores each member as a COMPLETE sub-geometry (its own byte-order
+   *  byte and type code), so we must recurse rather than read raw coordinates.
+   *  A GeometryCollection is the one variant with no `coordinates`, and it is
+   *  never a legal member of a Multi* — so treat it as corrupt input rather
+   *  than casting the union away and reading `undefined`. */
+  private readMemberCoordinates(): number[] | number[][] | number[][][] | number[][][][] {
+    const member = this.readGeometry();
+    if (!("coordinates" in member)) {
+      throw new Error("Malformed WKB: GeometryCollection nested inside a Multi* geometry");
+    }
+    return member.coordinates;
+  }
+
   readGeometry(): GeoJSONGeometry {
     this.littleEndian = this.readByte() === 1;
     let geomType = this.readUint32();
@@ -92,21 +107,21 @@ class WKBReader {
       case WKB_MULTIPOINT: {
         const n = this.readUint32();
         const coords: number[][] = [];
-        for (let i = 0; i < n; i++) coords.push(this.readGeometry().coordinates as number[]);
+        for (let i = 0; i < n; i++) coords.push(this.readMemberCoordinates() as number[]);
         return { type: "MultiPoint", coordinates: coords };
       }
 
       case WKB_MULTILINESTRING: {
         const n = this.readUint32();
         const lines: number[][][] = [];
-        for (let i = 0; i < n; i++) lines.push((this.readGeometry() as any).coordinates);
+        for (let i = 0; i < n; i++) lines.push(this.readMemberCoordinates() as number[][]);
         return { type: "MultiLineString", coordinates: lines };
       }
 
       case WKB_MULTIPOLYGON: {
         const n = this.readUint32();
         const polys: number[][][][] = [];
-        for (let i = 0; i < n; i++) polys.push((this.readGeometry() as any).coordinates);
+        for (let i = 0; i < n; i++) polys.push(this.readMemberCoordinates() as number[][][]);
         return { type: "MultiPolygon", coordinates: polys };
       }
 
@@ -125,8 +140,13 @@ class WKBReader {
 
 /** Parse WKB binary data to GeoJSON geometry. */
 export function wkbToGeoJSON(wkb: Uint8Array): GeoJSONGeometry {
-  const reader = new WKBReader(wkb.buffer.slice(wkb.byteOffset, wkb.byteOffset + wkb.byteLength));
-  return reader.readGeometry();
+  // Copy into a fresh, definitely-non-shared ArrayBuffer. `wkb.buffer` is
+  // typed ArrayBufferLike and can genuinely be a SharedArrayBuffer when the
+  // bytes came from DuckDB's threaded wasm memory — and `DataView` over a
+  // shared buffer is a different type than the reader accepts.
+  const bytes = new Uint8Array(wkb.byteLength);
+  bytes.set(wkb);
+  return new WKBReader(bytes.buffer).readGeometry();
 }
 
 // ---------------------------------------------------------------------------

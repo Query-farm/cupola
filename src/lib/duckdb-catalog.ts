@@ -138,17 +138,25 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     // `columns` is normally a serialized Arrow schema. We leave it as an
     // empty Uint8Array and rely on the `_columnInfo` override path in
     // service.ts's getColumns() to surface real column metadata.
+    //
+    // Field names are the SNAKE_CASE ones from vgi/client's TableInfo — the
+    // same shape CatalogApp builds for the memory catalog. These entries flow
+    // into TableDetail, ColumnsTable, tree.ts and the AI agent, all of which
+    // read `primary_key_constraints`/`not_null_constraints`/etc. Emitting
+    // camelCase here (as this did through v0.4.103) left every one of those
+    // reads `undefined`, so attached DuckDB catalogs silently rendered with no
+    // primary-key or NOT NULL badges and no constraint section at all.
     const entry: any = {
       name,
-      schemaName,
+      schema_name: schemaName,
       comment,
       tags: {},
       columns: emptyColumns,
-      notNullConstraints,
-      uniqueConstraints: [],
-      checkConstraints: [],
-      primaryKeyConstraints: [],
-      foreignKeyConstraints: emptyFkBytes,
+      not_null_constraints: notNullConstraints,
+      unique_constraints: [],
+      check_constraints: [],
+      primary_key_constraints: [],
+      foreign_key_constraints: emptyFkBytes,
       _columnInfo: cols.map((c) => ({
         name: c.name,
         arrowType: c.duckdbType,
@@ -169,18 +177,19 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     const definition = row.sql == null ? "" : String(row.sql);
     const cols = colsByTable.get(`${schemaName}.${name}`) ?? [];
 
+    // Snake_case TableInfo/ViewInfo shape — see the note on the table entry above.
     const entry: any = {
       name,
-      schemaName,
+      schema_name: schemaName,
       comment,
       tags: {},
       definition,
       columns: emptyColumns,
-      notNullConstraints: [],
-      uniqueConstraints: [],
-      checkConstraints: [],
-      primaryKeyConstraints: [],
-      foreignKeyConstraints: emptyFkBytes,
+      not_null_constraints: [],
+      unique_constraints: [],
+      check_constraints: [],
+      primary_key_constraints: [],
+      foreign_key_constraints: emptyFkBytes,
       _columnInfo: cols.map((c) => ({
         name: c.name,
         arrowType: c.duckdbType,

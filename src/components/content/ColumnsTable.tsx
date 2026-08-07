@@ -95,7 +95,11 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, check
             )}
             {col.name}
             {pkColumns.has(col.idx) && (
-              <Key className="h-3 w-3 text-amber-500 shrink-0" title="Primary key" />
+              // lucide-react icons don't take `title` (it was dropped on the
+              // floor, so the tooltip never appeared). Put it on a wrapper.
+              <span title="Primary key" className="inline-flex shrink-0">
+                <Key className="h-3 w-3 text-amber-500" aria-label="Primary key" />
+              </span>
             )}
             {fk && (
               <button

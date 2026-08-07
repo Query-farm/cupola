@@ -13,7 +13,7 @@
 
 import * as duckdb from "@haybarn/haybarn-wasm";
 
-import { bridge, notifyQueryChange, setBootPhase } from "./shell-bridge";
+import { bridge, notifyQueryChange, setBootPhase, type QueryResult } from "./shell-bridge";
 
 let bootPromise: Promise<void> | null = null;
 
@@ -149,7 +149,11 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // label on "Downloading" makes users think the network is stuck.
   let warmingUp = false;
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker, (p) => {
-    const pct = Number(p.percentage);
+    // InstantiationProgress reports {bytesLoaded, bytesTotal} — there is no
+    // `percentage` field. Reading one yielded NaN on every tick, which the
+    // guard below then discarded, so the download bar sat frozen at 0% for
+    // the whole (multi-megabyte) WASM fetch.
+    const pct = p.bytesTotal > 0 ? (p.bytesLoaded / p.bytesTotal) * 100 : NaN;
     if (!Number.isFinite(pct)) return;
     bridge.progress?.(pct);
     if (pct >= 100) {
@@ -180,7 +184,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // Preserve the existing { ok, arrowBuffers, error } contract. AsyncDuckDB's
   // runQuery returns a single Uint8Array of File-format Arrow IPC bytes —
   // exactly what every consumer's tableFromIPC() call expects.
-  const runQueryWrapped = async (sql: string) => {
+  const runQueryWrapped = async (sql: string): Promise<QueryResult> => {
     // Clear any stale cancel flag from a prior query that was cancelled
     // cross-surface (e.g. AskAIChat cancel hit before the shell readLoop's
     // post-query reset ran). Without this, a fresh query would be cancelled
@@ -189,10 +193,19 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
     if (cancelInt32) Atomics.store(cancelInt32, 0, 0);
     try {
       const bytes = await db.runQuery(connId, sql);
-      // Detach the underlying buffer so tableFromIPC's Uint8Array view is
-      // safe even if runQuery returns a subarray of a larger arena.
-      const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-      return { ok: true, arrowBuffers: [ab] };
+      // Copy out of wasm memory so tableFromIPC's view is safe even if
+      // runQuery returned a subarray of a larger arena.
+      //
+      // Copy via a fresh Uint8Array rather than `bytes.buffer.slice(...)`:
+      // with the threads build, wasm memory is backed by a SharedArrayBuffer,
+      // and slicing one yields another SharedArrayBuffer. That made the real
+      // type `ArrayBuffer | SharedArrayBuffer` while QueryResult promised
+      // `ArrayBuffer[]`, which is the discrepancy that rippled out into every
+      // consumer's buffer handling. Allocating a plain Uint8Array guarantees a
+      // non-shared ArrayBuffer, so the declared type is now the true one.
+      const copy = new Uint8Array(bytes.byteLength);
+      copy.set(bytes);
+      return { ok: true, arrowBuffers: [copy.buffer] };
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       return { ok: false, error: msg };

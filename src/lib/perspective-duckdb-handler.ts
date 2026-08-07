@@ -7,7 +7,7 @@
  * Reference: ~/Development/perspective/rust/perspective-js/src/ts/virtual_servers/duckdb.ts
  */
 
-import { tableFromIPC } from "apache-arrow";
+import { tableFromIPC } from "@query-farm/apache-arrow";
 import { bridge } from "@/lib/shell-bridge";
 
 // ---------------------------------------------------------------------------
@@ -159,7 +159,7 @@ const FILTER_OPS = [
   ">=", "<=", ">", "<",
 ];
 
-import { Type as ArrowType } from "apache-arrow";
+import { Type as ArrowType } from "@query-farm/apache-arrow";
 
 /**
  * Map an Arrow field's DataType to a Perspective column type.
@@ -259,7 +259,10 @@ function arrowTypeToPsp(field: any): ColumnType | null {
     case ArrowType.DenseUnion:
     case ArrowType.SparseUnion:
     case ArrowType.FixedSizeList:
-    case ArrowType.LargeList:
+      // No LargeList case: Arrow's `Type` enum has no such member (large lists
+      // only exist as a flatbuffers wire type). The `default` below already
+      // returns null, so they — and any future nested type — are rejected the
+      // same way.
       return null;
 
     default:

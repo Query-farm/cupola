@@ -34,7 +34,7 @@ describe("fetchWithRetry", () => {
     globalThis.fetch = (async () => {
       calls++;
       return jsonResponse(401, { error: { message: "bad key" } });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(fetchWithRetry("https://x", {}, noopCallbacks(), 3)).rejects.toThrow(/api key/i);
     expect(calls).toBe(1);
@@ -45,7 +45,7 @@ describe("fetchWithRetry", () => {
     globalThis.fetch = (async () => {
       calls++;
       return jsonResponse(404, { error: { message: "not found" } });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(fetchWithRetry("https://x", {}, noopCallbacks(), 3)).rejects.toThrow(/404/);
     expect(calls).toBe(1);
@@ -57,7 +57,7 @@ describe("fetchWithRetry", () => {
       calls++;
       if (calls === 1) return jsonResponse(429, { error: { message: "slow down" } }, { "retry-after": "1" });
       return new Response("ok", { status: 200 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const res = await fetchWithRetry("https://x", {}, noopCallbacks(), 3);
     expect(res.status).toBe(200);
@@ -69,7 +69,7 @@ describe("fetchWithRetry", () => {
     globalThis.fetch = (async () => {
       calls++;
       throw new TypeError("Failed to fetch");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     // maxRetries=1 means up to 2 attempts total (1 initial + 1 retry).
     // Previously the outer loop in runAgentTurn would multiply this — that
@@ -81,12 +81,12 @@ describe("fetchWithRetry", () => {
   test("abort during retry-after wait exits without runaway retries", async () => {
     let calls = 0;
     const controller = new AbortController();
-    globalThis.fetch = (async (_url, init?: RequestInit) => {
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
       calls++;
       if (init?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
       // Long retry-after so we have time to abort during the countdown.
       return jsonResponse(429, { error: { message: "slow" } }, { "retry-after": "5" });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const promise = fetchWithRetry("https://x", { signal: controller.signal }, noopCallbacks(), 3);
     setTimeout(() => controller.abort(), 50);

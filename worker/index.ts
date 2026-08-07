@@ -52,6 +52,12 @@ declare global {
   interface CacheStorage {
     default: Cache;
   }
+  /** Only `waitUntil` is used; declared here alongside the other stubs rather
+   *  than pulling in @cloudflare/workers-types for the whole Astro project. */
+  interface ExecutionContext {
+    waitUntil(promise: Promise<unknown>): void;
+    passThroughOnException(): void;
+  }
 }
 
 /** Matches /v1.2.3/ or /v1.2.3/some/path */

@@ -10,9 +10,26 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "jsxImportSource": "react",
-    "baseUrl": ".",
+    // No `baseUrl`: it is deprecated in TypeScript 6 and makes a plain `tsc`
+    // run fail with TS5101 before it checks a single file. `paths` resolves
+    // relative to this file's directory without it.
+    // These MUST mirror `vite.resolve.alias` in astro.config.mjs. The bundler
+    // resolves these specifiers to sibling-repo source; without the same
+    // mapping here, `astro check` reports them as unresolved modules.
     "paths": {
-      "@/*": ["./src/*"]
-    }
+      "@/*": ["./src/*"],
+      "@query-farm/vgi-rpc/connect": ["../vgi-rpc-typescript/src/client/connect.ts"],
+      "@query-farm/vgi-rpc": ["../vgi-rpc-typescript/src/index.ts"],
+      "vgi/client": ["../vgi-typescript/src/client-entry.ts"],
+      // Mirrors `vite.resolve.dedupe`: pin every importer — including the
+      // sibling sources above, which would otherwise resolve their own copy —
+      // to this project's single Arrow install, so `Field` is one nominal type
+      // across the boundary.
+      "@query-farm/apache-arrow": ["./node_modules/@query-farm/apache-arrow"],
+      "@query-farm/apache-arrow/*": ["./node_modules/@query-farm/apache-arrow/*"]
+    },
+    // Unit tests import `bun:test`; without this every test file reports
+    // TS2307 and drowns out real findings in `astro check`.
+    "types": ["bun-types"]
   }
 }

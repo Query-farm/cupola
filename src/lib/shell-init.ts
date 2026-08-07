@@ -220,7 +220,9 @@ export function initShell(
   let outputMode: "box" | "line" = "box";
   let maxDisplayRows = 40;
   let lastTable: any = null;
-  let lastArrowBuffer: Uint8Array | null = null;
+  // Arrow IPC payloads travel as plain ArrayBuffers end to end (see the copy
+  // in duckdb-worker-boot's runQueryWrapped); this holds one verbatim.
+  let lastArrowBuffer: ArrayBuffer | null = null;
 
   /** Handle the VGI extension's interactive OAuth popup request. Opens a
    *  popup window, waits for oauth-callback.html to post the real code back

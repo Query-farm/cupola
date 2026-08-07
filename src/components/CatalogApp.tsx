@@ -1334,18 +1334,25 @@ function ContentPanel({
     if (selection?.catalog && memoryCatalog && selection.catalog === memoryCatalog.catalogName) {
       return <MemoryCatalogOverview catalog={memoryCatalog} onNavigate={onNavigate} />;
     }
-    const attached = selection?.catalog && attachedCatalogs?.find((c) => c.catalogName === selection.catalog);
+    const attached = selection?.catalog
+      ? attachedCatalogs?.find((c) => c.catalogName === selection.catalog)
+      : undefined;
     if (attached) {
       return <CatalogOverview catalog={attached} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;
     }
     return <CatalogOverview catalog={data} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;
   }
 
-  // Determine which catalog to search
-  const catalog = (selection.catalog && memoryCatalog && selection.catalog === memoryCatalog.catalogName)
-    ? memoryCatalog
-    : (selection.catalog && attachedCatalogs?.find((c) => c.catalogName === selection.catalog))
-      ?? data;
+  // Determine which catalog to search. Both branches must be a ternary, not
+  // `cond && find(...) ?? data`: with an empty-string `selection.catalog` that
+  // expression evaluates to `""`, which is not nullish, so `?? data` doesn't
+  // fire and every `catalog.schemas` access below hits a string.
+  const catalog: CatalogData =
+    (selection.catalog && memoryCatalog && selection.catalog === memoryCatalog.catalogName)
+      ? memoryCatalog
+      : (selection.catalog
+          ? attachedCatalogs?.find((c) => c.catalogName === selection.catalog)
+          : undefined) ?? data;
 
   const schema = catalog.schemas.find((s) => s.info.name === selection.schema);
   if (!schema) return <CatalogOverview catalog={data} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;

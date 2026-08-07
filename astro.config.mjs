@@ -108,6 +108,11 @@ export default defineConfig({
         name: 'shell-wasm-direct-serve',
         enforce: 'pre',
         configureServer(server) {
+          /**
+           * @param {import('node:http').IncomingMessage} req
+           * @param {import('node:http').ServerResponse} res
+           * @param {(err?: unknown) => void} next
+           */
           const handler = (req, res, next) => {
             // COOP/COEP required for SharedArrayBuffer (DuckDB-WASM COI/threads build)
             res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
@@ -125,7 +130,8 @@ export default defineConfig({
               let filePath = resolve('public' + relPath);
               try { filePath = realpathSync(filePath); } catch {}
               if (existsSync(filePath)) {
-                const ext = filePath.split('.').pop();
+                const ext = filePath.split('.').pop() ?? '';
+                /** @type {Record<string, string>} */
                 const types = { js: 'application/javascript', wasm: 'application/wasm' };
                 res.setHeader('Content-Type', types[ext] || 'application/octet-stream');
                 res.end(readFileSync(filePath));
@@ -141,7 +147,8 @@ export default defineConfig({
               let filePath = resolve('node_modules/@haybarn/haybarn-wasm/dist/' + relPath);
               try { filePath = realpathSync(filePath); } catch {}
               if (existsSync(filePath)) {
-                const ext = filePath.split('.').pop();
+                const ext = filePath.split('.').pop() ?? '';
+                /** @type {Record<string, string>} */
                 const types = { js: 'application/javascript', wasm: 'application/wasm' };
                 res.setHeader('Content-Type', types[ext] || 'application/octet-stream');
                 res.end(readFileSync(filePath));
@@ -159,7 +166,8 @@ export default defineConfig({
             if (reqPath && rootPublicFiles.includes(reqPath)) {
               const filePath = resolve('public' + reqPath);
               if (existsSync(filePath)) {
-                const ext = filePath.split('.').pop();
+                const ext = filePath.split('.').pop() ?? '';
+                /** @type {Record<string, string>} */
                 const types = {
                   html: 'text/html; charset=utf-8',
                   png: 'image/png',
@@ -207,6 +215,14 @@ export default defineConfig({
       exclude: ['astro'],
     },
     resolve: {
+      // Force ONE Apache Arrow copy into the bundle. Arrow objects cross the
+      // boundary between cupola and the aliased sibling sources (vgi/client's
+      // deserializeSchema hands us Fields), and the siblings resolve
+      // @query-farm/apache-arrow from their OWN node_modules. Without dedupe
+      // the bundle carried two builds and the two `Field` types were nominally
+      // distinct even at identical versions. Keep in sync with the matching
+      // `paths` entry in tsconfig.json, which does the same for typechecking.
+      dedupe: ['@query-farm/apache-arrow'],
       alias: {
         // Use the client-only connect module directly to avoid bundling
         // Node.js server-side code (node:crypto, node:zlib, etc.)

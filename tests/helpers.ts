@@ -13,7 +13,12 @@ export const BASE = `/v${pkg.version}/`;
 // Override with VGI_SERVICE_URL to point the suite at a different VGI server
 // (e.g. a hosted haybarn-backed instance) without editing the suite.
 export const SERVICE_URL = process.env.VGI_SERVICE_URL || "http://localhost:9009";
-export const APP_URL = `http://localhost:4321${BASE}?service=${encodeURIComponent(SERVICE_URL)}`;
+// Origin of the app under test. Overridable because astro dev falls back to
+// 4322/4323/... when 4321 is taken; without this the suite would silently aim
+// at whatever else is squatting on 4321 (and playwright's `baseURL` doesn't
+// apply — these specs navigate with absolute URLs).
+export const APP_ORIGIN = process.env.CUPOLA_APP_ORIGIN || "http://localhost:4321";
+export const APP_URL = `${APP_ORIGIN}${BASE}?service=${encodeURIComponent(SERVICE_URL)}`;
 
 // Tight timeouts: prefer fast failure over hanging. The real wait is the very
 // first page load (DuckDB-WASM + catalog fetch) handled in gotoApp().
@@ -83,7 +88,12 @@ export async function shellQuery(
     const result = await bridge.query(sql);
     if (!result.ok) return { ok: false, error: result.error };
     if (!result.arrowBuffers?.length) return { ok: true, numRows: 0, columns: [], rows: [] };
-    const { tableFromIPC } = await import("/node_modules/apache-arrow/Arrow.mjs");
+    // Vite-resolved browser URL — a bare specifier doesn't work inside
+    // page.evaluate. Held in a variable so TypeScript treats it as a runtime
+    // specifier rather than trying to resolve the literal against node_modules
+    // (it isn't a module path on the checking host).
+    const arrowUrl = "/node_modules/@query-farm/apache-arrow/Arrow.mjs";
+    const { tableFromIPC } = await import(arrowUrl);
     const table = tableFromIPC(new Uint8Array(result.arrowBuffers[0]));
     const fields = table.schema.fields;
     const columns = fields.map((f: any) => f.name);

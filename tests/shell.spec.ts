@@ -38,8 +38,11 @@ async function shellQuery(page: Page, sql: string): Promise<{ ok: boolean; error
     const result = await bridge.query(sql);
     if (!result.ok) return { ok: false, error: result.error };
     if (!result.arrowBuffers?.length) return { ok: true, numRows: 0, columns: [], rows: [] };
-    // Use the Vite-resolved path for apache-arrow (bare specifier doesn't work in evaluate)
-    const { tableFromIPC } = await import("/node_modules/apache-arrow/Arrow.mjs");
+    // Use the Vite-resolved path for apache-arrow (bare specifier doesn't work
+    // in evaluate). Held in a variable so TypeScript treats it as a runtime
+    // specifier instead of resolving the literal on the checking host.
+    const arrowUrl = "/node_modules/@query-farm/apache-arrow/Arrow.mjs";
+    const { tableFromIPC } = await import(arrowUrl);
     const table = tableFromIPC(new Uint8Array(result.arrowBuffers[0]));
     const fields = table.schema.fields;
     const columns = fields.map((f: any) => f.name);

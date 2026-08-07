@@ -8,7 +8,7 @@
  * character so we don't issue a worker round-trip on every keystroke.
  */
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
-import { tableFromIPC } from "apache-arrow";
+import { tableFromIPC } from "@query-farm/apache-arrow";
 import { bridge } from "@/lib/shell-bridge";
 
 export async function sqlAutoCompleteSource(

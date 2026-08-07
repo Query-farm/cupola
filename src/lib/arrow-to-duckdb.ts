@@ -8,6 +8,11 @@
  * Also checks ARROW:extension:name metadata for extension types like geoarrow.wkb.
  */
 
+// One Arrow, everywhere. `@query-farm/apache-arrow` is the build vgi/client
+// returns Fields from, and `vite.resolve.dedupe` + the matching tsconfig
+// `paths` entry pin every importer (including the aliased sibling sources) to
+// this single copy — so a Field crossing the vgi boundary is the same nominal
+// type it is here.
 import type { Field, DataType } from "@query-farm/apache-arrow";
 
 /** Convert an Arrow Field to a DuckDB type display string. */

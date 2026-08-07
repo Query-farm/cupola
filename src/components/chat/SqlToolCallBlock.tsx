@@ -45,14 +45,21 @@ export function SqlToolCallBlock({ toolCall, onCancel }: Props) {
   const dr = toolCall.displayResult;
   const isError = !!toolCall.error;
 
+  // ToolCallDisplayResult carries two alternative shapes with every field
+  // optional: a row-bearing SQL result (columns/rows/rowCount/showing) or a
+  // bare `message` (DDL, SET, empty result). Narrow once here rather than
+  // assuming the row fields are present at each use site.
+  const resultRows = dr?.rows;
+  const rowCount = dr?.rowCount ?? 0;
+
   const summary = toolCall.isExecuting
     ? `Running query — ${formatElapsed(elapsed)}`
     : isError
     ? "Query failed"
     : dr?.message
     ? dr.message
-    : dr && dr.rowCount > 0
-    ? `${dr.rowCount.toLocaleString()} row${dr.rowCount !== 1 ? "s" : ""} returned`
+    : rowCount > 0
+    ? `${rowCount.toLocaleString()} row${rowCount !== 1 ? "s" : ""} returned`
     : "Query completed";
 
   return (
@@ -124,15 +131,15 @@ export function SqlToolCallBlock({ toolCall, onCancel }: Props) {
           )}
 
           {/* Results table */}
-          {dr && dr.rows.length > 0 && (
+          {resultRows && resultRows.length > 0 && (
             <div>
               <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Results</span>
               <div className="mt-1">
                 <QueryResultTable
-                  columns={dr.columns}
-                  rows={dr.rows}
-                  rowCount={dr.rowCount}
-                  showing={dr.showing}
+                  columns={dr?.columns ?? []}
+                  rows={resultRows}
+                  rowCount={rowCount}
+                  showing={dr?.showing ?? resultRows.length}
                 />
               </div>
             </div>
