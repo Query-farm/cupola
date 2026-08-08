@@ -18,7 +18,7 @@
 import { formatCellValue, safeGetArrowValue } from "./format";
 
 // ---------------------------------------------------------------------------
-// Result cache — bounded to last 3 query results
+// Result cache — one instance per conversation
 // ---------------------------------------------------------------------------
 
 interface CachedResult {
@@ -28,18 +28,57 @@ interface CachedResult {
   rowCount: number;
 }
 
-const resultCache = new Map<string, CachedResult>();
-let resultCounter = 0;
+/** Default entries retained per conversation. Each holds up to CACHE_LIMIT
+ *  (10k) formatted rows, so this is a memory bound as much as a usefulness
+ *  one — the agent normally pages through the most recent result or two. */
+const DEFAULT_MAX_ENTRIES = 5;
 
-function cacheResult(result: CachedResult): string {
-  const id = `result_${++resultCounter}`;
-  resultCache.set(id, result);
-  // Evict oldest if more than 3
-  if (resultCache.size > 3) {
-    const oldest = resultCache.keys().next().value;
-    if (oldest) resultCache.delete(oldest);
+/**
+ * Backing store for the `read_query_results` tool: run_sql stashes the full
+ * (up to 10k) row set here and hands the model a `result_id` it can page
+ * through without re-running the query.
+ *
+ * **One instance per conversation.** This used to be a module-level Map with a
+ * 3-entry LRU and a module-level counter, shared by all three AI surfaces
+ * (AskAIChat, EditorAiPanel, the terminal's `.ai` mode). Because they ran
+ * against one cache, a query on any surface could evict a `result_id` another
+ * surface had just handed its model — the agent would then ask to page through
+ * a result that no longer existed and get `Result 'result_N' not found or
+ * expired` for a query it had only just run. Per-conversation instances remove
+ * the interference and make the lifetime obvious: the cache dies with the
+ * conversation instead of living for the page's whole session.
+ */
+export class QueryResultCache {
+  private readonly entries = new Map<string, CachedResult>();
+  private counter = 0;
+
+  constructor(private readonly maxEntries: number = DEFAULT_MAX_ENTRIES) {}
+
+  /** Store a result set and return the id the model uses to page through it. */
+  store(result: CachedResult): string {
+    const id = `result_${++this.counter}`;
+    this.entries.set(id, result);
+    // Map preserves insertion order, so the first key is the oldest.
+    while (this.entries.size > this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest === undefined) break;
+      this.entries.delete(oldest);
+    }
+    return id;
   }
-  return id;
+
+  get(id: string): CachedResult | undefined {
+    return this.entries.get(id);
+  }
+
+  /** Drop everything — e.g. when the user starts a new conversation. */
+  clear(): void {
+    this.entries.clear();
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +157,7 @@ export function sampleRowsForAI(rows: Record<string, any>[], maxRows = 3): Recor
 
 export function formatArrowTableAsJson(
   table: any,
+  cache: QueryResultCache,
   maxRows = 20
 ): { json: string; resultId: string } {
   const fields = table.schema.fields;
@@ -139,7 +179,7 @@ export function formatArrowTableAsJson(
     allRows.push(row);
   }
   const rows = allRows.slice(0, limit);
-  const resultId = cacheResult({ columns, types, rows: allRows, rowCount: numRows });
+  const resultId = cache.store({ columns, types, rows: allRows, rowCount: numRows });
 
   const result = {
     columns,
@@ -153,8 +193,13 @@ export function formatArrowTableAsJson(
   return { json: JSON.stringify(result), resultId };
 }
 
-export function executeReadQueryResults(resultId: string, offset = 0, limit = 20): string {
-  const cached = resultCache.get(resultId);
+export function executeReadQueryResults(
+  cache: QueryResultCache,
+  resultId: string,
+  offset = 0,
+  limit = 20,
+): string {
+  const cached = cache.get(resultId);
   if (!cached) return JSON.stringify({ error: `Result '${resultId}' not found or expired` });
 
   const clampedLimit = Math.min(limit, 100);

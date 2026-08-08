@@ -19,7 +19,8 @@
  * exports from `./ai-agent` — both surfaces import them as-is.
  */
 import type { Table } from "@query-farm/apache-arrow";
-import { formatArrowTableAsJson, executeDescribeTable } from "./ai-agent";
+import { executeDescribeTable } from "./ai-agent";
+import { formatArrowTableAsJson, QueryResultCache } from "./query-results";
 import { quoteLiteral, decodeArrowBuffer } from "./duckdb-query";
 import type { CatalogData } from "./service";
 import type { QueryResult } from "./shell-bridge";
@@ -30,6 +31,11 @@ import type { QueryResult } from "./shell-bridge";
 
 export interface RunSqlEnv {
   query: (sql: string) => Promise<QueryResult>;
+  /** Where run_sql stashes the full row set so the model can page through it
+   *  via read_query_results. One instance per conversation — see
+   *  QueryResultCache. Optional so the describe_table-only call sites don't
+   *  have to construct one they'd never use. */
+  resultCache?: QueryResultCache;
 }
 
 export type RunSqlOutcome =
@@ -117,7 +123,10 @@ export async function executeRunSql(
     return JSON.stringify({ ok: true, message: "Query executed successfully" });
   }
 
-  const { json } = formatArrowTableAsJson(table);
+  // A conversation always supplies its own cache; the fallback keeps a
+  // caller that omits it working (the result_id it hands back is simply
+  // unreachable afterwards, which is better than throwing mid-tool-call).
+  const { json } = formatArrowTableAsJson(table, env.resultCache ?? new QueryResultCache());
   await callbacks.onOutcome?.({ kind: "table", sql, table, json, elapsedMs });
   return json;
 }

@@ -18,12 +18,12 @@ import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
 import { bridge } from "@/lib/shell-bridge";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
+import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
 import type { CatalogData } from "@/lib/service";
 import {
   runAgentTurn,
   buildSystemPrompt,
   executeListTables,
-  executeReadQueryResults,
   TOOLS,
   type MessageParam,
 } from "@/lib/ai-agent";
@@ -57,6 +57,8 @@ interface ConversationState {
   abort: AbortController | null;
   askUserResolve: ((value: string) => void) | null;
   conversationId: string;
+  /** read_query_results store, scoped to this document's conversation. */
+  resultCache: QueryResultCache;
   /** Last current-query snapshot sent as context, so we only resend on change. */
   sentContext: string | null;
 }
@@ -84,7 +86,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
   const getConvo = useCallback((id: string): ConversationState => {
     let c = convos.current.get(id);
     if (!c) {
-      c = { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), sentContext: null };
+      c = { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), resultCache: new QueryResultCache(), sentContext: null };
       convos.current.set(id, c);
     }
     return c;
@@ -229,7 +231,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
         };
         return executeRunSql(
           input.sql,
-          { query: (sql) => withAbort(queryFn(sql), signal) },
+          { query: (sql) => withAbort(queryFn(sql), signal), resultCache: c.resultCache },
           {
             onStart: () => { bridge.progress = updateProgress; },
             onEnd: () => { bridge.progress = prevProgress; },
@@ -258,7 +260,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
           },
         );
       }
-      if (name === "read_query_results") return executeReadQueryResults(input.result_id, input.offset, input.limit);
+      if (name === "read_query_results") return executeReadQueryResults(c.resultCache, input.result_id, input.offset, input.limit);
       if (name === "list_tables") return executeListTables(catalogData);
       if (name === "describe_table") {
         const queryFn = bridge.query;
@@ -363,7 +365,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
 
   const handleNew = useCallback(() => {
     const c = convos.current.get(docId);
-    if (c) { c.abort?.abort(); convos.current.set(docId, { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), sentContext: null }); bump(); }
+    if (c) { c.abort?.abort(); convos.current.set(docId, { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), resultCache: new QueryResultCache(), sentContext: null }); bump(); }
   }, [docId]);
 
   const hasApiKey = !!getSetting("anthropicApiKey");

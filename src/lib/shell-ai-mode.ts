@@ -6,7 +6,6 @@ import {
   runAgentTurn,
   buildSystemPrompt,
   executeListTables,
-  executeReadQueryResults,
   type MessageParam,
 } from "@/lib/ai-agent";
 import { executeRunSql, describeTableWithFallback } from "@/lib/ai-tool-executor";
@@ -16,6 +15,7 @@ import { estimateCost, formatCost } from "@/lib/pricing";
 import { bridge, recordQuery } from "@/lib/shell-bridge";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
+import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
 import type { CatalogData } from "@/lib/service";
 import * as Sentry from "@sentry/astro";
 
@@ -24,6 +24,9 @@ export interface AIConversationState {
   messages: MessageParam[];
   conversationId: string;
   conversationName: string;
+  /** read_query_results store for this .ai session. Survives across `.ai`
+   *  entries alongside `messages`, and is replaced by `.ai new`. */
+  resultCache: QueryResultCache;
 }
 
 /** Terminal I/O interface for AI mode. */
@@ -125,7 +128,7 @@ function createToolExecutor(
     if (name === "run_sql") {
       const lastUserMsg = conv.messages.filter(m => m.role === "user").pop();
       const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
-      return executeRunSql(input.sql, { query: ops.runQueryAsync }, {
+      return executeRunSql(input.sql, { query: ops.runQueryAsync, resultCache: conv.resultCache }, {
         onStart: () => { spinner.stop(); ops.setQueryRunning(true); },
         onEnd: () => { ops.clearProgressBar(); ops.setQueryRunning(false); ops.resetCancelFlag(); },
         onOutcome: async (out) => {
@@ -166,7 +169,7 @@ function createToolExecutor(
     }
 
     if (name === "read_query_results") {
-      return executeReadQueryResults(input.result_id, input.offset, input.limit);
+      return executeReadQueryResults(conv.resultCache, input.result_id, input.offset, input.limit);
     }
     if (name === "list_tables") {
       return executeListTables(ops.catalogData);
@@ -303,6 +306,9 @@ export async function runAIMode(
     conv.messages = [];
     conv.conversationId = `ai-${crypto.randomUUID()}`;
     conv.conversationName = "";
+    // The old result_ids referred to the previous conversation and are
+    // unreachable now; drop the rows rather than carry them.
+    conv.resultCache.clear();
     term.writeln("Starting new AI conversation. Type .exit to return to SQL.", "35");
   } else if (conv.messages.length > 0) {
     const nameHint = conv.conversationName ? ` (${conv.conversationName})` : "";
@@ -352,13 +358,13 @@ export async function runAIMode(
         continue;
       }
       if (aiTrimmed === "/new") {
-        conv.messages = []; conv.conversationId = `ai-${crypto.randomUUID()}`; conv.conversationName = "";
+        conv.messages = []; conv.conversationId = `ai-${crypto.randomUUID()}`; conv.conversationName = ""; conv.resultCache.clear();
         if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
         term.writeln("Started new conversation.", "33");
         continue;
       }
       if (aiTrimmed === ".clear" || aiTrimmed === "/clear") {
-        conv.messages = []; conv.conversationId = `ai-${crypto.randomUUID()}`; conv.conversationName = "";
+        conv.messages = []; conv.conversationId = `ai-${crypto.randomUUID()}`; conv.conversationName = ""; conv.resultCache.clear();
         if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
         term.writeln("Conversation cleared.", "33");
         continue;

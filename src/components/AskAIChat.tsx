@@ -10,14 +10,13 @@ import {
   runAgentTurn,
   buildSystemPrompt,
   executeListTables,
-  executeReadQueryResults,
   TOOLS,
   CHART_TOOL,
   type MessageParam,
 } from "@/lib/ai-agent";
 import { executeRunSql, describeTableWithFallback, validateChartSpec, validateExtraData } from "@/lib/ai-tool-executor";
 import { readRows } from "@/lib/duckdb-query";
-import { sampleRowsForAI } from "@/lib/query-results";
+import { sampleRowsForAI, QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
 import { cacheChartRows, cacheChartExtra, evictChartRows } from "@/lib/chart-rows-store";
 import { compileChartSpec, renderChartToPng } from "./chat/chart-embed";
 import type { ToolResult } from "@/lib/ai-agent";
@@ -57,6 +56,10 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
   const askUserResolve = useRef<((value: string) => void) | null>(null);
   // Groups this chat session's gen_ai spans in Sentry's Conversations view.
   const conversationIdRef = useRef<string>(crypto.randomUUID());
+  // read_query_results backing store, scoped to THIS conversation. Previously a
+  // module-level 3-entry LRU shared with the editor panel and terminal .ai
+  // mode, so their queries evicted each other's result_ids.
+  const resultCacheRef = useRef(new QueryResultCache());
 
   useEffect(() => {
     if (settings.aiTelemetry) Sentry.setConversationId(conversationIdRef.current);
@@ -306,7 +309,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         };
         return executeRunSql(
           input.sql,
-          { query: (sql) => withAbort(queryFn(sql), signal) },
+          { query: (sql) => withAbort(queryFn(sql), signal), resultCache: resultCacheRef.current },
           {
             onStart: () => { bridge.progress = updateProgress; },
             onEnd: () => { bridge.progress = prevProgress; },
@@ -370,7 +373,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         );
       }
       if (name === "read_query_results") {
-        return executeReadQueryResults(input.result_id, input.offset, input.limit);
+        return executeReadQueryResults(resultCacheRef.current, input.result_id, input.offset, input.limit);
       }
       if (name === "list_tables") {
         return executeListTables(catalogData!);
@@ -668,6 +671,8 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
     setMessages([]);
     agentMessages.current = [];
     conversationIdRef.current = crypto.randomUUID();
+    // New conversation → the old result_ids are unreachable; free the rows.
+    resultCacheRef.current.clear();
     if (settings.aiTelemetry) Sentry.setConversationId(conversationIdRef.current);
   };
 

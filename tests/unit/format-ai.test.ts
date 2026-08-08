@@ -13,12 +13,16 @@ import {
   Decimal, Timestamp, TimeUnit, TimeMicrosecond,
   Int32, Int64, Float64, Binary,
 } from "@query-farm/apache-arrow";
-import { formatArrowTableAsJson } from "../../src/lib/query-results";
+import { formatArrowTableAsJson, QueryResultCache } from "../../src/lib/query-results";
+
+// These tests exercise cell formatting, not caching — a throwaway cache per
+// call keeps them independent of the result-id counter.
+const cache = () => new QueryResultCache();
 
 /** First-cell value from a column built out of JS values (strings, booleans, …). */
 function cellFromArray(name: string, values: any[]): any {
   const t = new Table({ [name]: vectorFromArray(values) });
-  return JSON.parse(formatArrowTableAsJson(t).json).rows[0][name];
+  return JSON.parse(formatArrowTableAsJson(t, cache()).json).rows[0][name];
 }
 
 /** Build a single-column Arrow Table from an explicit type + chunk Data. */
@@ -31,7 +35,7 @@ function tableOf(name: string, type: any, data: any, opts: { nullBitmap?: Uint8A
 
 /** Run a one-column, one-row table through the serializer and return that cell value. */
 function cell(name: string, type: any, data: any): any {
-  const { json } = formatArrowTableAsJson(tableOf(name, type, data));
+  const { json } = formatArrowTableAsJson(tableOf(name, type, data), cache());
   return JSON.parse(json).rows[0][name];
 }
 
@@ -86,7 +90,7 @@ describe("scalars & null", () => {
   test("NULL stays JSON null (not empty string)", () => {
     const t = tableOf("n", new Int32(), Int32Array.from([0]),
       { nullCount: 1, nullBitmap: new Uint8Array([0]) });
-    expect(JSON.parse(formatArrowTableAsJson(t).json).rows[0].n).toBeNull();
+    expect(JSON.parse(formatArrowTableAsJson(t, cache()).json).rows[0].n).toBeNull();
   });
 });
 
@@ -100,7 +104,7 @@ describe("binary & geometry", () => {
     });
     const table = new Table({ b: new Vector([data]) });
     if (extName) table.schema.fields[0].metadata.set("ARROW:extension:name", extName);
-    return JSON.parse(formatArrowTableAsJson(table).json).rows[0].b;
+    return JSON.parse(formatArrowTableAsJson(table, cache()).json).rows[0].b;
   }
 
   /** Little-endian WKB POINT(x y). */
@@ -146,7 +150,7 @@ describe("binary & geometry", () => {
 
 describe("no double-escaping anywhere in the JSON", () => {
   test("serialized JSON for HUGEINT contains a clean value", () => {
-    const { json } = formatArrowTableAsJson(tableOf("s", new Decimal(0, 38, 128), Uint32Array.from([6, 0, 0, 0])));
+    const { json } = formatArrowTableAsJson(tableOf("s", new Decimal(0, 38, 128), Uint32Array.from([6, 0, 0, 0])), cache());
     expect(json).toContain('"s":"6"');
     expect(json).not.toContain('\\\\');   // no escaped backslashes => no nested stringify
   });

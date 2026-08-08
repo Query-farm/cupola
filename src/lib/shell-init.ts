@@ -21,6 +21,7 @@ import { attachInputHandlers, type CompletionItem } from "./shell-input";
 import { bridge, recordQuery, notifyQueryChange, setBootPhase } from "./shell-bridge";
 import { quoteLiteral, quoteIdent } from "./duckdb-query";
 import { SHELL_EXTENSIONS, recordExtensionLoaded } from "./duckdb-engine";
+import { QueryResultCache } from "./query-results";
 import { isRecoverableAuthError, isUnrecoverableAuthError } from "./auth-errors";
 import { getOAuthMeta, redirectToAuth } from "./auth";
 import { ensureDuckDB } from "./duckdb-worker-boot";
@@ -580,6 +581,7 @@ export function initShell(
     messages: [],
     conversationId: `ai-${crypto.randomUUID()}`,
     conversationName: "",
+    resultCache: new QueryResultCache(),
   };
 
   // Read loop
