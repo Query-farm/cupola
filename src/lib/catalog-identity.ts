@@ -7,7 +7,7 @@
  *
  * Secondary source: the DuckDB `vgi_catalog_identity()` table function,
  * which returns identity for all attached catalogs. This becomes available
- * once the shell worker boots and `bridge.query` is set — typically only
+ * once the shell worker boots and `engine.query` is set — typically only
  * after the user opens the SQL Shell. When available, it upgrades the
  * identity with claims parsed by the native extension (which may include
  * fields not present in the client-side JWT).
@@ -15,7 +15,7 @@
 import { useState, useEffect } from "react";
 import { getUserInfo } from "./auth";
 import { esc, readRows } from "./duckdb-query";
-import { bridge } from "./shell-bridge";
+import { engine } from "./shell-bridge";
 
 export interface CatalogIdentity {
   catalogName: string;
@@ -84,7 +84,7 @@ export function useCatalogIdentity(
     // available). This can provide richer info (issuer, extension-parsed
     // claims) and works for attached catalogs that don't have SPA tokens.
     const tryExtension = async () => {
-      if (cancelled || !bridge.query) return;
+      if (cancelled || !engine.query) return;
       try {
         const result = await fetchFromExtension(catalogName);
         if (result && !cancelled) {
@@ -96,9 +96,9 @@ export function useCatalogIdentity(
       }
     };
 
-    // If bridge.query is already available, try immediately.
+    // If engine.query is already available, try immediately.
     // Otherwise, check once after a delay (the worker may boot soon).
-    if (bridge.query) {
+    if (engine.query) {
       tryExtension();
     } else {
       const timer = setTimeout(tryExtension, 3000);

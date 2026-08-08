@@ -5,7 +5,7 @@ import type { ExportFormat } from "@/lib/editor/result-export";
 
 interface Props {
   running: boolean;
-  /** bridge.query is available (DuckDB booted). */
+  /** engine.query is available (DuckDB booted). */
   queryReady: boolean;
   /** Human-readable boot phase shown while the engine initializes. */
   bootPhase?: string | null;

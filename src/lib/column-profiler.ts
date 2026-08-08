@@ -3,7 +3,7 @@
  * executes them via the shell bridge, and parses Arrow IPC results.
  */
 
-import { bridge } from "./shell-bridge";
+import { engine } from "./shell-bridge";
 import { quoteIdent, quoteLiteral, decodeArrowBuffer } from "./duckdb-query";
 import type { ColumnStats } from "./service";
 
@@ -132,7 +132,7 @@ function sampleClause(rowCount: number | null): string {
 // ============================================================================
 
 async function runQuery(sql: string): Promise<any[] | null> {
-  const queryFn = bridge.query;
+  const queryFn = engine.query;
   if (!queryFn) return null;
 
   const result = await queryFn(sql);

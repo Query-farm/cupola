@@ -31,7 +31,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell }: Pro
 
   // Lazily fetch column statistics from DuckDB WASM shell.
   // undefined = loading, Map = loaded, null = unavailable.
-  // fetchColumnStats internally awaits bridge.attached, so a click that
+  // fetchColumnStats internally awaits engine.attached, so a click that
   // lands before the shell finishes booting is queued, not failed.
   const [columnStats, setColumnStats] = useState<Map<string, ColumnStats> | undefined | null>(undefined);
   useEffect(() => {

@@ -14,7 +14,7 @@ import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
 import { getAuthToken, getAuthTokenForService } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
 import { tableFromIPC, RecordBatchFileReader, Table as ArrowTable } from "@query-farm/apache-arrow";
-import { bridge, onBootChange } from "@/lib/shell-bridge";
+import { engine, terminal, ui, onBootChange } from "@/lib/shell-bridge";
 import { ShellBootScreen } from "./ShellBootScreen";
 import * as Sentry from "@sentry/astro";
 import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
@@ -140,13 +140,13 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   const containerRef = useRef<HTMLDivElement>(null);
   const perspectiveRef = useRef<HTMLDivElement>(null);
   const { settings } = useSettings();
-  // Overlay visibility is driven by bridge.bootPhase, not by external-script
+  // Overlay visibility is driven by engine.bootPhase, not by external-script
   // loading. The DuckDB worker boot (downloading WASM, spinning up pthreads,
   // loading extensions, attaching) is the slow part — especially on Safari —
   // and the bridge already signals true readiness with setBootPhase(null).
-  const [bootActive, setBootActive] = useState(() => bridge.bootPhase !== null);
+  const [bootActive, setBootActive] = useState(() => engine.bootPhase !== null);
   useEffect(() => {
-    const unsub = onBootChange(() => setBootActive(bridge.bootPhase !== null));
+    const unsub = onBootChange(() => setBootActive(engine.bootPhase !== null));
     return () => unsub();
   }, []);
   const [error, setError] = useState<string | null>(null);
@@ -166,16 +166,16 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   // with cleanup so React's strict-mode mount/unmount/remount doesn't leave a
   // stale closure pointing at the previous component instance's setState.
   useEffect(() => {
-    bridge.addQueryHistoryEntry = (entry: QueryHistoryEntry) => {
+    ui.addQueryHistoryEntry = (entry: QueryHistoryEntry) => {
       setQueryHistory(prev => { const next = [...prev, entry]; onQueryHistoryCountChange?.(next.length); return next; });
     };
-    return () => { bridge.addQueryHistoryEntry = null; };
+    return () => { ui.addQueryHistoryEntry = null; };
   }, [onQueryHistoryCountChange]);
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
 
   // Resolve selected table or view for Data Preview and Perspective tabs
   // Search both VGI catalog and memory catalog
-  const allCatalogs = [catalogData, bridge.memoryCatalog].filter(Boolean);
+  const allCatalogs = [catalogData, ui.memoryCatalog].filter(Boolean);
   const findInCatalogs = (type: "table" | "view", name?: string, schema?: string) => {
     if (!name || !schema) return null;
     for (const cat of allCatalogs) {
@@ -191,13 +191,13 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
 
   // Expose a function to switch to the shell tab.
   useEffect(() => {
-    bridge.activateShell = () => setActiveTab("shell");
-    return () => { bridge.activateShell = null; };
+    terminal.activate = () => setActiveTab("shell");
+    return () => { terminal.activate = null; };
   }, [setActiveTab]);
 
   // Expose a callback for the shell to trigger Perspective view
   useEffect(() => {
-    bridge.showPerspective = async (arrowBuffer: ArrayBuffer) => {
+    ui.showPerspective = async (arrowBuffer: ArrayBuffer) => {
       setActiveTab("perspective");
       setPerspectiveLoading(true);
       try {
@@ -210,7 +210,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
       }
     };
     return () => {
-      bridge.showPerspective = null;
+      ui.showPerspective = null;
     };
   }, [setActiveTab]);
 
@@ -218,7 +218,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   // query result in the Data Preview tab. The Arrow IPC buffer is decoded
   // here and handed to DataPreview's client-side (result) pagination mode.
   useEffect(() => {
-    bridge.showPreview = (arrowBuffer: ArrayBuffer) => {
+    ui.showPreview = (arrowBuffer: ArrayBuffer) => {
       try {
         setResultPreview(tableFromIPC(arrowBuffer));
         setActiveTab("preview");
@@ -227,7 +227,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         Sentry.captureException(e, { tags: { component: "preview", path: "showPreview" } });
       }
     };
-    return () => { bridge.showPreview = null; };
+    return () => { ui.showPreview = null; };
   }, [setActiveTab]);
 
   // A result preview belongs to a specific query, not to the sidebar. When the
@@ -243,7 +243,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
 
     // Service or catalog switched — make sure any consumers awaiting the
     // previous ATTACH cycle now block on the new one.
-    bridge.resetAttached?.();
+    engine.resetAttached?.();
 
     (async () => {
       try {
@@ -286,10 +286,10 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   // and masked real bugs — replaced by rAF + a single 0ms tick to cover
   // the case where layout finishes after rAF on Safari.
   useEffect(() => {
-    if (activeTab === "shell" && bridge.shellFitAddon) {
+    if (activeTab === "shell" && terminal.fitAddon) {
       const fitAndRefresh = () => {
-        bridge.shellFitAddon?.fit();
-        const term = bridge.shellTerm;
+        terminal.fitAddon?.fit();
+        const term = terminal.term;
         if (term) term.refresh(0, term.rows - 1);
       };
       requestAnimationFrame(fitAndRefresh);
@@ -302,8 +302,8 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     const el = rootRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      if (activeTab === "shell" && bridge.shellFitAddon) {
-        bridge.shellFitAddon.fit();
+      if (activeTab === "shell" && terminal.fitAddon) {
+        terminal.fitAddon.fit();
       }
     });
     ro.observe(el);
@@ -331,11 +331,11 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         if (cancelled) return;
 
         // Wait for DuckDB to be fully ready (ATTACH complete, readLoop started)
-        if (!bridge.runQuery) {
+        if (!terminal.runQuery) {
           await new Promise<void>((resolve) => {
             const onReady = () => { resolve(); window.removeEventListener("duckdb-ready", onReady); };
             window.addEventListener("duckdb-ready", onReady);
-            if (bridge.runQuery) onReady();
+            if (terminal.runQuery) onReady();
           });
         }
         if (cancelled) return;
@@ -455,7 +455,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
           if (data) {
             const text = treeIdToShellText(data);
             if (text) {
-              bridge.insertText?.(text);
+              terminal.insertText?.(text);
             }
           }
         }}
@@ -530,8 +530,8 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
           setActiveTab("shell");
           const run = () => {
             const tryRun = () => {
-              if (bridge.runQuery) {
-                bridge.runQuery(sql);
+              if (terminal.runQuery) {
+                terminal.runQuery(sql);
               } else {
                 requestAnimationFrame(tryRun);
               }
@@ -539,13 +539,13 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
             tryRun();
           };
           // If in AI mode, exit it first by simulating Ctrl+D
-          if (bridge.inAiMode) {
-            const term = bridge.shellTerm;
+          if (terminal.inAiMode) {
+            const term = terminal.term;
             if (term) {
               term.paste("\x04"); // Ctrl+D to exit AI mode
               // Wait for AI mode to exit, then run the query
               const waitForSql = () => {
-                if (!bridge.inAiMode) {
+                if (!terminal.inAiMode) {
                   setTimeout(run, 100);
                 } else {
                   requestAnimationFrame(waitForSql);
@@ -666,11 +666,11 @@ function QueryCard({ entry, compact, onRerun }: { entry: QueryHistoryEntry; comp
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             </button>
           )}
-          {bridge.openInEditor && (
+          {ui.openInEditor && (
             <button
               className="p-1 text-terminal-fg/30 hover:text-terminal-accent transition-colors cursor-pointer"
               title="Open in SQL editor"
-              onClick={() => bridge.openInEditor?.(entry.sql)}
+              onClick={() => ui.openInEditor?.(entry.sql)}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m10 13-2 2 2 2"/><path d="m14 17 2-2-2-2"/></svg>
             </button>

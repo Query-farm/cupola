@@ -5,7 +5,7 @@
 import { useState, Fragment } from "react";
 import { BarChart3, Loader2, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { bridge } from "@/lib/shell-bridge";
+import { engine } from "@/lib/shell-bridge";
 import { formatCompactNumber } from "@/lib/format";
 import {
   fetchColumnProfile,
@@ -37,7 +37,7 @@ export function ColumnProfile({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!bridge.query) return null;
+  if (!engine.query) return null;
 
   const profile = cachedProfile;
 

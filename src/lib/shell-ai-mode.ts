@@ -12,7 +12,7 @@ import { executeRunSql, describeTableWithFallback } from "@/lib/ai-tool-executor
 import { isAiTelemetryEnabled } from "@/lib/ai-telemetry";
 import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 import { estimateCost, formatCost } from "@/lib/pricing";
-import { bridge, recordQuery } from "@/lib/shell-bridge";
+import { terminal, ui, recordQuery } from "@/lib/shell-bridge";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
@@ -316,11 +316,11 @@ export async function runAIMode(
   }
   term.writeln("");
 
-  bridge.inAiMode = true;
+  terminal.inAiMode = true;
   // Group this session's gen_ai spans in Sentry's Conversations view. Cleared
   // in the exit finally so SQL-mode spans don't inherit it.
   if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
-  const systemPrompt = buildSystemPrompt(ops.catalogData, getEngineInfo(), bridge.memoryCatalog);
+  const systemPrompt = buildSystemPrompt(ops.catalogData, getEngineInfo(), ui.memoryCatalog);
   const spinner = createSpinner(term);
 
   // Ctrl+D / Escape exits AI mode
@@ -416,7 +416,7 @@ export async function runAIMode(
     }
   } finally {
     ctrlDDisposable.dispose();
-    bridge.inAiMode = false;
+    terminal.inAiMode = false;
     Sentry.setConversationId(null);
   }
 }

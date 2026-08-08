@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Sparkles, RotateCcw, Settings, FileText, Copy } from "lucide-react";
 import * as Sentry from "@sentry/astro";
 import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
-import { bridge } from "@/lib/shell-bridge";
+import { engine, ui } from "@/lib/shell-bridge";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import type { CatalogData } from "@/lib/service";
@@ -95,7 +95,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
           askUserResolve.current = null;
         }
         abortRef.current.abort();
-        bridge.cancelQuery?.();
+        engine.cancelQuery?.();
       }
     };
     document.addEventListener("keydown", handler);
@@ -122,7 +122,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
         const cleanedExtras = extraVal.cleaned;
         const compileResult = await compileChartSpec(sanitized);
         if (compileResult.error) throw new Error(`Vega-Lite compile failed: ${compileResult.error}`);
-        if (!bridge.query) throw new Error("DuckDB not ready");
+        if (!engine.query) throw new Error("DuckDB not ready");
         const rows = await readRows(input.sql);
         if (rows === null) throw new Error("Query failed or returned no rows");
         const chartId = uid();
@@ -225,7 +225,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
     // hasChartTool = true: include render_chart capability in the prompt
     // guidance (and CHART_TOOL in the tool list below). Terminal `.ai` mode
     // passes a different surface and would set this false.
-    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), bridge.memoryCatalog, true);
+    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), ui.memoryCatalog, true);
     const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
     const maxTokens = getSetting("aiMaxTokens") || DEFAULT_AI_MAX_TOKENS;
@@ -259,20 +259,20 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
 
     /**
      * Race a promise against an AbortSignal. When the signal aborts we
-     * fire bridge.cancelQuery to interrupt the haybarn worker (best-effort)
+     * fire engine.cancelQuery to interrupt the haybarn worker (best-effort)
      * and reject with AbortError so the agent loop bails out — even if the
-     * underlying bridge.query promise hasn't settled yet.
+     * underlying engine.query promise hasn't settled yet.
      */
     function withAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
       if (!signal) return p;
       return new Promise<T>((resolve, reject) => {
         if (signal.aborted) {
-          bridge.cancelQuery?.();
+          engine.cancelQuery?.();
           reject(new DOMException("Aborted", "AbortError"));
           return;
         }
         const onAbort = () => {
-          bridge.cancelQuery?.();
+          engine.cancelQuery?.();
           reject(new DOMException("Aborted", "AbortError"));
         };
         signal.addEventListener("abort", onAbort, { once: true });
@@ -290,14 +290,14 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
     // [text, image] form so the model can see the chart it just drew.
     const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<ToolResult> => {
       if (name === "run_sql") {
-        const queryFn = bridge.query;
+        const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB shell not initialized — open SQL Shell first");
         const lastUserMsg = agentMessages.current.filter(m => m.role === "user").pop();
         const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
 
-        // Subscribe to bridge.progress while the query runs so the tool
+        // Subscribe to engine.progress while the query runs so the tool
         // block can render its progress bar. Restored in onEnd.
-        const prevProgress = bridge.progress;
+        const prevProgress = engine.progress;
         const updateProgress = (pct: number) => {
           blocks = blocks.map(b =>
             b.type === "tool_call" && b.toolCall.isExecuting
@@ -310,47 +310,47 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
           input.sql,
           { query: (sql) => withAbort(queryFn(sql), signal), resultCache: resultCacheRef.current },
           {
-            onStart: () => { bridge.progress = updateProgress; },
-            onEnd: () => { bridge.progress = prevProgress; },
+            onStart: () => { engine.progress = updateProgress; },
+            onEnd: () => { engine.progress = prevProgress; },
             onOutcome: async (out) => {
               if (out.kind === "error") {
-                bridge.addQueryHistoryEntry?.({
+                ui.addQueryHistoryEntry?.({
                   id: Date.now(), timestamp: Date.now(), sql: input.sql,
                   executionTimeMs: out.elapsedMs, success: false, error: out.errMsg, userQuestion,
                 });
                 return;
               }
               if (out.kind === "empty") {
-                bridge.addQueryHistoryEntry?.({
+                ui.addQueryHistoryEntry?.({
                   id: Date.now(), timestamp: Date.now(), sql: input.sql,
                   executionTimeMs: out.elapsedMs, success: true, rowCount: 0, userQuestion,
                 });
                 pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
                 // COMMENT ON returns empty — refresh sidebar so comments appear.
-                if (/COMMENT\s+ON/i.test(input.sql)) await bridge.refreshMemoryTables?.();
+                if (/COMMENT\s+ON/i.test(input.sql)) await ui.refreshMemoryTables?.();
                 return;
               }
               if (out.kind === "ddl") {
-                bridge.addQueryHistoryEntry?.({
+                ui.addQueryHistoryEntry?.({
                   id: Date.now(), timestamp: Date.now(), sql: input.sql,
                   executionTimeMs: out.elapsedMs, success: true, rowCount: 0, userQuestion,
                 });
                 pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
-                await bridge.refreshMemoryTables?.();
+                await ui.refreshMemoryTables?.();
                 const createMatch = input.sql.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
                 if (createMatch) {
                   const schema = createMatch[1] || "main";
                   const name = createMatch[2];
-                  bridge.navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
+                  ui.navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
                 }
                 const dropMatch = input.sql.match(/DROP\s+(?:TABLE|VIEW|SCHEMA)\s+(?:IF\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
                 if (dropMatch) {
                   const isSchemaLevel = /DROP\s+SCHEMA/i.test(input.sql);
                   if (isSchemaLevel) {
-                    bridge.navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
+                    ui.navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
                   } else {
                     const schema = dropMatch[1] || "main";
-                    bridge.navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
+                    ui.navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
                   }
                 }
                 return;
@@ -363,7 +363,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
                 rowCount: parsed.row_count,
                 showing: parsed.showing,
               };
-              bridge.addQueryHistoryEntry?.({
+              ui.addQueryHistoryEntry?.({
                 id: Date.now(), timestamp: Date.now(), sql: input.sql,
                 executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion,
               });
@@ -378,7 +378,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
         return executeListTables(catalogData!);
       }
       if (name === "describe_table") {
-        const queryFn = bridge.query;
+        const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB shell not initialized");
         return describeTableWithFallback(catalogData!, { query: queryFn }, input);
       }
@@ -414,12 +414,12 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
         if (compileResult.error) {
           return JSON.stringify({ ok: false, error: `Vega-Lite compile failed: ${compileResult.error}` });
         }
-        if (!bridge.query) {
+        if (!engine.query) {
           return JSON.stringify({ ok: false, error: "DuckDB not ready — open the SQL Shell first." });
         }
         const rows = await readRows(input.sql);
         if (rows === null) {
-          const raw = await bridge.query(input.sql);
+          const raw = await engine.query(input.sql);
           if (!raw.ok) {
             return JSON.stringify({ ok: false, error: raw.error || "Query failed" });
           }
@@ -436,7 +436,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
         for (const ex of cleanedExtras) {
           const exRows = await readRows(ex.sql);
           if (exRows === null) {
-            const raw = await bridge.query(ex.sql);
+            const raw = await engine.query(ex.sql);
             const msg = !raw.ok ? raw.error : "Query returned no rows";
             return JSON.stringify({ ok: false, error: `extraData "${ex.name}" failed: ${msg || "Query failed"}` });
           }
@@ -678,7 +678,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
   const handleStop = () => {
     abortRef.current?.abort();
     // Also cancel any running DuckDB query
-    bridge.cancelQuery?.();
+    engine.cancelQuery?.();
   };
 
   // Starter questions
@@ -689,7 +689,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
   // Pass hasChartTool=true so the preview shown to the user matches what
   // the agent actually sees at runtime (see line 128).
-  const systemPrompt = useMemo(() => catalogData ? buildSystemPrompt(catalogData, getEngineInfo(), bridge.memoryCatalog, true) : null, [catalogData, serviceUrl]);
+  const systemPrompt = useMemo(() => catalogData ? buildSystemPrompt(catalogData, getEngineInfo(), ui.memoryCatalog, true) : null, [catalogData, serviceUrl]);
 
   return (
     <div className="flex flex-col h-full bg-background">

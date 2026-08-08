@@ -9,13 +9,13 @@
  */
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import { tableFromIPC } from "@query-farm/apache-arrow";
-import { bridge } from "@/lib/shell-bridge";
+import { engine } from "@/lib/shell-bridge";
 import { quoteLiteral } from "@/lib/duckdb-query";
 
 export async function sqlAutoCompleteSource(
   context: CompletionContext,
 ): Promise<CompletionResult | null> {
-  const q = bridge.query;
+  const q = engine.query;
   if (!q) return null;
 
   // Only complete when explicitly invoked (Ctrl-Space) or while typing a word.

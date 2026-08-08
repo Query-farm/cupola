@@ -34,7 +34,7 @@ interface Props {
   toolCall: ToolCallEntry;
   /** Called when the user clicks the inline cancel button while the
    *  query is executing. Aborts the agent + cancels the in-flight DuckDB
-   *  query via bridge.cancelQuery. */
+   *  query via engine.cancelQuery. */
   onCancel?: () => void;
 }
 

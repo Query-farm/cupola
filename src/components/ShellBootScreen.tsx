@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { bridge, onBootChange } from "@/lib/shell-bridge";
+import { engine, onBootChange } from "@/lib/shell-bridge";
 
 /**
  * Animated Haybarn boot indicator shown inside the SQL Shell panel while the
@@ -18,13 +18,13 @@ export function ShellBootScreen() {
     const unsub = onBootChange(() => force((n) => n + 1));
     return () => unsub();
   }, []);
-  const phase = bridge.bootPhase || "Initializing Haybarn";
-  const progress = bridge.bootProgress;
+  const phase = engine.bootPhase || "Initializing Haybarn";
+  const progress = engine.bootProgress;
   const isDeterminate = typeof progress === "number" && progress > 0;
 
   const [elapsedSec, setElapsedSec] = useState(0);
   useEffect(() => {
-    const start = bridge.workerCreateStart || performance.now();
+    const start = engine.workerCreateStart || performance.now();
     const id = setInterval(() => {
       setElapsedSec(Math.max(0, Math.round((performance.now() - start) / 1000)));
     }, 1000);

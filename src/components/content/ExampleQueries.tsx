@@ -3,7 +3,7 @@ import { Copy, Play, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SqlCodeBlock } from "./SqlCodeBlock";
 import * as Accordion from "@radix-ui/react-accordion";
-import { bridge } from "@/lib/shell-bridge";
+import { terminal, ui } from "@/lib/shell-bridge";
 
 interface ExampleQuery {
   name?: string | null;
@@ -54,13 +54,13 @@ function QueryBlock({ query, onOpenShell }: { query: ExampleQuery; index: number
     // Prefer the DBeaver-style SQL editor (deterministic: it queues + runs the
     // query without the terminal-paste setTimeout race). Fall back to the
     // xterm shell if the editor surface isn't available.
-    if (bridge.openInEditor) {
-      bridge.openInEditor(query.sql);
+    if (ui.openInEditor) {
+      ui.openInEditor(query.sql);
       return;
     }
-    bridge.activateShell?.();
+    terminal.activate?.();
     setTimeout(() => {
-      bridge.runQuery?.(query.sql);
+      terminal.runQuery?.(query.sql);
     }, 150);
   };
 

@@ -2,10 +2,10 @@
 //
 // AsyncDuckDB runs its own sub-worker (COI/EH/MVP variant selected by
 // selectBundle). This module owns the lifecycle of that sub-worker and adapts
-// it to the project's existing `bridge.query` / `bridge.cancelQuery` contract
+// it to the project's existing `engine.query` / `engine.cancelQuery` contract
 // — no second worker layer, no custom wire protocol. The dependency surface
 // for the rest of the app is unchanged: consumers keep calling
-// `bridge.query(sql)` and get back `{ ok, arrowBuffers, error }`.
+// `engine.query(sql)` and get back `{ ok, arrowBuffers, error }`.
 //
 // Boot is invoked from CatalogApp at mount (eager) so the wasm download
 // overlaps with catalog fetch + React hydration; the shell can run as soon
@@ -13,7 +13,7 @@
 
 import * as duckdb from "@haybarn/haybarn-wasm";
 
-import { bridge, notifyQueryChange, setBootPhase, type QueryResult } from "./shell-bridge";
+import { engine, notifyQueryChange, setBootPhase, type QueryResult } from "./shell-bridge";
 import { recordDuckDBVersion } from "./duckdb-engine";
 
 let bootPromise: Promise<void> | null = null;
@@ -35,14 +35,14 @@ export interface DuckDBBootOptions {
 }
 
 /** Idempotent boot. Resolves when AsyncDuckDB is instantiated, a connection
- *  is open, the cancel SAB is registered, and `bridge.query` is live. */
+ *  is open, the cancel SAB is registered, and `engine.query` is live. */
 export function ensureDuckDB(opts: DuckDBBootOptions): Promise<void> {
   if (bootPromise) return bootPromise;
   // Seed a phase synchronously so the overlay has copy from the first frame
   // — before any awaits land. The microtask before doBoot runs is enough of
   // a gap on Safari to flicker the fallback otherwise.
   setBootPhase("Starting Haybarn");
-  bridge.workerCreateStart = performance.now();
+  engine.workerCreateStart = performance.now();
   bootPromise = doBoot(opts).catch((e) => {
     bootPromise = null; // allow retry
     throw e;
@@ -61,7 +61,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // URLs for everything so the sub-worker's resolution is unambiguous.
   const absBase = typeof window !== "undefined" ? `${window.location.origin}${base}` : base;
   const t0 = performance.now();
-  bridge.workerCreateStart = t0;
+  engine.workerCreateStart = t0;
   const timings: { phase: string; ms: number }[] = [];
   let phaseT = t0;
   const mark = (phase: string) => {
@@ -98,21 +98,21 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // from /haybarn/ (R2 via the Cloudflare Worker), so plain `new Worker(url)`
   // works without the Blob indirection and preserves source-map URLs.
   const subWorker = new Worker(bundle.mainWorker!);
-  bridge.worker = subWorker;
+  engine.worker = subWorker;
 
   // SABs go directly to the sub-worker pre-instantiate. handlePreInitMessage
   // (shipped in @haybarn/haybarn-wasm@1.5.3-rc7) consumes both 'init-oauth-sab'
   // and 'init-cancel-sab' before the AsyncDuckDB dispatcher sees them.
   const oauthSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(8192) : null;
   if (oauthSAB) {
-    (bridge as unknown as { _oauthSAB: SharedArrayBuffer })._oauthSAB = oauthSAB;
+    (engine as unknown as { _oauthSAB: SharedArrayBuffer })._oauthSAB = oauthSAB;
     subWorker.postMessage({ type: "init-oauth-sab", sab: oauthSAB });
   }
 
   const cancelSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;
   const cancelInt32 = cancelSAB ? new Int32Array(cancelSAB) : null;
-  bridge.cancelInt32 = cancelInt32;
-  bridge.cancelQuery = () => {
+  engine.cancelInt32 = cancelInt32;
+  engine.cancelQuery = () => {
     if (cancelInt32) Atomics.store(cancelInt32, 0, 1);
   };
 
@@ -156,7 +156,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
     // the whole (multi-megabyte) WASM fetch.
     const pct = p.bytesTotal > 0 ? (p.bytesLoaded / p.bytesTotal) * 100 : NaN;
     if (!Number.isFinite(pct)) return;
-    bridge.progress?.(pct);
+    engine.progress?.(pct);
     if (pct >= 100) {
       if (!warmingUp) {
         warmingUp = true;
@@ -212,10 +212,10 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
       return { ok: false, error: msg };
     }
   };
-  bridge.query = runQueryWrapped;
+  engine.query = runQueryWrapped;
   // Pending vs non-streaming distinction (today's `query-sync`) is moot under
   // AsyncDuckDB.runQuery, which always returns a single File-format buffer.
-  bridge.querySync = runQueryWrapped;
+  engine.querySync = runQueryWrapped;
   notifyQueryChange();
 
   const version = await db.getVersion();
@@ -223,7 +223,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // than letting the prompt keep asserting a hardcoded literal.
   recordDuckDBVersion(version);
   const totalMs = Math.round(performance.now() - t0);
-  bridge.workerReadyData = { wasmVersion: version, totalMs, timings };
+  engine.workerReadyData = { wasmVersion: version, totalMs, timings };
   console.log(`[shell] worker ready in ${totalMs}ms (haybarn ${version})`);
   console.log(`[shell] phase breakdown: ${JSON.stringify(timings)}`);
 }

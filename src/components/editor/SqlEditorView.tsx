@@ -9,7 +9,7 @@ import { format as formatSql } from "sql-formatter";
 import * as Sentry from "@sentry/astro";
 import { tableToIPC } from "@query-farm/apache-arrow";
 import { decodeArrowBuffer } from "@/lib/duckdb-query";
-import { bridge, recordQuery, onBootChange } from "@/lib/shell-bridge";
+import { engine, terminal, ui, onBootChange, recordQuery } from "@/lib/shell-bridge";
 import { useSettings } from "@/lib/settings";
 import type { CatalogData } from "@/lib/service";
 import {
@@ -80,12 +80,12 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
     return 0.42;
   });
   const splitColRef = useRef<HTMLDivElement>(null);
-  // bridge.query availability — re-checked after the shell finishes booting.
-  const [queryReady, setQueryReady] = useState<boolean>(() => !!bridge.query);
+  // engine.query availability — re-checked after the shell finishes booting.
+  const [queryReady, setQueryReady] = useState<boolean>(() => !!engine.query);
   // Live engine boot phase (e.g. "Downloading DuckDB") shown in the toolbar
   // while the WASM engine initializes — the user can't see the shell boot
   // screen when the editor is the active surface.
-  const [bootPhase, setBootPhase] = useState<string | null>(() => bridge.bootPhase);
+  const [bootPhase, setBootPhase] = useState<string | null>(() => engine.bootPhase);
 
   const editorRef = useRef<CodeMirrorSqlHandle | null>(null);
   const runIdRef = useRef(0);
@@ -104,11 +104,11 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
   );
   const activeResult = (activeId && results[activeId]) || emptyResult;
 
-  // Poll briefly for bridge.query becoming available (shell boots async).
+  // Poll briefly for engine.query becoming available (shell boots async).
   useEffect(() => {
     if (queryReady) return;
     const t = setInterval(() => {
-      if (bridge.query) { setQueryReady(true); clearInterval(t); }
+      if (engine.query) { setQueryReady(true); clearInterval(t); }
     }, 400);
     return () => clearInterval(t);
   }, [queryReady]);
@@ -116,8 +116,8 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
   // Track the live boot phase while the engine initializes.
   useEffect(() => {
     if (queryReady) return;
-    setBootPhase(bridge.bootPhase);
-    return onBootChange(() => setBootPhase(bridge.bootPhase));
+    setBootPhase(engine.bootPhase);
+    return onBootChange(() => setBootPhase(engine.bootPhase));
   }, [queryReady]);
 
   const persist = useCallback((next: EditorDocState) => {
@@ -182,8 +182,8 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
     const myRun = ++runIdRef.current;
     setActiveResult(docId, { running: true, ran: true, error: null });
 
-    if (bridge.attached) await bridge.attached;
-    const q = bridge.query;
+    if (engine.attached) await engine.attached;
+    const q = engine.query;
     if (!q) {
       setActiveResult(docId, { running: false, error: "DuckDB is still starting up. Try again in a moment." });
       return;
@@ -223,8 +223,8 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
       setActiveResult(docId, { running: false, error: null, ok: true, table: null, rowCount: 0, elapsedMs });
       recordQuery({ sql: trimmed, executionTimeMs: elapsedMs, success: true });
       // A DDL statement likely changed the schema — refresh sidebar catalogs.
-      bridge.refreshMemoryTables?.();
-      bridge.onAttachedCatalogsChanged?.();
+      ui.refreshMemoryTables?.();
+      ui.onAttachedCatalogsChanged?.();
       return;
     }
     setActiveResult(docId, {
@@ -261,7 +261,7 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
   }, [activeId, runSql]);
 
   const handleStop = useCallback(() => {
-    bridge.cancelQuery?.();
+    engine.cancelQuery?.();
   }, []);
 
   // ---- toolbar actions ----------------------------------------------------
@@ -291,12 +291,12 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
 
   const handleOpenInPerspective = useCallback(() => {
     const table = activeResult.table;
-    if (!table || !bridge.showPerspective) return;
+    if (!table || !ui.showPerspective) return;
     // showPerspective wants an Arrow IPC ArrayBuffer; slice to detach a clean
     // buffer (the Uint8Array view may be a subarray of a larger allocation).
     const ipc = tableToIPC(table, "file");
     const ab = ipc.buffer.slice(ipc.byteOffset, ipc.byteOffset + ipc.byteLength) as ArrayBuffer;
-    bridge.showPerspective(ab);
+    ui.showPerspective(ab);
   }, [activeResult.table]);
 
   // Copy a share link for the active tab. The link carries the connection
@@ -369,10 +369,10 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
 
   const handleOpenInShell = useCallback(() => {
     const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";
-    bridge.activateShell?.();
+    terminal.activate?.();
     if (sql.trim()) {
       // activateShell switches surfaces; give the terminal a tick to focus.
-      setTimeout(() => bridge.runQuery?.(sql.trim()), 50);
+      setTimeout(() => terminal.runQuery?.(sql.trim()), 50);
     }
     onExitEditor?.();
   }, [activeDoc?.sql, onExitEditor]);
@@ -384,7 +384,7 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
     const ed = editorRef.current;
     if (!ed) return;
     if (isTableRef(text) && ed.getDoc().trim() === "") {
-      ed.insertAtCursor(buildTableSelect(text, [catalogData, bridge.memoryCatalog]));
+      ed.insertAtCursor(buildTableSelect(text, [catalogData, ui.memoryCatalog]));
     } else {
       ed.insertAtCursor(text);
     }
@@ -402,7 +402,7 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
     replaceStatement: applyReplaceStatement,
     replaceDocument: applyReplaceDocument,
     insertAtCursor: applyInsertAtCursor,
-    openInNewTab: (sql: string) => bridge.openInEditor?.(sql),
+    openInNewTab: (sql: string) => ui.openInEditor?.(sql),
   }), [applyReplaceStatement, applyReplaceDocument, applyInsertAtCursor]);
 
   // Right-panel resize (inverted delta vs a left sidebar). Persist on release.
@@ -447,8 +447,8 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
 
   // ---- sidebar click-to-insert --------------------------------------------
   useEffect(() => {
-    bridge.insertIntoEditor = smartInsert;
-    return () => { if (bridge.insertIntoEditor === smartInsert) bridge.insertIntoEditor = null; };
+    ui.insertIntoEditor = smartInsert;
+    return () => { if (ui.insertIntoEditor === smartInsert) ui.insertIntoEditor = null; };
   }, [smartInsert]);
 
   // ---- externally-pushed SQL (example queries, shell history, share links) --

@@ -15,7 +15,7 @@ import { useReducer, useRef, useEffect, useCallback } from "react";
 import { Sparkles, RotateCcw, X } from "lucide-react";
 import * as Sentry from "@sentry/astro";
 import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
-import { bridge } from "@/lib/shell-bridge";
+import { engine, ui } from "@/lib/shell-bridge";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
@@ -128,7 +128,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
         c.abort?.abort();
         c.askUserResolve?.("__cancelled__");
       }
-      bridge.cancelQuery?.();
+      engine.cancelQuery?.();
     };
   }, []);
 
@@ -177,7 +177,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
 
     if (settings.aiTelemetry) Sentry.setConversationId(c.conversationId);
 
-    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), bridge.memoryCatalog, false) +
+    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), ui.memoryCatalog, false) +
       "\n\nYou are an AI assistant embedded in a SQL editor. The user is editing SQL in the adjacent pane. Be concise. When you run a query, its results appear in the editor's results grid. When you produce a final query for the user, run it with run_sql so it can be applied to the editor. Do not produce charts.";
     const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
@@ -206,8 +206,8 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
     function withAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
       if (!signal) return p;
       return new Promise<T>((resolve, reject) => {
-        if (signal.aborted) { bridge.cancelQuery?.(); reject(new DOMException("Aborted", "AbortError")); return; }
-        const onAbort = () => { bridge.cancelQuery?.(); reject(new DOMException("Aborted", "AbortError")); };
+        if (signal.aborted) { engine.cancelQuery?.(); reject(new DOMException("Aborted", "AbortError")); return; }
+        const onAbort = () => { engine.cancelQuery?.(); reject(new DOMException("Aborted", "AbortError")); };
         signal.addEventListener("abort", onAbort, { once: true });
         p.then((v) => { signal.removeEventListener("abort", onAbort); resolve(v); },
                (e) => { signal.removeEventListener("abort", onAbort); reject(e); });
@@ -216,7 +216,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
 
     const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<any> => {
       if (name === "run_sql") {
-        const queryFn = bridge.query;
+        const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB engine is still starting — try again in a moment.");
         const userQuestion = text;
         // Shared run token so the latest run (AI or manual) wins the grid.
@@ -224,7 +224,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
         const setGrid = (patch: Partial<ResultState>) => { if (myRun === runIdRef.current) setActiveResult(myDoc, patch); };
         setGrid({ running: true, ran: true, error: null });
 
-        const prevProgress = bridge.progress;
+        const prevProgress = engine.progress;
         const updateProgress = (pct: number) => {
           blocks = blocks.map((b) => (b.type === "tool_call" && b.toolCall.isExecuting ? { ...b, toolCall: { ...b.toolCall, progress: pct } } : b));
           updateBlocks(blocks);
@@ -233,28 +233,28 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
           input.sql,
           { query: (sql) => withAbort(queryFn(sql), signal), resultCache: c.resultCache },
           {
-            onStart: () => { bridge.progress = updateProgress; },
-            onEnd: () => { bridge.progress = prevProgress; },
+            onStart: () => { engine.progress = updateProgress; },
+            onEnd: () => { engine.progress = prevProgress; },
             onOutcome: async (out) => {
               if (out.kind === "error") {
-                bridge.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: input.sql, executionTimeMs: out.elapsedMs, success: false, error: out.errMsg, userQuestion });
+                ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: input.sql, executionTimeMs: out.elapsedMs, success: false, error: out.errMsg, userQuestion });
                 setGrid({ running: false, ok: false, error: out.errMsg, table: null });
                 return;
               }
               if (out.kind === "empty" || out.kind === "ddl") {
-                bridge.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: 0, userQuestion });
+                ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: 0, userQuestion });
                 pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
                 setGrid({ running: false, ok: true, error: null, table: null, rowCount: 0, elapsedMs: out.elapsedMs, ran: true });
                 if (out.kind === "ddl" || /COMMENT\s+ON/i.test(input.sql)) {
-                  await bridge.refreshMemoryTables?.();
-                  bridge.onAttachedCatalogsChanged?.();
+                  await ui.refreshMemoryTables?.();
+                  ui.onAttachedCatalogsChanged?.();
                 }
                 return;
               }
               // table
               const parsed = JSON.parse(out.json);
               pendingDisplayResult = { columns: parsed.columns, rows: parsed.rows, rowCount: parsed.row_count, showing: parsed.showing };
-              bridge.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion });
+              ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion });
               setGrid({ running: false, ok: true, error: null, table: out.table, rowCount: out.table.numRows, elapsedMs: out.elapsedMs, ran: true });
             },
           },
@@ -263,7 +263,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
       if (name === "read_query_results") return executeReadQueryResults(c.resultCache, input.result_id, input.offset, input.limit);
       if (name === "list_tables") return executeListTables(catalogData);
       if (name === "describe_table") {
-        const queryFn = bridge.query;
+        const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB engine not ready");
         return describeTableWithFallback(catalogData, { query: queryFn }, input);
       }
@@ -348,7 +348,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
     const c = convos.current.get(docId);
     if (c?.askUserResolve) { c.askUserResolve("__cancelled__"); c.askUserResolve = null; }
     c?.abort?.abort();
-    bridge.cancelQuery?.();
+    engine.cancelQuery?.();
   }, [docId]);
 
   const handleAskUserSelect = useCallback((option: string, _index: number) => {

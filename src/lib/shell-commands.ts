@@ -3,7 +3,7 @@
  * Each command is a pure function of its input + a context interface.
  */
 import { formatCellValue, safeGetArrowValue } from "@/lib/format";
-import { bridge } from "@/lib/shell-bridge";
+import { ui } from "@/lib/shell-bridge";
 
 /** Mutable shell state exposed to commands via getters/setters. */
 export interface ShellState {
@@ -109,10 +109,10 @@ export async function handleDotCommand(trimmed: string, state: ShellState, io: S
   if (trimmed === ".preview") {
     if (!state.lastArrowBuffer) {
       writeln("No result to preview. Run a query first.", "31");
-    } else if (!bridge.showPreview) {
+    } else if (!ui.showPreview) {
       writeln("Data Preview is unavailable.", "31");
     } else {
-      bridge.showPreview(state.lastArrowBuffer);
+      ui.showPreview(state.lastArrowBuffer);
       writeln("Opened last result in the Data Preview tab", "32");
     }
     return true;
@@ -123,7 +123,7 @@ export async function handleDotCommand(trimmed: string, state: ShellState, io: S
     if (!state.lastArrowBuffer) {
       writeln("No result to view. Run a query first.", "31");
     } else {
-      bridge.showPerspective?.(state.lastArrowBuffer);
+      ui.showPerspective?.(state.lastArrowBuffer);
       writeln("Switched to Perspective viewer", "32");
     }
     return true;

@@ -15,7 +15,7 @@ import type {
 } from "vgi/client";
 import { getAuthTokenForService } from "./auth";
 import { arrowFieldToDuckDB } from "./arrow-to-duckdb";
-import { bridge } from "./shell-bridge";
+import { engine } from "./shell-bridge";
 import { readRows, esc } from "./duckdb-query";
 
 /** Column info extracted from a TableInfo's serialized Arrow schema. */
@@ -187,10 +187,10 @@ export async function fetchColumnStats(
   schemaName: string,
   tableName: string,
 ): Promise<Map<string, ColumnStats> | null> {
-  if (!bridge.query || !bridge.attached) return null;
+  if (!engine.query || !engine.attached) return null;
   // Wait for ATTACH + USE to complete. vgi_table_statistics() resolves
   // against the current catalog; firing pre-ATTACH returns "Catalog not found".
-  await bridge.attached;
+  await engine.attached;
   try {
     const sql = `SELECT column_name, column_type, min, max, has_null, has_not_null, distinct_count FROM vgi_table_statistics('${esc(catalogName)}', '${esc(schemaName)}', '${esc(tableName)}')`;
     const rows = await readRows(sql);

@@ -8,7 +8,7 @@
  */
 
 import { tableFromIPC } from "@query-farm/apache-arrow";
-import { bridge } from "@/lib/shell-bridge";
+import { engine } from "@/lib/shell-bridge";
 
 // ---------------------------------------------------------------------------
 // Traversal — tracks visible rows for collapse/expand in grouped views
@@ -278,7 +278,7 @@ async function getArrowSchema(tableId: string): Promise<any[]> {
 
 /** Execute a SQL query via the shared DuckDB WASM worker. */
 async function runQuery(sql: string): Promise<{ arrowBuffers?: ArrayBuffer[]; ok: boolean; error?: string }> {
-  const queryFn = bridge.query;
+  const queryFn = engine.query;
   if (!queryFn) throw new Error("DuckDB shell not initialized");
   return queryFn(sql);
 }

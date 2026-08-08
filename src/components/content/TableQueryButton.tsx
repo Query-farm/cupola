@@ -4,7 +4,7 @@ import { Popover as BaseUIPopover } from "@base-ui/react/popover";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { bridge } from "@/lib/shell-bridge";
+import { terminal, ui } from "@/lib/shell-bridge";
 
 interface Props {
   /** The SQL to create/run (e.g. `SELECT * FROM cat.schema.table LIMIT 100`). */
@@ -29,12 +29,12 @@ export function TableQueryButton({ sql, onOpenShell, withMenu, primaryVariant = 
   // Deterministic "open a new editor tab + run" path, with the same fallback
   // ladder ExampleQueries uses when the editor surface isn't mounted.
   const runInEditor = () => {
-    if (bridge.openInEditor) {
-      bridge.openInEditor(sql);
+    if (ui.openInEditor) {
+      ui.openInEditor(sql);
       return;
     }
-    bridge.activateShell?.();
-    setTimeout(() => bridge.runQuery?.(sql), 150);
+    terminal.activate?.();
+    setTimeout(() => terminal.runQuery?.(sql), 150);
   };
 
   const copySql = () => {

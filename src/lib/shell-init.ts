@@ -18,7 +18,7 @@ import { printBoxTable, printLineTable, cellWidth, type TerminalOutput } from ".
 import { handleDotCommand, type ShellState, type ShellIO } from "./shell-commands";
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "./shell-ai-mode";
 import { attachInputHandlers, type CompletionItem } from "./shell-input";
-import { bridge, recordQuery, notifyQueryChange, setBootPhase } from "./shell-bridge";
+import { engine, terminal, ui, notifyQueryChange, recordQuery, setBootPhase } from "./shell-bridge";
 import { quoteLiteral, quoteIdent } from "./duckdb-query";
 import { SHELL_EXTENSIONS, recordExtensionLoaded } from "./duckdb-engine";
 import { QueryResultCache } from "./query-results";
@@ -70,7 +70,7 @@ export function initShell(
   const WGA = (window as any).WebglAddon;
 
   // Singleton terminal — reuse across shell instances
-  const isNewTerminal = !bridge.shellTerm;
+  const isNewTerminal = !terminal.term;
   let term: any, fitAddon: any, rl: any;
   let shellInputHandlers: ReturnType<typeof attachInputHandlers>;
 
@@ -119,7 +119,7 @@ export function initShell(
     // sql_auto_complete comes from the `autocomplete` extension, which is
     // explicit-loaded in runPostReady (autoload is disabled at boot).
     shellInputHandlers = attachInputHandlers(term, rl, async (text) => {
-      const q = bridge.query;
+      const q = engine.query;
       if (!q) {
         shellInputHandlers?.onCompletions([]);
         return;
@@ -145,13 +145,13 @@ export function initShell(
       shellInputHandlers?.onCompletions(completions);
     });
 
-    bridge.shellTerm = term;
-    bridge.shellFitAddon = fitAddon;
-    bridge.shellReadline = rl;
+    terminal.term = term;
+    terminal.fitAddon = fitAddon;
+    terminal.readline = rl;
   } else {
-    term = bridge.shellTerm;
-    fitAddon = bridge.shellFitAddon;
-    rl = bridge.shellReadline;
+    term = terminal.term;
+    fitAddon = terminal.fitAddon;
+    rl = terminal.readline;
     // Reparent the terminal DOM element to the new container
     const termEl = term.element?.parentElement;
     if (termEl && termEl !== container) {
@@ -213,8 +213,8 @@ export function initShell(
   // Tie the progress bar into the existing bridge callback so other code paths
   // (haybarn boot, deferred installs) can also feed it. Held back as a ref so
   // we can restore on cleanup.
-  const prevBridgeProgress = bridge.progress;
-  bridge.progress = renderProgressBar;
+  const prevBridgeProgress = engine.progress;
+  engine.progress = renderProgressBar;
 
   // ensureDuckDB is called below inside the isNewTerminal branch (idempotent)
   // so the boot fires lazily on first shell open, not on every initShell.
@@ -237,7 +237,7 @@ export function initShell(
    *    flag = -1  → byte[4..7] holds length, byte[8..] holds the error msg
    *    flag = 0   → extension is still waiting (Atomics.wait on this) */
   function handleAuthUrl(url: string): void {
-    const oauthSAB = (bridge as unknown as { _oauthSAB?: SharedArrayBuffer })._oauthSAB ?? null;
+    const oauthSAB = (engine as unknown as { _oauthSAB?: SharedArrayBuffer })._oauthSAB ?? null;
     if (!oauthSAB) {
       console.error("[shell] No oauth SAB — can't route auth code back to extension");
       return;
@@ -397,7 +397,7 @@ export function initShell(
   }
 
   // Runs the post-ready flow (INSTALL vgi + ATTACH + timezone + readLoop).
-  // Invoked once AsyncDuckDB.instantiate has resolved and bridge.query is live.
+  // Invoked once AsyncDuckDB.instantiate has resolved and engine.query is live.
   let postReadyInvoked = false;
   const runPostReady = (readyWasmVersion: string) => {
     if (postReadyInvoked) return;
@@ -412,8 +412,8 @@ export function initShell(
       // extensions surface as a normal SQL error we can route through
       // try/catch, and the only way an extension gets loaded is via our
       // explicit INSTALL/LOAD calls below.
-      await bridge.query!("SET autoload_known_extensions = false");
-      await bridge.query!("SET autoinstall_known_extensions = false");
+      await engine.query!("SET autoload_known_extensions = false");
+      await engine.query!("SET autoinstall_known_extensions = false");
 
       // Extensions to pre-load at shell startup. Each gets an explicit
       // INSTALL + LOAD pair so no user query triggers a sync autoload.
@@ -423,7 +423,7 @@ export function initShell(
         writeln(`Loading ${ext.name} extension...`, "33");
         setBootPhase(`Loading ${ext.name} extension`);
         const fromClause = ext.source ? ` FROM ${ext.source}` : "";
-        const install = await bridge.query!(`INSTALL ${ext.name}${fromClause}`);
+        const install = await engine.query!(`INSTALL ${ext.name}${fromClause}`);
         if (!install.ok) {
           const msg = `INSTALL ${ext.name} failed: ${install.error ?? ""}`;
           if (ext.required) {
@@ -435,7 +435,7 @@ export function initShell(
           console.warn("[shell]", msg, "(continuing)");
           continue;
         }
-        const load = await bridge.query!(`LOAD ${ext.name}`);
+        const load = await engine.query!(`LOAD ${ext.name}`);
         if (!load.ok) {
           const msg = `LOAD ${ext.name} failed: ${load.error ?? ""}`;
           if (ext.required) {
@@ -472,12 +472,12 @@ export function initShell(
           const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
           const { setDuckDBTimezone } = await import("./format");
           if (browserTz) {
-            const r = await bridge.query!(`SET TimeZone=${quoteLiteral(browserTz)}`);
+            const r = await engine.query!(`SET TimeZone=${quoteLiteral(browserTz)}`);
             if (!r.ok) console.warn("[shell] SET TimeZone failed:", r.error);
             setDuckDBTimezone(browserTz);
             console.log("[shell] timezone set to", browserTz);
           } else {
-            const tzResult = await bridge.query!("SELECT current_setting('TimeZone') as tz");
+            const tzResult = await engine.query!("SELECT current_setting('TimeZone') as tz");
             if (tzResult.ok && tzResult.arrowBuffers?.length) {
               const tzTable = tableFromIPC(tzResult.arrowBuffers[0]);
               const tzVal = tzTable.getChildAt(0)?.get(0);
@@ -506,14 +506,14 @@ export function initShell(
         setBootPhase(`Connecting to ${config.catalogName}`);
         const attachSql = buildAttachSql();
         console.log("[shell] ATTACH SQL:", attachSql.replace(/(oauth_refresh_token|bearer_token) '[^']*'/g, "$1 '***'"));
-        const result = await bridge.query!(attachSql);
+        const result = await engine.query!(attachSql);
         if (result.ok) {
-          await bridge.query!(`USE ${config.catalogName}`);
+          await engine.query!(`USE ${config.catalogName}`);
           writeln(`Connected to ${config.catalogName}`, "32");
           // Wake up consumers (column stats, data preview) that were awaiting
-          // ATTACH completion. They block on bridge.attached so they don't
-          // race the boot-phase exposure of bridge.query.
-          bridge.markAttached?.();
+          // ATTACH completion. They block on engine.attached so they don't
+          // race the boot-phase exposure of engine.query.
+          engine.markAttached?.();
         } else {
           const errStr = result.error ?? "";
           console.log("[shell] ATTACH failed:", errStr);
@@ -524,13 +524,13 @@ export function initShell(
           }
           // Resolve attached even on failure so downstream consumers fail
           // fast with their own "catalog not found" error instead of hanging.
-          bridge.markAttached?.();
+          engine.markAttached?.();
         }
         writeln("");
       } else {
         // No VGI catalog configured — resolve attached immediately so any
         // consumer that races here (shouldn't, but be defensive) doesn't hang.
-        bridge.markAttached?.();
+        engine.markAttached?.();
         writeln("");
         writeln("Type SQL queries below.", "33");
         writeln("");
@@ -539,9 +539,9 @@ export function initShell(
       // Shell is fully ready — expose runQuery for external callers
       console.log("[shell] post-ready: handing off to readLoop");
       setBootPhase(null);
-      bridge.runQuery = runQuery;
+      terminal.runQuery = runQuery;
       notifyQueryChange();
-      bridge.onAttachedCatalogsChanged?.();
+      ui.onAttachedCatalogsChanged?.();
       window.dispatchEvent(new Event("duckdb-ready"));
       readLoop();
     })();
@@ -551,7 +551,7 @@ export function initShell(
   // Perspective) collapse to AsyncDuckDB.runQuery, which always returns a
   // single File-format Arrow IPC buffer.
   function runQueryAsync(sql: string): Promise<{ ok: boolean; arrowBuffers?: ArrayBuffer[]; error?: string }> {
-    const q = bridge.query;
+    const q = engine.query;
     if (!q) return Promise.resolve({ ok: false, error: "duckdb not ready" });
     return q(sql);
   }
@@ -660,7 +660,7 @@ export function initShell(
           tableFromIPC,
           printTable,
           clearProgressBar,
-          resetCancelFlag: () => { if (bridge.cancelInt32) Atomics.store(bridge.cancelInt32, 0, 0); },
+          resetCancelFlag: () => { if (engine.cancelInt32) Atomics.store(engine.cancelInt32, 0, 0); },
         };
         await runAIMode(trimmed, aiConv, aiTerm, aiOps, { apiKey: config.aiApiKey || "", model: config.aiModel || "claude-sonnet-4-6" });
         continue;
@@ -670,7 +670,7 @@ export function initShell(
       const result = await runQueryAsync(trimmed);
       const elapsed = performance.now() - t0;
       clearProgressBar();
-      if (bridge.cancelInt32) Atomics.store(bridge.cancelInt32, 0, 0); // reset cancel flag for next query
+      if (engine.cancelInt32) Atomics.store(engine.cancelInt32, 0, 0); // reset cancel flag for next query
 
       if (!result.ok) {
         const errStr = result.error || "unknown";
@@ -710,21 +710,21 @@ export function initShell(
             const elapsedStr = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(1)}s` : `${Math.round(elapsed)}ms`;
             writeln(`OK (${elapsedStr})`, "32");
             // DDL — refresh sidebar and handle navigation
-            bridge.refreshMemoryTables?.().then?.(() => {
+            ui.refreshMemoryTables?.().then?.(() => {
               const createMatch = trimmed.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
               if (createMatch) {
                 const schema = createMatch[1] || "main";
                 const name = createMatch[2];
-                bridge.navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
+                ui.navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
               }
               const dropMatch = trimmed.match(/DROP\s+(?:TABLE|VIEW|SCHEMA)\s+(?:IF\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
               if (dropMatch) {
                 const isSchemaLevel = /DROP\s+SCHEMA/i.test(trimmed);
                 if (isSchemaLevel) {
-                  bridge.navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
+                  ui.navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
                 } else {
                   const schema = dropMatch[1] || "main";
-                  bridge.navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
+                  ui.navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
                 }
               }
             });
@@ -767,7 +767,7 @@ export function initShell(
       // Sync sidebar with the live set of attached VGI catalogs whenever
       // the user ran an ATTACH or DETACH.
       if (/^\s*(ATTACH|DETACH)\b/i.test(trimmed)) {
-        bridge.onAttachedCatalogsChanged?.();
+        ui.onAttachedCatalogsChanged?.();
       }
     }
   }
@@ -850,9 +850,9 @@ export function initShell(
     }
   }
 
-  // bridge.query and bridge.querySync are set by ensureDuckDB once AsyncDuckDB
+  // engine.query and engine.querySync are set by ensureDuckDB once AsyncDuckDB
   // has instantiated. Only catalogName is shell-config-specific.
-  bridge.catalogName = config.catalogName;
+  engine.catalogName = config.catalogName;
 
   if (isNewTerminal) {
     // First initShell call this page load — wait for ensureDuckDB to resolve
@@ -864,8 +864,8 @@ export function initShell(
           baseUrl: import.meta.env.BASE_URL,
           onAuthUrl: handleAuthUrl,
         });
-        const elapsedMs = Math.round(performance.now() - bridge.workerCreateStart);
-        const ready = bridge.workerReadyData;
+        const elapsedMs = Math.round(performance.now() - engine.workerCreateStart);
+        const ready = engine.workerReadyData;
         console.log(`[shell] DuckDBShell ready in ${elapsedMs}ms (haybarn ${ready?.wasmVersion ?? "?"})`);
         runPostReady(ready?.wasmVersion ?? "");
       } catch (err) {
@@ -875,7 +875,7 @@ export function initShell(
     })();
   } else {
     // Reconnecting — readLoop is already running, re-expose runQuery
-    bridge.runQuery = runQuery;
+    terminal.runQuery = runQuery;
   }
 
   // Insert text into the terminal's current input line.
@@ -884,7 +884,7 @@ export function initShell(
   // buildTableSelect/isTableRef so both surfaces behave identically.
   function insertText(text: string) {
     if (isTableRef(text) && promptInputEmpty) {
-      term.paste(buildTableSelect(text, [config.catalogData, bridge.memoryCatalog]) + ";");
+      term.paste(buildTableSelect(text, [config.catalogData, ui.memoryCatalog]) + ";");
     } else {
       term.paste(text);
     }
@@ -900,24 +900,24 @@ export function initShell(
     });
   }
 
-  // Expose insertText immediately (for drag-drop from tree). bridge.runQuery
+  // Expose insertText immediately (for drag-drop from tree). terminal.runQuery
   // is set later, after ATTACH completes and readLoop starts.
-  bridge.insertText = insertText;
+  terminal.insertText = insertText;
 
   return {
     cleanup: () => {
       resizeObserver.disconnect();
       inputTracker.dispose();
       if (fitTimer) clearTimeout(fitTimer);
-      bridge.progress = prevBridgeProgress;
+      engine.progress = prevBridgeProgress;
       // Don't terminate shared worker or dispose shared terminal
-      bridge.shellFitAddon = null;
-      bridge.insertText = null;
-      bridge.runQuery = null;
-      // bridge.query stays set — it's owned by ensureDuckDB now, not by the
+      terminal.fitAddon = null;
+      terminal.insertText = null;
+      terminal.runQuery = null;
+      // engine.query stays set — it's owned by ensureDuckDB now, not by the
       // shell, and other components (DataPreview, fetchColumnStats, etc.)
       // depend on it remaining available even when the shell tab is closed.
-      bridge.catalogName = null;
+      engine.catalogName = null;
       notifyQueryChange();
     },
     insertText,

@@ -9,7 +9,7 @@
  * repeated N times. These helpers are the only correct way to decode.
  */
 import { tableFromIPC, type Table } from "@query-farm/apache-arrow";
-import { bridge } from "./shell-bridge";
+import { engine } from "./shell-bridge";
 
 /** SQL-escape a string for inlining into a literal. DuckDB uses SQL-standard
  *  single-quote doubling. Returns the escaped *body* — callers supply the
@@ -56,7 +56,7 @@ export function decodeArrowBuffer(buf: ArrayBuffer | Uint8Array): Table {
 /** Run SQL and decode the result to an Apache Arrow `Table`. Returns null if
  *  the query failed, the bridge isn't ready, or no Arrow buffer came back. */
 export async function readTable(sql: string): Promise<Table | null> {
-  const q = bridge.query;
+  const q = engine.query;
   if (!q) return null;
   const r = await q(sql);
   if (!r.ok || !r.arrowBuffers?.length) return null;

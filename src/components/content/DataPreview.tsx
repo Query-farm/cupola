@@ -12,7 +12,7 @@ import { DataGrid } from "./DataGrid";
 import type { ColumnInfo } from "@/lib/service";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 import { safeGetArrowValue } from "@/lib/format";
-import { bridge } from "@/lib/shell-bridge";
+import { engine } from "@/lib/shell-bridge";
 import { quoteLiteral, decodeArrowBuffer } from "@/lib/duckdb-query";
 import { waitForTableReady } from "@/lib/table-ready";
 import { useSettings } from "@/lib/settings";
@@ -37,7 +37,7 @@ async function queryDuckDB(sql: string): Promise<{ table: any; error?: string }>
   // verbatim), and empty success (table: null with no error). Decode is
   // the same single-buffer / Uint8Array dance — using the static
   // tableFromIPC import standardized in duckdb-query.ts.
-  const queryFn = bridge.query;
+  const queryFn = engine.query;
   if (!queryFn) return { table: null, error: "DuckDB shell not initialized. Open the SQL Shell tab first." };
   const result = await queryFn(sql);
   if (!result.ok) return { table: null, error: result.error || "Query failed" };
@@ -68,13 +68,13 @@ async function resolveOrderBy(tablePath: string): Promise<string> {
   // the words "ORDER BY"), including ASC NULLS LAST modifiers, so the
   // caller can splice it without per-rung knowledge.
 
-  // Rung 1: rowid. The caller is responsible for ensuring bridge.query is
+  // Rung 1: rowid. The caller is responsible for ensuring engine.query is
   // set before invoking us — otherwise the probe can't actually run and the
   // ladder will cascade to ALL incorrectly.
-  if (!bridge.query) {
-    throw new Error("resolveOrderBy called before bridge.query was ready");
+  if (!engine.query) {
+    throw new Error("resolveOrderBy called before engine.query was ready");
   }
-  const probe = await bridge.query(`SELECT rowid FROM ${tablePath} LIMIT 1`);
+  const probe = await engine.query(`SELECT rowid FROM ${tablePath} LIMIT 1`);
   if (probe?.ok) {
     console.log("[preview] orderBy resolved to rowid for", tablePath);
     return "rowid ASC NULLS LAST";
@@ -293,7 +293,7 @@ export function DataPreview({ tablePath, result }: Props) {
       }
       if (!tablePath) return;
       // Wait for the shell to be ready to query this specific table — for
-      // VGI-catalog tables this awaits ATTACH+USE, not just bridge.query.
+      // VGI-catalog tables this awaits ATTACH+USE, not just engine.query.
       // The orderBy probe must NOT run pre-ATTACH or it cascades to the ALL
       // fallback and caches that wrong choice for the table's lifetime.
       await waitForTableReady(tablePath);

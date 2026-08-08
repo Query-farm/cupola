@@ -15,7 +15,7 @@ import {
   hasTokens as hasOAuthTokens,
 } from "@/lib/oauth-client";
 import { SettingsProvider } from "@/lib/settings";
-import { bridge, setShellWorkerSentryUser } from "@/lib/shell-bridge";
+import { engine, terminal, ui, setShellWorkerSentryUser } from "@/lib/shell-bridge";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
 import { loadTheme } from "@/lib/theme";
 import { lazy, Suspense } from "react";
@@ -166,7 +166,7 @@ export function CatalogApp() {
 
   /** Fetch in-memory DuckDB tables via the shell worker. Returns null if shell isn't running. */
   const fetchMemoryTables = useCallback(async () => {
-    if (!bridge.query) { setMemoryCatalog(null); return; }
+    if (!engine.query) { setMemoryCatalog(null); return; }
 
     try {
       const colRows = await readRows(
@@ -278,7 +278,7 @@ export function CatalogApp() {
    *  refresh button. The primary (?service=) catalog is excluded — it's
    *  rendered from `data` separately. */
   const syncAttachedCatalogs = useCallback(async (): Promise<void> => {
-    if (!bridge.query) return;
+    if (!engine.query) return;
     let names: string[] = [];
     try {
       const rows = await readRows(
@@ -295,7 +295,7 @@ export function CatalogApp() {
     }
 
     // Exclude the primary catalog — it's already rendered from `data`.
-    const primaryName = catalogNameRef.current ?? bridge.catalogName ?? null;
+    const primaryName = catalogNameRef.current ?? engine.catalogName ?? null;
     if (primaryName) names = names.filter((n) => n !== primaryName);
 
     const current = attachedCatalogsRef.current;
@@ -328,14 +328,14 @@ export function CatalogApp() {
     try { localStorage.setItem("vgi-sidebar-collapsed", sidebarCollapsed ? "1" : "0"); } catch {}
   }, [sidebarCollapsed]);
 
-  // bridge.openInEditor: switch to the editor tab and queue the SQL.
+  // ui.openInEditor: switch to the editor tab and queue the SQL.
   // Invoked by ExampleQueries' Run button and the shell's history tab.
   useEffect(() => {
-    bridge.openInEditor = (sql: string, opts?: { autoRun?: boolean }) => {
+    ui.openInEditor = (sql: string, opts?: { autoRun?: boolean }) => {
       setPendingEditorSql({ sql, autoRun: opts?.autoRun ?? true });
       setActiveTab("editor");
     };
-    return () => { bridge.openInEditor = null; };
+    return () => { ui.openInEditor = null; };
   }, []);
 
   // `?sql=` / `?sql_z=` — a shared query link. Stage it in a new editor tab
@@ -358,13 +358,13 @@ export function CatalogApp() {
   // useEffect + cleanup so unmount clears the slots instead of leaking the
   // previous component instance's closures.
   useEffect(() => {
-    bridge.refreshMemoryTables = fetchMemoryTables;
-    bridge.onAttachedCatalogsChanged = syncAttachedCatalogs;
-    bridge.memoryCatalog = memoryCatalog;
+    ui.refreshMemoryTables = fetchMemoryTables;
+    ui.onAttachedCatalogsChanged = syncAttachedCatalogs;
+    ui.memoryCatalog = memoryCatalog;
     return () => {
-      bridge.refreshMemoryTables = null;
-      bridge.onAttachedCatalogsChanged = null;
-      bridge.memoryCatalog = null;
+      ui.refreshMemoryTables = null;
+      ui.onAttachedCatalogsChanged = null;
+      ui.memoryCatalog = null;
     };
   }, [fetchMemoryTables, syncAttachedCatalogs, memoryCatalog]);
 
@@ -374,8 +374,8 @@ export function CatalogApp() {
   useEffect(() => {
     if (activeTab !== "shell") return;
     requestAnimationFrame(() => {
-      bridge.shellFitAddon?.fit();
-      setTimeout(() => bridge.shellFitAddon?.fit(), 50);
+      terminal.fitAddon?.fit();
+      setTimeout(() => terminal.fitAddon?.fit(), 50);
     });
   }, [activeTab]);
 
@@ -494,8 +494,8 @@ export function CatalogApp() {
   // Expose navigate globally so AI agent can select newly created objects.
   // useEffect + cleanup so unmount drops the stale callback.
   useEffect(() => {
-    bridge.navigateToSelection = navigate;
-    return () => { bridge.navigateToSelection = null; };
+    ui.navigateToSelection = navigate;
+    return () => { ui.navigateToSelection = null; };
   }, [navigate]);
 
   const loadCatalog = useCallback(
@@ -551,7 +551,7 @@ export function CatalogApp() {
           updatePageTitle(initialSel, catalog.catalogName);
         }
         // Also refresh memory tables if shell is running
-        if (bridge.query) {
+        if (engine.query) {
           await fetchMemoryTables();
           // On refresh (not initial load), force every attached VGI catalog
           // to re-fetch by clearing the cache first — explicit user intent
@@ -740,8 +740,8 @@ export function CatalogApp() {
                 onShellInsert={(text) => {
                   // In editor mode, route table/column clicks into the SQL
                   // editor at the cursor; otherwise into the xterm shell.
-                  if (activeTab === "editor" && bridge.insertIntoEditor) {
-                    bridge.insertIntoEditor(text);
+                  if (activeTab === "editor" && ui.insertIntoEditor) {
+                    ui.insertIntoEditor(text);
                   } else {
                     shellInsertRef.current?.(text);
                   }
