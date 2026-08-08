@@ -20,6 +20,12 @@
 import * as Sentry from "@sentry/cloudflare";
 
 import { scrubUrl } from "../src/lib/sentry-scrub";
+import {
+  type ErrorVariant,
+  plainTextForVariant,
+  renderErrorPage,
+  statusForVariant,
+} from "./error-page";
 
 // Injected by wrangler via --define at deploy time. Local `wrangler dev`
 // gets the literal placeholder, which is fine — the DSN check below skips
@@ -134,6 +140,44 @@ function respond(obj: R2ObjectBody, key: string, extraHeaders?: Record<string, s
   return new Response(obj.body, { headers });
 }
 
+async function readLatest(env: Env): Promise<string | null> {
+  const obj = await env.ASSETS_BUCKET.get("_latest");
+  if (!obj) return null;
+  return (await obj.text()).trim();
+}
+
+/**
+ * Only documents get the branded page. A missing `.js`/`.wasm` sub-resource
+ * must keep its plain-text body — handing a fetch() or a <script> tag a page
+ * of HTML is worse than the bare 404 it replaced.
+ */
+function wantsHtml(request: Request): boolean {
+  return (request.headers.get("Accept") ?? "").includes("text/html");
+}
+
+function errorResponse(
+  request: Request,
+  opts: {
+    variant: ErrorVariant;
+    path: string;
+    requestedVersion?: string;
+    latestVersion?: string;
+  },
+): Response {
+  const status = statusForVariant(opts.variant);
+  // `no-store` throughout: a version that 404s today may be restored, and a
+  // cached error page would outlive the fix. `cacheAndReturn` already skips
+  // non-200s, so this only guards browser and intermediary caches.
+  const headers = new Headers({ "Cache-Control": "no-store, max-age=0" });
+
+  if (!wantsHtml(request)) {
+    headers.set("Content-Type", "text/plain; charset=utf-8");
+    return new Response(plainTextForVariant(opts.variant, opts.path), { status, headers });
+  }
+  headers.set("Content-Type", "text/html; charset=utf-8");
+  return new Response(renderErrorPage(opts), { status, headers });
+}
+
 const handler = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -204,11 +248,10 @@ const handler = {
 
     // ---- /latest/ → /v{latest_version}/ ----
     if (path === "/latest" || path === "/latest/" || path.startsWith("/latest/")) {
-      const latestObj = await env.ASSETS_BUCKET.get("_latest");
-      if (!latestObj) {
-        return new Response("No version deployed yet.", { status: 503 });
+      const latestVersion = await readLatest(env);
+      if (!latestVersion) {
+        return errorResponse(request, { variant: "not-deployed", path });
       }
-      const latestVersion = (await latestObj.text()).trim();
       const remainder = path.replace(/^\/latest\/?/, "");
       const target = `/v${latestVersion}/${remainder}`;
       const qs = url.search ? url.search : "";
@@ -223,7 +266,19 @@ const handler = {
       const r2Key = `v${version}/${remainder}`;
       const obj = await fetchWithFallback(env.ASSETS_BUCKET, r2Key, remainder);
       if (!obj) {
-        return new Response(`Not found: ${path}`, { status: 404 });
+        // Distinguish "the whole release is gone" from "that page doesn't
+        // exist inside a release that is still live". One extra R2 get, and
+        // only on a request that has already failed.
+        const latestVersion = await readLatest(env);
+        const versionRootExists =
+          version === latestVersion ||
+          (await fetchFromR2(env.ASSETS_BUCKET, `v${version}/`)) !== null;
+        return errorResponse(request, {
+          variant: versionRootExists ? "not-found" : "outdated-version",
+          path,
+          requestedVersion: version,
+          latestVersion: latestVersion ?? undefined,
+        });
       }
       const hasExtension = remainder.includes(".");
       const resolvedKey =
@@ -237,9 +292,8 @@ const handler = {
 
     // ---- Fallback: latest version, then root-level ----
     const stripped = path.startsWith("/") ? path.slice(1) : path;
-    const latestObj = await env.ASSETS_BUCKET.get("_latest");
-    if (latestObj) {
-      const latestVersion = (await latestObj.text()).trim();
+    const latestVersion = await readLatest(env);
+    if (latestVersion) {
       const r2Key = `v${latestVersion}/${stripped}`;
       const obj = await fetchWithFallback(env.ASSETS_BUCKET, r2Key, stripped);
       if (obj) {
@@ -248,7 +302,14 @@ const handler = {
       }
     }
 
-    return new Response("Not found", { status: 404 });
+    // No `_latest` at all means nothing has ever been published — the same
+    // condition the /latest/ branch reports as 503. This branch used to
+    // collapse it into a generic 404.
+    return errorResponse(request, {
+      variant: latestVersion ? "not-found" : "not-deployed",
+      path,
+      latestVersion: latestVersion ?? undefined,
+    });
   },
 };
 
