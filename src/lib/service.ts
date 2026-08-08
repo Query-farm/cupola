@@ -12,9 +12,8 @@ import type {
   ViewInfo,
   FunctionInfo,
   MacroInfo,
-  CatalogAttachResult,
 } from "vgi/client";
-import { getAuthToken, getAuthTokenForService } from "./auth";
+import { getAuthTokenForService } from "./auth";
 import { arrowFieldToDuckDB } from "./arrow-to-duckdb";
 import { bridge } from "./shell-bridge";
 import { readRows, esc } from "./duckdb-query";

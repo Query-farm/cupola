@@ -3,7 +3,7 @@
  * Loads xterm.js + addons from CDN to avoid SSR/bundling issues.
  * Shell logic adapted from public/shell/index.html.
  */
-import { useEffect, useRef, useState, useCallback, lazy, Suspense } from "react";
+import { useEffect, useRef, useState, lazy, Suspense } from "react";
 import { Loader2, Table2 } from "lucide-react";
 import type { TabId } from "./AppTabBar";
 const AskAIChat = lazy(() => import("./AskAIChat").then(m => ({ default: m.AskAIChat })));
@@ -11,19 +11,13 @@ import { DataPreview } from "./content/DataPreview";
 import { getColumns } from "@/lib/service";
 import { treeIdToShellText } from "@/lib/tree";
 import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
-import { getAuthToken, getAuthTokenForService, getOAuthMeta, redirectToAuth } from "@/lib/auth";
+import { getAuthToken, getAuthTokenForService } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
-import { formatCellValue, safeGetArrowValue } from "@/lib/format";
 import { tableFromIPC, RecordBatchFileReader, Table as ArrowTable } from "@query-farm/apache-arrow";
-import { printBoxTable, printLineTable, type TerminalOutput } from "@/lib/shell-table-renderer";
-import { handleDotCommand, type ShellState, type ShellIO } from "@/lib/shell-commands";
-import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "@/lib/shell-ai-mode";
-import { attachInputHandlers, type CompletionItem } from "@/lib/shell-input";
-import { bridge, recordQuery, notifyQueryChange, setBootPhase, onBootChange } from "@/lib/shell-bridge";
+import { bridge, onBootChange } from "@/lib/shell-bridge";
 import { ShellBootScreen } from "./ShellBootScreen";
 import * as Sentry from "@sentry/astro";
-import { ensureDuckDB, resolveThreadCount } from "@/lib/duckdb-worker-boot";
-import { getTerminalTheme } from "@/lib/theme";
+import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { initShell } from "@/lib/shell-init";
 
 import type { CatalogData } from "@/lib/service";
@@ -161,7 +155,6 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   // `.preview` in the shell. Takes precedence over the selection-driven table
   // preview, and is cleared when the sidebar selection changes (see below).
   const [resultPreview, setResultPreview] = useState<any>(null);
-  const [termSize, setTermSize] = useState<{ rows: number; cols: number } | null>(null);
   const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
 
   // CatalogApp only mounts this component once an engine-backed tab has been
@@ -179,7 +172,6 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     return () => { bridge.addQueryHistoryEntry = null; };
   }, [onQueryHistoryCountChange]);
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
-  const [perspectiveHasData, setPerspectiveHasData] = useState(false);
 
   // Resolve selected table or view for Data Preview and Perspective tabs
   // Search both VGI catalog and memory catalog
@@ -208,7 +200,6 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     bridge.showPerspective = async (arrowBuffer: ArrayBuffer) => {
       setActiveTab("perspective");
       setPerspectiveLoading(true);
-      setPerspectiveHasData(true);
       try {
         await loadPerspective(perspectiveRef.current!, arrowBuffer);
       } catch (e: any) {
@@ -288,12 +279,6 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     };
   }, [shellActivated, serviceUrl, catalogName]);
 
-  // Track terminal dimensions
-  const updateTermSize = useCallback(() => {
-    const term = bridge.shellTerm;
-    if (term) setTermSize({ rows: term.rows, cols: term.cols });
-  }, []);
-
   // Refit terminal when mode changes or switching back to shell tab.
   // The ResizeObserver in shell-init.ts handles continuous reflow; this is
   // just the one-shot post-mount fit. Prior to consolidation, this used a
@@ -304,7 +289,6 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     if (activeTab === "shell" && bridge.shellFitAddon) {
       const fitAndRefresh = () => {
         bridge.shellFitAddon?.fit();
-        updateTermSize();
         const term = bridge.shellTerm;
         if (term) term.refresh(0, term.rows - 1);
       };
@@ -312,7 +296,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
       const t = setTimeout(fitAndRefresh, 0);
       return () => { clearTimeout(t); };
     }
-  }, [activeTab, updateTermSize]);
+  }, [activeTab]);
 
   useEffect(() => {
     const el = rootRef.current;
@@ -320,12 +304,11 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     const ro = new ResizeObserver(() => {
       if (activeTab === "shell" && bridge.shellFitAddon) {
         bridge.shellFitAddon.fit();
-        updateTermSize();
       }
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [activeTab, updateTermSize]);
+  }, [activeTab]);
 
   // Auto-load Perspective virtual server when tab is active and a table is selected
   const perspectiveTableRef = useRef<string | null>(null);
@@ -599,7 +582,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
                     if (cid) convMap.set(cid, group);
                   }
                 }
-                return [...groups].reverse().map((group, gi) => {
+                return [...groups].reverse().map((group) => {
                   if (!group.conversationId || group.entries.length === 1) {
                     // Standalone query — render flat
                     const entry = group.entries[0];

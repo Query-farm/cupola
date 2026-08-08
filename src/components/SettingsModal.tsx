@@ -8,7 +8,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Settings, Database, FunctionSquare, TerminalSquare, Bot, FileCode2 } from "lucide-react";
+import { Settings, Database, TerminalSquare, Bot, FileCode2 } from "lucide-react";
 import {
   Select,
   SelectContent,

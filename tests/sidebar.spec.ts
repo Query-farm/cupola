@@ -2,7 +2,7 @@
  * Sidebar tree — rendering, filter input, expand/collapse behavior.
  */
 import { test, expect } from "@playwright/test";
-import { gotoApp, T_FAST, T_NORMAL } from "./helpers";
+import { gotoApp, T_NORMAL } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await gotoApp(page);

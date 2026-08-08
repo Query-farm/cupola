@@ -16,7 +16,7 @@
  * vega-lite type metadata doesn't sneak into the entry chunk either.
  */
 import { memo, useEffect, useRef, useState, useCallback } from "react";
-import { RotateCw, Maximize2, Download, Loader2 } from "lucide-react";
+import { RotateCw, Maximize2, Loader2 } from "lucide-react";
 import type { VegaChartContent } from "./ChatMessageAssistant";
 import { getChartRows, getChartExtras, refreshChartRows, refreshChartExtra } from "@/lib/chart-rows-store";
 import { MaximizedChartDialog } from "./MaximizedChartDialog";
@@ -267,7 +267,7 @@ function VegaChartBlockImpl({ chart, onUpdate }: Props) {
 }
 
 function ToolbarButton({
-  children, onClick, disabled, title, testId, asChild,
+  children, onClick, disabled, title, testId, asChild: _asChild,
 }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; title: string; testId?: string; asChild?: boolean }) {
   // asChild=true: the parent (e.g. ChartDownloadMenu's PopoverTrigger) owns
   // the click/keyboard behavior; we just render the icon and styling.

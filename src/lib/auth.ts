@@ -13,7 +13,6 @@ import {
   hasTokens as spaHasTokens,
   clearTokens as spaClearTokens,
   clearAllTokens as spaClearAllTokens,
-  extractOrigin,
 } from "./oauth-client";
 import { consumeAuthFragment } from "./url-params";
 

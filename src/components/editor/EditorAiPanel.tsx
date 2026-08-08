@@ -72,7 +72,7 @@ interface Props {
   getCurrentSql: () => string;
   apply: SqlApplyActions;
   /** Shared with manual runs so the latest run (AI or manual) wins the grid. */
-  runIdRef: React.MutableRefObject<number>;
+  runIdRef: React.RefObject<number>;
   setActiveResult: (docId: string, patch: Partial<ResultState>) => void;
   onClose: () => void;
 }

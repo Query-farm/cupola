@@ -4,7 +4,7 @@
  * the window.__cupolaEditorAiTest hook so these run without the network.
  */
 import { test, expect } from "@playwright/test";
-import { gotoApp, openEditor, typeInEditor, waitForShellBridge, T_NORMAL } from "./helpers";
+import { gotoApp, openEditor, waitForShellBridge, T_NORMAL } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await gotoApp(page);

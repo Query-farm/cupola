@@ -24,12 +24,10 @@ interface TraversalNode {
 class ViewTraversal {
   nodes: TraversalNode[];        // Currently visible rows
   private allNodes: TraversalNode[];  // Full tree (immutable after build)
-  private groupByLen: number;
 
-  private constructor(allNodes: TraversalNode[], groupByLen: number) {
+  private constructor(allNodes: TraversalNode[], _groupByLen: number) {
     this.allNodes = allNodes;
     this.nodes = [...allNodes]; // Start fully expanded
-    this.groupByLen = groupByLen;
   }
 
   /** Build a traversal from the __GROUPING_ID__ column of a grouped DuckDB result. */
@@ -310,7 +308,6 @@ async function queryRows(sql: string): Promise<any[]> {
  */
 export class VgiDuckDBHandler {
   private _sqlBuilder: any = null;
-  private mod: any;
   private tableOrderingCache = new Map<string, { hasRowid: boolean; primaryKey: string[] | null }>();
   private tableSizeCache = new Map<string, number>();
   private tableSchemaCache = new Map<string, Record<string, ColumnType>>();
@@ -319,8 +316,7 @@ export class VgiDuckDBHandler {
   /** Traversals for grouped views — enables collapse/expand. */
   private traversals = new Map<string, ViewTraversal>();
 
-  constructor(perspectiveMod: any) {
-    this.mod = perspectiveMod;
+  constructor(_perspectiveMod: any) {
   }
 
   /** Detect whether a table has rowid or a primary key for stable ordering. */

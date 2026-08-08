@@ -297,7 +297,6 @@ export async function printBoxTable(table: Table, out: TerminalOutput, maxDispla
 
   const { visibleIndices, ellipsisPos } = pruneColumns(idealWidths, out.cols);
   const shownCount = visibleIndices.length;
-  const hiddenCount = totalCols - shownCount;
 
   distributeSlack(idealWidths, visibleIndices, ellipsisPos, out.cols, names, grid);
 

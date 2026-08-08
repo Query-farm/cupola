@@ -10,8 +10,8 @@ import sentry from '@sentry/astro';
 
 import tailwindcss from '@tailwindcss/vite';
 
-const require = createRequire(import.meta.url);
-const pkg = require('./package.json');
+const requireJson = createRequire(import.meta.url);
+const pkg = requireJson('./package.json');
 const gitHash = execSync('git rev-parse --short HEAD').toString().trim();
 
 const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN;

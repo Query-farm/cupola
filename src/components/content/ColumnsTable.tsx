@@ -277,7 +277,6 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, check
                   </TableRow>
                   {row.getIsExpanded() && hasStats && columnStats.get(row.original.name) && (() => {
                     const stat = columnStats.get(row.original.name)!;
-                    const hasProfile = profileCache.has(row.original.name);
                     return (
                       <TableRow className="bg-muted/10 hover:bg-muted/10">
                         <TableCell colSpan={colCount} className="py-2 px-3">

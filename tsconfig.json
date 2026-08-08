@@ -5,7 +5,14 @@
     "**/*"
   ],
   "exclude": [
-    "dist"
+    "dist",
+    // Vendored, minified third-party bundles (Perspective, DuckDB-WASM shell
+    // artifacts) served as static assets. They are fetched by runtime URL —
+    // see getPerspectiveCDN() in DuckDBShell — never statically imported, so
+    // they contribute nothing to type safety. Checking them produced 170 of
+    // the project's 244 diagnostics, all unfixable without hand-editing
+    // minified vendor code, which drowned out our own.
+    "public"
   ],
   "compilerOptions": {
     "jsx": "react-jsx",

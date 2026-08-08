@@ -5,7 +5,7 @@ import { TreeView } from "@/components/tree-view";
 import { SettingsModal } from "@/components/SettingsModal";
 import type { CatalogData } from "@/lib/service";
 import { useSettings } from "@/lib/settings";
-import { buildTreeData, filterTree, parseSelection, selectionToTreeId, type Selection, type TreeDataItem } from "@/lib/tree";
+import { buildTreeData, filterTree, parseSelection, selectionToTreeId, type Selection } from "@/lib/tree";
 
 interface Props {
   catalog: CatalogData;

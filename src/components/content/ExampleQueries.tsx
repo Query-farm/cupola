@@ -41,7 +41,7 @@ function parseExampleQueries(json: string): ExampleQuery[] | null {
   return null;
 }
 
-function QueryBlock({ query, index, onOpenShell }: { query: ExampleQuery; index: number; onOpenShell?: () => void }) {
+function QueryBlock({ query, onOpenShell }: { query: ExampleQuery; index: number; onOpenShell?: () => void }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {

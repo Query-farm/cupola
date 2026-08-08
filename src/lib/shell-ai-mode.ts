@@ -57,8 +57,6 @@ export interface AIShellOps {
   tableFromIPC: (buf: any) => any;
   printTable: (table: any, elapsedMs?: number) => Promise<void>;
   clearProgressBar: () => void;
-  /** Set/get query running flag. */
-  setQueryRunning: (running: boolean) => void;
   /** Reset the cancel flag after a query completes. */
   resetCancelFlag: () => void;
 }
@@ -129,8 +127,8 @@ function createToolExecutor(
       const lastUserMsg = conv.messages.filter(m => m.role === "user").pop();
       const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
       return executeRunSql(input.sql, { query: ops.runQueryAsync, resultCache: conv.resultCache }, {
-        onStart: () => { spinner.stop(); ops.setQueryRunning(true); },
-        onEnd: () => { ops.clearProgressBar(); ops.setQueryRunning(false); ops.resetCancelFlag(); },
+        onStart: () => { spinner.stop(); },
+        onEnd: () => { ops.clearProgressBar(); ops.resetCancelFlag(); },
         onOutcome: async (out) => {
           if (out.kind === "error") {
             term.println(`\x1b[31m  Error: ${out.errMsg}\x1b[0m`);

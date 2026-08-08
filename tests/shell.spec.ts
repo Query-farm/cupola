@@ -224,7 +224,6 @@ test.describe("DuckDB WASM Shell", () => {
 
   test.describe("dot commands", () => {
     test(".help shows help text", async ({ page }) => {
-      const consolePromise = waitForConsoleMatch(page, /\.help|Show this help/, 5000).catch(() => null);
       await shellRun(page, ".help");
       // .help writes to terminal, not console — just verify it doesn't error
       // The command is handled if no error is thrown

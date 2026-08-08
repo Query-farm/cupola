@@ -1,9 +1,7 @@
-import { useState, useMemo, useCallback, useRef } from "react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useState, useMemo, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Copy, Check, Upload, RotateCcw, Download } from "lucide-react";
@@ -46,13 +44,6 @@ const DEFAULT_COLORS: Record<string, string> = {
   "terminal-fg": "#f5f0e0",
   "terminal-accent": "#6ba034",
   "terminal-muted": "#4a4a38",
-};
-
-const DEFAULT_TERMINAL = {
-  background: "#1a1a0e",
-  foreground: "#f5f0e0",
-  cursor: "#6ba034",
-  selection: "#3a3a28",
 };
 
 const DEFAULT_LOGO = `${import.meta.env.BASE_URL}logo-hero.png`;
@@ -145,7 +136,6 @@ export function ThemeBuilder() {
   const [name, setName] = useState("");
   const [logo, setLogo] = useState("");
   const [copied, setCopied] = useState(false);
-  const importRef = useRef<HTMLInputElement>(null);
 
   const setColor = useCallback((key: string, value: string) => {
     setColors((prev) => ({ ...prev, [key]: value }));
@@ -207,7 +197,7 @@ export function ThemeBuilder() {
       if (raw.name) setName(raw.name);
       if (raw.logo) setLogo(raw.logo);
       const importedColors = raw.colors ?? (raw.name || raw.logo || raw.terminal ? {} : raw);
-      setColors((prev) => {
+      setColors(() => {
         const next = { ...DEFAULT_COLORS };
         for (const [k, v] of Object.entries(importedColors)) {
           if (k in next && typeof v === "string") next[k] = v;

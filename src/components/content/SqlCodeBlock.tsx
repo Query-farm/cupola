@@ -10,7 +10,7 @@ interface Props {
 }
 
 export function SqlCodeBlock({ query }: Props) {
-  const { formatted, highlighted } = useMemo(() => {
+  const { highlighted } = useMemo(() => {
     let fmt: string;
     try {
       fmt = format(query, {
@@ -24,7 +24,7 @@ export function SqlCodeBlock({ query }: Props) {
     }
 
     const result = hljs.highlight(fmt, { language: "sql" });
-    return { formatted: fmt, highlighted: result.value };
+    return { highlighted: result.value };
   }, [query]);
 
   return (

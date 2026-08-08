@@ -63,7 +63,7 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
   const [results, setResults] = useState<Record<string, ResultState>>({});
   const [hasSelection, setHasSelection] = useState(false);
   // Docked Ask AI panel (right side) — persisted open state + width.
-  const AI_MIN = 320, AI_MAX = 720, AI_DEFAULT = 400;
+  const AI_MIN = 320, AI_MAX = 720;
   const [aiOpen, setAiOpen] = useState<boolean>(() => {
     try { return localStorage.getItem("vgi-editor-ai-open") === "1"; } catch { return false; }
   });

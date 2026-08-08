@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from "react";
+import type { ComponentType } from "react";
 import { ChevronRight } from "lucide-react";
 
 interface Props {

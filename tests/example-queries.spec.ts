@@ -8,7 +8,7 @@
  * via bridge.query to assert the result is ok with no error.
  */
 import { test, expect, type Page } from "@playwright/test";
-import { gotoApp, openShell, shellQuery, waitForShellBridge, APP_URL, T_NORMAL, T_SHELL_BOOT } from "./helpers";
+import { gotoApp, openShell, shellQuery, waitForShellBridge, APP_URL } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await gotoApp(page);
@@ -33,9 +33,6 @@ async function extractExampleSqls(page: Page): Promise<string[]> {
   if (!(await heading.isVisible({ timeout: 1500 }).catch(() => false))) return [];
 
   // Click each accordion trigger to expand it (Run button only renders when expanded).
-  const triggers = page.locator('button[data-state="closed"]', {
-    has: page.locator("svg"), // chevron
-  });
   // Find example-query accordion triggers by being siblings of QueryBlock content.
   // Simpler: select all triggers within the Accordion.Root that holds example queries.
   // The Accordion.Root has <h2>Example Quer{y,ies}</h2> immediately preceding it.

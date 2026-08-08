@@ -5,8 +5,7 @@
 
 import React from "react";
 import { Database, Folder, FolderOpen, Table2, Eye, FunctionSquare, Braces, Columns3, Key, TerminalSquare, RefreshCw, Loader2 } from "lucide-react";
-import { getColorForType } from "@/components/content/CatalogIcons";
-import type { CatalogData, ResolvedSchema, ColumnInfo } from "./service";
+import type { CatalogData, ResolvedSchema } from "./service";
 import { getColumns } from "./service";
 import { shortTypeName } from "./arrow-to-duckdb";
 

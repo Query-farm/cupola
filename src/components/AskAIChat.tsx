@@ -28,7 +28,6 @@ import {
   ChatMessageAssistant,
   type ContentBlock,
   type ToolCallEntry,
-  type AskUserState,
 } from "./chat/ChatMessageAssistant";
 interface ChatMessage {
   id: string;
@@ -46,7 +45,7 @@ interface Props {
   isActive?: boolean;
 }
 
-export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Props) {
+export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
   const { settings } = useSettings();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -683,20 +682,6 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
   };
 
   // Starter questions
-  const starters = catalogData ? (() => {
-    const firstSchema = catalogData.schemas[0];
-    const firstTable = firstSchema?.tables[0];
-    const questions: string[] = [];
-    if (firstTable) {
-      questions.push(`How many rows are in ${firstTable.name}?`);
-      questions.push(`What columns does ${firstTable.name} have?`);
-    }
-    questions.push("What tables are available?");
-    if (catalogData.schemas.length > 1) {
-      questions.push("Summarize the database schemas");
-    }
-    return questions;
-  })() : [];
 
   const hasApiKey = !!getSetting("anthropicApiKey");
   const hasMessages = messages.length > 0;

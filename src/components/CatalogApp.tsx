@@ -6,7 +6,7 @@ import { fetchAttachedCatalog } from "@/lib/duckdb-catalog";
 import { readRows, quoteLiteral } from "@/lib/duckdb-query";
 import { isRecoverableAuthError } from "@/lib/auth-errors";
 import { type Selection } from "@/lib/tree";
-import { getAuthToken, getAuthTokenForService, getUserInfo, hadAuthToken, redirectToAuth } from "@/lib/auth";
+import { getAuthTokenForService, getUserInfo, hadAuthToken } from "@/lib/auth";
 import * as Sentry from "@sentry/astro";
 import {
   bootstrap as oauthBootstrap,
@@ -17,7 +17,7 @@ import {
 import { SettingsProvider } from "@/lib/settings";
 import { bridge, setShellWorkerSentryUser } from "@/lib/shell-bridge";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
-import { loadTheme, getLogoUrl, DEFAULT_LOGO, type ThemeConfig } from "@/lib/theme";
+import { loadTheme } from "@/lib/theme";
 import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Header } from "./Header";
@@ -59,6 +59,9 @@ import {
  *  shell-init all classify identically — they previously had three different
  *  inline rules, each keying off a bare "auth" substring. */
 const isRecoverableAuthMessage = isRecoverableAuthError;
+
+/** Default brand mark for the full-page screens, overridden by a themed logo. */
+const CUPOLA_MARK = `${import.meta.env.BASE_URL}cupola-logo-large.png`;
 
 /** Minimum spacing between two login redirects before we call it a loop. */
 const AUTH_REDIRECT_LOOP_WINDOW_MS = 10_000;
@@ -142,7 +145,15 @@ export function CatalogApp() {
   // callback chain and the mount effect fires a second loadCatalog().
   const catalogNameRef = useRef<string | undefined>(undefined);
   useEffect(() => { catalogNameRef.current = data?.catalogName; }, [data?.catalogName]);
-  const [logoUrl, setLogoUrl] = useState(DEFAULT_LOGO);
+  // Brand mark for the welcome / connecting / error screens. Defaults to the
+  // Cupola mark and is replaced when a `?theme=` config supplies its own logo.
+  //
+  // These screens took a `logoUrl` prop and then ignored it, hardcoding the
+  // Cupola image — and `getLogoUrl()` had no callers at all. So a theme's
+  // `logo` field was loaded, parsed and cached but never reached any pixel,
+  // despite theme.ts documenting it as replacing "the default VGI logo in
+  // header and error screens". The prop is now actually used.
+  const [logoUrl, setLogoUrl] = useState(CUPOLA_MARK);
   const [authError, setAuthError] = useState<{ title: string; message: string } | null>(null);
   const [attachError, setAttachError] = useState<{ title: string; message: string } | null>(null);
   // True only after client-side hydration. We use this to gate any render
@@ -1029,7 +1040,7 @@ function ConnectingScreen({
             (not a roundel), so we drop the old rotating circular halo —
             it would clip the cupola corners and read awkwardly. */}
         <img
-          src={`${import.meta.env.BASE_URL}cupola-logo-large.png`}
+          src={logoUrl}
           alt=""
           aria-hidden="true"
           width={128}
@@ -1100,7 +1111,7 @@ function ErrorScreen({
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
             <img
-              src={`${import.meta.env.BASE_URL}cupola-logo-large.png`}
+              src={logoUrl}
               alt=""
               aria-hidden="true"
               width={96}
@@ -1212,7 +1223,7 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
       <div className="max-w-xl w-full mx-auto px-6 py-12 lg:py-16">
         <div className="flex flex-col items-center text-center mb-8">
           <img
-            src={`${import.meta.env.BASE_URL}cupola-logo-large.png`}
+            src={logoUrl}
             alt=""
             aria-hidden="true"
             width={144}

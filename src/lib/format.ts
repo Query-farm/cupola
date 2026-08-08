@@ -494,7 +494,7 @@ function formatTimestamp(value: any, unit: "s" | "ms" | "us" | "ns", tz: string 
 // ============================================================================
 
 /** Format a time value. Unit is "us" (microseconds) or "ns" (nanoseconds). */
-function formatTimeValue(value: any, unit: "us" | "ns", hasTz: boolean): string {
+function formatTimeValue(value: any, unit: "us" | "ns", _hasTz: boolean): string {
   let v: bigint;
   if (typeof value === "bigint") {
     v = value;

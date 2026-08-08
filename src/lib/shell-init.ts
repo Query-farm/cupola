@@ -220,7 +220,6 @@ export function initShell(
   // so the boot fires lazily on first shell open, not on every initShell.
   let currentWasmVersion = "";
 
-  let queryRunning = false;
   let outputMode: "box" | "line" = "box";
   let maxDisplayRows = 40;
   let lastTable: any = null;
@@ -556,7 +555,6 @@ export function initShell(
     if (!q) return Promise.resolve({ ok: false, error: "duckdb not ready" });
     return q(sql);
   }
-  const runQuerySync = runQueryAsync;
 
   // Current catalog/schema for prompt
   let currentCatalog = "";
@@ -662,19 +660,16 @@ export function initShell(
           tableFromIPC,
           printTable,
           clearProgressBar,
-          setQueryRunning: (running: boolean) => { queryRunning = running; },
           resetCancelFlag: () => { if (bridge.cancelInt32) Atomics.store(bridge.cancelInt32, 0, 0); },
         };
         await runAIMode(trimmed, aiConv, aiTerm, aiOps, { apiKey: config.aiApiKey || "", model: config.aiModel || "claude-sonnet-4-6" });
         continue;
       }
 
-      queryRunning = true;
       const t0 = performance.now();
       const result = await runQueryAsync(trimmed);
       const elapsed = performance.now() - t0;
       clearProgressBar();
-      queryRunning = false;
       if (bridge.cancelInt32) Atomics.store(bridge.cancelInt32, 0, 0); // reset cancel flag for next query
 
       if (!result.ok) {

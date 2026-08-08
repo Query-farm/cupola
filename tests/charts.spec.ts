@@ -12,7 +12,7 @@
  * the connected VGI catalog's schema beyond what gotoApp() requires.
  */
 import { test, expect, type Page } from "@playwright/test";
-import { gotoApp, openShell, waitForShellBridge, T_FAST, T_NORMAL, T_SHELL_BOOT } from "./helpers";
+import { gotoApp, openShell, waitForShellBridge, T_FAST, T_NORMAL } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await gotoApp(page);
