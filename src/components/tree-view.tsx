@@ -271,9 +271,13 @@ const TreeItem = React.forwardRef<HTMLDivElement, TreeItemProps>(
         const isRoot = (level ?? 0) === 0
         return (
             <div ref={ref} role={isRoot ? "tree" : "group"} className={className}>
-                <ul>
+                {/* role="none" on the list wrappers: a `tree` (or `group`) must
+                    contain `treeitem` children directly, and <ul>/<li> would
+                    otherwise interpose implicit list/listitem roles and break
+                    that relationship. */}
+                <ul role="none">
                     {data.map((item) => (
-                        <li key={item.id}>
+                        <li role="none" key={item.id}>
                             {item.children ? (
                                 <TreeNode
                                     item={item}
@@ -354,7 +358,17 @@ const TreeNode = ({
             onValueChange={() => onToggleExpand(item.id)}
         >
             <AccordionPrimitive.Item value={item.id}>
+                {/* Branch nodes are treeitems too. Only TreeLeaf carried the
+                    role before, so a tree of collapsed schemas exposed no
+                    treeitem at all — unusable as a tree for screen readers.
+                    The role goes on the ROW (the trigger), matching TreeLeaf,
+                    not on the wrapping Item: the Item also contains the
+                    expanded child group, so a treeitem there would take its
+                    accessible name from every descendant, and its click target
+                    would cover the children rather than the row. */}
                 <AccordionTrigger
+                    role="treeitem"
+                    aria-expanded={isOpen}
                     className={cn(
                         treeVariants(),
                         isSelected && selectedTreeVariants(),

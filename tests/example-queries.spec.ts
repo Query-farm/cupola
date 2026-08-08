@@ -8,12 +8,18 @@
  * via bridge.query to assert the result is ok with no error.
  */
 import { test, expect, type Page } from "@playwright/test";
-import { gotoApp, openShell, shellQuery, waitForShellBridge, APP_URL } from "./helpers";
+import { gotoApp, shellQuery, waitForShellBridge, APP_URL } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await gotoApp(page);
   await waitForShellBridge(page);
-  await openShell(page);
+  // Deliberately NOT openShell(): the active tab is persisted to localStorage
+  // ("vgi-active-tab"), so selecting the shell here made every later
+  // `page.goto(#/schema/...)` reload restore the SHELL tab — leaving the
+  // catalog pane unrendered, so the table page under test never appeared and
+  // the loop below burned its whole timeout finding nothing. The engine boots
+  // on load regardless of which tab is active (see gotoApp), so the shell tab
+  // was never needed for shellQuery.
 });
 
 /** Find the catalog name attached from the VGI server. */
