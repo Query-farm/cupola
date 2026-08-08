@@ -16,6 +16,8 @@ import { Sparkles, RotateCcw, X } from "lucide-react";
 import * as Sentry from "@sentry/astro";
 import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
 import { bridge } from "@/lib/shell-bridge";
+import { getEngineInfo } from "@/lib/duckdb-engine";
+import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import type { CatalogData } from "@/lib/service";
 import {
   runAgentTurn,
@@ -173,10 +175,11 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
 
     if (settings.aiTelemetry) Sentry.setConversationId(c.conversationId);
 
-    const systemPrompt = buildSystemPrompt(catalogData, serviceUrl, bridge.memoryCatalog, false) +
+    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), bridge.memoryCatalog, false) +
       "\n\nYou are an AI assistant embedded in a SQL editor. The user is editing SQL in the adjacent pane. Be concise. When you run a query, its results appear in the editor's results grid. When you produce a final query for the user, run it with run_sql so it can be applied to the editor. Do not produce charts.";
     const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
+    const maxTokens = getSetting("aiMaxTokens") || DEFAULT_AI_MAX_TOKENS;
 
     let blocks: ContentBlock[] = [];
     let pendingDisplayResult: import("@/components/chat/ChatMessageAssistant").ToolCallDisplayResult | undefined;
@@ -316,7 +319,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
             updateBlocks(blocks);
           },
         },
-        c.abort.signal, maxRounds, TOOLS,
+        c.abort.signal, maxRounds, TOOLS, maxTokens,
       );
     } catch (err: any) {
       removeThinking();

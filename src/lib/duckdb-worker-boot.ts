@@ -14,6 +14,7 @@
 import * as duckdb from "@haybarn/haybarn-wasm";
 
 import { bridge, notifyQueryChange, setBootPhase, type QueryResult } from "./shell-bridge";
+import { recordDuckDBVersion } from "./duckdb-engine";
 
 let bootPromise: Promise<void> | null = null;
 
@@ -218,6 +219,9 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   notifyQueryChange();
 
   const version = await db.getVersion();
+  // The AI system prompt states the DuckDB version; record the real one rather
+  // than letting the prompt keep asserting a hardcoded literal.
+  recordDuckDBVersion(version);
   const totalMs = Math.round(performance.now() - t0);
   bridge.workerReadyData = { wasmVersion: version, totalMs, timings };
   console.log(`[shell] worker ready in ${totalMs}ms (haybarn ${version})`);

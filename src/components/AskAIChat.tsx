@@ -3,6 +3,8 @@ import { Sparkles, RotateCcw, Settings, FileText, Copy } from "lucide-react";
 import * as Sentry from "@sentry/astro";
 import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
 import { bridge } from "@/lib/shell-bridge";
+import { getEngineInfo } from "@/lib/duckdb-engine";
+import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import type { CatalogData } from "@/lib/service";
 import {
   runAgentTurn,
@@ -221,9 +223,10 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
     // hasChartTool = true: include render_chart capability in the prompt
     // guidance (and CHART_TOOL in the tool list below). Terminal `.ai` mode
     // passes a different surface and would set this false.
-    const systemPrompt = buildSystemPrompt(catalogData, serviceUrl, bridge.memoryCatalog, true);
+    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), bridge.memoryCatalog, true);
     const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
+    const maxTokens = getSetting("aiMaxTokens") || DEFAULT_AI_MAX_TOKENS;
 
     // Mutable blocks array — updated in callbacks, then set into state
     let blocks: ContentBlock[] = [];
@@ -603,6 +606,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
         // .ai mode passes the default TOOLS via shell-ai-mode.ts and
         // doesn't see render_chart at all.
         [...TOOLS, CHART_TOOL],
+        maxTokens,
       );
     } catch (err: any) {
       removeThinking();
@@ -695,7 +699,7 @@ export function AskAIChat({ catalogData, serviceUrl, catalogName, isActive }: Pr
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
   // Pass hasChartTool=true so the preview shown to the user matches what
   // the agent actually sees at runtime (see line 128).
-  const systemPrompt = useMemo(() => catalogData ? buildSystemPrompt(catalogData, serviceUrl, bridge.memoryCatalog, true) : null, [catalogData, serviceUrl]);
+  const systemPrompt = useMemo(() => catalogData ? buildSystemPrompt(catalogData, getEngineInfo(), bridge.memoryCatalog, true) : null, [catalogData, serviceUrl]);
 
   return (
     <div className="flex flex-col h-full bg-background">

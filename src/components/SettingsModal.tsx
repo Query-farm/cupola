@@ -293,6 +293,27 @@ export function SettingsModal() {
               </SettingRow>
               <SettingRow>
                 <SettingLabel
+                  title="Max response tokens"
+                  description="Output cap per AI request. Lower saves cost; too low truncates long answers and charts. Clamped to the selected model's limit."
+                />
+                <Select
+                  value={String(settings.aiMaxTokens)}
+                  onValueChange={(val) => updateSettings({ aiMaxTokens: Number(val) })}
+                >
+                  <SelectTrigger className="w-24 h-8 text-sm shrink-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[4096, 8192, 16384, 32768, 64000].map((n) => (
+                      <SelectItem key={n} value={String(n)} className="text-sm">
+                        {n.toLocaleString()}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </SettingRow>
+              <SettingRow>
+                <SettingLabel
                   htmlFor="ai-telemetry"
                   title="Share AI conversation analytics"
                   description="Send AI prompts, responses, and tool calls to Sentry to help monitor and improve the agent."

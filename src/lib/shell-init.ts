@@ -20,6 +20,7 @@ import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps }
 import { attachInputHandlers, type CompletionItem } from "./shell-input";
 import { bridge, recordQuery, notifyQueryChange, setBootPhase } from "./shell-bridge";
 import { quoteLiteral, quoteIdent } from "./duckdb-query";
+import { SHELL_EXTENSIONS, recordExtensionLoaded } from "./duckdb-engine";
 import { isRecoverableAuthError, isUnrecoverableAuthError } from "./auth-errors";
 import { getOAuthMeta, redirectToAuth } from "./auth";
 import { ensureDuckDB } from "./duckdb-worker-boot";
@@ -416,23 +417,9 @@ export function initShell(
 
       // Extensions to pre-load at shell startup. Each gets an explicit
       // INSTALL + LOAD pair so no user query triggers a sync autoload.
-      // `source` is the FROM clause for the INSTALL — omitted for core
-      // extensions, `community` for community ones. `required: true` means
-      // the shell can't function without it (currently just VGI).
-      const extensions: Array<{ name: string; source?: string; required?: boolean }> = [
-        { name: "icu" },
-        { name: "json" },
-        { name: "httpfs" },
-        { name: "vgi", source: "community", required: true },
-        { name: "iceberg" },
-        { name: "spatial" },
-        { name: "ducklake" },
-        // autocomplete provides sql_auto_complete(), used by both the shell's
-        // Tab completion and the SQL editor's CodeMirror completion source.
-        // Must be explicit-loaded since autoload is disabled above.
-        { name: "autocomplete" },
-      ];
-      for (const ext of extensions) {
+      // The list lives in ./duckdb-engine because the AI system prompt has to
+      // describe it, and a second hardcoded copy there drifted from this one.
+      for (const ext of SHELL_EXTENSIONS) {
         writeln(`Loading ${ext.name} extension...`, "33");
         setBootPhase(`Loading ${ext.name} extension`);
         const fromClause = ext.source ? ` FROM ${ext.source}` : "";
@@ -457,7 +444,13 @@ export function initShell(
             return;
           }
           console.warn("[shell]", msg, "(continuing)");
+          continue;
         }
+        // Record only on success. A non-required extension that fails to
+        // install or load is skipped and must NOT appear in the AI prompt's
+        // "loaded extensions" list — that claim is what made the agent emit
+        // ST_* calls against a build where spatial hadn't loaded.
+        recordExtensionLoaded(ext.name);
       }
 
       // Sync timezone BEFORE attaching. Push the browser's IANA zone (e.g.

@@ -16,6 +16,7 @@ type AgentSpan = Parameters<Parameters<typeof Sentry.startSpan>[1]>[0];
 import type { CatalogData } from "./service";
 import { getColumns, getForeignKeys } from "./service";
 import { filterTagsForAI, getTag, TAG_DOC_LLM } from "./tags";
+import type { EngineInfo } from "./duckdb-engine";
 import { fetchWithRetry } from "./ai-fetch";
 import {
   AGENT_NAME,
@@ -29,9 +30,12 @@ import {
   serializeToolResult,
 } from "./ai-telemetry";
 
-// Keep in sync with the extension list loaded in src/lib/shell-init.ts.
-// Spatial is loaded there, so the spatial-aware prompting below is active.
-const SPATIAL_ENABLED = true;
+// Spatial guidance is emitted only when the spatial extension ACTUALLY loaded
+// this session. It used to be `const SPATIAL_ENABLED = true` with a comment
+// asking the reader to keep it in sync with shell-init by hand — so when a
+// non-required extension failed to install (which shell-init tolerates and
+// continues past), the prompt still told the model spatial was available and
+// it would emit ST_* calls that error.
 
 // ---------------------------------------------------------------------------
 // Types
@@ -98,6 +102,7 @@ export { formatArrowTableAsJson, executeReadQueryResults } from "./query-results
 import { pruneCarriedToolImages } from "./query-results";
 import { recordToolCall, repeatedCallMessage } from "./ai-loop-guard";
 import { parseStreamedToolInput } from "./tool-input";
+import { clampMaxTokens, DEFAULT_AI_MAX_TOKENS } from "./ai/model-limits";
 
 // ---------------------------------------------------------------------------
 // Dev-side tool-call tracing
@@ -166,7 +171,7 @@ function tryJson(s: string): unknown {
 export const TOOLS: Tool[] = [
   {
     name: "run_sql",
-    description: "Execute a DuckDB SQL query against the connected database. Returns results as JSON with columns, types, first 20 rows, total row count, and a result_id for paging. Use standard DuckDB 1.5.1 SQL syntax.",
+    description: "Execute a SQL query against the connected DuckDB database. Returns results as JSON with columns, types, first 20 rows, total row count, and a result_id for paging.",
     input_schema: {
       type: "object",
       properties: {
@@ -284,14 +289,35 @@ export const CHART_TOOL: Tool = {
 // System prompt builder
 // ---------------------------------------------------------------------------
 
-export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memoryCatalog?: CatalogData | null, hasChartTool: boolean = false): string {
+/** Cap on the characters the catalog inventory may contribute to the prompt.
+ *
+ *  The inventory lists every schema, table, view and macro with its comment.
+ *  It was emitted unconditionally, so a large catalog could dominate (or blow)
+ *  the model's input budget before the user's question was even read. When the
+ *  listing exceeds this, it is truncated and the model is told to use
+ *  list_tables/describe_table instead — which is what those tools are for.
+ *
+ *  ~60k characters is roughly 15k tokens: generous for the common case, and
+ *  small enough to leave room for conversation on a 200k-context model. */
+const CATALOG_INVENTORY_CHAR_BUDGET = 60_000;
+
+export function buildSystemPrompt(
+  catalog: CatalogData,
+  engine: EngineInfo,
+  memoryCatalog?: CatalogData | null,
+  hasChartTool: boolean = false,
+): string {
   const cat = catalog.catalogName;
   const firstSchema = catalog.schemas[0]?.info.name || "schema";
   const firstTable = catalog.schemas[0]?.tables[0]?.name || "table";
   const exFull = `${cat}.${firstSchema}.${firstTable}`;
+  // Observed engine facts, never assumed. An empty version means the worker
+  // hasn't reported yet; say nothing rather than assert a number.
+  const spatialEnabled = engine.loadedExtensions.includes("spatial");
+  const duckdbLabel = engine.duckdbVersion ? `DuckDB ${engine.duckdbVersion}` : "DuckDB";
 
   const lines: string[] = [
-    `You are a data analyst assistant connected to a DuckDB 1.5.1 database.`,
+    `You are a data analyst assistant connected to a ${duckdbLabel} database.`,
     ``,
     `## Tools`,
     `* **describe_table** — Get column names, types, and descriptions for a table.`,
@@ -340,7 +366,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
       `If ANY of those checks fail, immediately call render_chart again with a fixed spec. Common fixes: rotate axis labels with \`labelAngle: -45\`, use \`point\` instead of \`circle\` when you need shape encoding, sort the x-axis, add explicit axis titles, set a dark mark/text color for low-contrast elements, increase \`size\`. **Iterate until the chart meets all checks — the user sees only the version you settle on, so don't ship a draft.** When you're satisfied, give the user a short interpretation of what the chart shows.`,
       `**Faceted / repeated / concat charts** (specs with top-level \`facet\`, \`repeat\`, \`concat\`/\`hconcat\`/\`vconcat\`, or \`encoding.row\` / \`encoding.column\`): Vega-Lite ignores top-level \`width\`/\`height\` on these — the chat surface will NOT inject sizing. You MUST set dimensions per-unit-spec yourself: e.g. \`{ facet: { row: { field: "..." } }, spec: { width: 300, height: 150, mark: "circle", encoding: {...} } }\`, or for repeat: \`{ repeat: [...], spec: { width: 200, height: 120, ... } }\`. Keep per-facet width modest (150-300) so the row of facets fits horizontally.`,
       ``,
-      ...(SPATIAL_ENABLED ? [
+      ...(spatialEnabled ? [
         `### Plotting geometry (maps)`,
         `Geometry columns hold spatial data (WGS84 / EPSG:4326 — longitude/latitude in degrees). There are two ways to map them, and a \`projection\` is ALWAYS required (use \`{"type": "mercator"}\` for general/world data, \`{"type": "albersUsa"}\` for US-only data).`,
         ``,
@@ -378,7 +404,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `* Never perform arithmetic outside SQL.`,
     `* Never combine results from separate queries in prose — use JOINs or CTEs.`,
     `* Never use two-part or bare table names — always use \`catalog.schema.table\`.`,
-    ...(SPATIAL_ENABLED ? [`* Never use \`ST_Area()\`, \`ST_Distance()\`, or \`ST_Length()\` for real-world measurements (see Spatial section below).`] : []),
+    ...(spatialEnabled ? [`* Never use \`ST_Area()\`, \`ST_Distance()\`, or \`ST_Length()\` for real-world measurements (see Spatial section below).`] : []),
     `* Never attempt to LOAD or INSTALL extensions. Only the loaded extensions listed below are available.`,
     ``,
     `## Object naming: catalog → schema → table`,
@@ -423,7 +449,7 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     `## Attached catalogs`,
     ``,
     `### ${cat}`,
-    `Loaded extensions: icu, json, httpfs, iceberg, spatial, ducklake`,
+    `Loaded extensions: ${engine.loadedExtensions.join(", ") || "(none reported yet)"}`,
   ];
 
   // Catalog-level description for AI context (canonical doc_llm, deprecated fallback)
@@ -434,57 +460,82 @@ export function buildSystemPrompt(catalog: CatalogData, serviceUrl: string, memo
     lines.push(``);
   }
 
-  // Dynamic catalog content
+  // Dynamic catalog content — accumulated separately from `lines` so it can be
+  // measured against the budget and dropped wholesale if it's too large. The
+  // agent is not blind without it: list_tables and describe_table exist for
+  // exactly this, and the truncation notice below points the model at them.
+  const inventory: string[] = [];
   for (const schema of catalog.schemas) {
     const schemaComment = schema.info.comment ? ` — ${schema.info.comment}` : "";
     const aiTags = filterTagsForAI(schema.info.tags);
     const schemaTags = aiTags
       ? ` [${Object.entries(aiTags).map(([k, v]) => `${k}: ${v}`).join(", ")}]` : "";
-    lines.push(`**Schema: ${cat}.${schema.info.name}**${schemaComment}${schemaTags}`);
+    inventory.push(`**Schema: ${cat}.${schema.info.name}**${schemaComment}${schemaTags}`);
 
     for (const table of schema.tables) {
       const comment = table.comment ? ` — ${table.comment}` : "";
-      lines.push(`* \`${cat}.${schema.info.name}.${table.name}\`${comment}`);
+      inventory.push(`* \`${cat}.${schema.info.name}.${table.name}\`${comment}`);
     }
 
     for (const view of schema.views) {
       const comment = view.comment ? ` — ${view.comment}` : "";
-      lines.push(`* \`${cat}.${schema.info.name}.${view.name}\`${comment}`);
+      inventory.push(`* \`${cat}.${schema.info.name}.${view.name}\`${comment}`);
     }
 
     if (schema.macros?.length > 0) {
       for (const macro of schema.macros) {
         const comment = macro.comment ? ` — ${macro.comment}` : "";
         const params = macro.parameters.length > 0 ? `(${macro.parameters.join(", ")})` : "()";
-        lines.push(`* \`${cat}.${schema.info.name}.${macro.name}${params}\` (${macro.macro_type} macro)${comment}`);
+        inventory.push(`* \`${cat}.${schema.info.name}.${macro.name}${params}\` (${macro.macro_type} macro)${comment}`);
       }
     }
-    lines.push(``);
+    inventory.push(``);
   }
 
   // Memory catalog tables (if any exist)
   if (memoryCatalog && memoryCatalog.schemas.some(s => s.tables.length > 0 || s.views.length > 0)) {
-    lines.push(`### memory (in-memory tables)`);
-    lines.push(`These are user-created tables and views in the writable memory catalog.`);
-    lines.push(``);
+    inventory.push(`### memory (in-memory tables)`);
+    inventory.push(`These are user-created tables and views in the writable memory catalog.`);
+    inventory.push(``);
     for (const schema of memoryCatalog.schemas) {
       const hasTables = schema.tables.length > 0 || schema.views.length > 0;
       if (!hasTables) continue;
-      lines.push(`**Schema: memory.${schema.info.name}**`);
+      inventory.push(`**Schema: memory.${schema.info.name}**`);
       for (const table of schema.tables) {
         const comment = table.comment ? ` — ${table.comment}` : "";
-        lines.push(`* \`memory.${schema.info.name}.${table.name}\`${comment}`);
+        inventory.push(`* \`memory.${schema.info.name}.${table.name}\`${comment}`);
       }
       for (const view of schema.views) {
         const comment = view.comment ? ` — ${view.comment}` : "";
-        lines.push(`* \`memory.${schema.info.name}.${view.name}\`${comment}`);
+        inventory.push(`* \`memory.${schema.info.name}.${view.name}\`${comment}`);
       }
-      lines.push(``);
+      inventory.push(``);
     }
   }
 
+
+  // Apply the size budget. Counting characters (not tokens) keeps this
+  // dependency-free and is close enough — the point is to stop an enormous
+  // catalog from crowding out the conversation, not to hit an exact number.
+  const inventoryChars = inventory.reduce((n, line) => n + line.length + 1, 0);
+  if (inventoryChars <= CATALOG_INVENTORY_CHAR_BUDGET) {
+    lines.push(...inventory);
+  } else {
+    const schemaNames = catalog.schemas.map((sc) => `${cat}.${sc.info.name}`);
+    const objectCount = catalog.schemas.reduce(
+      (n, sc) => n + sc.tables.length + sc.views.length + (sc.macros?.length ?? 0),
+      0,
+    );
+    lines.push(
+      `This catalog is too large to list here (${objectCount} objects across ${schemaNames.length} schemas).`,
+      `Schemas: ${schemaNames.join(", ")}.`,
+      `Call **list_tables** to enumerate objects, then **describe_table** for the ones you need.`,
+      ``,
+    );
+  }
+
   // Spatial section
-  if (SPATIAL_ENABLED) {
+  if (spatialEnabled) {
     lines.push(`## Spatial data (${cat} catalog)`);
     lines.push(``);
     lines.push(`Geometry columns are lon/lat degrees in WGS84 (EPSG:4326 / OGC:CRS84). The data is global — coordinates can be anywhere on Earth, so never hardcode a region-specific projection.`);
@@ -703,11 +754,12 @@ async function streamOneRequest(
   systemPrompt: string,
   callbacks: AgentCallbacks,
   tools: Tool[],
+  maxTokens: number,
   signal: AbortSignal | undefined,
   telemetry: boolean
 ): Promise<StreamResult> {
   if (!telemetry) {
-    return streamOneRequestInner(apiKey, model, messages, systemPrompt, callbacks, tools, signal);
+    return streamOneRequestInner(apiKey, model, messages, systemPrompt, callbacks, tools, maxTokens, signal);
   }
   return Sentry.startSpan(
     {
@@ -725,7 +777,7 @@ async function streamOneRequest(
     async (span) => {
       try {
         const result = await streamOneRequestInner(
-          apiKey, model, messages, systemPrompt, callbacks, tools, signal
+          apiKey, model, messages, systemPrompt, callbacks, tools, maxTokens, signal
         );
         span.setAttributes({
           ...mapUsageAttributes(result),
@@ -748,6 +800,7 @@ async function streamOneRequestInner(
   systemPrompt: string,
   callbacks: AgentCallbacks,
   tools: Tool[],
+  maxTokens: number,
   signal?: AbortSignal
 ): Promise<StreamResult> {
   const response = await fetchWithRetry(
@@ -774,7 +827,11 @@ async function streamOneRequestInner(
         system: [
           { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
         ],
-        max_tokens: 4096,
+        // Clamped per model: over the model's ceiling is a 400. Streaming is
+        // on, so the usual non-streaming timeout argument for a small cap
+        // doesn't apply — the old hardcoded 4096 truncated long tool_use
+        // blocks (large Vega specs) mid-JSON.
+        max_tokens: clampMaxTokens(model, maxTokens),
         stream: true,
       }),
       signal,
@@ -859,10 +916,11 @@ export async function runAgentTurn(
   signal?: AbortSignal,
   maxToolRounds = 20,
   tools: Tool[] = TOOLS,
+  maxTokens: number = DEFAULT_AI_MAX_TOKENS,
 ): Promise<void> {
   if (!isAiTelemetryEnabled()) {
     return runAgentTurnInner(
-      apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, null
+      apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, null
     );
   }
   // startNewTrace detaches the turn from any active pageload/navigation trace,
@@ -886,7 +944,7 @@ export async function runAgentTurn(
       async (span) => {
         try {
           await runAgentTurnInner(
-            apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, span
+            apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, span
           );
         } catch (err) {
           // User cancellations are not internal errors; this status sticks
@@ -909,6 +967,7 @@ async function runAgentTurnInner(
   signal: AbortSignal | undefined,
   maxToolRounds: number,
   tools: Tool[],
+  maxTokens: number,
   agentSpan: AgentSpan | null,
 ): Promise<void> {
   const MAX_TOOL_ROUNDS = maxToolRounds;
@@ -954,7 +1013,7 @@ async function runAgentTurnInner(
     // multiply attempts and resend the full conversation each time.
     const { content, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } =
       await streamOneRequest(
-        apiKey, model, messages, systemPrompt, callbacks, tools, signal, agentSpan !== null
+        apiKey, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, agentSpan !== null
       );
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;

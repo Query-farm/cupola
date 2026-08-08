@@ -14,6 +14,8 @@ import { isAiTelemetryEnabled } from "@/lib/ai-telemetry";
 import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 import { estimateCost, formatCost } from "@/lib/pricing";
 import { bridge, recordQuery } from "@/lib/shell-bridge";
+import { getEngineInfo } from "@/lib/duckdb-engine";
+import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import type { CatalogData } from "@/lib/service";
 import * as Sentry from "@sentry/astro";
 
@@ -59,10 +61,11 @@ export interface AIShellOps {
 }
 
 /** Read fresh AI settings from localStorage (user may change mid-session). */
-function readAISettings(defaults: { apiKey: string; model: string }): { apiKey: string; model: string; maxToolRounds: number } {
+function readAISettings(defaults: { apiKey: string; model: string }): { apiKey: string; model: string; maxToolRounds: number; maxTokens: number } {
   let apiKey = defaults.apiKey;
   let model = defaults.model;
   let maxToolRounds = 20;
+  let maxTokens = DEFAULT_AI_MAX_TOKENS;
   try {
     const stored = localStorage.getItem("vgi-frontend-settings");
     if (stored) {
@@ -70,9 +73,10 @@ function readAISettings(defaults: { apiKey: string; model: string }): { apiKey: 
       if (s.anthropicApiKey) apiKey = s.anthropicApiKey;
       if (s.aiModel) model = s.aiModel;
       if (s.aiMaxToolRounds) maxToolRounds = s.aiMaxToolRounds;
+      if (s.aiMaxTokens) maxTokens = s.aiMaxTokens;
     }
   } catch {}
-  return { apiKey, model, maxToolRounds };
+  return { apiKey, model, maxToolRounds, maxTokens };
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +288,7 @@ export async function runAIMode(
     return;
   }
 
-  const { apiKey, model, maxToolRounds } = readAISettings(defaults);
+  const { apiKey, model, maxToolRounds, maxTokens } = readAISettings(defaults);
   if (!apiKey) {
     term.writeln("No API key configured. Set your Anthropic API key in Settings.", "31");
     return;
@@ -312,7 +316,7 @@ export async function runAIMode(
   // Group this session's gen_ai spans in Sentry's Conversations view. Cleared
   // in the exit finally so SQL-mode spans don't inherit it.
   if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
-  const systemPrompt = buildSystemPrompt(ops.catalogData, ops.serviceUrl, bridge.memoryCatalog);
+  const systemPrompt = buildSystemPrompt(ops.catalogData, getEngineInfo(), bridge.memoryCatalog);
   const spinner = createSpinner(term);
 
   // Ctrl+D / Escape exits AI mode
@@ -386,7 +390,7 @@ export async function runAIMode(
       const agent = createAgentCallbacks(term, spinner, model);
 
       try {
-        await runAgentTurn(apiKey, model, conv.messages, systemPrompt, executeTool, agent.callbacks, abort.signal, maxToolRounds);
+        await runAgentTurn(apiKey, model, conv.messages, systemPrompt, executeTool, agent.callbacks, abort.signal, maxToolRounds, undefined, maxTokens);
       } catch (err: any) {
         spinner.stop();
         if (err.name === "AbortError" || err.message === "Cancelled.") {

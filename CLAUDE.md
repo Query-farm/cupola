@@ -251,6 +251,7 @@ Stored in localStorage (`vgi-frontend-settings` — key name predates the Cupola
 | `anthropicApiKey` | `""` | Claude API key for AI features |
 | `aiModel` | `"claude-sonnet-4-6"` | Claude model for AI agent (retired IDs auto-migrated on load via `RETIRED_MODEL_REPLACEMENTS` in `settings.tsx`) |
 | `aiMaxToolRounds` | `20` | Max tool-use rounds per AI conversation |
+| `aiMaxTokens` | `16384` | Max output tokens per AI request. Clamped to the selected model's own ceiling by `clampMaxTokens` in `src/lib/ai/model-limits.ts` — Haiku caps at 64K, Sonnet/Opus at 128K, and exceeding a model's ceiling is a 400. Was hardcoded at 4096, which truncated long `tool_use` blocks (large Vega specs) mid-JSON. |
 | `aiChartFeedback` | `true` | Feed rendered chart PNG back to the agent so it can iterate |
 | `aiTelemetry` | `true` | Send AI conversation analytics to Sentry (user opt-out) |
 

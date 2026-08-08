@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { consumeAiKey } from "./url-params";
+import { DEFAULT_AI_MAX_TOKENS } from "./ai/model-limits";
 
 export interface Settings {
   showDuckDBTypes: boolean;
@@ -20,6 +21,11 @@ export interface Settings {
   anthropicApiKey: string;
   aiModel: string;
   aiMaxToolRounds: number;
+  /** Max output tokens per AI request. Clamped to the selected model's own
+   *  ceiling before the request goes out (over it is a 400). The old
+   *  hardcoded 4096 truncated long tool_use blocks — notably large Vega specs
+   *  from render_chart — mid-JSON. */
+  aiMaxTokens: number;
   /** Send the rendered chart PNG back to the AI agent as part of
    *  render_chart's tool_result, so it can SEE its output and iterate on
    *  visual issues (overlapping labels, bad scales). Adds ~1500 input
@@ -62,6 +68,7 @@ const defaultSettings: Settings = {
   anthropicApiKey: "",
   aiModel: DEFAULT_AI_MODEL,
   aiMaxToolRounds: 20,
+  aiMaxTokens: DEFAULT_AI_MAX_TOKENS,
   aiChartFeedback: true,
   aiTelemetry: true,
 };
