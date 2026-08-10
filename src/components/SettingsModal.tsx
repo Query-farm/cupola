@@ -132,6 +132,18 @@ export function SettingsModal() {
                   onCheckedChange={(checked) => updateSettings({ geometryAsText: checked })}
                 />
               </SettingRow>
+              <SettingRow>
+                <SettingLabel
+                  htmlFor="number-grouping"
+                  title="Group digits in numbers"
+                  description="Separate thousands in numeric cells using your browser's locale (1,234,567). Affects the data grid only — copied cells and CSV/Excel exports stay unformatted so they paste and re-import cleanly."
+                />
+                <Switch
+                  id="number-grouping"
+                  checked={settings.numberGrouping}
+                  onCheckedChange={(checked) => updateSettings({ numberGrouping: checked })}
+                />
+              </SettingRow>
             </div>
           </TabsContent>
 

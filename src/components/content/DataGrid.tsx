@@ -68,6 +68,9 @@ interface Props {
   onLoadMore?: () => void;
   /** Render geometry columns as WKT text instead of the clickable map viewer. */
   geometryAsText?: boolean;
+  /** Group digits in numeric cells using the browser's locale. Display only —
+   *  clipboard copy and CSV/XLSX export deliberately stay ungrouped. */
+  numberGrouping?: boolean;
   /** Active column sort (rendered as a chevron on the header). */
   sort?: SortState;
   /** Called when a column header is clicked. Absent → headers aren't sortable. */
@@ -204,6 +207,7 @@ export function DataGrid({
   canLoadMore,
   onLoadMore,
   geometryAsText,
+  numberGrouping,
   sort,
   onSort,
 }: Props) {
@@ -247,12 +251,14 @@ export function DataGrid({
               return <GeometryViewer wkb={val} label={`Row ${rowIdx}`} />;
             }
             const field = fieldByName.get(column.id);
-            const display = formatCellValue(val, column.id, field, info?.duckdbType);
+            const display = formatCellValue(val, column.id, field, info?.duckdbType, {
+              grouping: numberGrouping,
+            });
             return <span className={`font-mono ${numeric ? "text-right block tabular-nums" : ""}`}>{display}</span>;
           },
         };
       }),
-    [columnNames, infoByName, fieldByName, startRow, geometryAsText]
+    [columnNames, infoByName, fieldByName, startRow, geometryAsText, numberGrouping]
   );
 
   const table = useReactTable({

@@ -18,6 +18,11 @@ export interface Settings {
   previewRowsPerPage: number;
   /** Render geometry columns as WKT text instead of a clickable map preview. */
   geometryAsText: boolean;
+  /** Group digits in numeric cells using the browser's locale separator
+   *  (1234567 -> 1,234,567). Display only: the grids opt in, while CSV/XLSX
+   *  export, clipboard copy, the AI agent's view of results, and the terminal
+   *  deliberately do not — see `formatCellValue`'s `grouping` option. */
+  numberGrouping: boolean;
   anthropicApiKey: string;
   aiModel: string;
   aiMaxToolRounds: number;
@@ -65,6 +70,7 @@ const defaultSettings: Settings = {
   editorAutocomplete: true,
   previewRowsPerPage: 50,
   geometryAsText: false,
+  numberGrouping: false,
   anthropicApiKey: "",
   aiModel: DEFAULT_AI_MODEL,
   aiMaxToolRounds: 20,

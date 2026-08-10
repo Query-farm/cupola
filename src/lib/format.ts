@@ -27,7 +27,93 @@ const TIME_TYPES = new Set(["TIME", "TIME_NS", "TIME WITH TIME ZONE", "TIMETZ"])
  * Uses Arrow field type or DuckDB type string for formatting decisions.
  * Output matches DuckDB CLI formatting — no locale commas.
  */
-export function formatCellValue(value: any, _columnName?: string, field?: any, duckdbType?: string): string {
+/** Options for display-only presentation tweaks. */
+export interface FormatOptions {
+  /** Group digits using the browser's locale (1234567 -> 1,234,567).
+   *
+   *  Opt-in on purpose. `formatCellValue` is not just a display renderer — it
+   *  also produces CSV/XLSX exports, clipboard payloads, and the text the AI
+   *  agent reads (`query-results.ts`), plus the terminal, which deliberately
+   *  matches DuckDB CLI output. Grouping any of those would be quietly wrong:
+   *  a grouped number lands in Excel as text, pastes across two spreadsheet
+   *  cells, and gives the agent a string it cannot do arithmetic on. Defaulting
+   *  to off means those paths stay correct by omission rather than by each one
+   *  remembering to disable it. */
+  grouping?: boolean;
+}
+
+// Locale separators, resolved once — `Intl.NumberFormat` construction is far too
+// expensive to repeat per cell in a virtualized grid.
+const LOCALE_SEPARATORS = (() => {
+  try {
+    const parts = new Intl.NumberFormat(undefined, { useGrouping: true }).formatToParts(12345.6);
+    return {
+      group: parts.find((p) => p.type === "group")?.value ?? ",",
+      decimal: parts.find((p) => p.type === "decimal")?.value ?? ".",
+    };
+  } catch {
+    return { group: ",", decimal: "." };
+  }
+})();
+
+/** True for types whose rendering is a base-10 number worth grouping.
+ *
+ *  Type-gated rather than relying on the shape of the output: DuckDB's BIT
+ *  renders as a digit string ("10101"), which would otherwise be mangled into
+ *  "10,101". Dates, times, intervals and UUIDs are excluded by their own
+ *  formatting, but BIT is not. */
+function isGroupableNumeric(field?: any, duckdbType?: string): boolean {
+  if (duckdbType) {
+    const d = duckdbType.toUpperCase();
+    if (/\b(BIT|VARCHAR|BLOB|UUID|DATE|TIME|TIMESTAMP|INTERVAL|BOOLEAN)\b/.test(d)) return false;
+    if (/\b(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UHUGEINT|UBIGINT|UINTEGER|USMALLINT|UTINYINT|FLOAT|DOUBLE|REAL|DECIMAL|NUMERIC)\b/.test(d)) {
+      return true;
+    }
+  }
+  const ext = getDuckDBExtensionType(field);
+  if (ext === "hugeint" || ext === "uhugeint") return true;
+  if (ext) return false;
+  return /^(Int|Uint|UInt|Float|Decimal)/.test(String(field?.type ?? ""));
+}
+
+/** Apply locale group + decimal separators to a plain base-10 numeric string.
+ *
+ *  Operates on the already-formatted string rather than re-formatting the value,
+ *  so every DuckDB-compatible decision upstream survives — the `.0` suffix on
+ *  whole doubles, significant-figure limits, and HUGEINT's 39 digits, which a
+ *  round-trip through `Number()` would destroy.
+ *
+ *  The regex is the safety net: anything not a bare optionally-signed decimal
+ *  (`nan`, `inf`, `-inf`, exponent form, dates, WKT, …) is returned untouched.
+ *  The decimal separator is swapped too, not just the group separator — in
+ *  de-DE the group separator IS ".", so grouping alone would render 1234567.89
+ *  as the ambiguous "1.234.567.89". */
+function localizeNumeric(s: string): string {
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return s;
+  const negative = s.startsWith("-");
+  const body = negative ? s.slice(1) : s;
+  const dot = body.indexOf(".");
+  const intPart = dot < 0 ? body : body.slice(0, dot);
+  const fracPart = dot < 0 ? null : body.slice(dot + 1);
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, LOCALE_SEPARATORS.group);
+  return (
+    (negative ? "-" : "") + grouped + (fracPart !== null ? LOCALE_SEPARATORS.decimal + fracPart : "")
+  );
+}
+
+export function formatCellValue(
+  value: any,
+  _columnName?: string,
+  field?: any,
+  duckdbType?: string,
+  opts?: FormatOptions,
+): string {
+  const out = formatCellValueRaw(value, _columnName, field, duckdbType);
+  if (opts?.grouping && isGroupableNumeric(field, duckdbType)) return localizeNumeric(out);
+  return out;
+}
+
+function formatCellValueRaw(value: any, _columnName?: string, field?: any, duckdbType?: string): string {
   if (value === null || value === undefined) return "";
 
   // DuckDB Arrow extension types (arrow_lossless_conversion=true)

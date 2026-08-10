@@ -273,6 +273,7 @@ Stored in localStorage (`vgi-frontend-settings` — key name predates the Cupola
 | `shellThreads` | `0` | DuckDB WASM thread count (0 = auto) |
 | `previewRowsPerPage` | `50` | Remembered rows-per-page for the data preview grid (editor results + catalog Preview Data). One of DataPreview's `PAGE_SIZES`. |
 | `geometryAsText` | `false` | Render geometry columns as WKT text instead of a clickable map preview (`GeometryViewer`) |
+| `numberGrouping` | `false` | Group digits in numeric grid cells using the browser's locale (`1,234,567`). Applied via `formatCellValue`'s opt-in `grouping` option and passed only from `DataGrid`/`DataPreview` — CSV/XLSX export, clipboard copy, the AI agent's view (`query-results.ts`) and the terminal deliberately stay ungrouped, since a grouped number lands in Excel as text, pastes across two cells, and is not arithmetic the agent can do. Swaps the decimal separator too: in `de-DE` the group separator is `.`, so grouping alone would make `1234567.89` ambiguous. Type-gated because DuckDB's `BIT` renders as a digit string |
 | `anthropicApiKey` | `""` | Claude API key for AI features |
 | `aiModel` | `"claude-sonnet-4-6"` | Claude model for AI agent (retired IDs auto-migrated on load via `RETIRED_MODEL_REPLACEMENTS` in `settings.tsx`) |
 | `aiMaxToolRounds` | `20` | Max tool-use rounds per AI conversation |
@@ -338,7 +339,9 @@ portable:
 |-----|---------|
 | `VGI_SERVICE_URL` | VGI server (default `http://localhost:9009`) |
 | `CUPOLA_APP_ORIGIN` | app origin — **set this when 4321 is taken**; `astro dev` silently falls through to 4322/4323 and the suite would otherwise drive whatever else is squatting there |
-| `CUPOLA_BASE` | base path, e.g. `/v0.4.106/` |
+| `CUPOLA_BASE` | base path, e.g. `/v0.4.109/` |
+
+**After bumping the version, restart `bun run dev`.** `astro dev` computes `base` from `package.json` at startup, while `helpers.ts` reads it per run — so a server started before the bump serves `/v<old>/` and every spec 404s into a blank page, failing in `gotoApp` with a misleading "tree never became visible".
 
 `.test_formats` compares the terminal formatter against DuckDB CLI reference
 output and tolerates `≥106`/`≤4`. The 4 permitted failures are rendering-only:

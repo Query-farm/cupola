@@ -477,6 +477,7 @@ export function DataPreview({ tablePath, result }: Props) {
           canLoadMore={hasMore && !loading}
           onLoadMore={loadMore}
           geometryAsText={settings.geometryAsText}
+          numberGrouping={settings.numberGrouping}
           sort={sort}
           onSort={handleSort}
         />
