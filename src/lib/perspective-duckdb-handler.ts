@@ -343,11 +343,23 @@ export class VgiDuckDBHandler {
     return { hasRowid: false, primaryKey: null };
   }
 
-  /** Replace unqualified view ID references with memory.main qualified version in SQL. */
-  private qualifyViewSql(sql: string, viewId: string): string {
-    // The SQL builder may or may not quote view IDs. Use regex with word boundary for safety.
-    const escaped = viewId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return sql.replace(new RegExp(`(?<!")\\b${escaped}\\b(?!")`, "g"), `memory.main."${viewId}"`);
+  /**
+   * Fully-qualified, quoted name for a Perspective-generated view id.
+   *
+   * VGI catalogs are read-only, so the SQL model's scratch views are created in
+   * `memory.main` and every reference to them has to say so. The builder
+   * interpolates whatever id it is given verbatim, and *only* ever in a table
+   * position — `CREATE {} AS`, `DROP TABLE IF EXISTS {}`, `FROM {}`,
+   * `DESCRIBE {}` — so handing it the qualified name up front produces correct
+   * SQL directly.
+   *
+   * This replaces a regex that rewrote the id inside already-generated SQL. That
+   * approach had to guess at token boundaries with a lookbehind and would
+   * happily rewrite an identically-named token inside a string literal, so a
+   * filter on the right value could corrupt the query.
+   */
+  private qualifiedView(viewId: string): string {
+    return `memory.main."${viewId.replace(/"/g, '""')}"`;
   }
 
   private get sqlBuilder() {
@@ -418,10 +430,10 @@ export class VgiDuckDBHandler {
   async tableSize(tableId: string): Promise<number> {
     const cached = this.tableSizeCache.get(tableId);
     if (cached !== undefined) return cached;
-    let sql = this.sqlBuilder.tableSize(tableId);
-    if (!tableId.includes(".")) {
-      sql = this.qualifyViewSql(sql, tableId);
-    }
+    // A bare id (no dots) is one of our scratch views, not a catalog table.
+    const sql = this.sqlBuilder.tableSize(
+      tableId.includes(".") ? tableId : this.qualifiedView(tableId),
+    );
     const rows = await queryRows(sql);
     const size = Number(rows[0]?.["count_star()"] ?? 0);
     this.tableSizeCache.set(tableId, size);
@@ -478,7 +490,7 @@ export class VgiDuckDBHandler {
     // The SQL builder uses hyphenated names everywhere, so we point it at the
     // rename view where those names actually exist.
     const renameView = await this.ensureRenameView(tableId);
-    let sql = this.sqlBuilder.tableMakeView(renameView, viewId, config);
+    let sql = this.sqlBuilder.tableMakeView(renameView, this.qualifiedView(viewId), config);
 
     // Detect table ordering capability (cached per table)
     if (!this.tableOrderingCache.has(tableId)) {
@@ -501,8 +513,6 @@ export class VgiDuckDBHandler {
       sql = sql.replace(/CREATE TABLE\s+/i, "CREATE VIEW ");
     }
 
-    // VGI catalogs are read-only — create in memory.main schema
-    sql = this.qualifyViewSql(sql, viewId);
     const result = await runQuery(sql);
     if (!result.ok) throw new Error(result.error || "Failed to create view");
     this.viewSizeCache.delete(viewId);
@@ -524,8 +534,7 @@ export class VgiDuckDBHandler {
   }
 
   async viewDelete(viewId: string): Promise<void> {
-    let sql = this.sqlBuilder.viewDelete(viewId);
-    sql = this.qualifyViewSql(sql, viewId);
+    const sql = this.sqlBuilder.viewDelete(this.qualifiedView(viewId));
     const result = await runQuery(sql);
     if (!result.ok) {
       const viewSql = sql.replace(/DROP TABLE/i, "DROP VIEW");
@@ -579,8 +588,9 @@ export class VgiDuckDBHandler {
       }
     } else {
       // No traversal — pass through to SQL builder
-      let sql = this.sqlBuilder.viewGetData(viewId, config, viewport, schema);
-      sql = this.qualifyViewSql(sql, viewId);
+      const sql = this.sqlBuilder.viewGetData(
+        this.qualifiedView(viewId), config, viewport, schema,
+      );
       const result = await runQuery(sql);
       if (!result.ok) throw new Error(result.error || "Query failed");
       if (result.arrowBuffers?.length) {
@@ -594,8 +604,7 @@ export class VgiDuckDBHandler {
     if (traversal) return traversal.length;
     const cached = this.viewSizeCache.get(viewId);
     if (cached !== undefined) return cached;
-    let sql = this.sqlBuilder.viewSize(viewId);
-    sql = this.qualifyViewSql(sql, viewId);
+    const sql = this.sqlBuilder.viewSize(this.qualifiedView(viewId));
     const rows = await queryRows(sql);
     const size = Number(Object.values(rows[0] ?? {})[0] ?? 0);
     this.viewSizeCache.set(viewId, size);
@@ -625,8 +634,7 @@ export class VgiDuckDBHandler {
   }
 
   async viewGetMinMax(viewId: string, columnName: string, config: any): Promise<{ min: any; max: any }> {
-    let sql = this.sqlBuilder.viewGetMinMax(viewId, columnName, config);
-    sql = this.qualifyViewSql(sql, viewId);
+    const sql = this.sqlBuilder.viewGetMinMax(this.qualifiedView(viewId), columnName, config);
     const rows = await queryRows(sql);
     let [min, max] = Object.values(rows[0] ?? {});
     if (typeof min === "bigint") min = Number(min);

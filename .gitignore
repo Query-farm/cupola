@@ -1,5 +1,15 @@
 # build output
 dist/
+# ...except the vendored Perspective artifacts. They deliberately mirror the npm
+# package layout (<pkg>/dist/cdn + <pkg>/dist/wasm) because each bundle locates
+# its siblings relative to its own URL — perspective.js rewrites
+# `client/dist/cdn` to `server/dist/wasm`, and perspective-viewer.js fetches
+# `../wasm/...`. That puts every one of them under a `dist/` directory, which the
+# blanket rule above would swallow: `git status` would show only the deletion of
+# the old flat files and none of their replacements. Re-include the directories
+# first — git cannot re-include a file whose parent directory is excluded.
+!public/perspective/**/dist/
+!public/perspective/**/dist/**
 # generated types
 .astro/
 

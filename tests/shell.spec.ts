@@ -2,15 +2,19 @@
  * DuckDB WASM Shell — Playwright integration tests.
  *
  * Requires:
- *   - Dev server running on localhost:4321
- *   - VGI server running on localhost:9003 (run-local-noauth.sh)
+ *   - Dev server (started by playwright.config.ts, or point CUPOLA_APP_ORIGIN
+ *     at a running one)
+ *   - Any VGI server — see helpers.ts for the default and VGI_SERVICE_URL.
+ *
+ * The catalog-access tests discover whatever catalog the server attached rather
+ * than naming one. They used to hardcode `albemarle_gis` on localhost:9003,
+ * which meant they only passed against one developer's local dataset and failed
+ * as soon as that server was serving something else.
  *
  * Run: npx @playwright/test tests/shell.spec.ts
  */
 import { test, expect, type Page } from "@playwright/test";
-
-const SERVICE_URL = "http://localhost:9003";
-const APP_URL = `http://localhost:4321/?service=${SERVICE_URL}`;
+import { APP_URL } from "./helpers";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -18,8 +22,14 @@ const APP_URL = `http://localhost:4321/?service=${SERVICE_URL}`;
 
 /** Wait for the shell bridge to be ready (runQuery is set). */
 async function waitForShell(page: Page, timeoutMs = 30_000): Promise<void> {
+  // `waitForFunction(fn, arg, options)` — the options object must go in the
+  // THIRD position. Passed second it is treated as the page-function argument
+  // and silently ignored, so this fell back to the config's 10s actionTimeout
+  // and every test in this file failed in beforeEach waiting for a DuckDB boot
+  // + ATTACH that legitimately needs longer.
   await page.waitForFunction(
     () => typeof (window as any).__bridge?.runQuery === "function",
+    null,
     { timeout: timeoutMs },
   );
 }
@@ -142,6 +152,17 @@ test.describe("DuckDB WASM Shell", () => {
     });
   });
 
+  /** The catalog the VGI server ATTACHed, whatever it is called. */
+  async function attachedCatalog(page: Page): Promise<string | null> {
+    const r = await shellQuery(
+      page,
+      `SELECT DISTINCT catalog_name FROM information_schema.schemata
+        WHERE catalog_name NOT IN ('memory', 'system', 'temp')
+        ORDER BY 1 LIMIT 1`,
+    );
+    return (r.rows?.[0]?.catalog_name as string) ?? null;
+  }
+
   test.describe("VGI catalog access", () => {
     test("query attached catalog", async ({ page }) => {
       const result = await shellQuery(page, "SELECT current_catalog()");
@@ -149,15 +170,42 @@ test.describe("DuckDB WASM Shell", () => {
     });
 
     test("list schemas", async ({ page }) => {
-      const result = await shellQuery(page, "SELECT schema_name FROM information_schema.schemata WHERE catalog_name = 'albemarle_gis' LIMIT 5");
+      const catalog = await attachedCatalog(page);
+      test.skip(!catalog, "VGI server attached no catalog");
+      const result = await shellQuery(
+        page,
+        `SELECT schema_name FROM information_schema.schemata
+          WHERE catalog_name = '${catalog}' LIMIT 5`,
+      );
       expect(result.ok).toBe(true);
       expect(result.numRows).toBeGreaterThan(0);
     });
 
     test("query remote table", async ({ page }) => {
-      const result = await shellQuery(page, "SELECT COUNT(*) as cnt FROM albemarle_gis.property.parcels");
-      expect(result.ok).toBe(true);
-      expect(result.rows![0].cnt).toBeGreaterThan(0);
+      const catalog = await attachedCatalog(page);
+      test.skip(!catalog, "VGI server attached no catalog");
+
+      const tables = await shellQuery(
+        page,
+        `SELECT table_schema, table_name FROM information_schema.tables
+          WHERE table_catalog = '${catalog}'
+            AND table_schema NOT IN ('information_schema', 'pg_catalog')
+          LIMIT 1`,
+      );
+      expect(tables.ok).toBe(true);
+      test.skip(!tables.rows?.length, `catalog ${catalog} exposes no tables`);
+
+      const { table_schema, table_name } = tables.rows![0];
+      // A successful COUNT(*) is the assertion: it proves the whole remote path
+      // (DuckDB -> VGI extension -> RPC -> Arrow) round-trips. Row count is not
+      // asserted to be non-zero — an empty table is a legitimate catalog.
+      const result = await shellQuery(
+        page,
+        `SELECT COUNT(*) as cnt FROM "${catalog}"."${table_schema}"."${table_name}"`,
+      );
+      expect(result.ok, result.error).toBe(true);
+      expect(typeof result.rows![0].cnt).toBe("number");
+      expect(result.rows![0].cnt).toBeGreaterThanOrEqual(0);
     });
   });
 
@@ -203,7 +251,12 @@ test.describe("DuckDB WASM Shell", () => {
 
   test.describe("format tests (.test_formats)", () => {
     test("107+ format tests pass", async ({ page }) => {
-      const consolePromise = waitForConsoleMatch(page, /FORMAT_TEST:/);
+      test.setTimeout(90_000);
+      // ~110 comparisons take north of 15s here. At the old default this timed
+      // out before the summary line was logged, turning a legible "N passed, M
+      // failed" into an opaque hang — and `runFormatTests` reports its errors
+      // to the xterm buffer only, so nothing reached the test output either.
+      const consolePromise = waitForConsoleMatch(page, /FORMAT_TEST:/, 60_000);
       await shellRun(page, ".test_formats");
       const logLine = await consolePromise;
       // Parse "FORMAT_TEST: 107 passed, 3 failed." or "FORMAT_TEST: All 110 tests passed."

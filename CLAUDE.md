@@ -30,6 +30,10 @@ bun run test:e2e
 # Add a ShadCN component
 bunx --bun shadcn@latest add <component> --yes
 
+# Rebuild the vendored Perspective fork into public/perspective/
+./build-perspective.sh                  # build + stage
+./build-perspective.sh --stage-only     # re-stage an existing build
+
 # Publish a new version (bump version in package.json first)
 ./publish.sh                  # prompt for commit message
 ./publish.sh "fix: whatever"  # use provided message
@@ -80,7 +84,7 @@ The app reads the following parameters from the URL. VGI servers issuing the red
 - **TanStack Table** — column sorting, filtering, expansion in ColumnsTable
 - **xterm.js** — terminal emulator for the DuckDB SQL shell
 - **DuckDB-WASM** (`@haybarn/haybarn-wasm`) — in-browser SQL engine with VGI extension
-- **Perspective** — pivot table / data grid visualization
+- **Perspective** — pivot table / data grid visualization. A **locally built fork**, vendored into `public/perspective/`; there is no `@perspective-dev/*` npm dependency (see "Vendored Perspective" below)
 - **Vega-Lite** — AI agent chart rendering
 - **Sentry** — error reporting + AI agent monitoring (`@sentry/astro` browser, `@sentry/cloudflare` worker)
 - **vgi-typescript** (`vgi/client`) — browser-safe VGI client for Arrow IPC RPC
@@ -198,6 +202,8 @@ worker/
 tests/
   unit/                      # bun:test unit tests (bun run test)
   *.spec.ts                  # Playwright e2e tests (bun run test:e2e)
+                             #   perspective.spec.ts = static Arrow path
+                             #   perspective-virtual-server.spec.ts = DuckDB-backed path
 .github/workflows/
   publish.yml                # Manual-dispatch CI publish (inactive until secrets are set)
 ```
@@ -210,7 +216,20 @@ tests/
 
 **Node stubs** (`src/lib/node-stubs.ts`): Apache Arrow's Node.js I/O modules reference `node:stream` etc. These stubs provide minimal class shells so `class X extends Readable` doesn't throw. They are aliased in `astro.config.mjs`.
 
-**One Apache Arrow, everywhere**: application code imports Arrow **only** from `@query-farm/apache-arrow` — never bare `apache-arrow`, and never from a CDN. Arrow objects cross the boundary between cupola and the sibling repos (`vgi/client`'s `deserializeSchema` hands back `Field`s), so more than one build on the page means structurally-identical-but-nominally-distinct types and cross-version IPC bugs. Three copies used to ship at once: a phantom `apache-arrow@17` (imported by 10 modules but absent from `package.json`, resolving only via `@perspective-dev/client`'s hoist), `@query-farm/apache-arrow@21.1.1` from vgi-typescript's own `node_modules`, and `apache-arrow@18.1.0` fetched from jsdelivr at runtime by `DuckDBShell`. Keeping it to one requires **all three** of: the pinned `@query-farm/apache-arrow` dependency, `vite.resolve.dedupe` in `astro.config.mjs`, and the matching `paths` entry in `tsconfig.json` (the latter two must stay in sync, and the sibling sources resolve their own copy without them). Unit tests must import Arrow from the same package or they will build tables the code cannot decode. `@haybarn/haybarn-wasm` keeps its own internal `apache-arrow@17`; that is fine and separate — it exchanges only raw IPC bytes with us, never Arrow objects.
+**One Apache Arrow, everywhere**: application code imports Arrow **only** from `@query-farm/apache-arrow` — never bare `apache-arrow`, and never from a CDN. Arrow objects cross the boundary between cupola and the sibling repos (`vgi/client`'s `deserializeSchema` hands back `Field`s), so more than one build on the page means structurally-identical-but-nominally-distinct types and cross-version IPC bugs. Three copies used to ship at once: a phantom `apache-arrow@17` (imported by 10 modules but absent from `package.json`, resolving via a transitive hoist), `@query-farm/apache-arrow@21.1.1` from vgi-typescript's own `node_modules`, and `apache-arrow@18.1.0` fetched from jsdelivr at runtime by `DuckDBShell`. The hoist is `@haybarn/haybarn-wasm`, which declares `apache-arrow: ^17.0.0` (`bun.lock`) — **not** `@perspective-dev/client`, which never declared Arrow at all and is no longer a dependency. Keeping it to one requires **all three** of: the pinned `@query-farm/apache-arrow` dependency, `vite.resolve.dedupe` in `astro.config.mjs`, and the matching `paths` entry in `tsconfig.json` (the latter two must stay in sync, and the sibling sources resolve their own copy without them). Unit tests must import Arrow from the same package or they will build tables the code cannot decode. `@haybarn/haybarn-wasm` keeps its own internal `apache-arrow@17`; that is fine and separate — it exchanges only raw IPC bytes with us, never Arrow objects.
+
+**Vendored Perspective** (`public/perspective/`, built by `./build-perspective.sh`): cupola does **not** consume `@perspective-dev/*` from npm. It loads a locally built fork carrying patches upstream does not have — DuckDB Arrow coercion for hugeint/uuid/timetz/interval/bignum/bit, all dictionary key widths, `Int64` preservation, and the `view_collapse`/`view_expand` handler-trait methods that `ViewTraversal` in `perspective-duckdb-handler.ts` depends on. The fork is `~/Development/perspective` branch `duckdb-type-support-v5` (rebased onto upstream `v5.1.0`, pushed to the `query-farm` remote). To move to a newer upstream, rebase that branch and re-run the script.
+
+Four things bite, all of which report the wrong cause:
+
+- **The staging layout mirrors the npm package layout (`<pkg>/dist/cdn` + `<pkg>/dist/wasm`) and must not be flattened.** Each bundle finds its siblings relative to its own URL: `perspective-viewer.js` fetches `../wasm/perspective-viewer.wasm`, and `perspective.js` rewrites `.../client/dist/cdn/…` → `.../server/dist/wasm/…`, falling back to `../../../server/dist/wasm/…`. Flat, the viewer 404s (surfacing as `WebAssembly.compile(): BufferSource argument is empty`) and the server wasm is requested from the **origin root**. Cupola vendored these flat until the v5 upgrade, which is why it broke.
+- **`Missing perspective-client.wasm` is a red herring.** `worker()` never fetches a client wasm — it reads `__wasm_module__` off the registered `<perspective-viewer>` class. The viewer ends in a top-level `await init_client(fetch(...))` which *swallows* a failed load ("Stage 0 wasm loading failed, skipping"), so the import still resolves and the element is silently never defined. Any problem loading `viewer/dist/wasm/perspective-viewer.wasm` surfaces as this error. **Check that file's URL first.**
+- **`.gitignore` needs its `!public/perspective/**/dist/` negation.** The blanket `dist/` rule matches a directory named `dist` at any depth, so without it every vendored artifact is invisible to git — `git status` shows only the deletion of whatever was there before and none of the replacements, and a commit ships a broken app while all local tests stay green (Astro copies `public/` from disk regardless).
+- **`viewer-charts` replaced `viewer-d3fc`** in the 4.5 plugin-API change, which also retired `viewer-openlayers`; both packages were deleted upstream. Loading the d3fc name 404s and rejects `ensurePerspectiveLoaded()`, taking out **both** Perspective paths.
+
+Two build prerequisites fail with errors pointing elsewhere, so `build-perspective.sh` encodes them: `rust/perspective-client/src/rust/proto.rs` is **gitignored and generated** (a stale one gives ~56 "struct X has no field named Y" errors in files you never touched — regenerate with `PROTOC=… --features generate-proto`), and `PACKAGE` must include `metadata`, which emits the ts-rs bindings the client's `.d.ts` re-exports `Features` from (omit it and the Rust builds fine, then `tsc` fails with `Cannot find module '.../ts-rs/ColumnType.d.ts'`).
+
+**Two Perspective code paths, one container.** `ui.showPerspective(arrowBuffer)` loads a **static Arrow snapshot** (`perspectiveWorker.table()`) — driven by the shell's `.perspective` and the editor's "Open in Perspective". Selecting a table and opening the Perspective tab instead starts the **virtual server** (`VgiDuckDBHandler`), which compiles pivots to SQL against DuckDB-WASM. They share a DOM container and module-global worker but nothing else — the static path renames nothing while the virtual server maps `_`→`-` in column names, and only the virtual server supports grouping. Each has its own spec (`perspective.spec.ts`, `perspective-virtual-server.spec.ts`); the virtual-server one had no coverage until v5 broke it.
 
 **Arrow-to-DuckDB types**: Column types from the VGI server are Arrow types (Utf8, Int64, Date32). `arrow-to-duckdb.ts` converts these to DuckDB display names (VARCHAR, BIGINT, DATE). Checks `ARROW:extension:name` metadata for `geoarrow.wkb` → `GEOMETRY`.
 
@@ -293,15 +312,32 @@ Unit tests are pure-logic bun tests in `tests/unit/` (`bun run test`); the AI ag
 
 For end-to-end work, test with Playwright (or Playwright MCP) against a running VGI server:
 ```bash
-# Start VGI server (no auth for testing)
-cd ~/Development/vgi-albemarle-gis && ./run-local-noauth.sh
+# Start any VGI server (no auth for testing), e.g.
+cd ~/Development/vgi-albemarle-gis && ./run-local-noauth.sh   # :9003
 
 # Start frontend dev server
 cd ~/Development/vgi-web-frontend && bun run dev
 
 # Test in browser
-http://localhost:4321/?service=http://localhost:9003
+http://localhost:4321/?service=http://localhost:9009
 ```
+
+The suite must not depend on one developer's dataset. Specs discover the attached
+catalog (`information_schema.schemata` minus `memory`/`system`/`temp`) and
+`test.skip` when there is none, rather than naming one — `shell.spec.ts` used to
+hardcode `albemarle_gis` and failed everywhere else. Three env vars keep a run
+portable:
+
+| var | purpose |
+|-----|---------|
+| `VGI_SERVICE_URL` | VGI server (default `http://localhost:9009`) |
+| `CUPOLA_APP_ORIGIN` | app origin — **set this when 4321 is taken**; `astro dev` silently falls through to 4322/4323 and the suite would otherwise drive whatever else is squatting there |
+| `CUPOLA_BASE` | base path, e.g. `/v0.4.106/` |
+
+Known failure: `.test_formats` reports 101/9 against a `≥107`/`≤3` tolerance. The
+gaps are `uhugeint`, `bit` and `time_tz` in the terminal formatter
+(`src/lib/format.ts`) — the same DuckDB encodings the Perspective fork patches,
+needing the equivalent fixes here.
 
 ## Publishing & Deployment
 
@@ -342,3 +378,6 @@ The `package.json` references local sibling repos:
 - `@query-farm/vgi-rpc` → `../vgi-rpc-typescript` (public repo; `astro.config.mjs` aliases directly into its source)
 
 The CI publish workflow checks these out side-by-side; locally they must exist as sibling directories.
+
+A third sibling is needed only to **rebuild** Perspective, not to build or run cupola:
+- `~/Development/perspective` → the Query-farm fork, branch `duckdb-type-support-v5`. Consumed as prebuilt artifacts committed under `public/perspective/`, so a normal `bun run build` does not need it. See "Vendored Perspective" above and `./build-perspective.sh`.

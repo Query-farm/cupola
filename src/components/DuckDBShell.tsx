@@ -709,10 +709,21 @@ function getPerspectiveCDN() {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const base = import.meta.env.BASE_URL;
   return [
-    `${origin}${base}perspective/perspective.js`,              // Built from source — includes fromArrowIpc
-    `${origin}${base}perspective/perspective-viewer.js`,       // Built from source — matching WASM protocol
-    `${origin}${base}perspective/perspective-viewer-datagrid.js`,
-    `${origin}${base}perspective/perspective-viewer-d3fc.js`,
+    // These paths mirror the npm package layout (<pkg>/dist/cdn/...) on
+    // purpose — each bundle locates its own wasm relative to its URL, and v5
+    // derives the server wasm by rewriting `client/dist/cdn` to
+    // `server/dist/wasm`. Flattening them breaks that resolution with errors
+    // that name the wrong file. See build-perspective.sh.
+    `${origin}${base}perspective/client/dist/cdn/perspective.js`,
+    `${origin}${base}perspective/viewer/dist/cdn/perspective-viewer.js`,
+    `${origin}${base}perspective/viewer-datagrid/dist/cdn/perspective-viewer-datagrid.js`,
+    // `viewer-charts` replaced `viewer-d3fc` in Perspective 4.5 (the new plugin
+    // API, which also retired `viewer-openlayers`). Both packages were deleted
+    // outright upstream, so this must not be reverted to the d3fc name: the
+    // file would 404, the dynamic import would reject, and a rejected
+    // `ensurePerspectiveLoaded()` takes out BOTH Perspective paths — the
+    // virtual-server tab and the shell's `.perspective` command.
+    `${origin}${base}perspective/viewer-charts/dist/cdn/perspective-viewer-charts.js`,
   ];
 }
 let perspectiveLoaded = false;
@@ -738,6 +749,19 @@ async function ensurePerspectiveLoaded(): Promise<void> {
     const perspective = await import(/* @vite-ignore */ getPerspectiveCDN()[0]);
     await Promise.all(getPerspectiveCDN().slice(1).map(url => import(/* @vite-ignore */ url)));
     perspectiveMod = perspective.default;
+
+    // `worker()` does NOT fetch a client wasm of its own — it reads
+    // `__wasm_module__` off the registered <perspective-viewer> class and
+    // throws "Missing perspective-client.wasm" when that element is absent.
+    //
+    // The viewer bundle ends in a top-level `await init_client(fetch(...))`, so
+    // awaiting its import IS enough to guarantee registration — but only when
+    // that fetch succeeds. `init_client` swallows a failed load ("Stage 0 wasm
+    // loading failed, skipping"), the import still resolves, and the element is
+    // never defined. The result is that ANY problem fetching
+    // viewer/dist/wasm/perspective-viewer.wasm surfaces here as a complaint
+    // about a *client* wasm that was never the issue. If you see that error,
+    // check that file's URL first.
     perspectiveWorker = await perspectiveMod.worker();
     perspectiveLoaded = true;
   }
