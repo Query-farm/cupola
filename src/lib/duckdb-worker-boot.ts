@@ -171,6 +171,24 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   if (!warmingUp) setBootPhase("Warming up Haybarn", null);
   mark("instantiate");
 
+  // Ask the Arrow exporter to preserve HUGEINT/UHUGEINT/TIME_TZ/BIT/UUID as
+  // tagged extension types instead of collapsing them to lossy primitives —
+  // UHUGEINT arriving as a *signed* DECIMAL(38,0) (so 2^128-1 reads as -1), BIT
+  // as an untagged BLOB, and TIME_TZ as a plain TIME with its offset discarded.
+  //
+  // This MUST be a config key here, not `SET arrow_lossless_conversion = true`.
+  // haybarn's exporter reads `webdb_.config_->arrow_lossless_conversion` (a C++
+  // field fixed at instantiation) — see lib/src/webdb.cc, whose comment states
+  // the flag is "pinned by the wasm packaging layer ... rather than driven from
+  // session settings". `WebDB::Open` pushes that field into DuckDB's setting
+  // one-way at startup, so a later SET updates the *setting* the exporter never
+  // reads: `current_setting()` reports true while the output stays lossy.
+  //
+  // `src/lib/format.ts` keys its hugeint/timetz/bit/uuid handlers off the
+  // `ARROW:extension:metadata` this produces; without it they silently never
+  // fire. `.test_formats` is the guard.
+  await db.open({ arrowLosslessConversion: true });
+
   setBootPhase("Connecting to Haybarn");
   const conn = await db.connect();
   const connId = conn.useUnsafe((_db, id) => id);

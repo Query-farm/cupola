@@ -536,6 +536,27 @@ export function initShell(
         writeln("");
       }
 
+      // Resolve the prompt's catalog/schema BEFORE announcing readiness.
+      //
+      // This used to be the first statement of readLoop, which opened a race:
+      // the three lines below hide the boot overlay, publish `terminal.runQuery`
+      // and fire `duckdb-ready`, but readLoop then `await`ed this query before
+      // ever reaching `rl.read()`. For the width of that round-trip the shell
+      // LOOKED ready while xterm-readline was not reading, and `runQuery` drives
+      // the terminal via `term.paste()` — which readline drops (or throws
+      // "Cannot read properties of undefined (reading 'inputType')") unless it
+      // is inside `read()`. So a query submitted right after the overlay
+      // disappeared — by a fast user, or by the editor / query-history / AI
+      // calling `terminal.runQuery` off the `duckdb-ready` event — silently
+      // vanished, and the only recovery was reloading the page.
+      //
+      // Safari hit it far more than Chrome because its slower WASM makes this
+      // round-trip longer, widening the window.
+      //
+      // Awaiting it here means readLoop's body runs synchronously as far as
+      // `rl.read(prompt)`, so readline is live before anything can submit.
+      await refreshCatalog();
+
       // Shell is fully ready — expose runQuery for external callers
       console.log("[shell] post-ready: handing off to readLoop");
       setBootPhase(null);
@@ -595,7 +616,10 @@ export function initShell(
   });
 
   async function readLoop() {
-    await refreshCatalog();
+    // NOTE: nothing may be awaited before the first `rl.read()` below. The
+    // caller publishes `terminal.runQuery` immediately before invoking this, so
+    // any await here reopens the window in which submitted input is silently
+    // dropped. `refreshCatalog()` used to live here and did exactly that.
     while (true) {
       promptInputEmpty = true;
       const ctx = currentCatalog

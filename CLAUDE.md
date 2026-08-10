@@ -231,6 +231,12 @@ Two build prerequisites fail with errors pointing elsewhere, so `build-perspecti
 
 **Two Perspective code paths, one container.** `ui.showPerspective(arrowBuffer)` loads a **static Arrow snapshot** (`perspectiveWorker.table()`) — driven by the shell's `.perspective` and the editor's "Open in Perspective". Selecting a table and opening the Perspective tab instead starts the **virtual server** (`VgiDuckDBHandler`), which compiles pivots to SQL against DuckDB-WASM. They share a DOM container and module-global worker but nothing else — the static path renames nothing while the virtual server maps `_`→`-` in column names, and only the virtual server supports grouping. Each has its own spec (`perspective.spec.ts`, `perspective-virtual-server.spec.ts`); the virtual-server one had no coverage until v5 broke it.
 
+**Lossless Arrow conversion** (`duckdb-worker-boot.ts`): the worker opens the database with `db.open({ arrowLosslessConversion: true })`. Without it DuckDB collapses its own types to lossy primitives — `UHUGEINT` becomes a *signed* `DECIMAL(38,0)` so `2^128-1` reads as `-1`, `BIT` becomes an untagged `BLOB`, `TIME_TZ` becomes a plain `TIME` with its offset thrown away — and none carry `ARROW:extension:metadata`, so the handlers in `format.ts` that key off it silently never fire. That shipped for a long time: the shell rendered BIT columns as hex blobs and UHUGEINT as `-1`.
+
+**This must be the config key, not `SET arrow_lossless_conversion = true`.** haybarn's exporter reads `webdb_.config_->arrow_lossless_conversion`, a C++ field fixed at instantiation (`lib/src/webdb.cc`, whose comment says the flag is "pinned by the wasm packaging layer … rather than driven from session settings"). `WebDB::Open` pushes that field *into* DuckDB's setting one-way at startup, so a later `SET` updates a setting the exporter never reads — `current_setting()` cheerfully reports `true` while the output stays lossy. `arrow_output_version` is pinned the same way (`ArrowFormatVersion::V1_0`), so setting it does nothing either. `.test_formats` is the guard.
+
+**Terminal readiness is not `terminal.runQuery` being set** (`shell-init.ts`): `runQuery` drives the terminal through `term.paste()`, which xterm-readline only accepts from inside `rl.read()`. Outside it the input is dropped, or throws `Cannot read properties of undefined (reading 'inputType')`. The post-ready handoff therefore resolves the prompt's catalog **before** hiding the boot overlay and publishing `runQuery`, so `readLoop()` runs synchronously as far as its first `rl.read()`. **Do not add an `await` ahead of that read.** It previously did (`await refreshCatalog()` was readLoop's first line), which left a window one query round-trip wide where the shell looked ready but silently swallowed anything submitted — a fast user, or the editor / query-history / AI panel reacting to `duckdb-ready`. Safari hit it constantly because its slower WASM widens the window; the only recovery was reloading. `waitForShell` in `shell.spec.ts` guards it by requiring the terminal to echo a `.help`.
+
 **Arrow-to-DuckDB types**: Column types from the VGI server are Arrow types (Utf8, Int64, Date32). `arrow-to-duckdb.ts` converts these to DuckDB display names (VARCHAR, BIGINT, DATE). Checks `ARROW:extension:name` metadata for `geoarrow.wkb` → `GEOMETRY`.
 
 **SQL string literals vs identifiers**: use `quoteLiteral()` for VALUES and `quoteIdent()` for NAMES, both from `src/lib/duckdb-query.ts`. Mixing them is silent: `WHERE database_name = "memory"` is an identifier reference, so DuckDB raises `Binder Error: Referenced column "memory" not found`, and callers that treat a failed query as "not found" swallow it. That bug disabled `describe_table` for memory/attached catalogs for many releases.
@@ -334,10 +340,13 @@ portable:
 | `CUPOLA_APP_ORIGIN` | app origin — **set this when 4321 is taken**; `astro dev` silently falls through to 4322/4323 and the suite would otherwise drive whatever else is squatting there |
 | `CUPOLA_BASE` | base path, e.g. `/v0.4.106/` |
 
-Known failure: `.test_formats` reports 101/9 against a `≥107`/`≤3` tolerance. The
-gaps are `uhugeint`, `bit` and `time_tz` in the terminal formatter
-(`src/lib/format.ts`) — the same DuckDB encodings the Perspective fork patches,
-needing the equivalent fixes here.
+`.test_formats` compares the terminal formatter against DuckDB CLI reference
+output and tolerates `≥106`/`≤4`. The 4 permitted failures are rendering-only:
+`timestamp_tz[0/1]` and `timestamptz_array[1]` (DuckDB WASM ICU prints a DST
+offset where the reference used a fixed one — the instants agree), and
+`varchar[1]` (embedded tab collapsed by the terminal). It was 9 until
+`arrowLosslessConversion` was enabled; do not widen the tolerance to absorb a
+regression.
 
 ## Publishing & Deployment
 

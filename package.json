@@ -2,7 +2,7 @@
   "name": "@query-farm/cupola",
   "private": true,
   "type": "module",
-  "version": "0.4.107",
+  "version": "0.4.108",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.12.0"
@@ -16,7 +16,8 @@
     "astro": "astro",
     "check": "astro check",
     "test": "bun test ./tests/unit",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "build:landing-client": "bun build ./src/landing/vgi-client-entry.ts --outfile public/vgi-client.js --target browser --format esm --minify"
   },
   "dependencies": {
     "@astrojs/react": "^5.0.4",
