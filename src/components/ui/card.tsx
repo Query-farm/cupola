@@ -9,12 +9,12 @@ function Card({
   ...props
 }: React.ComponentProps<"div"> & {
   size?: "default" | "sm";
-  /** "featured" = earth-50 wash with a 2px earth-300 ring and soft shadow.
+  /** "featured" = soil-100 wash with a 2px sun-400 ring and soft shadow.
    *  Use for the ConnectBox and other hero surfaces; default for general cards. */
   variant?: "default" | "featured";
 }) {
   const variantClasses = variant === "featured"
-    ? "bg-earth-50 dark:bg-earth-900/30 ring-2 ring-earth-300 dark:ring-earth-700 shadow-md"
+    ? "bg-soil-100 dark:bg-soil-900/30 ring-2 ring-sun-400 dark:ring-sun-800 shadow-md"
     : "bg-card ring-1 ring-foreground/10";
   return (
     <div

@@ -289,7 +289,7 @@ function filterNode(node: TreeDataItem, query: string): TreeDataItem | null {
  * badges. Semantic clusters (with explicit dark-mode pairs):
  *
  *   numeric  → blue   (integer + float + decimal — one family)
- *   string   → slate  (cool neutral; reserves harvest for action colors)
+ *   string   → slate  (cool neutral; reserves field green for action colors)
  *   boolean  → duck   (DuckDB-nod yellow)
  *   temporal → violet (all DATE/TIME/TIMESTAMP/INTERVAL — one family)
  *   uuid     → teal
@@ -306,12 +306,12 @@ export function typeColorClass(type: string): string {
       t === "BIGNUM" || t === "VARINT" ||
       t === "FLOAT" || t === "DOUBLE" || t === "REAL" || t === "DECIMAL" || t.startsWith("DECIMAL("))
     return "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300";
-  // String — slate (cool neutral). Was harvest; moved to free harvest as a true accent.
+  // String — slate (cool neutral). Was the action green; moved so field-* stays a true accent.
   if (t === "VARCHAR" || t === "TEXT" || t === "STRING" || t === "UTF8" || t === "CHAR" || t.startsWith("VARCHAR(") || t === "JSON")
     return "bg-slate-100 text-slate-700 dark:bg-slate-800/70 dark:text-slate-300";
   // Boolean — duck yellow (DuckDB nod)
   if (t === "BOOLEAN" || t === "BOOL")
-    return "bg-duck-100 text-duck-800 dark:bg-duck-500/20 dark:text-duck-100";
+    return "bg-sun-200 text-sun-700 dark:bg-sun-400/20 dark:text-sun-200";
   // Temporal — DATE / TIMESTAMP / TIME / INTERVAL / DATETIME all collapse to violet
   if (t === "DATE" || t === "DATE32" || t === "DATE64" || t === "DATETIME" || t === "INTERVAL" ||
       t.startsWith("TIMESTAMP") || t.startsWith("TIME"))
@@ -321,7 +321,7 @@ export function typeColorClass(type: string): string {
     return "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300";
   // Enum
   if (t.startsWith("ENUM"))
-    return "bg-duck-100 text-duck-800 dark:bg-duck-500/20 dark:text-duck-100";
+    return "bg-sun-200 text-sun-700 dark:bg-sun-400/20 dark:text-sun-200";
   // Bit
   if (t === "BIT")
     return "bg-soil-200 text-soil-700 dark:bg-soil-800 dark:text-soil-300";
@@ -332,5 +332,5 @@ export function typeColorClass(type: string): string {
   if (t.startsWith("STRUCT") || t.startsWith("LIST") || t.startsWith("MAP") || t.startsWith("UNION") || t.includes("["))
     return "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300";
   // Default — warm soil neutral
-  return "bg-soil-100 text-soil-600 dark:bg-soil-800 dark:text-soil-300";
+  return "bg-soil-100 text-soil-700 dark:bg-soil-800 dark:text-soil-300";
 }

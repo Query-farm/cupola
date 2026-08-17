@@ -966,7 +966,7 @@ const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
         />
         <button
           onClick={connect}
-          className="px-4 py-2 rounded-md bg-harvest-500 text-white text-sm font-semibold hover:bg-harvest-600 transition-colors"
+          className="px-4 py-2 rounded-md bg-field-700 text-white text-sm font-semibold hover:bg-field-800 transition-colors"
         >
           Connect
         </button>
@@ -1004,7 +1004,7 @@ function BrandShell({ children }: { children: React.ReactNode }) {
     // overflow-hidden for the catalog app's fixed panes, so these brand
     // surfaces must be their own bounded scroll container or tall content
     // (welcome form + recents + footer) gets clipped with no way to scroll.
-    <div className="flex flex-col h-screen overflow-y-auto bg-gradient-to-b from-soil-50 via-earth-50 to-soil-100 dark:from-background dark:via-background dark:to-soil-900/30">
+    <div className="flex flex-col h-screen overflow-y-auto bg-gradient-to-b from-soil-50 via-soil-100 to-soil-200 dark:from-background dark:via-background dark:to-soil-900/30">
       <header className="sticky top-0 z-40 shrink-0 flex items-center px-4 h-14 border-b border-border bg-card/95 backdrop-blur-sm shadow-sm">
         <BrandMark />
       </header>
@@ -1016,7 +1016,7 @@ function BrandShell({ children }: { children: React.ReactNode }) {
 /**
  * Connecting / redirecting screen. Shown during the initial catalog fetch
  * and during OAuth redirect prep. Pulses the VGI logo behind a rotating
- * harvest spinner ring with the destination service URL + animated
+ * field-green spinner ring with the destination service URL + animated
  * ellipsis so the user knows something is in flight.
  */
 function ConnectingScreen({
@@ -1053,15 +1053,15 @@ function ConnectingScreen({
           aria-hidden="true"
           width={128}
           height={128}
-          className="w-32 h-32 mb-6 rounded-2xl shadow-xl ring-1 ring-soil-200/60 dark:ring-soil-700/60 animate-cs-pulse"
+          className="w-32 h-32 mb-6 rounded-2xl shadow-xl ring-1 ring-soil-300/60 dark:ring-soil-700/60 animate-cs-pulse"
         />
 
-        <h1 className="font-heading text-2xl md:text-3xl font-bold text-soil-900 dark:text-soil-100 mb-2">
+        <h1 className="font-heading text-2xl md:text-3xl font-bold text-soil-900 dark:text-cream mb-2">
           {message}
-          <span className="inline-block ml-0.5 align-baseline text-harvest-600 dark:text-harvest-400 animate-cs-ellipsis" aria-hidden="true">…</span>
+          <span className="inline-block ml-0.5 align-baseline text-field-700 dark:text-field-400 animate-cs-ellipsis" aria-hidden="true">…</span>
         </h1>
         {ready && displayUrl && (
-          <p className="font-mono text-sm text-soil-600 dark:text-soil-400 break-all max-w-md">
+          <p className="font-mono text-sm text-soil-700 dark:text-cream-2 break-all max-w-md">
             {displayUrl}
           </p>
         )}
@@ -1124,12 +1124,12 @@ function ErrorScreen({
               aria-hidden="true"
               width={96}
               height={96}
-              className="w-24 h-24 mx-auto mb-6 rounded-2xl shadow-lg ring-1 ring-soil-200/60 dark:ring-soil-700/60"
+              className="w-24 h-24 mx-auto mb-6 rounded-2xl shadow-lg ring-1 ring-soil-300/60 dark:ring-soil-700/60"
             />
-            <h1 className="font-heading text-2xl font-bold text-soil-900 dark:text-soil-100 mb-3">
+            <h1 className="font-heading text-2xl font-bold text-soil-900 dark:text-cream mb-3">
               Connection Error
             </h1>
-            <p className="font-mono text-sm text-soil-600 dark:text-soil-400 break-all mb-4">
+            <p className="font-mono text-sm text-soil-700 dark:text-cream-2 break-all mb-4">
               {serviceUrl}
             </p>
             <div className="rounded-lg bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive dark:text-red-300 text-left">
@@ -1158,7 +1158,7 @@ function ErrorScreen({
                       onClick={() => connectTo(s.url)}
                       className="w-full text-left px-3 py-2 rounded-md hover:bg-muted transition-colors group"
                     >
-                      <span className="block text-sm font-medium text-earth-700 dark:text-earth-300 truncate">
+                      <span className="block text-sm font-medium text-soil-700 dark:text-cream-2 truncate">
                         {s.catalogName}
                       </span>
                       <span className="block text-xs text-muted-foreground truncate font-mono">
@@ -1236,12 +1236,12 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
             aria-hidden="true"
             width={144}
             height={144}
-            className="w-36 h-36 mb-6 rounded-2xl shadow-xl ring-1 ring-soil-200/60 dark:ring-soil-700/60"
+            className="w-36 h-36 mb-6 rounded-2xl shadow-xl ring-1 ring-soil-300/60 dark:ring-soil-700/60"
           />
-          <h1 className="font-heading text-4xl md:text-5xl font-bold text-soil-900 dark:text-soil-100 leading-[1.05] tracking-tight mb-3">
+          <h1 className="font-heading text-4xl md:text-5xl font-bold text-soil-900 dark:text-cream leading-[1.05] tracking-tight mb-3">
             Browse any VGI catalog.
           </h1>
-          <p className="text-soil-700 dark:text-soil-300 text-lg max-w-md leading-relaxed">
+          <p className="text-soil-700 dark:text-cream-2 text-lg max-w-md leading-relaxed">
             Connect to a VGI server to explore schemas, tables, views, and functions — with an embedded SQL shell and AI analyst.
           </p>
         </div>

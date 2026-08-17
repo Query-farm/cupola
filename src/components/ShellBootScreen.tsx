@@ -10,7 +10,7 @@ import { engine, onBootChange } from "@/lib/shell-bridge";
  * dashes, current phase label, elapsed timer, and a progress bar —
  * determinate during the WASM download (real % from db.instantiate),
  * indeterminate (sweeping shimmer) for open-ended extension-load + connect
- * phases. Earth/soil/harvest palette to match the rest of the chrome.
+ * phases. Strata Sun (soil/field) palette to match the rest of the chrome.
  */
 export function ShellBootScreen() {
   const [, force] = useState(0);
@@ -48,7 +48,7 @@ export function ShellBootScreen() {
         <div className="text-[44px] leading-none animate-shell-tractor select-none" aria-hidden="true">
           🚜
         </div>
-        <div className="w-32 overflow-hidden text-harvest-500/40 font-mono text-sm leading-none">
+        <div className="w-32 overflow-hidden text-field-600/40 font-mono text-sm leading-none">
           <div className="whitespace-nowrap animate-shell-soil">
             — — — — — — — — — — — — — — — —
           </div>
@@ -59,7 +59,7 @@ export function ShellBootScreen() {
       <div className="text-center">
         <div className="text-sm font-medium text-terminal-fg">
           {phase}
-          <span className="inline-block ml-0.5 text-harvest-400 animate-shell-ellipsis" aria-hidden="true">…</span>
+          <span className="inline-block ml-0.5 text-field-400 animate-shell-ellipsis" aria-hidden="true">…</span>
         </div>
         <div className="text-[11px] font-mono text-terminal-muted mt-1">
           {elapsedSec}s elapsed
@@ -75,11 +75,11 @@ export function ShellBootScreen() {
       <div className="w-64 h-1.5 rounded-full bg-terminal-muted/30 overflow-hidden relative">
         {isDeterminate ? (
           <div
-            className="absolute inset-y-0 left-0 bg-harvest-500 rounded-full transition-[width] duration-200 ease-out"
+            className="absolute inset-y-0 left-0 bg-field-600 rounded-full transition-[width] duration-200 ease-out"
             style={{ width: `${Math.max(0, Math.min(100, progress!))}%` }}
           />
         ) : (
-          <div className="absolute top-0 bottom-0 w-1/3 bg-harvest-500/70 rounded-full animate-shell-sweep" />
+          <div className="absolute top-0 bottom-0 w-1/3 bg-field-600/70 rounded-full animate-shell-sweep" />
         )}
       </div>
 

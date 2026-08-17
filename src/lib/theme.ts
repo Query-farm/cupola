@@ -78,12 +78,15 @@ export interface ThemeConfig {
   terminal?: Partial<TerminalTheme>;
 }
 
-/** Default terminal colors (VGI green-on-dark). */
+/** Default terminal colors — Strata Sun on rock, matching --terminal-* in
+ *  global.css. These are the values xterm actually receives; the CSS tokens
+ *  only style the surrounding chrome and the scrollbar, so the two lists have
+ *  to be kept in step by hand. */
 export const DEFAULT_TERMINAL_THEME: TerminalTheme = {
-  background: "#1a1a0e",
-  foreground: "#f5f0e0",
-  cursor: "#6ba034",
-  selection: "#3a3a28",
+  background: "#1a1512",   // rock-900 — code always sits on rock
+  foreground: "#f4ece0",   // cream
+  cursor: "#d9a441",       // sun-400: display/accent only, never body text
+  selection: "#3b2e22",    // soil-800
 };
 
 /** Default logo URL — served from our own origin so COEP require-corp lets it through. */

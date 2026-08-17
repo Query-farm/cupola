@@ -1,5 +1,38 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2d5016" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-  <ellipse cx="12" cy="5" rx="9" ry="3"/>
-  <path d="M3 5V19A9 3 0 0 0 21 19V5"/>
-  <path d="M3 12A9 3 0 0 0 21 12"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Cupola" color="#211a12">
+  <title>Cupola</title>
+  <desc>An axonometric cupola. Four visible planes carry the four Strata Sun bands, palest on the largest face; the finial is the only ink and inherits currentColor.</desc>
+  <!--
+    The finial is the one piece of ink, so on a dark ground it disappears.
+    This file is referenced as an <img> (favicon, the worker error page, the
+    app header), where currentColor cannot reach it from the host document —
+    so the swap happens inside the SVG instead. Media queries in an <img>-
+    referenced SVG evaluate against the viewer's OS scheme, which is exactly
+    what the favicon and the worker error page follow.
+
+    The app's own dark mode is a `.dark` class, not prefers-color-scheme, so
+    it will not track this — that is currently moot, since nothing in the app
+    sets that class (see the report). If manual dark mode is ever wired up,
+    inline the SVG there and let currentColor do the work again.
+  -->
+  <style>
+    @media (prefers-color-scheme: dark) { svg { color: #f4ece0; } }
+  </style>
+  <!-- roof, left face -->
+  <polygon points="32.0,14.0 8.0,32.0 32.0,42.0" fill="#d9a441"/>
+  <!-- roof, right face -->
+  <polygon points="32.0,14.0 56.0,32.0 32.0,42.0" fill="#a9762e"/>
+  <!-- body, left face -->
+  <polygon points="17.0,35.0 32.0,42.0 32.0,59.0 17.0,52.0" fill="#f0c877"/>
+  <!-- body, right face -->
+  <polygon points="47.0,35.0 32.0,42.0 32.0,59.0 47.0,52.0" fill="#7a5230"/>
+  <!-- louver slats -->
+  <polygon points="19.4,38.9 29.6,43.5 29.6,45.5 19.4,40.9" fill="#7a5230"/>
+  <polygon points="44.6,38.9 34.4,43.5 34.4,45.5 44.6,40.9" fill="#a9762e"/>
+  <polygon points="19.4,44.0 29.6,48.6 29.6,50.6 19.4,46.0" fill="#7a5230"/>
+  <polygon points="44.6,44.0 34.4,48.6 34.4,50.6 44.6,46.0" fill="#a9762e"/>
+  <polygon points="19.4,49.1 29.6,53.7 29.6,55.7 19.4,51.1" fill="#7a5230"/>
+  <polygon points="44.6,49.1 34.4,53.7 34.4,55.7 44.6,51.1" fill="#a9762e"/>
+  <!-- finial: the one piece of ink, and the reason this reads as a cupola -->
+  <path d="M32.0,14.0 L32.0,10.8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+  <circle cx="32" cy="8.2" r="2.6" fill="currentColor"/>
 </svg>

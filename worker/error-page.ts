@@ -153,18 +153,19 @@ window.addEventListener(ev,stop,{once:true,passive:true});});
 })();`;
 
 /**
- * The product mark is the illustrated barn cupola in `public/cupola-icon.png`
- * (256×256), the same file `BrandMark` renders — not the stroke-only
- * `cupola-icon.svg`, which is a different lineart mark the app doesn't use.
+ * The product mark is the axonometric cupola in `public/cupola-mark.svg`, the
+ * same file `BrandMark` renders and the same shape query.farm uses. It is an
+ * SVG (~1.4KB) rather than the old 256x256 PNG, so it stays crisp on the
+ * error page's large header mark at any DPR.
  *
  * Referenced by unversioned URL rather than inlined: base64 would add ~126KB
  * to every worker response. The worker's latest-version fallback resolves
- * `/cupola-icon.png` to `v{latest}/cupola-icon.png`, the same way
+ * `/cupola-mark.svg` to `v{latest}/cupola-mark.svg`, the same way
  * `public/oauth-callback.html` reaches `/logo-hero.png`. In the one case that
  * fallback can't resolve — an empty bucket, the `not-deployed` variant — the
  * `onerror` hook drops the image rather than showing a broken-image glyph.
  */
-const LOGO_SRC = "/cupola-icon.png";
+const LOGO_SRC = "/cupola-mark.svg";
 const LOGO_FALLBACK = `this.style.display='none'`;
 
 export function renderErrorPage(opts: ErrorPageOptions): string {
@@ -184,33 +185,33 @@ export function renderErrorPage(opts: ErrorPageOptions): string {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@600;700&display=swap">
+<link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=Commissioner:wght@300;500;600&family=Petrona:wght@600;700&display=swap">
 <script>${THEME_SCRIPT}</script>
 <style>
 :root{
-  --background:#f7f6f4; --foreground:#3d342a;
-  --card:#ffffff; --card-foreground:#3d342a;
-  --border:#d3cab9; --muted-foreground:#8a754f;
-  --accent:#22c55e; --accent-hover:#16a34a; --accent-foreground:#ffffff;
-  --code-bg:#e8e4df;
-  --ring-subtle:rgba(211,202,185,0.6);
-  --page-gradient:linear-gradient(to bottom,#f7f6f4,#f9f7f4,#e8e4df);
+  --background:#f7f3ea; --foreground:#211a12;
+  --card:#fffdf7; --card-foreground:#211a12;
+  --border:#cfc4ad; --muted-foreground:#5d4632;
+  --accent:#45632f; --accent-hover:#33501f; --accent-foreground:#ffffff;
+  --code-bg:#e6dbc2;
+  --ring-subtle:rgba(207,196,173,0.6);
+  --page-gradient:linear-gradient(to bottom,#f7f3ea,#efe9db,#e6dbc2);
   --radius:0.5rem;
 }
 @media (prefers-color-scheme: dark){
   :root{
-    --background:#1a1612; --foreground:#e8e4df;
-    --card:#251f18; --card-foreground:#e8e4df;
-    --border:#3d342a; --muted-foreground:#a18c68;
-    --accent:#4ade80; --accent-hover:#22c55e; --accent-foreground:#14532d;
-    --code-bg:#2a221b;
-    --ring-subtle:rgba(90,74,54,0.6);
-    --page-gradient:linear-gradient(to bottom,#1a1612,#1a1612,rgba(61,52,42,0.3));
+    --background:#100d0a; --foreground:#f4ece0;
+    --card:#1a1512; --card-foreground:#f4ece0;
+    --border:#2a2420; --muted-foreground:#c6b8a2;
+    --accent:#8cb878; --accent-hover:#aecb84; --accent-foreground:#1a1512;
+    --code-bg:#2a2420;
+    --ring-subtle:rgba(42,36,32,0.6);
+    --page-gradient:linear-gradient(to bottom,#100d0a,#100d0a,rgba(42,36,32,0.4));
   }
 }
 *{margin:0;padding:0;box-sizing:border-box}
 body{
-  font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  font-family:'Commissioner',ui-sans-serif,system-ui,-apple-system,sans-serif;
   background:var(--background);
   background-image:var(--page-gradient);
   color:var(--foreground);
@@ -226,8 +227,8 @@ header{
 }
 .brand{display:flex;align-items:center;gap:0.5rem;white-space:nowrap;text-decoration:none;color:inherit}
 header .mark{width:32px;height:32px;flex-shrink:0}
-.wordmark{font-family:'Outfit',system-ui,sans-serif;font-weight:700;font-size:1rem;line-height:1;color:var(--foreground)}
-.byline{font-family:'Outfit',system-ui,sans-serif;font-size:0.875rem;line-height:1;color:var(--muted-foreground)}
+.wordmark{font-family:'Petrona',Georgia,serif;font-weight:700;font-size:1rem;line-height:1;color:var(--foreground)}
+.byline{font-family:'Commissioner',ui-sans-serif,system-ui,sans-serif;font-size:0.875rem;line-height:1;color:var(--muted-foreground)}
 @media (max-width:640px){.byline{display:none}}
 main{
   flex:1;display:flex;align-items:flex-start;justify-content:center;
@@ -248,7 +249,7 @@ main{
   box-shadow:0 10px 15px -3px rgba(0,0,0,0.1),0 4px 6px -4px rgba(0,0,0,0.1);
   outline:1px solid var(--ring-subtle);outline-offset:-1px;
 }
-h1{font-family:'Outfit',system-ui,sans-serif;font-size:1.5rem;font-weight:700;line-height:1.3;margin-bottom:0.75rem}
+h1{font-family:'Petrona',Georgia,serif;font-size:1.5rem;font-weight:600;line-height:1.15;letter-spacing:-0.022em;margin-bottom:0.75rem}
 p.body{font-size:0.938rem;line-height:1.6;color:var(--muted-foreground)}
 p.detail{font-size:0.813rem;line-height:1.5;color:var(--muted-foreground);margin-top:0.75rem}
 code{

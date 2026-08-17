@@ -4,33 +4,46 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
-  Query.Farm-aligned palette + display font.
-  - earth-* (brown) carries primary brand chrome
-  - soil-* (warm neutral) sets page bg, body text, borders
-  - harvest-* (bright green) is the action / selection accent
-  - duck-* (yellow) is the DuckDB nod; used on boolean badges
-  - grain-* (secondary green) is reserved for charts / secondary accents
-  Theme override via ?theme=<url> still works — only the semantic tokens
-  (--primary, --accent, --background, …) get rewritten; the named scales
-  stay as a foundation.
+  Query.Farm "Strata Sun" palette + display font, matching query.farm.
+
+  - sun-*   the brand mark's four bands. DISPLAY AND ACCENT ONLY.
+  - soil-*  grounds, body text, borders, and the brown brand chrome
+  - rock-*  code surfaces, the terminal, and the dark end
+  - field-* the one cool note: actions, links, live indicators
+
+  Three rules from the site's DESIGN_BRIEF that bite here:
+    1. sun-400 as body text is 3.3:1 — never. sun-700 is the only gold that
+       may carry text on a light ground.
+    2. Code and the terminal always sit on rock-*, never on a coloured band.
+    3. Figures are Commissioner, tabular. Petrona ships no tabular set.
+
+  This replaces the earlier earth-/harvest-/duck-/grain-* scales, which were
+  the pre-redesign Query.Farm palette. They are gone rather than aliased —
+  every usage in src/ was migrated in the same pass, so a stale name is now
+  a build-visible mistake instead of a silently off-brand colour.
+
+  Theme override via ?theme=<url> still works exactly as before: only the
+  semantic tokens (--primary, --accent, --background, …) get rewritten, and
+  the named scales stay as the foundation underneath.
 */
 
 @theme inline {
-    --font-heading: 'Outfit', 'Inter', sans-serif;
-    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-    --font-mono: 'JetBrains Mono', monospace;
+    /* Petrona sets words, Commissioner sets everything else, JetBrains Mono
+       sets code — the same three families query.farm uses. */
+    --font-heading: 'Petrona', Georgia, serif;
+    --font-sans: 'Commissioner', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
 
-    /* Named color scales — register as Tailwind utilities (bg-earth-50, text-soil-700, ring-harvest-500, …) */
-    --color-earth-50:  var(--earth-50);
-    --color-earth-100: var(--earth-100);
-    --color-earth-200: var(--earth-200);
-    --color-earth-300: var(--earth-300);
-    --color-earth-400: var(--earth-400);
-    --color-earth-500: var(--earth-500);
-    --color-earth-600: var(--earth-600);
-    --color-earth-700: var(--earth-700);
-    --color-earth-800: var(--earth-800);
-    --color-earth-900: var(--earth-900);
+    /* Named color scales — register as Tailwind utilities
+       (bg-soil-50, text-sun-700, ring-field-700, bg-rock-900, …) */
+    --color-sun-200: var(--sun-200);
+    --color-sun-300: var(--sun-300);
+    --color-sun-400: var(--sun-400);
+    --color-sun-500: var(--sun-500);
+    --color-sun-600: var(--sun-600);
+    --color-sun-700: var(--sun-700);
+    --color-sun-800: var(--sun-800);
+    --color-sun-900: var(--sun-900);
 
     --color-soil-50:  var(--soil-50);
     --color-soil-100: var(--soil-100);
@@ -43,25 +56,18 @@
     --color-soil-800: var(--soil-800);
     --color-soil-900: var(--soil-900);
 
-    --color-harvest-50:  var(--harvest-50);
-    --color-harvest-100: var(--harvest-100);
-    --color-harvest-200: var(--harvest-200);
-    --color-harvest-300: var(--harvest-300);
-    --color-harvest-400: var(--harvest-400);
-    --color-harvest-500: var(--harvest-500);
-    --color-harvest-600: var(--harvest-600);
-    --color-harvest-700: var(--harvest-700);
-    --color-harvest-800: var(--harvest-800);
-    --color-harvest-900: var(--harvest-900);
+    --color-rock-700: var(--rock-700);
+    --color-rock-800: var(--rock-800);
+    --color-rock-900: var(--rock-900);
+    --color-rock-950: var(--rock-950);
 
-    --color-duck-50:  var(--duck-50);
-    --color-duck-100: var(--duck-100);
-    --color-duck-500: var(--duck-500);
-    --color-duck-800: var(--duck-800);
+    --color-field-400: var(--field-400);
+    --color-field-600: var(--field-600);
+    --color-field-700: var(--field-700);
+    --color-field-800: var(--field-800);
 
-    --color-grain-100: var(--grain-100);
-    --color-grain-500: var(--grain-500);
-    --color-grain-700: var(--grain-700);
+    --color-cream:   var(--cream);
+    --color-cream-2: var(--cream-2);
 
     /* ShadCN semantic tokens (overridable by ?theme=<url>) */
     --color-sidebar-ring: var(--sidebar-ring);
@@ -110,130 +116,135 @@
 
 :root {
     /* ---- Named color scales (foundation, not theme-overridable) ---- */
-    /* Earth — brand chrome */
-    --earth-50:  #f9f7f4;
-    --earth-100: #f0ebe3;
-    --earth-200: #e1d5c4;
-    --earth-300: #cab89d;
-    --earth-400: #b39777;
-    --earth-500: #9d7f5e;
-    --earth-600: #8a6d4f;
-    --earth-700: #725843;
-    --earth-800: #5e4939;
-    --earth-900: #4d3c2f;
+    /* Sun — the mark's four bands. Display and accent only. */
+    --sun-200: #f6ddab;
+    --sun-300: #f0c877;   /* mark band 1 */
+    --sun-400: #d9a441;   /* mark band 2 — brand gold; text on DARK only */
+    --sun-500: #c08e2f;
+    --sun-600: #a9762e;   /* mark band 3 */
+    --sun-700: #7d5714;   /* the only gold that may carry text on light */
+    --sun-800: #7a5230;   /* mark band 4 */
+    --sun-900: #5a3c22;
 
-    /* Soil — warm neutrals */
-    --soil-50:  #f7f6f4;
-    --soil-100: #e8e4df;
-    --soil-200: #d3cab9;
-    --soil-300: #baab8e;
-    --soil-400: #a18c68;
-    --soil-500: #8a754f;
-    --soil-600: #705e41;
-    --soil-700: #5a4a36;
-    --soil-800: #4a3e2f;
-    --soil-900: #3d342a;
+    /* Soil — grounds, chrome, body text */
+    --soil-50:  #f7f3ea;  /* paper — the app background */
+    --soil-100: #efe9db;
+    --soil-200: #e6dbc2;
+    --soil-300: #cfc4ad;  /* rules on paper */
+    --soil-400: #a9825a;
+    --soil-500: #8a5f38;
+    --soil-600: #7a5230;
+    --soil-700: #5d4632;
+    --soil-800: #3b2e22;
+    --soil-900: #211a12;  /* ink — body text on paper */
 
-    /* Harvest — primary action / selection */
-    --harvest-50:  #f0fdf4;
-    --harvest-100: #dcfce7;
-    --harvest-200: #bbf7d0;
-    --harvest-300: #86efac;
-    --harvest-400: #4ade80;
-    --harvest-500: #22c55e;
-    --harvest-600: #16a34a;
-    --harvest-700: #15803d;
-    --harvest-800: #166534;
-    --harvest-900: #14532d;
+    /* Rock — code surfaces, the terminal, and the dark end */
+    --rock-700: #5f5750;
+    --rock-800: #2a2420;
+    --rock-900: #1a1512;  /* code + terminal ground — ALWAYS */
+    --rock-950: #100d0a;
 
-    /* Duck — DuckDB nod */
-    --duck-50:  #fffbeb;
-    --duck-100: #fef3c7;
-    --duck-500: #f59e0b;
-    --duck-800: #92400e;
+    /* Field — the one cool note: actions, links, live dots */
+    --field-400: #7a9a54;
+    --field-600: #5f7a3c;
+    --field-700: #45632f;  /* action fill. white label 6.8:1 */
+    --field-800: #33501f;  /* hover — must DARKEN, never lighten */
 
-    /* Grain — reserved (charts, secondary green) */
-    --grain-100: #ecfccb;
-    --grain-500: #84cc16;
-    --grain-700: #4d7c0f;
+    /* Text on dark */
+    --cream:   #f4ece0;
+    --cream-2: #c6b8a2;
 
     /* ---- ShadCN semantic tokens (theme-overridable) ---- */
     --background: var(--soil-50);
     --foreground: var(--soil-900);
-    --card: #ffffff;
+    --card: #fffdf7;                              /* the site's card paper */
     --card-foreground: var(--soil-900);
-    --popover: #ffffff;
+    --popover: #fffdf7;
     --popover-foreground: var(--soil-900);
-    --primary: var(--earth-600);
+
+    /* Brown is chrome (active tabs, headers); green is interaction. Keeping
+       those two jobs separate is the whole point of the field scale. */
+    --primary: var(--soil-600);                   /* white label 6.4:1 */
     --primary-foreground: #ffffff;
     --secondary: var(--soil-100);
     --secondary-foreground: var(--soil-900);
     --muted: var(--soil-100);
-    --muted-foreground: var(--soil-500);
-    --accent: var(--harvest-500);
+    --muted-foreground: var(--soil-700);          /* 7.6:1 on paper */
+    --accent: var(--field-700);                   /* white label 6.8:1 */
     --accent-foreground: #ffffff;
-    --destructive: #8b0000;
-    --border: var(--soil-200);
-    --input: var(--soil-200);
-    --ring: var(--harvest-500);
-    --chart-1: var(--earth-600);
-    --chart-2: var(--harvest-500);
-    --chart-3: var(--duck-500);
-    --chart-4: var(--soil-500);
-    --chart-5: #1a4a6b;
+    --destructive: #8b2f1d;
+    --border: var(--soil-300);
+    --input: var(--soil-300);
+    --ring: var(--field-700);
+
+    /* Charts: gold reads as a fill here, not as text, so the band colours are
+       fair game. Ordered for separation rather than for palette order. */
+    --chart-1: var(--field-700);
+    --chart-2: var(--sun-400);
+    --chart-3: var(--soil-600);
+    --chart-4: var(--sun-600);
+    --chart-5: #2f5058;                           /* cat-slate ink */
     --radius: 0.5rem;
-    --sidebar: var(--soil-50);
+
+    --sidebar: var(--soil-100);
     --sidebar-foreground: var(--soil-900);
-    --sidebar-primary: var(--earth-600);
+    --sidebar-primary: var(--soil-600);
     --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: var(--soil-100);
+    --sidebar-accent: var(--soil-200);
     --sidebar-accent-foreground: var(--soil-900);
-    --sidebar-border: var(--soil-200);
-    --sidebar-ring: var(--harvest-500);
-    --terminal-bg: #1a1a0e;
-    --terminal-fg: #f5f0e0;
-    --terminal-accent: #6ba034;
-    --terminal-muted: #4a4a38;
+    --sidebar-border: var(--soil-300);
+    --sidebar-ring: var(--field-700);
+
+    /* Terminal: rock, never a coloured band (brief §3). */
+    --terminal-bg: var(--rock-900);
+    --terminal-fg: var(--cream);
+    --terminal-accent: var(--sun-400);
+    --terminal-muted: var(--soil-800);
 }
 
 .dark {
     /*
-      Warm-dark inversion. Background sits below soil-900 so cards (which
-      sit at near-soil-900) can be distinguished. Primary chrome shifts up
-      the earth scale to earth-300 for readability; harvest accent shifts
-      one step brighter (harvest-400) for the same reason.
+      Warm-dark inversion built on the rock scale. Background is rock-950 so
+      cards at rock-900 separate from it. Chrome shifts to sun-300 and the
+      action accent to the site's link-dark green — both measured against
+      rock-900, not eyeballed.
     */
-    --background: #1a1612;
-    --foreground: var(--soil-100);
-    --card: #251f18;
-    --card-foreground: var(--soil-100);
-    --popover: #251f18;
-    --popover-foreground: var(--soil-100);
-    --primary: var(--earth-300);
-    --primary-foreground: #1a1612;
-    --secondary: #2a221b;
-    --secondary-foreground: var(--soil-100);
-    --muted: #2a221b;
-    --muted-foreground: var(--soil-400);
-    --accent: var(--harvest-400);
-    --accent-foreground: var(--harvest-900);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: var(--soil-900);
-    --input: var(--soil-800);
-    --ring: var(--harvest-400);
-    --chart-1: var(--earth-300);
-    --chart-2: var(--harvest-400);
-    --chart-3: var(--duck-500);
-    --chart-4: var(--soil-400);
-    --chart-5: #4a7c9e;
-    --sidebar: #1a1612;
-    --sidebar-foreground: var(--soil-100);
-    --sidebar-primary: var(--earth-300);
-    --sidebar-primary-foreground: #1a1612;
-    --sidebar-accent: #2a221b;
-    --sidebar-accent-foreground: var(--soil-100);
-    --sidebar-border: var(--soil-900);
-    --sidebar-ring: var(--harvest-400);
+    --background: var(--rock-950);
+    --foreground: var(--cream);
+    --card: var(--rock-900);
+    --card-foreground: var(--cream);
+    --popover: var(--rock-900);
+    --popover-foreground: var(--cream);
+    --primary: var(--sun-300);                    /* rock-900 label 11.6:1 */
+    --primary-foreground: var(--rock-900);
+    --secondary: var(--rock-800);
+    --secondary-foreground: var(--cream);
+    --muted: var(--rock-800);
+    --muted-foreground: var(--cream-2);           /* 8.4:1 on rock-950 */
+    --accent: #8cb878;                            /* link-dark, 8.0:1 */
+    --accent-foreground: var(--rock-900);
+    --destructive: #e08b7a;
+    --border: var(--rock-800);
+    --input: var(--rock-800);
+    --ring: #8cb878;
+    --chart-1: #8cb878;
+    --chart-2: var(--sun-400);
+    --chart-3: var(--soil-400);
+    --chart-4: var(--sun-300);
+    --chart-5: #7fa8b4;
+    --sidebar: var(--rock-900);
+    --sidebar-foreground: var(--cream);
+    --sidebar-primary: var(--sun-300);
+    --sidebar-primary-foreground: var(--rock-900);
+    --sidebar-accent: var(--rock-800);
+    --sidebar-accent-foreground: var(--cream);
+    --sidebar-border: var(--rock-800);
+    --sidebar-ring: #8cb878;
+
+    --terminal-bg: var(--rock-950);
+    --terminal-fg: var(--cream);
+    --terminal-accent: var(--sun-400);
+    --terminal-muted: var(--soil-800);
 }
 
 @layer base {

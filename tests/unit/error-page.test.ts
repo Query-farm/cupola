@@ -120,14 +120,16 @@ describe("renderErrorPage — escaping", () => {
 describe("renderErrorPage — branding", () => {
   const html = renderErrorPage({ variant: "not-found", path: "/nope", latestVersion: "0.4.90" });
 
-  test("uses the product mark BrandMark renders, not the lineart SVG", () => {
-    expect(html).toContain('src="/cupola-icon.png"');
-    // The stroke-only cupola-icon.svg is a different mark the app never shows.
+  test("uses the same product mark BrandMark renders", () => {
+    // Both the header lockup and this page point at cupola-mark.svg — the
+    // axonometric cupola, matching query.farm. The mark is REFERENCED, never
+    // inlined: base64 would add weight to every worker response.
+    expect(html).toContain('src="/cupola-mark.svg"');
     expect(html).not.toContain("<svg");
   });
 
   test("references the logo unversioned so the latest-version fallback resolves it", () => {
-    expect(html).not.toContain("/v0.4.90/cupola-icon.png");
+    expect(html).not.toContain("/v0.4.90/cupola-mark.svg");
   });
 
   test("hides the logo rather than showing a broken image when R2 can't serve it", () => {

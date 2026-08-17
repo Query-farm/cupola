@@ -51,7 +51,7 @@ function functionTypeLabel(type: FunctionInfo["function_type"]): string {
 // their own tint from the same palette family as typeColorClass, so the Kind column
 // scans as fast as the Type column.
 const KIND_PILL: Record<string, string> = {
-  positional: "bg-soil-100 text-soil-600 dark:bg-soil-800 dark:text-soil-300",
+  positional: "bg-soil-100 text-soil-700 dark:bg-soil-800 dark:text-soil-300",
   named: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
   const: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
   varargs: "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
