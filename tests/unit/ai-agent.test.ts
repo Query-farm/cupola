@@ -64,6 +64,28 @@ describe("fetchWithRetry", () => {
     expect(calls).toBe(2);
   });
 
+  test("onRetry: countdown messages, then null immediately before the retried request", async () => {
+    // The null is the "countdown over, going back out now" signal — NOT
+    // "nothing is happening". A surface that clears its indicator on null
+    // shows a blank panel for the whole retried request, which is the
+    // slowest part of a rate-limited turn. Locking the sequence in here so
+    // the contract is visible from the callback's own tests.
+    const seen: (string | null)[] = [];
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) return jsonResponse(429, { error: { message: "slow down" } }, { "retry-after": "1" });
+      // Still in flight when the retry goes out: null must already have fired.
+      expect(seen[seen.length - 1]).toBeNull();
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const res = await fetchWithRetry("https://x", {}, { onRetry: (m) => seen.push(m) }, 3);
+    expect(res.status).toBe(200);
+    expect(seen.filter((m) => typeof m === "string" && /rate limited/i.test(m)).length).toBeGreaterThan(0);
+    expect(seen[seen.length - 1]).toBeNull();
+  });
+
   test("network error: caps at maxRetries+1 attempts, not double-counted", async () => {
     let calls = 0;
     globalThis.fetch = (async () => {

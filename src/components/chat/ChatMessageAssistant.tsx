@@ -4,6 +4,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { SqlToolCallBlock } from "./SqlToolCallBlock";
 import { AskUserBlock } from "./AskUserBlock";
 import { ThinkingIndicator } from "./ThinkingIndicator";
+import { toolActivityLabel } from "@/lib/ai/tool-labels";
 import { estimateCost, formatCost } from "@/lib/pricing";
 
 // Lazy: pulls vega-embed (and transitively vega + vega-lite runtime) only
@@ -144,24 +145,20 @@ export function ChatMessageAssistant({
                 </div>
               );
             }
-            if (
-              tc.name === "list_tables" || tc.name === "describe_table" ||
-              tc.name === "read_query_results"
-            ) {
-              const label = tc.name === "describe_table"
-                ? `Looking up ${tc.input?.schema}.${tc.input?.table}`
-                : tc.name === "list_tables"
-                ? "Looking up tables"
-                : "Reading more results";
-              return (
-                <div key={block.id} className="text-xs text-muted-foreground/60 flex items-center gap-1.5 py-0.5">
-                  <span className={`w-1.5 h-1.5 rounded-full ${tc.isExecuting ? "bg-primary/40 animate-pulse" : "bg-muted-foreground/30"}`} />
-                  <span className="flex-1">{tc.isExecuting ? `${label}...` : label}</span>
-                  {tc.isExecuting && onCancel && <CancelChip onCancel={onCancel} />}
-                </div>
-              );
-            }
-            return null;
+            // ask_user renders its own block (pushed by the tool itself), so a
+            // status row here would just duplicate it. Every OTHER tool gets
+            // one — including render_chart, which previously fell through to
+            // `return null` and so spent its whole pipeline (compile, SQL,
+            // extras, PNG render) with nothing on screen at all.
+            if (tc.name === "ask_user") return null;
+            const label = toolActivityLabel(tc.name, tc.input);
+            return (
+              <div key={block.id} className="text-xs text-muted-foreground/60 flex items-center gap-1.5 py-0.5">
+                <span className={`w-1.5 h-1.5 rounded-full ${tc.isExecuting ? "bg-primary/40 animate-pulse" : "bg-muted-foreground/30"}`} />
+                <span className="flex-1">{tc.isExecuting ? `${label}...` : label}</span>
+                {tc.isExecuting && onCancel && <CancelChip onCancel={onCancel} />}
+              </div>
+            );
           }
           if (block.type === "thinking") {
             return <ThinkingIndicator key={block.id} label={block.label} onCancel={onCancel} />;

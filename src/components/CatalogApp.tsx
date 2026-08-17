@@ -114,6 +114,11 @@ export function CatalogApp() {
     try { return localStorage.getItem("vgi-sidebar-collapsed") === "1"; } catch { return false; }
   });
   const [queryHistoryCount, setQueryHistoryCount] = useState(0);
+  // AI turns in flight, per surface. Both panels stay mounted (or, for the
+  // editor's, can be collapsed) while a turn runs, so the tab bar is the only
+  // place that can say "still working" once the user looks elsewhere.
+  const [askAiBusy, setAskAiBusy] = useState(false);
+  const [editorAiBusy, setEditorAiBusy] = useState(false);
   // The engine host (shell/askai/preview/queries/perspective) is mounted for
   // the whole session — hidden behind the catalog/editor when not active — so
   // (a) DuckDB boots + ATTACHes once (column stats, previews work on the
@@ -723,6 +728,7 @@ export function CatalogApp() {
         activeTab={activeTab}
         onSelect={setActiveTab}
         queryHistoryCount={queryHistoryCount}
+        busyTabs={{ askai: askAiBusy, editor: editorAiBusy }}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
       />
@@ -786,6 +792,7 @@ export function CatalogApp() {
                     onExitEditor={() => setActiveTab("catalog")}
                     pendingSql={pendingEditorSql}
                     onPendingConsumed={() => { setPendingEditorSql(null); clearSharedSql(); }}
+                    onAiBusyChange={setEditorAiBusy}
                   />
                 </Suspense>
               </ErrorBoundary>
@@ -806,6 +813,7 @@ export function CatalogApp() {
                     activeTab={activeTab}
                     onTabChange={setActiveTab}
                     onQueryHistoryCountChange={setQueryHistoryCount}
+                    onAiBusyChange={setAskAiBusy}
                     onShellReady={(insert) => { shellInsertRef.current = insert; fetchMemoryTables(); syncAttachedCatalogs(); }}
                     catalogData={data}
                     selection={selection}

@@ -53,9 +53,12 @@ interface Props {
    *  links). Opens a new tab; call onPendingConsumed once handled. */
   pendingSql?: PendingEditorSql | null;
   onPendingConsumed?: () => void;
+  /** True while any sub-tab's Ask AI conversation has a turn in flight, so the
+   *  app tab bar can flag it from outside the editor. */
+  onAiBusyChange?: (busy: boolean) => void;
 }
 
-export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEditor, pendingSql, onPendingConsumed }: Props) {
+export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEditor, pendingSql, onPendingConsumed, onAiBusyChange }: Props) {
   const { settings } = useSettings();
   // Transient "Copied" confirmation on the Share button.
   const [shareCopied, setShareCopied] = useState(false);
@@ -72,6 +75,22 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
     return 400;
   });
   useEffect(() => { try { localStorage.setItem("vgi-editor-ai-open", aiOpen ? "1" : "0"); } catch {} }, [aiOpen]);
+  // Doc ids whose AI conversation is mid-turn. Conversations are per sub-tab
+  // and the panel can be closed outright, so a running agent is otherwise
+  // invisible the moment the user switches tabs or collapses the panel.
+  const [aiBusyDocs, setAiBusyDocs] = useState<Set<string>>(() => new Set());
+  const handleAiBusyChange = useCallback((id: string, busy: boolean) => {
+    setAiBusyDocs((prev) => {
+      if (prev.has(id) === busy) return prev;
+      const next = new Set(prev);
+      if (busy) next.add(id); else next.delete(id);
+      return next;
+    });
+  }, []);
+  useEffect(() => { onAiBusyChange?.(aiBusyDocs.size > 0); }, [aiBusyDocs, onAiBusyChange]);
+  // Leaving the editor unmounts the panel and aborts its turns; make sure the
+  // parent's flag doesn't stay stuck on.
+  useEffect(() => () => onAiBusyChange?.(false), [onAiBusyChange]);
   // Vertical editor/results split (fraction of the left column the editor pane
   // gets). Persisted; clamped so neither pane collapses.
   const SPLIT_MIN = 0.2, SPLIT_MAX = 0.8;
@@ -477,6 +496,7 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
       <SqlEditorTabs
         docs={docState.docs}
         activeId={activeId}
+        busyDocIds={aiBusyDocs}
         onSelect={handleSelectTab}
         onAdd={() => handleAddTab("")}
         onClose={handleCloseTab}
@@ -496,6 +516,7 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
         onOpenInShell={handleOpenInShell}
         onAskAI={() => setAiOpen((o) => !o)}
         aiActive={aiOpen}
+        aiBusy={aiBusyDocs.size > 0}
         onDownloadSql={handleDownloadSql}
         onShareLink={handleShareLink}
         shareCopied={shareCopied}
@@ -545,6 +566,7 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
             runIdRef={runIdRef}
             setActiveResult={setActiveResult}
             onClose={() => setAiOpen(false)}
+            onBusyChange={handleAiBusyChange}
           />
         </div>
       </div>

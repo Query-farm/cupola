@@ -31,11 +31,14 @@ interface Props {
   onSelect: (tab: TabId) => void;
   /** Count shown on the Query History tab. */
   queryHistoryCount?: number;
+  /** Tabs with work in flight — currently the two AI surfaces. Renders a
+   *  pulsing dot so a running agent is visible from any other tab. */
+  busyTabs?: Partial<Record<TabId, boolean>>;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
 }
 
-export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, sidebarCollapsed, onToggleSidebar }: Props) {
+export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs, sidebarCollapsed, onToggleSidebar }: Props) {
   return (
     <div className="flex items-center gap-1 px-2 h-10 border-b border-border bg-card shrink-0 overflow-x-auto" role="tablist" aria-label="Workspace">
       <button
@@ -71,6 +74,17 @@ export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, sidebarC
               <Icon className="h-3.5 w-3.5" />
             ) : null}
             {tab.label}
+            {busyTabs?.[tab.id] && (
+              <span
+                className={cn(
+                  "ml-0.5 h-1.5 w-1.5 rounded-full animate-pulse shrink-0",
+                  active ? "bg-primary-foreground/80" : "bg-accent",
+                )}
+                data-testid={`tab-busy-${tab.id}`}
+                title="Working…"
+                aria-label="Working"
+              />
+            )}
             {tab.id === "queries" && queryHistoryCount > 0 && (
               <span className={cn("ml-0.5 rounded-full px-1.5 text-[10px]", active ? "bg-primary-foreground/20" : "bg-foreground/10")}>
                 {queryHistoryCount}

@@ -28,6 +28,7 @@ import {
   type MessageParam,
 } from "@/lib/ai-agent";
 import { executeRunSql, describeTableWithFallback } from "@/lib/ai-tool-executor";
+import { toolInputLabel } from "@/lib/ai/tool-labels";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessageUser } from "@/components/chat/ChatMessageUser";
 import {
@@ -55,7 +56,10 @@ interface ConversationState {
   agentMessages: MessageParam[];
   isLoading: boolean;
   abort: AbortController | null;
-  askUserResolve: ((value: string) => void) | null;
+  /** Installed by the ask_user tool for the life of one question. Takes the
+   *  chosen option and its index (index < 0 = cancelled) so the resolver can
+   *  mark its own block answered before handing the answer to the agent. */
+  askUserResolve: ((option: string, index: number) => void) | null;
   conversationId: string;
   /** read_query_results store, scoped to this document's conversation. */
   resultCache: QueryResultCache;
@@ -75,9 +79,14 @@ interface Props {
   runIdRef: React.RefObject<number>;
   setActiveResult: (docId: string, patch: Partial<ResultState>) => void;
   onClose: () => void;
+  /** Fired when a doc's turn starts/ends. Conversations are per sub-tab and
+   *  the panel itself can be closed, so the surfaces that stay visible (the
+   *  editor tab strip, the toolbar button, the app tab bar) need to say that
+   *  an agent is still working. */
+  onBusyChange?: (docId: string, busy: boolean) => void;
 }
 
-export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, apply, runIdRef, setActiveResult, onClose }: Props) {
+export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, apply, runIdRef, setActiveResult, onClose, onBusyChange }: Props) {
   const { settings } = useSettings();
   const convos = useRef<Map<string, ConversationState>>(new Map());
   const [, bump] = useReducer((x: number) => x + 1, 0);
@@ -126,7 +135,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
     return () => {
       for (const c of convos.current.values()) {
         c.abort?.abort();
-        c.askUserResolve?.("__cancelled__");
+        c.askUserResolve?.("__cancelled__", -1);
       }
       engine.cancelQuery?.();
     };
@@ -170,10 +179,15 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
     c.agentMessages.push({ role: "user", content: userContent });
 
     const assistantId = uid();
-    c.messages = [...c.messages, { id: assistantId, role: "assistant", blocks: [{ type: "thinking", id: uid(), label: "Thinking" }], isStreaming: true }];
+    // Seeded into BOTH the message and the local `blocks` array below — they
+    // used to disagree, so the first updateBlocks() of the turn silently wiped
+    // this indicator (see onRetry, which can fire before any content arrives).
+    const seedThinking: ContentBlock = { type: "thinking", id: uid(), label: "Thinking" };
+    c.messages = [...c.messages, { id: assistantId, role: "assistant", blocks: [seedThinking], isStreaming: true }];
     c.isLoading = true;
     c.abort = new AbortController();
     bump();
+    onBusyChange?.(myDoc, true);
 
     if (settings.aiTelemetry) Sentry.setConversationId(c.conversationId);
 
@@ -183,7 +197,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
     const maxTokens = getSetting("aiMaxTokens") || DEFAULT_AI_MAX_TOKENS;
 
-    let blocks: ContentBlock[] = [];
+    let blocks: ContentBlock[] = [seedThinking];
     let pendingDisplayResult: import("@/components/chat/ChatMessageAssistant").ToolCallDisplayResult | undefined;
 
     const updateBlocks = (next: ContentBlock[]) => {
@@ -202,6 +216,13 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
       return blocks.length - 1;
     };
     const removeThinking = () => { blocks = blocks.filter((b) => b.type !== "thinking"); };
+    /** Replace whatever indicator is showing with a fresh one. Every silent
+     *  window in the turn ends with a call to this. */
+    const showThinking = (label: string) => {
+      removeThinking();
+      blocks = [...blocks, { type: "thinking", id: uid(), label }];
+      updateBlocks(blocks);
+    };
 
     function withAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
       if (!signal) return p;
@@ -268,10 +289,21 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
         return describeTableWithFallback(catalogData, { query: queryFn }, input);
       }
       if (name === "ask_user") {
+        const blockId = uid();
         return new Promise<string>((resolve) => {
-          c.askUserResolve = resolve;
+          // Mark the block answered in the LOCAL array, not just in message
+          // state: every later updateBlocks() overwrites state from this
+          // array, so a state-only edit was reverted by the next callback and
+          // the answered question went back to offering live buttons.
+          c.askUserResolve = (option, index) => {
+            blocks = blocks.map((b) => (b.id === blockId && b.type === "ask_user"
+              ? { ...b, askUser: { ...b.askUser, selectedIndex: index, resolved: true } }
+              : b));
+            updateBlocks(blocks);
+            resolve(index < 0 ? "__cancelled__" : `User selected: ${option}`);
+          };
           removeThinking();
-          blocks.push({ type: "ask_user", id: uid(), askUser: { question: input.question, options: input.options || [], resolved: false } });
+          blocks.push({ type: "ask_user", id: blockId, askUser: { question: input.question, options: input.options || [], resolved: false } });
           updateBlocks(blocks);
         });
       }
@@ -289,6 +321,10 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
             blocks = blocks.map((b, i) => (i === idx ? { ...b, content: tb.content + chunk } : b));
             updateBlocks(blocks);
           },
+          // The model is streaming this call's arguments — onToolCall is still
+          // one whole SSE stream away, and a long SQL statement spends seconds
+          // here with nothing else on screen.
+          onToolInputStart: (n) => showThinking(toolInputLabel(n)),
           onToolCall: (n, inp) => {
             removeThinking();
             const tc: ToolCallEntry = { name: n, input: inp, isExecuting: true };
@@ -308,11 +344,10 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
             updateBlocks(blocks);
           },
           onDone: (usage) => { removeThinking(); updateBlocks(blocks); updateAssistant({ isStreaming: false, usage }); },
-          onRetry: (message) => {
-            removeThinking();
-            if (message) blocks = [...blocks, { type: "thinking", id: uid(), label: message.replace("...", "") }];
-            updateBlocks(blocks);
-          },
+          // message === null means the countdown ended and the request is
+          // being retried NOW; clearing the indicator there left the panel
+          // blank for the whole retry.
+          onRetry: (message) => showThinking(message ? message.replace("...", "") : "Thinking"),
           onError: (error) => {
             removeThinking();
             const idx = ensureTextBlock();
@@ -325,7 +360,13 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
       );
     } catch (err: any) {
       removeThinking();
-      blocks = blocks.map((b) => (b.type === "tool_call" && b.toolCall.isExecuting ? { ...b, toolCall: { ...b.toolCall, isExecuting: false, error: "Cancelled" } } : b));
+      blocks = blocks.map((b) => {
+        if (b.type === "tool_call" && b.toolCall.isExecuting) return { ...b, toolCall: { ...b.toolCall, isExecuting: false, error: "Cancelled" } };
+        // An unanswered question outlives the turn that asked it — nothing is
+        // listening for the click any more, so retire the buttons.
+        if (b.type === "ask_user" && !b.askUser.resolved) return { ...b, askUser: { ...b.askUser, resolved: true } };
+        return b;
+      });
       const isCancel = err?.name === "AbortError" || /cancell?ed/i.test(err?.message || "");
       if (!isCancel) {
         const idx = ensureTextBlock();
@@ -341,26 +382,26 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
       c.isLoading = false;
       c.abort = null;
       bump();
+      onBusyChange?.(myDoc, false);
     }
-  }, [docId, catalogData, serviceUrl, settings, getCurrentSql, getConvo, apply, runIdRef, setActiveResult]);
+  }, [docId, catalogData, serviceUrl, settings, getCurrentSql, getConvo, apply, runIdRef, setActiveResult, onBusyChange]);
 
   const stop = useCallback(() => {
     const c = convos.current.get(docId);
-    if (c?.askUserResolve) { c.askUserResolve("__cancelled__"); c.askUserResolve = null; }
+    if (c?.askUserResolve) { c.askUserResolve("__cancelled__", -1); c.askUserResolve = null; }
     c?.abort?.abort();
     engine.cancelQuery?.();
   }, [docId]);
 
-  const handleAskUserSelect = useCallback((option: string, _index: number) => {
+  // The resolver (installed by the ask_user tool) owns marking the block
+  // answered — it can reach the turn's live block array, which this callback
+  // cannot.
+  const handleAskUserSelect = useCallback((option: string, index: number) => {
     const c = convos.current.get(docId);
     if (!c) return;
-    c.messages = c.messages.map((m) => {
-      if (!m.blocks?.some((b) => b.type === "ask_user" && !b.askUser.resolved)) return m;
-      return { ...m, blocks: m.blocks.map((b) => (b.type === "ask_user" && !b.askUser.resolved ? { ...b, askUser: { ...b.askUser, selectedIndex: _index, resolved: true } } : b)) };
-    });
-    bump();
-    c.askUserResolve?.(`User selected: ${option}`);
+    const resolve = c.askUserResolve;
     c.askUserResolve = null;
+    resolve?.(option, index);
   }, [docId]);
 
   const handleNew = useCallback(() => {

@@ -86,6 +86,14 @@ interface Tool {
 
 export interface AgentCallbacks {
   onText: (chunk: string) => void;
+  /** The model has started streaming a tool_use block's input JSON. Fires at
+   *  content_block_start, i.e. BEFORE the arguments have finished arriving —
+   *  onToolCall can't stand in for it, since that only fires once the whole
+   *  response has streamed and the dispatch loop reaches the call. Long inputs
+   *  (a big SQL statement, a Vega spec) spend seconds in this window, and a
+   *  surface that clears its indicator on the first text delta would otherwise
+   *  show nothing at all for the duration. */
+  onToolInputStart?: (name: string) => void;
   onToolCall: (name: string, input: any) => void;
   onToolResult: (name: string, summary: string) => void;
   onDone: (usage?: { inputTokens: number; outputTokens: number }) => void;
@@ -594,6 +602,7 @@ async function streamOneRequestInner(
           input: {},
         };
         currentToolInput = "";
+        callbacks.onToolInputStart?.(event.content_block.name);
       }
     } else if (event.type === "content_block_delta") {
       if (event.delta.type === "text_delta" && currentBlock?.type === "text") {

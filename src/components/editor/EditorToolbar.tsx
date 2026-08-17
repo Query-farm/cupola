@@ -21,6 +21,9 @@ interface Props {
   onAskAI: () => void;
   /** Whether the Ask AI panel is currently open (renders the button pressed). */
   aiActive?: boolean;
+  /** A turn is in flight in some sub-tab's conversation. The panel may be
+   *  closed, so the button is the only thing left to say so. */
+  aiBusy?: boolean;
   onDownloadSql: () => void;
   /** Copy a link that reopens this tab's SQL (unexecuted) against this catalog. */
   onShareLink: () => void;
@@ -42,6 +45,7 @@ export function EditorToolbar({
   onOpenInShell,
   onAskAI,
   aiActive,
+  aiBusy,
   onDownloadSql,
   onShareLink,
   shareCopied,
@@ -143,11 +147,14 @@ export function EditorToolbar({
         variant={aiActive ? "default" : "ghost"}
         onClick={onAskAI}
         className="h-7 gap-1.5"
-        title="Toggle the Ask AI panel"
+        title={aiBusy ? "Ask AI is working — click to show the panel" : "Toggle the Ask AI panel"}
         aria-pressed={aiActive}
+        aria-busy={aiBusy || undefined}
         data-testid="editor-ask-ai"
       >
-        <Sparkles className="h-3.5 w-3.5" />
+        {aiBusy
+          ? <Loader2 className="h-3.5 w-3.5 animate-spin" data-testid="editor-ask-ai-busy" />
+          : <Sparkles className="h-3.5 w-3.5" />}
         Ask AI
       </Button>
       <Button

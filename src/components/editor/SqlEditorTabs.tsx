@@ -6,13 +6,16 @@ import { cn } from "@/lib/utils";
 interface Props {
   docs: EditorDoc[];
   activeId: string | null;
+  /** Docs whose Ask AI conversation has a turn in flight. Each conversation is
+   *  per tab, so without this a running agent vanishes when you switch tabs. */
+  busyDocIds?: Set<string>;
   onSelect: (id: string) => void;
   onAdd: () => void;
   onClose: (id: string) => void;
   onRename: (id: string, name: string) => void;
 }
 
-export function SqlEditorTabs({ docs, activeId, onSelect, onAdd, onClose, onRename }: Props) {
+export function SqlEditorTabs({ docs, activeId, busyDocIds, onSelect, onAdd, onClose, onRename }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -69,6 +72,14 @@ export function SqlEditorTabs({ docs, activeId, onSelect, onAdd, onClose, onRena
               />
             ) : (
               <span className="truncate">{doc.name}</span>
+            )}
+            {busyDocIds?.has(doc.id) && (
+              <span
+                className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse shrink-0"
+                data-testid={`editor-tab-ai-busy-${doc.id}`}
+                title="Ask AI is working on this tab"
+                aria-label="Ask AI is working"
+              />
             )}
             <button
               onClick={(e) => {

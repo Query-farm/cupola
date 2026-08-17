@@ -5,6 +5,7 @@ import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
 import { engine, ui } from "@/lib/shell-bridge";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
+import { toolInputLabel } from "@/lib/ai/tool-labels";
 import type { CatalogData } from "@/lib/service";
 import {
   runAgentTurn,
@@ -43,16 +44,22 @@ interface Props {
   serviceUrl: string;
   catalogName: string;
   isActive?: boolean;
+  /** Fired when a turn starts/ends so the tab bar can flag the running agent
+   *  while the user is looking at another tab. */
+  onBusyChange?: (busy: boolean) => void;
 }
 
-export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
+export function AskAIChat({ catalogData, serviceUrl, isActive, onBusyChange }: Props) {
   const { settings } = useSettings();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const agentMessages = useRef<MessageParam[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const askUserResolve = useRef<((value: string) => void) | null>(null);
+  // Installed by the ask_user tool for the life of one question. Takes the
+  // chosen option and its index (index < 0 = cancelled) so the resolver can
+  // mark its own block answered before handing the answer to the agent.
+  const askUserResolve = useRef<((option: string, index: number) => void) | null>(null);
   // Groups this chat session's gen_ai spans in Sentry's Conversations view.
   const conversationIdRef = useRef<string>(crypto.randomUUID());
   // read_query_results backing store, scoped to THIS conversation. Previously a
@@ -64,6 +71,8 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
     if (settings.aiTelemetry) Sentry.setConversationId(conversationIdRef.current);
     return () => Sentry.setConversationId(null);
   }, [settings.aiTelemetry]);
+
+  useEffect(() => { onBusyChange?.(isLoading); }, [isLoading, onBusyChange]);
 
   // Auto-scroll only if user is already near the bottom
   const userScrolledUp = useRef(false);
@@ -91,8 +100,9 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
       if (e.key === "Escape" && abortRef.current) {
         // Resolve any pending ask_user promise to prevent leak
         if (askUserResolve.current) {
-          askUserResolve.current("__cancelled__");
+          const pendingAsk = askUserResolve.current;
           askUserResolve.current = null;
+          pendingAsk("__cancelled__", -1);
         }
         abortRef.current.abort();
         engine.cancelQuery?.();
@@ -211,11 +221,15 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
     setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "user", content: text }]);
     agentMessages.current.push({ role: "user", content: text });
 
-    // Add placeholder assistant message with thinking indicator
+    // Add placeholder assistant message with thinking indicator. The SAME
+    // block object seeds the local `blocks` array below — they used to
+    // disagree, so the first updateBlocks() of the turn silently wiped this
+    // indicator (see the onRetry path, which can fire before any content).
     const assistantId = crypto.randomUUID();
+    const seedThinking: ContentBlock = { type: "thinking", id: uid(), label: "Thinking" };
     setMessages(prev => [...prev, {
       id: assistantId, role: "assistant",
-      blocks: [{ type: "thinking", id: uid(), label: "Thinking" }],
+      blocks: [seedThinking],
       isStreaming: true,
     }]);
 
@@ -231,7 +245,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
     const maxTokens = getSetting("aiMaxTokens") || DEFAULT_AI_MAX_TOKENS;
 
     // Mutable blocks array — updated in callbacks, then set into state
-    let blocks: ContentBlock[] = [];
+    let blocks: ContentBlock[] = [seedThinking];
     // Store display results for tool calls (set during executeTool, used by onToolResult)
     let pendingDisplayResult: import("./chat/ChatMessageAssistant").ToolCallDisplayResult | undefined;
 
@@ -255,6 +269,15 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
     // Remove the thinking indicator from blocks
     const removeThinking = () => {
       blocks = blocks.filter(b => b.type !== "thinking");
+    };
+
+    // Replace whatever indicator is showing with a fresh one. Every silent
+    // window in the turn ends with a call to this: the panel must never be
+    // waiting on the model or a tool without saying so.
+    const showThinking = (label: string) => {
+      removeThinking();
+      blocks = [...blocks, { type: "thinking", id: uid(), label }];
+      updateBlocks(blocks);
     };
 
     /**
@@ -383,11 +406,22 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
         return describeTableWithFallback(catalogData!, { query: queryFn }, input);
       }
       if (name === "ask_user") {
+        const blockId = uid();
         return new Promise<string>((resolve) => {
-          askUserResolve.current = resolve;
+          // Mark the block answered in the LOCAL array, not just in message
+          // state: every later updateBlocks() overwrites state from this
+          // array, so a state-only edit was reverted by the next callback and
+          // the answered question went back to offering live buttons.
+          askUserResolve.current = (option, index) => {
+            blocks = blocks.map(b => b.id === blockId && b.type === "ask_user"
+              ? { ...b, askUser: { ...b.askUser, selectedIndex: index, resolved: true } }
+              : b);
+            updateBlocks(blocks);
+            resolve(index < 0 ? "__cancelled__" : `User selected: ${option}`);
+          };
           // Remove thinking and add ask_user as an inline block
           removeThinking();
-          blocks.push({ type: "ask_user", id: uid(), askUser: { question: input.question, options: input.options || [], resolved: false } });
+          blocks.push({ type: "ask_user", id: blockId, askUser: { question: input.question, options: input.options || [], resolved: false } });
           updateBlocks(blocks);
         });
       }
@@ -541,6 +575,10 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
             blocks = blocks.map((b, i) => i === idx ? { ...b, content: textBlock.content + chunk } : b);
             updateBlocks(blocks);
           },
+          // The model is streaming this call's arguments. onToolCall is still
+          // one whole SSE stream away, so without this the panel would sit
+          // blank through a long SQL statement or Vega spec.
+          onToolInputStart: (name) => showThinking(toolInputLabel(name)),
           onToolCall: (name, input) => {
             removeThinking();
             const tc: ToolCallEntry = { name, input, isExecuting: true };
@@ -584,13 +622,11 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
             updateBlocks(blocks);
             updateAssistant({ isStreaming: false, usage });
           },
-          onRetry: (message) => {
-            removeThinking();
-            if (message) {
-              blocks = [...blocks, { type: "thinking", id: uid(), label: message.replace("...", "") }];
-            }
-            updateBlocks(blocks);
-          },
+          // message === null means the countdown ended and the request is
+          // being retried NOW — the slowest, least visible part of a bad
+          // network day. Fall back to a plain indicator instead of clearing
+          // it, which used to leave the panel blank for the whole retry.
+          onRetry: (message) => showThinking(message ? message.replace("...", "") : "Thinking"),
           onError: (error) => {
             removeThinking();
             const idx = ensureTextBlock();
@@ -623,6 +659,12 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
         if (b.type === "vega_chart" && b.chart.pending) {
           return { ...b, chart: { ...b.chart, pending: false } };
         }
+        // An unanswered question outlives the turn that asked it. Nothing is
+        // listening for the click any more, so retire the buttons instead of
+        // leaving them looking live.
+        if (b.type === "ask_user" && !b.askUser.resolved) {
+          return { ...b, askUser: { ...b.askUser, resolved: true } };
+        }
         return b;
       });
       const isCancellation = err.name === "AbortError" || err.message === "Cancelled." || err.message === "Query cancelled";
@@ -648,22 +690,13 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
     }
   }, [catalogData, serviceUrl, settings]);
 
+  // The resolver (installed by the ask_user tool) owns marking the block
+  // answered — it can reach the turn's live block array, which this callback
+  // cannot.
   const handleAskUserSelect = useCallback((option: string, index: number) => {
-    setMessages(prev => prev.map(m => {
-      if (!m.blocks) return m;
-      const hasUnresolved = m.blocks.some(b => b.type === "ask_user" && !b.askUser.resolved);
-      if (!hasUnresolved) return m;
-      return {
-        ...m,
-        blocks: m.blocks.map(b =>
-          b.type === "ask_user" && !b.askUser.resolved
-            ? { ...b, askUser: { ...b.askUser, selectedIndex: index, resolved: true } }
-            : b
-        ),
-      };
-    }));
-    askUserResolve.current?.(`User selected: ${option}`);
+    const resolve = askUserResolve.current;
     askUserResolve.current = null;
+    resolve?.(option, index);
   }, []);
 
   const handleNewConversation = () => {
@@ -676,6 +709,13 @@ export function AskAIChat({ catalogData, serviceUrl, isActive }: Props) {
   };
 
   const handleStop = () => {
+    // Release a pending ask_user FIRST. That promise is not raced against the
+    // abort signal, so an unanswered question left the agent parked on an
+    // await that nothing could ever settle: the turn never unwound, the
+    // finally never ran, and the panel showed "Stop" forever.
+    const pendingAsk = askUserResolve.current;
+    askUserResolve.current = null;
+    pendingAsk?.("__cancelled__", -1);
     abortRef.current?.abort();
     // Also cancel any running DuckDB query
     engine.cancelQuery?.();

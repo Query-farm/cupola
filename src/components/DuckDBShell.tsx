@@ -37,6 +37,9 @@ interface Props {
   onTabChange: (tab: TabId) => void;
   /** Notifies the parent of the query-history entry count (for the tab badge). */
   onQueryHistoryCountChange?: (count: number) => void;
+  /** Notifies the parent while the Ask AI panel has a turn in flight (for the
+   *  tab bar's busy dot — the panel is hidden, not unmounted, on other tabs). */
+  onAiBusyChange?: (busy: boolean) => void;
   /** Called when the shell is ready, with a function to insert text into the terminal. */
   onShellReady?: (insertText: (text: string) => void) => void;
   /** Catalog metadata for AI agent tools. */
@@ -132,7 +135,7 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, onQueryHistoryCountChange, onShellReady, catalogData, selection, onAuthError, onAttachError, attachOptions }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, onQueryHistoryCountChange, onAiBusyChange, onShellReady, catalogData, selection, onAuthError, onAttachError, attachOptions }: Props) {
   // The parent controls the active tab; expose a local alias so the existing
   // setActiveTab(...) call sites (history re-run, bridge slots) keep working.
   const setActiveTab = onTabChange;
@@ -520,6 +523,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
             serviceUrl={serviceUrl}
             catalogName={catalogName}
             isActive={activeTab === "askai"}
+            onBusyChange={onAiBusyChange}
           />
         </Suspense>
       </div>
