@@ -15,6 +15,17 @@ az containerapp create -n cupola -g <rg> --environment <env> \
   --target-port 80 --ingress external
 ```
 
+Official release images are also published for `linux/amd64` and `linux/arm64`:
+
+```bash
+docker pull ghcr.io/query-farm/cupola:latest
+docker run --rm -p 8080:80 ghcr.io/query-farm/cupola:latest
+```
+
+Use an exact release tag instead of `latest` when deployments must be
+reproducible. The GitHub Actions release workflow publishes exact, minor-line,
+and `latest` aliases after smoke-testing the container.
+
 ## Why this works the way it does
 
 ### It's a static site
@@ -67,11 +78,12 @@ shell silently fails to boot.
 - copies `duckdb-*.wasm` + worker bundles from
   `node_modules/@haybarn/haybarn-wasm/dist` into `dist/haybarn/`
 - downloads the 3 VGI extension wasm variants (`wasm_mvp`, `wasm_eh`,
-  `wasm_threads`, version `v1.5.3`) from `haybarn-extensions.query.farm` into
-  `dist/haybarn/extensions/` so the shell has a local mirror
-
-If the haybarn package version is bumped in `package.json`, update
-`HAYBARN_EXT_VERSION` in `build-image.sh` to match.
+  `wasm_threads`) from `haybarn-extensions.query.farm` into
+  `dist/haybarn/extensions/` so the shell has a local mirror. The extension
+  path is derived from the exact `@haybarn/haybarn-wasm` version in
+  `package.json`, which is the single version source for both image and
+  Cloudflare builds. Prerelease suffixes are omitted from the compatibility
+  path, so package `1.5.5-rc1` resolves to extension path `v1.5.5`.
 
 ### The `/npm/*` proxy
 `DuckDBShell.tsx` loads `apache-arrow` and `xterm-readline` as jsdelivr `+esm`

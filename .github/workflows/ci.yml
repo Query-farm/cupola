@@ -72,6 +72,21 @@ jobs:
           VGI_SERVICE_URL: https://vgi-open-meteo.rusty-bb6.workers.dev
         run: bun run test:e2e:smoke
 
+      - name: Build self-hosted bundle
+        working-directory: cupola
+        env:
+          BASE_PATH: /
+        run: |
+          bun run build
+          bun run check:bundle
+          ./scripts/stage-haybarn-assets.sh
+
+      - name: Build and smoke-test container
+        working-directory: cupola
+        run: |
+          docker build --tag cupola:ci .
+          ./scripts/test-container.sh cupola:ci
+
       # Keep advisories visible while the current transitive backlog is being
       # resolved. Remove continue-on-error once the baseline is clean.
       - name: Dependency audit

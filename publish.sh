@@ -168,46 +168,10 @@ upload_with_ct() {
 # Astro's `base: /v${VERSION}/` versions URLs in HTML/JS but does NOT change
 # the dist/ output directory layout. We add v${VERSION}/ during upload.
 
-# 1) Haybarn-wasm artifacts at /haybarn/ — shared across versions. The
-#    AsyncDuckDB sub-worker fetches duckdb-{coi,eh,mvp}.wasm + the worker.js
-#    bundles from these URLs. Sourced from the installed npm package so the
-#    versions match what the frontend was built against.
-HAYBARN_SRC="node_modules/@haybarn/haybarn-wasm/dist"
-echo "==> Staging haybarn artifacts from ${HAYBARN_SRC}..."
-mkdir -p dist/haybarn
-for f in \
-  duckdb-coi.wasm duckdb-eh.wasm duckdb-mvp.wasm \
-  duckdb-browser-coi.worker.js \
-  duckdb-browser-coi.worker.js.map \
-  duckdb-browser-coi.pthread.worker.js \
-  duckdb-browser-coi.pthread.worker.js.map \
-  duckdb-browser-eh.worker.js \
-  duckdb-browser-eh.worker.js.map \
-  duckdb-browser-mvp.worker.js \
-  duckdb-browser-mvp.worker.js.map; do
-  # Source maps may not ship for every worker variant — tolerate missing files
-  # rather than failing the publish. The non-map worker files are required.
-  if [ -e "${HAYBARN_SRC}/${f}" ]; then
-    cp "${HAYBARN_SRC}/${f}" "dist/haybarn/${f}"
-  elif [[ "$f" != *.map ]]; then
-    echo "ERROR: required haybarn artifact missing: ${HAYBARN_SRC}/${f}" >&2
-    exit 1
-  fi
-done
-
-# Mirror the VGI extension (3 wasm variants) to our R2 so the shell stays
-# bootable if haybarn-extensions.query.farm has an outage. The frontend sets
-# `SET custom_extension_repository = '${origin}/haybarn/extensions'` before
-# `INSTALL vgi FROM community;` so DuckDB fetches from our mirror.
-HAYBARN_EXT_VERSION="v1.5.4"
-mkdir -p "dist/haybarn/extensions/${HAYBARN_EXT_VERSION}"
-for variant in wasm_mvp wasm_eh wasm_threads; do
-  mkdir -p "dist/haybarn/extensions/${HAYBARN_EXT_VERSION}/${variant}"
-  echo "==> Fetching vgi extension for ${variant}..."
-  curl -fsSL \
-    -o "dist/haybarn/extensions/${HAYBARN_EXT_VERSION}/${variant}/vgi.duckdb_extension.wasm" \
-    "https://haybarn-extensions.query.farm/community/${HAYBARN_EXT_VERSION}/${variant}/vgi.duckdb_extension.wasm"
-done
+# 1) Stage the Haybarn runtime and matching VGI extension mirror. The same
+# script is used by the self-hosted image build so both distributions contain
+# an identical engine payload.
+./scripts/stage-haybarn-assets.sh
 
 # The dist/haybarn/ directory is staged above and picked up by the versioned
 # sync below — the worker fetches `${BASE_URL}haybarn/...` which resolves to

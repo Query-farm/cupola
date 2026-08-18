@@ -857,7 +857,6 @@ export function CatalogApp() {
                     catalogData={data}
                     serviceUrl={serviceUrl}
                     attachOptions={attachOptions}
-                    onExitEditor={() => setActiveTab("catalog")}
                     pendingSql={pendingEditorSql}
                     onPendingConsumed={() => { setPendingEditorSql(null); clearSharedSql(); }}
                     onAiBusyChange={setEditorAiBusy}

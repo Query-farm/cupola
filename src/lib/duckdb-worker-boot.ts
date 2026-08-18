@@ -100,9 +100,9 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   const subWorker = new Worker(bundle.mainWorker!);
   engine.worker = subWorker;
 
-  // SABs go directly to the sub-worker pre-instantiate. handlePreInitMessage
-  // (shipped in @haybarn/haybarn-wasm@1.5.3-rc7) consumes both 'init-oauth-sab'
-  // and 'init-cancel-sab' before the AsyncDuckDB dispatcher sees them.
+  // SABs go directly to the sub-worker pre-instantiate. Haybarn's
+  // handlePreInitMessage consumes both 'init-oauth-sab' and 'init-cancel-sab'
+  // before the AsyncDuckDB dispatcher sees them.
   const oauthSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(8192) : null;
   if (oauthSAB) {
     (engine as unknown as { _oauthSAB: SharedArrayBuffer })._oauthSAB = oauthSAB;

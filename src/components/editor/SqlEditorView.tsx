@@ -9,7 +9,7 @@ import { format as formatSql } from "sql-formatter";
 import * as Sentry from "@sentry/astro";
 import { tableToIPC } from "@query-farm/apache-arrow";
 import { decodeArrowBuffer } from "@/lib/duckdb-query";
-import { engine, terminal, ui, onBootChange, recordQuery } from "@/lib/shell-bridge";
+import { engine, ui, onBootChange, recordQuery } from "@/lib/shell-bridge";
 import { useSettings } from "@/lib/settings";
 import type { CatalogData } from "@/lib/service";
 import {
@@ -48,8 +48,6 @@ interface Props {
   serviceUrl: string;
   /** Resolved ATTACH options fragment, propagated into share links. */
   attachOptions?: string;
-  /** Switch back to the catalog browser (used after "Open in shell"). */
-  onExitEditor?: () => void;
   /** SQL pushed in from elsewhere (example queries, shell history, shared
    *  links). Opens a new tab; call onPendingConsumed once handled. */
   pendingSql?: PendingEditorSql | null;
@@ -59,7 +57,7 @@ interface Props {
   onAiBusyChange?: (busy: boolean) => void;
 }
 
-export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEditor, pendingSql, onPendingConsumed, onAiBusyChange }: Props) {
+export function SqlEditorView({ catalogData, serviceUrl, attachOptions, pendingSql, onPendingConsumed, onAiBusyChange }: Props) {
   const { settings } = useSettings();
   const isNarrow = useMediaQuery("(max-width: 767px)");
   // Transient "Copied" confirmation on the Share button.
@@ -388,16 +386,6 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
     editorRef.current?.insertAtCursor(sql);
   }, []);
 
-  const handleOpenInShell = useCallback(() => {
-    const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";
-    terminal.activate?.();
-    if (sql.trim()) {
-      // activateShell switches surfaces; give the terminal a tick to focus.
-      setTimeout(() => terminal.runQuery?.(sql.trim()), 50);
-    }
-    onExitEditor?.();
-  }, [activeDoc?.sql, onExitEditor]);
-
   // Smart insert (matches the shell): a bare table reference dropped/clicked
   // into an empty editor expands to a SELECT (geometry excluded); otherwise the
   // raw text is inserted at the cursor. A column/expression inserts verbatim.
@@ -512,7 +500,6 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
         onRun={handleRun}
         onStop={handleStop}
         onFormat={handleFormat}
-        onOpenInShell={handleOpenInShell}
         onAskAI={() => setAiOpen((o) => !o)}
         aiActive={aiOpen}
         aiBusy={aiBusyDocs.size > 0}

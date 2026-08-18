@@ -62,6 +62,8 @@ Without `?service=`, a welcome / connect page is shown.
 | `bun run check`   | Type-check Astro, React, and test sources    |
 | `bun run check:bundle` | Enforce the production JS size budget after a build |
 | `bun run audit`   | Report production dependency advisories     |
+| `bun run image:build` | Build the self-hosted Caddy image as `cupola:flat` |
+| `bun run image:test` | Smoke-test the locally built container image |
 | `./publish.sh`    | Publish a new version (build, upload to R2, deploy) |
 
 ## URL Parameters
@@ -86,7 +88,22 @@ Assets are served from Cloudflare R2 via a Worker with a versioned URL scheme (`
 
 Pull requests and pushes to `main` run the **CI** workflow (`.github/workflows/ci.yml`): frozen installs, type checking, unit tests, a production build, bundle-size enforcement, and Chromium smoke tests against the hosted Open-Meteo VGI service. Dependency advisories are reported there without failing the build until the existing audit backlog is resolved.
 
-**Publish from GitHub Actions:** run the **Publish** workflow (`.github/workflows/publish.yml`, manual trigger). It checks out the sibling repos (`vgi-typescript`, `vgi-rpc-typescript`), runs the tests, executes `./publish.sh --skip-commit` against the pushed commit, and tags the release. Required repository secrets:
+### Releases
+
+Releases are tag-driven. Update `package.json` to the next unused version,
+commit it, then push the matching tag:
+
+```sh
+git tag v0.4.116
+git push origin v0.4.116
+```
+
+The **Release** workflow requires the tag to exactly match `package.json`. It
+then runs the complete validation suite, publishes a multi-platform image to
+GHCR, deploys the versioned Cloudflare/R2 site in a separate job, and creates a
+GitHub Release with generated notes after both publishing jobs succeed.
+
+Required repository secrets:
 
 | Secret | Purpose |
 |--------|---------|
@@ -94,6 +111,26 @@ Pull requests and pushes to `main` run the **CI** workflow (`.github/workflows/c
 | `SENTRY_AUTH_TOKEN` | Sentry source-map upload |
 | `CLOUDFLARE_API_TOKEN` | Worker deploy |
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 S3-API asset upload |
+
+The GitHub-provided token publishes the container; no registry password is
+required. The GHCR package must be made public once in the repository/package
+settings so unauthenticated users can pull it.
+
+### Self-hosting with Docker
+
+Release images support both `linux/amd64` and `linux/arm64`:
+
+```sh
+docker run --rm -p 8080:80 ghcr.io/query-farm/cupola:latest
+```
+
+Open `http://localhost:8080/?service=https://your-vgi-server.example`. Exact
+release and minor-line tags are also published, for example `0.4.116` and
+`0.4`. The image is a static Caddy server and does not embed a VGI endpoint;
+the `service` URL remains runtime-configurable.
+
+To build locally (with the sibling VGI repositories checked out beside this
+one), run `bun run image:build`, followed by `bun run image:test`.
 
 ## License
 

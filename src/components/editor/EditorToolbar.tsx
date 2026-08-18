@@ -1,7 +1,5 @@
-import { Play, Square, Sparkles, WandSparkles, TerminalSquare, Loader2, ChevronDown } from "lucide-react";
-import { Popover as BaseUIPopover } from "@base-ui/react/popover";
+import { Play, Square, Sparkles, WandSparkles, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScriptMenu } from "./ScriptMenu";
 
 interface Props {
@@ -15,7 +13,6 @@ interface Props {
   onRun: () => void;
   onStop: () => void;
   onFormat: () => void;
-  onOpenInShell: () => void;
   onAskAI: () => void;
   /** Whether the Ask AI panel is currently open (renders the button pressed). */
   aiActive?: boolean;
@@ -39,14 +36,7 @@ interface Props {
  *
  * Layout, left to right:
  *
- *   [▶ Run ▾] [✨ Ask AI]  │  Format   Script ▾
- *
- * Run is a split button; its menu holds "Run in Shell", which is where the old
- * standalone "Shell" button went. That button named its destination rather
- * than its action, so it read as a mystery — it hands the current SQL to the
- * terminal surface and runs it there. Grouping it under Run says that it is
- * another way of running this query, which is exactly what it is, and matches
- * CloudBeaver's habit of collecting Execute variants together.
+ *   [▶ Run] [✨ Ask AI]  │  Format   Script ▾
  *
  * Ask AI sits in the execute cluster with a filled background because it is a
  * primary action, not a utility. Its fill is `primary` (brown) rather than the
@@ -61,7 +51,6 @@ export function EditorToolbar({
   onRun,
   onStop,
   onFormat,
-  onOpenInShell,
   onAskAI,
   aiActive,
   aiBusy,
@@ -92,44 +81,17 @@ export function EditorToolbar({
           </span>
         </>
       ) : (
-        /* Split button: the body runs here, the chevron offers the other
-           surfaces. Rendered as two adjacent buttons sharing a rounded shell
-           so the divider reads as one control rather than two. */
-        <div className="flex items-stretch shadow-sm rounded-md overflow-hidden" data-testid="editor-run-split">
-          <Button
-            size="sm"
-            onClick={onRun}
-            disabled={!queryReady}
-            className="h-7 gap-1.5 rounded-none bg-accent text-white hover:bg-accent/90"
-            title={hasSelection ? "Run selection (⌘/Ctrl+Enter for statement)" : "Run statement at cursor (⌘/Ctrl+Enter)"}
-            data-testid="editor-run"
-          >
-            <Play className="h-3.5 w-3.5" />
-            {hasSelection ? "Run selection" : "Run"}
-          </Button>
-          <span className="w-px bg-white/25" aria-hidden="true" />
-          <Popover>
-            <PopoverTrigger
-              className="flex items-center px-1.5 bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-40 disabled:pointer-events-none"
-              disabled={!queryReady}
-              title="Other ways to run this query"
-              aria-label="Other ways to run this query"
-              data-testid="editor-run-more"
-            >
-              <ChevronDown className="h-3.5 w-3.5" />
-            </PopoverTrigger>
-            <PopoverContent align="start" className="p-1 min-w-[200px]">
-              <BaseUIPopover.Close
-                onClick={onOpenInShell}
-                data-testid="editor-open-shell"
-                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-foreground/5 transition-colors text-left"
-              >
-                <TerminalSquare className="h-3.5 w-3.5" />
-                <span>Run in Shell</span>
-              </BaseUIPopover.Close>
-            </PopoverContent>
-          </Popover>
-        </div>
+        <Button
+          size="sm"
+          onClick={onRun}
+          disabled={!queryReady}
+          className="h-7 gap-1.5 bg-accent text-white hover:bg-accent/90 shadow-sm"
+          title={hasSelection ? "Run selection (⌘/Ctrl+Enter for statement)" : "Run statement at cursor (⌘/Ctrl+Enter)"}
+          data-testid="editor-run"
+        >
+          <Play className="h-3.5 w-3.5" />
+          {hasSelection ? "Run selection" : "Run"}
+        </Button>
       )}
 
       <Button
