@@ -10,8 +10,6 @@ import { filterDisplayTags, getTag, parseKeywords, TAG_DOC_MD, TAG_TITLE } from 
 import { DescriptionSection } from "./DescriptionSection";
 import { MetaChips } from "./MetaChips";
 import { ProvenanceCard } from "./ProvenanceCard";
-import { useCatalogIdentity } from "@/lib/catalog-identity";
-import { CatalogIdentityCard } from "./CatalogIdentityCard";
 
 interface Props {
   catalog: CatalogData;
@@ -22,7 +20,6 @@ interface Props {
 
 export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate }: Props) {
   const { settings } = useSettings();
-  const { identity, loading: identityLoading } = useCatalogIdentity(catalog.catalogName, serviceUrl);
   const totalTables = catalog.schemas.reduce((sum, s) => {
     if (settings.hideDollarTables) {
       return sum + s.tables.filter((t) => !t.name.includes("$")).length;
@@ -65,8 +62,10 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate
 
       <MetaChips keywords={keywords} />
 
-      <CatalogIdentityCard identity={identity} loading={identityLoading} />
-
+      {/* The signed-in identity used to sit here. It duplicates the header's
+          switcher in the top-right, which shows the same name/email and owns
+          sign-in and sign-out — so this was a second, read-only copy of it
+          halfway down the page. */}
       <ConnectBox catalogName={catalog.catalogName} serviceUrl={serviceUrl} attachOptions={attachOptions} />
 
       {catalog.schemas.length > 0 && (
