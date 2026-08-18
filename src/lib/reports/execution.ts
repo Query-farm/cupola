@@ -16,6 +16,11 @@ export function isBlockingVegaWarning(warning: string): boolean {
 function referencedColumns(block: ReportBlock): string[] {
   if (block.type === "table") return block.columns ?? [];
   if (block.type === "kpi") return [block.valueColumn, block.labelColumn].filter((column): column is string => !!column);
+  if (block.type === "sparkline") return [block.valueColumn, block.labelColumn].filter((column): column is string => !!column);
+  if (block.type === "small_multiples") return [block.facetColumn, block.xColumn, block.yColumn, block.colorColumn].filter((column): column is string => !!column);
+  if (block.type === "bullet") return [block.categoryColumn, block.valueColumn, block.targetColumn, ...(block.rangeColumns ?? [])];
+  if (block.type === "slopegraph") return [block.categoryColumn, block.startColumn, block.endColumn, block.colorColumn].filter((column): column is string => !!column);
+  if (block.type === "range_dot") return [block.categoryColumn, block.lowColumn, block.highColumn, block.valueColumn].filter((column): column is string => !!column);
   if (block.type === "map") return [
     block.geometryColumn,
     block.latitudeColumn,

@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { ResponsiveGridLayout, useContainerWidth, type Layout, type ResponsiveLayouts } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import { ArrowLeft, BarChart3, Bot, Check, Download, FileJson, FilePlus2, Loader2, Play, Plus, Printer, Save, Share2, Sparkles, Trash2, X } from "lucide-react";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import type { CatalogData } from "@/lib/service";
-import { engine } from "@/lib/shell-bridge";
+import { engine, ui } from "@/lib/shell-bridge";
 import { decodeArrowBuffer, tableToRows } from "@/lib/duckdb-query";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 import { ChatMessageAssistant, type ContentBlock, type ToolCallEntry } from "@/components/chat/ChatMessageAssistant";
 import { ChatMessageUser } from "@/components/chat/ChatMessageUser";
 import { QueryResultTable } from "@/components/chat/QueryResultTable";
 import { ReportMap } from "@/components/reports/ReportMap";
+import { ReportSparkline } from "@/components/reports/ReportSparkline";
 import { compileChartSpec, embedChart, downloadPNG, downloadSVG, renderChartToPng, type VegaView } from "@/components/chat/chart-embed";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,10 +29,11 @@ import { consumeReportPromotion, type ReportPromotion } from "@/lib/reports/even
 import { reportDisplayRows, reportMapRows } from "@/lib/reports/display";
 import { isBlockingVegaWarning, validateReportResultColumns } from "@/lib/reports/execution";
 import { REPORT_TOOLS, upsertAgentBlock, upsertAgentDataset, type SemanticBlockHeight, type SemanticBlockWidth } from "@/lib/reports/agent-tools";
-import { compileReportQuery } from "@/lib/reports/parameters";
+import { compileReportQuery, materializeReportQuery } from "@/lib/reports/parameters";
+import { isReportTufteBlock, tufteBlockToVegaSpec } from "@/lib/reports/tufte";
 import { buildShareReportUrl, clearSharedReport, consumeSharedReport } from "@/lib/reports/share";
 import { deleteReport, exportReportJson, getStoredReport, importReportJson, listReports, restoreReportRevision, saveReport } from "@/lib/reports/store";
-import { cloneReport, createEmptyReport, newReportId, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportParameter, type ReportParameterValue } from "@/lib/reports/types";
+import { cloneReport, createEmptyReport, newReportId, type ReportDataset, type ReportDocumentV1, type ReportParameter, type ReportParameterValue } from "@/lib/reports/types";
 import { parameterTokens, validateParameterValue, validateReadOnlySql, validateReport } from "@/lib/reports/validation";
 
 interface Props {
@@ -101,9 +103,14 @@ async function preflightReportCharts(
   const feedback: ToolResultContent[] = [];
   let imageCount = 0;
   for (const block of report.blocks) {
-    if (block.type !== "chart") continue;
+    const spec = block.type === "chart"
+      ? block.spec
+      : isReportTufteBlock(block)
+        ? tufteBlockToVegaSpec(block)
+        : null;
+    if (!spec) continue;
     const label = block.title ?? block.id;
-    const compile = await compileChartSpec(block.spec);
+    const compile = await compileChartSpec(spec);
     warnings.push(...compile.warnings.map((warning) => `${label}: ${warning}`));
     errors.push(...compile.warnings
       .filter(isBlockingVegaWarning)
@@ -112,11 +119,12 @@ async function preflightReportCharts(
       errors.push(`${label}: Vega-Lite compile failed: ${compile.error}`);
       continue;
     }
-    const rows = rowsByDataset.get(block.datasetId);
+    const datasetId = block.type === "chart" || isReportTufteBlock(block) ? block.datasetId : null;
+    const rows = datasetId ? rowsByDataset.get(datasetId) : undefined;
     if (!rows) continue;
     // Rendering is both a smoke test for Vega runtime failures and optional
     // visual feedback for the multimodal model.
-    const rendered = await renderChartToPng(block.spec, rows);
+    const rendered = await renderChartToPng(spec, rows);
     if ("error" in rendered) {
       errors.push(`${label}: chart render failed: ${rendered.error}`);
       continue;
@@ -149,6 +157,10 @@ function formatKpi(value: unknown, format?: "number" | "currency" | "percent" | 
   return new Intl.NumberFormat().format(number);
 }
 
+function reportBlockLabel(type: string): string {
+  return type.split("_").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ");
+}
+
 function applyPromotion(base: ReportDocumentV1, promotion: ReportPromotion): ReportDocumentV1 {
   const report = cloneReport(base);
   const dataset: ReportDataset = { id: newReportId("dataset"), name: promotion.title || `Dataset ${report.datasets.length + 1}`, sql: promotion.sql };
@@ -165,7 +177,12 @@ function applyPromotion(base: ReportDocumentV1, promotion: ReportPromotion): Rep
   return report;
 }
 
-function ReportChart({ block, rows }: { block: Extract<ReportBlock, { type: "chart" }>; rows: Record<string, any>[] }) {
+function ReportChart({ block, rows, onCsv, onSql }: {
+  block: { id: string; title?: string; spec: Record<string, any> };
+  rows: Record<string, any>[];
+  onCsv: () => void;
+  onSql: () => void;
+}) {
   const elRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<VegaView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -205,6 +222,8 @@ function ReportChart({ block, rows }: { block: Extract<ReportBlock, { type: "cha
   }, [block.spec, rows]);
   return <div className="h-full flex flex-col min-h-0">
     <div className="flex justify-end gap-1 report-authoring-control">
+      <button type="button" data-testid={`report-download-csv-${block.id}`} className="text-[10px] text-muted-foreground hover:text-foreground" onClick={onCsv}>CSV</button>
+      <button type="button" data-testid={`report-open-sql-${block.id}`} className="text-[10px] text-muted-foreground hover:text-foreground" onClick={onSql}>SQL</button>
       <button className="text-[10px] text-muted-foreground hover:text-foreground" onClick={() => viewRef.current && downloadPNG(viewRef.current, block.title || "chart")}>PNG</button>
       <button className="text-[10px] text-muted-foreground hover:text-foreground" onClick={() => viewRef.current && downloadSVG(viewRef.current, block.title || "chart")}>SVG</button>
     </div>
@@ -271,6 +290,12 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const agentMessagesRef = useRef<MessageParam[]>([]);
   const agentThreadRef = useRef<HTMLDivElement>(null);
   const runGeneration = useRef(0);
+  const autoRefreshRunningRef = useRef(false);
+  const autoRefreshStateRef = useRef<{
+    report: ReportDocumentV1 | null;
+    values: Record<string, ReportParameterValue>;
+    busy: boolean;
+  }>({ report: null, values: {}, busy: false });
   const resultCache = useRef(new QueryResultCache());
   const { width, containerRef, mounted } = useContainerWidth({ initialWidth: 1000 });
 
@@ -362,6 +387,47 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     setAppliedValues(structuredClone(values));
     runDatasets(draft, values, ids);
   }, [draft, values, appliedValues, runDatasets]);
+
+  useEffect(() => {
+    autoRefreshStateRef.current = {
+      report: draft,
+      values: appliedValues,
+      busy: agentBusy || Object.values(results).some((result) => result.running),
+    };
+  }, [draft, appliedValues, agentBusy, results]);
+
+  useEffect(() => {
+    const seconds = draft?.refreshIntervalSeconds;
+    if (!seconds) return;
+    const interval = window.setInterval(() => {
+      const current = autoRefreshStateRef.current;
+      if (!current.report || current.busy || autoRefreshRunningRef.current || document.visibilityState !== "visible") return;
+      autoRefreshRunningRef.current = true;
+      void runDatasets(current.report, structuredClone(current.values))
+        .finally(() => { autoRefreshRunningRef.current = false; });
+    }, seconds * 1_000);
+    return () => window.clearInterval(interval);
+  }, [draft?.id, draft?.refreshIntervalSeconds, runDatasets]);
+
+  const updateAutoRefresh = useCallback((seconds?: number) => {
+    if (!draft) return;
+    const { refreshIntervalSeconds: _previous, ...rest } = draft;
+    const next: ReportDocumentV1 = seconds
+      ? { ...rest, refreshIntervalSeconds: seconds, updatedAt: Date.now() }
+      : { ...rest, updatedAt: Date.now() };
+    setDraft(next);
+    setSourceText(exportReportJson(next));
+  }, [draft]);
+
+  const openDatasetInEditor = useCallback((dataset: ReportDataset) => {
+    if (!draft) return;
+    if (!ui.openInEditor) { setShareStatus("The SQL editor is not ready yet."); return; }
+    try {
+      ui.openInEditor(materializeReportQuery(dataset.sql, draft, appliedValues), { autoRun: false });
+    } catch (error) {
+      setShareStatus(error instanceof Error ? error.message : String(error));
+    }
+  }, [draft, appliedValues]);
 
   const createNew = useCallback(() => openReport(createEmptyReport("New report", catalogData.catalogName, serviceUrl), undefined, false, false), [catalogData.catalogName, serviceUrl, openReport]);
 
@@ -492,9 +558,17 @@ Cupola owns grid placement for compositional blocks. upsert_report_block may req
 
 Inspect every table before using it. SQL datasets must be one read-only SELECT/VALUES/WITH query. Parameter references use $key, date ranges use $key_start/$key_end, and multi-select values appear in IN ($key). Do not add a WHERE clause unless the user's request actually requires filtering.
 
-Supported blocks are markdown, kpi, table, chart, perspective, and map. Charts are minimal Vega-Lite v5 specs without data, datasets, url, href, or src. Vega-Lite y2 is valid only as an encoding definition such as {"y2":{"field":"high"}}; use layers only when the visual itself needs layers, not as a generic error workaround. The block tool compiles and renders charts with real rows and may return an image. Treat its exact compiler/render error as authoritative; do not guess at causes.
+Supported blocks are markdown, kpi, sparkline, small_multiples, bullet, slopegraph, range_dot, table, chart, perspective, and map. Every block may include a concise caption and source note. Use these semantic Tufte-style blocks before writing a free-form chart when they fit:
+- small_multiples: facetColumn, xColumn, yColumn; optionally xType, mark, colorColumn, facetColumns, sharedY, referenceValue, and referenceLabel. Prefer sharedY=true for honest comparison unless units or magnitudes genuinely differ.
+- bullet: categoryColumn, valueColumn, targetColumn; optionally up to three broad-to-narrow rangeColumns, format, and color. Use for actual versus goal, not as a decorative gauge.
+- slopegraph: categoryColumn, startColumn, endColumn; optionally startLabel, endLabel, colorColumn, and format. Use only for two endpoints.
+- range_dot: categoryColumn, lowColumn, highColumn; optionally valueColumn, format, and color. Use for intervals, uncertainty, min/max, or benchmarks.
+
+Use sparkline for a compact single-metric trend box: provide datasetId and valueColumn, optionally labelColumn, format, showValue, and color. Sparkline points follow query result order, so order the dataset in SQL. It needs no Vega spec and defaults to a compact quarter-width box with almost no chart margin. Use a full chart when axes, legends, multiple series, or richer encodings matter. Charts are minimal Vega-Lite v5 specs without data, datasets, url, href, or src. Vega-Lite y2 is valid only as an encoding definition such as {"y2":{"field":"high"}}; use layers only when the visual itself needs layers, not as a generic error workaround. The block tool compiles and renders all visualization blocks with real rows and may return an image. Treat its exact compiler/render error as authoritative; do not guess at causes.
 
 Maps are declarative Leaflet blocks: set type="map", datasetId, and either geometryColumn for WKB/GeoJSON or both latitudeColumn and longitudeColumn. Maps may also set labelColumn, colorColumn, tooltipColumns, basemap ("openstreetmap" or "none"), palette, and style.
+
+Reports may set refreshIntervalSeconds from 5 through 86400 when the user wants live automatic refresh; omit it (or configure it as null) otherwise.
 
 Current report:\n${JSON.stringify(draft)}`;
     try {
@@ -510,13 +584,17 @@ Current report:\n${JSON.stringify(draft)}`;
           const next = cloneReport(workingReport);
           next.title = String(input.title ?? "").trim();
           if ("description" in input) next.description = String(input.description ?? "");
+          if ("refreshIntervalSeconds" in input) {
+            if (input.refreshIntervalSeconds == null) delete next.refreshIntervalSeconds;
+            else next.refreshIntervalSeconds = Number(input.refreshIntervalSeconds);
+          }
           if (Array.isArray(input.requiredSources)) next.requiredSources = structuredClone(input.requiredSources);
           if (Array.isArray(input.parameters)) next.parameters = structuredClone(input.parameters);
           next.updatedAt = Date.now();
           const errors = validateReport(next);
           if (errors.length) return toolResult({ ok: false, errors });
           applyWorkingReport(next);
-          return toolResult({ ok: true, reportId: next.id, title: next.title, parameterKeys: next.parameters.map((parameter) => parameter.key) });
+          return toolResult({ ok: true, reportId: next.id, title: next.title, refreshIntervalSeconds: next.refreshIntervalSeconds ?? null, parameterKeys: next.parameters.map((parameter) => parameter.key) });
         }
         if (name === "upsert_report_dataset") {
           const updated = upsertAgentDataset(workingReport, input.dataset ?? {});
@@ -650,6 +728,21 @@ Current report:\n${JSON.stringify(draft)}`;
       {revisionOptions.length > 0 && <select className="h-8 rounded-md border bg-background px-2 text-xs" defaultValue="" aria-label="Restore report revision" onChange={async (e) => { const revision = Number(e.target.value); if (!revision) return; const restored = await restoreReportRevision(draft.id, revision); openReport(restored, undefined, false); }}><option value="">History</option>{revisionOptions.slice().reverse().map((r) => <option key={r.revision} value={r.revision}>Restore revision {r.revision}</option>)}</select>}
       <Button size="sm" variant="outline" onClick={() => { setInspectorOpen((v) => !v); setSourceText(exportReportJson(draft)); }}><FileJson className="h-4 w-4" /> Source</Button>
       <Button size="sm" data-testid="reports-run" disabled={reportErrors.length > 0 || Object.values(results).some((result) => result.running)} onClick={runFullReport}>{Object.values(results).some((result) => result.running) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {Object.values(results).some((result) => result.running) ? "Running report…" : "Run report"}</Button>
+      <select
+        className="h-8 rounded-md border bg-background px-2 text-xs"
+        aria-label="Auto refresh"
+        value={draft.refreshIntervalSeconds ?? 0}
+        onChange={(event) => updateAutoRefresh(Number(event.target.value) || undefined)}
+      >
+        <option value={0}>Auto refresh off</option>
+        {draft.refreshIntervalSeconds && ![30, 60, 300, 900].includes(draft.refreshIntervalSeconds)
+          ? <option value={draft.refreshIntervalSeconds}>Every {draft.refreshIntervalSeconds} seconds</option>
+          : null}
+        <option value={30}>Every 30 seconds</option>
+        <option value={60}>Every minute</option>
+        <option value={300}>Every 5 minutes</option>
+        <option value={900}>Every 15 minutes</option>
+      </select>
       <Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
       <Button size="sm" variant="outline" onClick={() => triggerDownload(new Blob([exportReportJson(draft)], { type: "application/json" }), `${safeFileStem(draft.title)}.cupola-report.json`)}><Download className="h-4 w-4" /> JSON</Button>
       <Button size="sm" variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(draft, { serviceUrl, values: appliedValues })); setShareStatus("Share link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}><Share2 className="h-4 w-4" /> Share</Button>
@@ -663,9 +756,57 @@ Current report:\n${JSON.stringify(draft)}`;
         {draft.blocks.length === 0 ? <div className="h-full flex items-center justify-center"><div className="text-center"><FilePlus2 className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" /><p className="font-medium">Start with a request</p><p className="text-sm text-muted-foreground mb-4">Open the agent and describe the report you need.</p><Button onClick={() => setAgentOpen(true)}><Sparkles className="h-4 w-4" /> Open report agent</Button></div></div> : mounted && <ResponsiveGridLayout width={width} breakpoints={{ lg: 768, sm: 0 }} cols={{ lg: 12, sm: 1 }} layouts={layouts} rowHeight={56} margin={[12, 12]} dragConfig={{ handle: ".report-drag-handle" }} resizeConfig={{ enabled: true }} onLayoutChange={(layout) => { if (width >= 768) updateLayout(layout); }}>
           {draft.blocks.map((block) => {
             const result = block.type === "markdown" ? null : results[block.datasetId];
-            return <div key={block.id} className="rounded-lg border bg-card shadow-sm overflow-hidden flex flex-col print:shadow-none">
-              <div className="report-drag-handle report-authoring-control cursor-move px-3 py-2 border-b flex items-center gap-2 text-sm font-medium"><span className="truncate">{block.title || (block.type === "markdown" ? "Text" : block.type[0].toUpperCase() + block.type.slice(1))}</span><div className="flex-1" />{result?.running && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{result?.fetchedAt && <span className="text-[10px] text-muted-foreground">{new Date(result.fetchedAt).toLocaleTimeString()}</span>}</div>
-              <div className={`flex-1 min-h-0 p-3 ${block.type === "chart" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={block.markdown} /> : result?.error ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className="text-xs text-destructive">{result.error}</div><Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report</Button></div> : block.type === "table" ? <div><div className="report-authoring-control flex justify-end gap-2 mb-1"><button className="text-[10px]" onClick={() => exportResult(result.table!, "csv", block.title || "report-table")}>CSV</button><button className="text-[10px]" onClick={() => exportResult(result.table!, "excel", block.title || "report-table")}>XLSX</button></div>{(() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })()}</div> : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "chart" ? <ReportChart block={block} rows={result.rows} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : <ReportPerspective table={result.table} config={block.config} onConfig={(config) => setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current)} />}</div>
+            const dataset = block.type === "markdown" ? null : draft.datasets.find((candidate) => candidate.id === block.datasetId);
+            const visualBlock = block.type === "chart"
+              ? block
+              : isReportTufteBlock(block)
+                ? { id: block.id, title: block.title, spec: tufteBlockToVegaSpec(block) }
+                : null;
+            const gridStyle = {
+              "--report-grid-column": block.layout.x + 1,
+              "--report-grid-row": block.layout.y + 1,
+              "--report-grid-width": block.layout.w,
+              "--report-grid-height": block.layout.h,
+            } as CSSProperties;
+            return <div key={block.id} style={gridStyle} data-testid={`report-block-${block.id}`} className="rounded-lg border bg-card shadow-sm overflow-hidden flex flex-col print:shadow-none">
+              <div className="report-drag-handle cursor-move px-3 py-2 border-b flex items-center gap-2 text-sm font-medium">
+                <span className="truncate">{block.title || (block.type === "markdown" ? "Text" : reportBlockLabel(block.type))}</span>
+                <div className="flex-1" />
+                {result?.fetchedAt && <span className="text-[10px] font-normal text-muted-foreground">as of {new Date(result.fetchedAt).toLocaleTimeString()}</span>}
+                <div className="report-authoring-control flex items-center gap-2" onMouseDown={(event) => event.stopPropagation()}>
+                  {result?.running && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {block.type !== "markdown" && block.type !== "chart" && !isReportTufteBlock(block) && <>
+                    <button
+                      type="button"
+                      className="text-[10px] font-medium text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                      disabled={!result?.table}
+                      data-testid={`report-download-csv-${block.id}`}
+                      onClick={() => result?.table && void exportResult(result.table, "csv", block.title || dataset?.name || "report-data")}
+                    >CSV</button>
+                    {block.type === "table" && <button
+                      type="button"
+                      className="text-[10px] font-medium text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                      disabled={!result?.table}
+                      onClick={() => result?.table && void exportResult(result.table, "excel", block.title || dataset?.name || "report-table")}
+                    >XLSX</button>}
+                    <button
+                      type="button"
+                      className="text-[10px] font-medium text-muted-foreground hover:text-foreground"
+                      data-testid={`report-open-sql-${block.id}`}
+                      onClick={() => dataset && openDatasetInEditor(dataset)}
+                    >SQL</button>
+                  </>}
+                </div>
+              </div>
+              <div className={`flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={block.markdown} /> : result?.error ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className="text-xs text-destructive">{result.error}</div><Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report</Button></div> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart
+                block={visualBlock}
+                rows={result.rows}
+                onCsv={() => void exportResult(result.table!, "csv", block.title || dataset?.name || "report-data")}
+                onSql={() => dataset && openDatasetInEditor(dataset)}
+              /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} config={block.config} onConfig={(config) => setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current)} /> : null}</div>
+              {(block.caption || block.source) && <div data-testid={`report-note-${block.id}`} className="px-3 pb-2 text-[10px] leading-snug text-muted-foreground">
+                {block.caption && <span>{block.caption}</span>}{block.caption && block.source && <span> · </span>}{block.source && <span>Source: {block.source}</span>}
+              </div>}
             </div>;
           })}
         </ResponsiveGridLayout>}

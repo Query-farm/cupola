@@ -109,6 +109,11 @@ export function validateReportStructure(input: unknown): string[] {
   if (input.schemaVersion !== 1) errors.push("report.schemaVersion must be 1.");
   requireString(input, "id", "report");
   requireString(input, "title", "report");
+  if (input.refreshIntervalSeconds !== undefined && (
+    !Number.isInteger(input.refreshIntervalSeconds)
+    || input.refreshIntervalSeconds < 5
+    || input.refreshIntervalSeconds > 86_400
+  )) errors.push("report.refreshIntervalSeconds must be an integer from 5 to 86400.");
   for (const key of ["createdAt", "updatedAt", "revision"] as const) {
     if (!Number.isFinite(input[key])) errors.push(`report.${key} must be a finite number.`);
   }
@@ -140,7 +145,7 @@ export function validateReportStructure(input: unknown): string[] {
     const path = `report.blocks[${index}]`;
     if (!isRecord(block)) { errors.push(`${path} must be an object.`); return; }
     requireString(block, "id", path);
-    if (!["markdown", "kpi", "table", "chart", "perspective", "map"].includes(block.type)) errors.push(`${path}.type is unsupported.`);
+    if (!["markdown", "kpi", "sparkline", "small_multiples", "bullet", "slopegraph", "range_dot", "table", "chart", "perspective", "map"].includes(block.type)) errors.push(`${path}.type is unsupported.`);
     if (!isRecord(block.layout)) {
       errors.push(`${path}.layout is required and must be {x, y, w, h}.`);
     } else {
@@ -153,7 +158,38 @@ export function validateReportStructure(input: unknown): string[] {
     } else {
       requireString(block, "datasetId", path);
     }
-    if (block.type === "kpi") requireString(block, "valueColumn", path);
+    if (block.type === "kpi" || block.type === "sparkline") requireString(block, "valueColumn", path);
+    if (block.type === "sparkline") {
+      if (block.showValue !== undefined && typeof block.showValue !== "boolean") errors.push(`${path}.showValue must be a boolean.`);
+      if (block.color !== undefined && typeof block.color !== "string") errors.push(`${path}.color must be a string.`);
+    }
+    if (block.caption !== undefined && typeof block.caption !== "string") errors.push(`${path}.caption must be a string.`);
+    if (block.source !== undefined && typeof block.source !== "string") errors.push(`${path}.source must be a string.`);
+    if (block.format !== undefined && !["number", "currency", "percent", "text"].includes(block.format)) errors.push(`${path}.format is unsupported.`);
+    if (block.type === "small_multiples") {
+      for (const key of ["facetColumn", "xColumn", "yColumn"] as const) requireString(block, key, path);
+      if (block.xType !== undefined && !["temporal", "quantitative", "ordinal", "nominal"].includes(block.xType)) errors.push(`${path}.xType is unsupported.`);
+      if (block.mark !== undefined && !["line", "area", "bar", "point"].includes(block.mark)) errors.push(`${path}.mark is unsupported.`);
+      if (block.facetColumns !== undefined && (!Number.isInteger(block.facetColumns) || block.facetColumns < 1 || block.facetColumns > 6)) errors.push(`${path}.facetColumns must be an integer from 1 to 6.`);
+      if (block.sharedY !== undefined && typeof block.sharedY !== "boolean") errors.push(`${path}.sharedY must be a boolean.`);
+      if (block.referenceValue !== undefined && !Number.isFinite(block.referenceValue)) errors.push(`${path}.referenceValue must be a finite number.`);
+      if (block.referenceLabel !== undefined && typeof block.referenceLabel !== "string") errors.push(`${path}.referenceLabel must be a string.`);
+      if (block.colorColumn !== undefined && typeof block.colorColumn !== "string") errors.push(`${path}.colorColumn must be a string.`);
+    }
+    if (block.type === "bullet") {
+      for (const key of ["categoryColumn", "valueColumn", "targetColumn"] as const) requireString(block, key, path);
+      if (block.rangeColumns !== undefined && (!Array.isArray(block.rangeColumns) || block.rangeColumns.length > 3 || block.rangeColumns.some((column: unknown) => typeof column !== "string" || !column.trim()))) errors.push(`${path}.rangeColumns must contain up to three column names.`);
+      if (block.color !== undefined && typeof block.color !== "string") errors.push(`${path}.color must be a string.`);
+    }
+    if (block.type === "slopegraph") {
+      for (const key of ["categoryColumn", "startColumn", "endColumn"] as const) requireString(block, key, path);
+      for (const key of ["startLabel", "endLabel", "colorColumn"] as const) if (block[key] !== undefined && typeof block[key] !== "string") errors.push(`${path}.${key} must be a string.`);
+    }
+    if (block.type === "range_dot") {
+      for (const key of ["categoryColumn", "lowColumn", "highColumn"] as const) requireString(block, key, path);
+      if (block.valueColumn !== undefined && typeof block.valueColumn !== "string") errors.push(`${path}.valueColumn must be a string.`);
+      if (block.color !== undefined && typeof block.color !== "string") errors.push(`${path}.color must be a string.`);
+    }
     if (block.type === "chart" && !isRecord(block.spec)) errors.push(`${path}.spec must be a Vega-Lite object.`);
     if (block.type === "table" && block.columns !== undefined && (!Array.isArray(block.columns) || block.columns.some((column: unknown) => typeof column !== "string"))) errors.push(`${path}.columns must contain column names.`);
     if (block.type === "perspective" && block.config !== undefined && !isRecord(block.config)) errors.push(`${path}.config must be an object.`);

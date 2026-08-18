@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { compileReportQuery } from "../../src/lib/reports/parameters";
+import { compileReportQuery, materializeReportQuery } from "../../src/lib/reports/parameters";
 import type { ReportParameter } from "../../src/lib/reports/types";
 
 const parameters: ReportParameter[] = [
@@ -33,5 +33,25 @@ describe("compileReportQuery", () => {
     const result = compileReportQuery("SELECT 1 WHERE 'x' IN ($categories)", { parameters }, { categories: [] });
     expect(result.sql).toBe("SELECT 1 WHERE 'x' IN (NULL)");
     expect(result.params).toEqual([]);
+  });
+});
+
+describe("materializeReportQuery", () => {
+  test("opens a runnable SQL snapshot with safely escaped current values", () => {
+    const parameters: any[] = [
+      { id: "city", key: "city", label: "City", type: "text", defaultValue: "Glen Allen" },
+      { id: "stations", key: "stations", label: "Stations", type: "multi_select", defaultValue: [] },
+    ];
+    expect(materializeReportQuery(
+      "SELECT * FROM weather WHERE city = $city AND station IN ($stations)",
+      { parameters },
+      { city: "O'Hare", stations: ["A", "B"] },
+    )).toBe("SELECT * FROM weather WHERE city = 'O''Hare' AND station IN ('A', 'B')");
+  });
+
+  test("does not replace parameter-looking text in strings or comments", () => {
+    const parameters: any[] = [{ id: "value", key: "value", label: "Value", type: "number", defaultValue: 1 }];
+    expect(materializeReportQuery("SELECT '$value' AS label, $value AS value -- $value", { parameters }, { value: 2 }))
+      .toBe("SELECT '$value' AS label, 2 AS value -- $value");
   });
 });

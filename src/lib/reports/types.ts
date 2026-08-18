@@ -45,6 +45,10 @@ export interface ReportLayout {
 interface ReportBlockBase {
   id: string;
   title?: string;
+  /** Brief interpretive note shown beneath the block. */
+  caption?: string;
+  /** Human-readable provenance, such as a table or agency name. */
+  source?: string;
   layout: ReportLayout;
 }
 
@@ -72,9 +76,76 @@ export interface ReportMapBlock extends ReportBlockBase {
   style?: ReportMapStyle;
 }
 
+export interface ReportSparklineBlock extends ReportBlockBase {
+  type: "sparkline";
+  datasetId: string;
+  /** Numeric series, plotted in query result order. */
+  valueColumn: string;
+  /** Optional label from the final plotted row, such as a date or status. */
+  labelColumn?: string;
+  format?: "number" | "currency" | "percent" | "text";
+  showValue?: boolean;
+  color?: string;
+}
+
+export interface ReportSmallMultiplesBlock extends ReportBlockBase {
+  type: "small_multiples";
+  datasetId: string;
+  facetColumn: string;
+  xColumn: string;
+  yColumn: string;
+  xType?: "temporal" | "quantitative" | "ordinal" | "nominal";
+  mark?: "line" | "area" | "bar" | "point";
+  colorColumn?: string;
+  facetColumns?: number;
+  sharedY?: boolean;
+  referenceValue?: number;
+  referenceLabel?: string;
+}
+
+export interface ReportBulletBlock extends ReportBlockBase {
+  type: "bullet";
+  datasetId: string;
+  categoryColumn: string;
+  valueColumn: string;
+  targetColumn: string;
+  /** Broad-to-narrow qualitative range upper bounds, up to three columns. */
+  rangeColumns?: string[];
+  format?: "number" | "currency" | "percent" | "text";
+  color?: string;
+}
+
+export interface ReportSlopegraphBlock extends ReportBlockBase {
+  type: "slopegraph";
+  datasetId: string;
+  categoryColumn: string;
+  startColumn: string;
+  endColumn: string;
+  startLabel?: string;
+  endLabel?: string;
+  colorColumn?: string;
+  format?: "number" | "currency" | "percent" | "text";
+}
+
+export interface ReportRangeDotBlock extends ReportBlockBase {
+  type: "range_dot";
+  datasetId: string;
+  categoryColumn: string;
+  lowColumn: string;
+  highColumn: string;
+  valueColumn?: string;
+  format?: "number" | "currency" | "percent" | "text";
+  color?: string;
+}
+
 export type ReportBlock =
   | (ReportBlockBase & { type: "markdown"; markdown: string })
   | (ReportBlockBase & { type: "kpi"; datasetId: string; valueColumn: string; labelColumn?: string; format?: "number" | "currency" | "percent" | "text" })
+  | ReportSparklineBlock
+  | ReportSmallMultiplesBlock
+  | ReportBulletBlock
+  | ReportSlopegraphBlock
+  | ReportRangeDotBlock
   | (ReportBlockBase & { type: "table"; datasetId: string; columns?: string[]; pageSize?: number })
   | (ReportBlockBase & { type: "chart"; datasetId: string; spec: Record<string, any> })
   | (ReportBlockBase & { type: "perspective"; datasetId: string; config?: Record<string, any> })
@@ -90,6 +161,8 @@ export interface ReportDocumentV1 {
   id: string;
   title: string;
   description?: string;
+  /** Persisted report refresh cadence. Omit to disable automatic refresh. */
+  refreshIntervalSeconds?: number;
   createdAt: number;
   updatedAt: number;
   revision: number;

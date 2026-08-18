@@ -91,6 +91,12 @@ test("fits a chart to its report block without an inner scrollbar", async ({ pag
       title: "Values by category",
       layout: { x: 0, y: 0, w: 8, h: 6 },
       spec: { mark: "bar", encoding: { x: { field: "category", type: "nominal" }, y: { field: "value", type: "quantitative" } } },
+    }, {
+      id: "chart-notes",
+      type: "markdown",
+      title: "Notes",
+      markdown: "The chart and notes should remain side by side when printed.",
+      layout: { x: 8, y: 0, w: 4, h: 6 },
     }],
   };
   await page.locator('input[type="file"]').setInputFiles({
@@ -103,6 +109,195 @@ test("fits a chart to its report block without an inner scrollbar", async ({ pag
   const chart = page.getByTestId("report-chart-container");
   await expect(chart.locator("svg")).toBeVisible({ timeout: T_NORMAL });
   expect(await chart.evaluate((element) => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
+
+  const download = page.waitForEvent("download");
+  await page.getByTestId("report-download-csv-chart-block").click();
+  expect((await download).suggestedFilename()).toBe("Values_by_category.csv");
+
+  await page.emulateMedia({ media: "print" });
+  const printedLayout = await page.evaluate(() => {
+    const chartBlock = document.querySelector('[data-testid="report-block-chart-block"]') as HTMLElement;
+    const notesBlock = document.querySelector('[data-testid="report-block-chart-notes"]') as HTMLElement;
+    const chartStyle = getComputedStyle(chartBlock);
+    const chartRect = chartBlock.getBoundingClientRect();
+    const notesRect = notesBlock.getBoundingClientRect();
+    return {
+      columnStart: chartStyle.gridColumnStart,
+      columnEnd: chartStyle.gridColumnEnd,
+      rowStart: chartStyle.gridRowStart,
+      sideBySide: chartRect.right <= notesRect.left + 1,
+      chartWider: chartRect.width > notesRect.width,
+    };
+  });
+  expect(printedLayout).toEqual({ columnStart: "1", columnEnd: "span 8", rowStart: "1", sideBySide: true, chartWider: true });
+  await page.emulateMedia({ media: "screen" });
+
+  await page.getByTestId("report-open-sql-chart-block").click();
+  await expect(page.getByTestId("tab-editor")).toHaveAttribute("aria-selected", "true", { timeout: T_NORMAL });
+  await expect(page.locator(".cm-content").first()).toContainText("SELECT * FROM (VALUES ('A', 10), ('B', 20))", { timeout: T_NORMAL });
+});
+
+test("automatically refreshes a report with its saved cadence", async ({ page }) => {
+  await page.getByTestId("tab-reports").click();
+  await page.evaluate(() => {
+    const nativeSetInterval = window.setInterval.bind(window);
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: any[]) =>
+      nativeSetInterval(handler, Math.min(timeout ?? 0, 100), ...args)) as typeof window.setInterval;
+  });
+  const now = Date.now();
+  const report = {
+    schemaVersion: 1,
+    id: "auto-refresh-example",
+    title: "Live conditions",
+    refreshIntervalSeconds: 5,
+    createdAt: now,
+    updatedAt: now,
+    revision: 1,
+    requiredSources: [],
+    parameters: [],
+    datasets: [{ id: "clock", name: "Clock", sql: "SELECT current_timestamp AS refreshed_at" }],
+    blocks: [{
+      id: "clock-table",
+      type: "table",
+      datasetId: "clock",
+      title: "Refresh clock",
+      layout: { x: 0, y: 0, w: 12, h: 4 },
+    }],
+  };
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "refresh.cupola-report.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(report)),
+  });
+  await expect(page.getByLabel("Auto refresh")).toHaveValue("5");
+  await page.getByTestId("reports-run").click();
+  const timestamp = page.getByRole("cell").first();
+  await expect(timestamp).toBeVisible({ timeout: T_NORMAL });
+  const initialValue = await timestamp.textContent();
+  await expect.poll(() => timestamp.textContent(), { timeout: T_NORMAL }).not.toBe(initialValue);
+});
+
+test("renders semantic Tufte comparison devices with provenance", async ({ page }) => {
+  await page.getByTestId("tab-reports").click();
+  const now = Date.now();
+  const report = {
+    schemaVersion: 1,
+    id: "tufte-devices-example",
+    title: "Regional performance",
+    createdAt: now,
+    updatedAt: now,
+    revision: 1,
+    requiredSources: [],
+    parameters: [],
+    datasets: [{
+      id: "trends",
+      name: "Regional trends",
+      sql: "SELECT * FROM (VALUES ('North', DATE '2026-01-01', 90), ('North', DATE '2026-02-01', 110), ('South', DATE '2026-01-01', 75), ('South', DATE '2026-02-01', 95)) AS t(region, month, actual)",
+    }, {
+      id: "comparisons",
+      name: "Regional comparisons",
+      sql: "SELECT * FROM (VALUES ('North', 110, 100, 140, 120, 82, 110, 80, 125), ('South', 95, 105, 135, 115, 90, 95, 85, 120)) AS t(region, actual, target, broad, close, start_value, end_value, low_value, high_value)",
+    }],
+    blocks: [{
+      id: "regional-multiples",
+      type: "small_multiples",
+      datasetId: "trends",
+      title: "Monthly performance by region",
+      facetColumn: "region",
+      xColumn: "month",
+      yColumn: "actual",
+      xType: "temporal",
+      referenceValue: 100,
+      referenceLabel: "Goal",
+      caption: "The same y-scale makes regional differences directly comparable.",
+      source: "Regional planning model",
+      layout: { x: 0, y: 0, w: 12, h: 6 },
+    }, {
+      id: "regional-bullets",
+      type: "bullet",
+      datasetId: "comparisons",
+      title: "Actual versus target",
+      categoryColumn: "region",
+      valueColumn: "actual",
+      targetColumn: "target",
+      rangeColumns: ["broad", "close"],
+      layout: { x: 0, y: 6, w: 6, h: 5 },
+    }, {
+      id: "regional-ranges",
+      type: "range_dot",
+      datasetId: "comparisons",
+      title: "Expected range",
+      categoryColumn: "region",
+      lowColumn: "low_value",
+      highColumn: "high_value",
+      valueColumn: "actual",
+      layout: { x: 6, y: 6, w: 6, h: 5 },
+    }, {
+      id: "regional-slopes",
+      type: "slopegraph",
+      datasetId: "comparisons",
+      title: "Period change",
+      categoryColumn: "region",
+      startColumn: "start_value",
+      endColumn: "end_value",
+      startLabel: "Previous",
+      endLabel: "Current",
+      layout: { x: 0, y: 11, w: 12, h: 6 },
+    }],
+  };
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "tufte.cupola-report.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(report)),
+  });
+  await page.getByTestId("reports-run").click();
+
+  const charts = page.getByTestId("report-chart-container");
+  await expect(charts).toHaveCount(4, { timeout: T_NORMAL });
+  for (let index = 0; index < 4; index++) await expect(charts.nth(index).locator("svg")).toBeVisible({ timeout: T_NORMAL });
+  await expect(page.getByTestId("report-note-regional-multiples")).toContainText("Source: Regional planning model");
+  await expect(page.getByTestId("report-download-csv-regional-bullets")).toBeVisible();
+  await expect(page.getByTestId("report-open-sql-regional-slopes")).toBeVisible();
+});
+
+test("renders a compact sparkline metric without Vega chart margins", async ({ page }) => {
+  await page.getByTestId("tab-reports").click();
+  const now = Date.now();
+  const report = {
+    schemaVersion: 1,
+    id: "sparkline-example",
+    title: "Weather trend",
+    createdAt: now,
+    updatedAt: now,
+    revision: 1,
+    requiredSources: [],
+    parameters: [],
+    datasets: [{ id: "temperatures", name: "Temperatures", sql: "SELECT * FROM (VALUES ('Mon', 68), ('Tue', 71), ('Wed', 73)) AS t(day, temperature)" }],
+    blocks: [{
+      id: "temperature-trend",
+      type: "sparkline",
+      datasetId: "temperatures",
+      title: "Temperature",
+      valueColumn: "temperature",
+      labelColumn: "day",
+      color: "#f97316",
+      layout: { x: 0, y: 0, w: 3, h: 2 },
+    }],
+  };
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "sparkline.cupola-report.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(report)),
+  });
+  await page.getByTestId("reports-run").click();
+
+  const sparkline = page.getByTestId("report-sparkline");
+  await expect(sparkline).toBeVisible({ timeout: T_NORMAL });
+  await expect(sparkline.getByText("73", { exact: true })).toBeVisible();
+  await expect(sparkline.getByText("Wed", { exact: true })).toBeVisible();
+  await expect(sparkline.locator("svg polyline")).toBeVisible();
+  await expect(page.getByTestId("report-chart-container")).toHaveCount(0);
+  expect(await sparkline.evaluate((element) => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
 });
 
 test("renders a declarative Leaflet map from query coordinates", async ({ page }) => {

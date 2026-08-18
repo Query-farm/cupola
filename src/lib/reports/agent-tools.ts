@@ -104,13 +104,35 @@ const mapStyleSchema = {
 const blockProperties = {
   id: stringSchema,
   title: stringSchema,
-  type: { enum: ["markdown", "kpi", "table", "chart", "perspective", "map"] },
+  caption: stringSchema,
+  source: stringSchema,
+  type: { enum: ["markdown", "kpi", "sparkline", "small_multiples", "bullet", "slopegraph", "range_dot", "table", "chart", "perspective", "map"] },
   layout: layoutSchema,
   markdown: stringSchema,
   datasetId: stringSchema,
   valueColumn: stringSchema,
   labelColumn: stringSchema,
   format: { enum: ["number", "currency", "percent", "text"] },
+  showValue: { type: "boolean" },
+  color: stringSchema,
+  categoryColumn: stringSchema,
+  facetColumn: stringSchema,
+  xColumn: stringSchema,
+  yColumn: stringSchema,
+  xType: { enum: ["temporal", "quantitative", "ordinal", "nominal"] },
+  mark: { enum: ["line", "area", "bar", "point"] },
+  facetColumns: { type: "number", minimum: 1, maximum: 6 },
+  sharedY: { type: "boolean" },
+  referenceValue: { type: "number" },
+  referenceLabel: stringSchema,
+  targetColumn: stringSchema,
+  rangeColumns: { type: "array", maxItems: 3, items: stringSchema },
+  startColumn: stringSchema,
+  endColumn: stringSchema,
+  startLabel: stringSchema,
+  endLabel: stringSchema,
+  lowColumn: stringSchema,
+  highColumn: stringSchema,
   columns: { type: "array", items: stringSchema },
   pageSize: { type: "number", minimum: 1, maximum: 1000 },
   spec: { type: "object", description: "A Vega-Lite v5 spec without data or datasets." },
@@ -141,6 +163,7 @@ export const REPORT_DOCUMENT_SCHEMA: Record<string, any> = {
     id: stringSchema,
     title: stringSchema,
     description: stringSchema,
+    refreshIntervalSeconds: { type: "number", minimum: 5, maximum: 86400 },
     createdAt: { type: "number" },
     updatedAt: { type: "number" },
     revision: { type: "number", minimum: 1 },
@@ -172,6 +195,12 @@ export const REPORT_TOOLS: Tool[] = [
       properties: {
         title: stringSchema,
         description: stringSchema,
+        refreshIntervalSeconds: {
+          type: ["number", "null"],
+          minimum: 5,
+          maximum: 86400,
+          description: "Automatic refresh cadence in seconds, or null to turn automatic refresh off.",
+        },
         requiredSources: { type: "array", items: sourceSchema },
         parameters: { type: "array", items: parameterSchema },
       },
@@ -197,7 +226,7 @@ export const REPORT_TOOLS: Tool[] = [
   },
   {
     name: "upsert_report_block",
-    description: "Create or update one report block and validate it against real dataset rows. Do not provide x/y/w/h: Cupola places blocks. Omit id when creating; reuse the returned id to revise the block. Chart blocks are compiled and rendered before success is reported.",
+    description: "Create or update one report block and validate it against real dataset rows. Do not provide x/y/w/h: Cupola places blocks. Omit id when creating; reuse the returned id to revise the block. Chart and semantic visualization blocks are compiled and rendered before success is reported.",
     input_schema: {
       type: "object",
       additionalProperties: false,
@@ -211,12 +240,12 @@ export const REPORT_TOOLS: Tool[] = [
   },
   {
     name: "finalize_report",
-    description: "Execute every dataset and compile/render every chart in the current working draft. Call only after composing the datasets and blocks. If it reports errors, correct the affected item and call finalize_report again.",
+    description: "Execute every dataset and compile/render every visualization in the current working draft. Call only after composing the datasets and blocks. If it reports errors, correct the affected item and call finalize_report again.",
     input_schema: { type: "object", additionalProperties: false, properties: { summary: stringSchema }, required: ["summary"] },
   },
   {
     name: "replace_report_draft",
-    description: "Strict bulk fallback: replace the complete report document, execute all datasets, and compile/render all charts. Prefer the compositional upsert tools for ordinary authoring. Layout must be nested on every block as layout: {x,y,w,h}; col/width at block top level are invalid.",
+    description: "Strict bulk fallback: replace the complete report document, execute all datasets, and compile/render all visualizations. Prefer the compositional upsert tools for ordinary authoring. Layout must be nested on every block as layout: {x,y,w,h}; col/width at block top level are invalid.",
     input_schema: {
       type: "object",
       additionalProperties: false,
@@ -237,14 +266,14 @@ function overlaps(a: ReportLayout, b: ReportLayout): boolean {
 }
 
 function defaultHeight(type: ReportBlock["type"]): number {
-  if (type === "kpi") return 2;
+  if (type === "kpi" || type === "sparkline") return 2;
   if (type === "markdown") return 3;
-  if (type === "table") return 5;
+  if (type === "table" || type === "bullet" || type === "range_dot") return 5;
   return 6;
 }
 
 function requestedLayout(blocks: ReportBlock[], type: ReportBlock["type"], width?: SemanticBlockWidth, height?: SemanticBlockHeight): ReportLayout {
-  const w = width === "quarter" ? 3 : width === "third" ? 4 : width === "half" ? 6 : width === "full" ? 12 : type === "kpi" ? 3 : 12;
+  const w = width === "quarter" ? 3 : width === "third" ? 4 : width === "half" ? 6 : width === "full" ? 12 : type === "kpi" || type === "sparkline" ? 3 : type === "bullet" || type === "range_dot" ? 6 : 12;
   const h = height === "compact" ? 2 : height === "medium" ? 5 : height === "tall" ? 8 : defaultHeight(type);
   const maxY = blocks.reduce((max, block) => Math.max(max, block.layout.y + block.layout.h), 0);
   for (let y = 0; y <= maxY; y++) {

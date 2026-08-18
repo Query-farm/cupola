@@ -5,14 +5,13 @@ export interface CompiledReportQuery {
   params: unknown[];
 }
 
-/** Compile $parameter references outside strings/comments to prepared `?`s. */
-export function compileReportQuery(
+function transformReportQuery(
   source: string,
   report: Pick<ReportDocumentV1, "parameters">,
   values: Record<string, ReportParameterValue>,
-): CompiledReportQuery {
+  renderValue: (value: unknown) => string,
+): string {
   const byKey = new Map(report.parameters.map((p) => [p.key, p]));
-  const params: unknown[] = [];
   let sql = "", i = 0, quote: "string" | "identifier" | "line" | "block" | null = null;
   while (i < source.length) {
     if (!quote && source[i] === "'" ) { quote = "string"; sql += source[i++]; continue; }
@@ -57,19 +56,53 @@ export function compileReportQuery(
         const value = values[key] ?? parameter.defaultValue;
         if (parameter.type === "multi_select") {
           const list = Array.isArray(value) ? value : [];
-          sql += list.length ? list.map(() => "?").join(", ") : "NULL";
-          params.push(...list);
+          sql += list.length ? list.map(renderValue).join(", ") : "NULL";
         } else if (parameter.type === "date_range") {
           if (!part) throw new Error(`Date range $${key} must be referenced as $${key}_start or $${key}_end`);
           const range = value && typeof value === "object" && !Array.isArray(value) ? value as { start: string | null; end: string | null } : { start: null, end: null };
-          sql += "?"; params.push(range[part]);
+          sql += renderValue(range[part]);
         } else {
-          sql += "?"; params.push(value);
+          sql += renderValue(value);
         }
         i += match[0].length; continue;
       }
     }
     sql += source[i++];
   }
+  return sql;
+}
+
+/** Compile $parameter references outside strings/comments to prepared `?`s. */
+export function compileReportQuery(
+  source: string,
+  report: Pick<ReportDocumentV1, "parameters">,
+  values: Record<string, ReportParameterValue>,
+): CompiledReportQuery {
+  const params: unknown[] = [];
+  const sql = transformReportQuery(source, report, values, (value) => {
+    params.push(value);
+    return "?";
+  });
   return { sql, params };
+}
+
+function sqlLiteral(value: unknown): string {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("Report parameter numbers must be finite.");
+    return String(value);
+  }
+  if (typeof value === "bigint") return String(value);
+  const text = value instanceof Date ? value.toISOString() : String(value);
+  return `'${text.replaceAll("'", "''")}'`;
+}
+
+/** Produce a runnable snapshot of a parameterized dataset for the SQL editor. */
+export function materializeReportQuery(
+  source: string,
+  report: Pick<ReportDocumentV1, "parameters">,
+  values: Record<string, ReportParameterValue>,
+): string {
+  return transformReportQuery(source, report, values, sqlLiteral);
 }

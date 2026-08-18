@@ -22,6 +22,14 @@ describe("report SQL validation", () => {
 });
 
 describe("report document validation", () => {
+  test("validates the persisted automatic refresh cadence", () => {
+    const report = createEmptyReport("Live report");
+    report.refreshIntervalSeconds = 30;
+    expect(validateReport(report)).toEqual([]);
+    report.refreshIntervalSeconds = 1;
+    expect(validateReport(report).join(" ")).toContain("refreshIntervalSeconds");
+  });
+
   test("validates references, layout, chart safety, and multi-select placement", () => {
     const report = createEmptyReport("Sales");
     report.parameters.push({ id: "parameter", key: "regions", label: "Regions", type: "multi_select", defaultValue: [] });
