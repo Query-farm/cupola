@@ -17,7 +17,7 @@ export function MetaChips({ keywords, classificationTags }: Props) {
     <div className="flex flex-col gap-2 mb-4">
       {hasKeywords && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs font-medium text-muted-foreground/70 uppercase tracking-wide mr-1">Keywords</span>
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide mr-1">Keywords</span>
           {keywords!.map((k) => (
             <Badge key={k} variant="secondary" className="text-xs font-normal px-2 py-0">{k}</Badge>
           ))}
@@ -25,7 +25,7 @@ export function MetaChips({ keywords, classificationTags }: Props) {
       )}
       {hasTags && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs font-medium text-muted-foreground/70 uppercase tracking-wide mr-1">Tags</span>
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide mr-1">Tags</span>
           {classificationTags!.map((t) => (
             <Badge key={t} variant="outline" className="text-xs font-normal px-2 py-0">{t}</Badge>
           ))}

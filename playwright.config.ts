@@ -5,7 +5,9 @@ const pkg = JSON.parse(
   readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
 );
 const BASE_PATH = `/v${pkg.version}/`;
-const BASE_URL = `http://localhost:4321${BASE_PATH}`;
+const APP_ORIGIN = process.env.CUPOLA_APP_ORIGIN || "http://localhost:4321";
+const BASE_URL = `${APP_ORIGIN}${BASE_PATH}`;
+const DEV_PORT = new URL(APP_ORIGIN).port || "4321";
 
 const config = {
   testDir: "./tests",
@@ -20,7 +22,7 @@ const config = {
     navigationTimeout: 20_000,
   },
   webServer: {
-    command: "bun run dev",
+    command: `bun run dev -- --port ${DEV_PORT} --strictPort`,
     url: BASE_URL,
     reuseExistingServer: true,
     timeout: 60_000,

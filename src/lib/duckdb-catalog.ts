@@ -13,21 +13,56 @@
  * for that).
  */
 import { esc, readRows } from "./duckdb-query";
-import type { CatalogData, ResolvedSchema } from "./service";
+import type { CatalogData, ColumnInfo, ResolvedSchema } from "./service";
+import type {
+  FunctionInfo,
+  MacroInfo,
+  SchemaInfo,
+  TableInfo,
+  ViewInfo,
+} from "vgi/client";
+
+interface ArrayLikeValue extends Iterable<unknown> {
+  toArray?: () => unknown[];
+}
 
 /** Convert an Arrow Vector / JS iterable to a plain string[]. Handles both
  *  the `toArray()` path (apache-arrow list vectors) and the iterable path
  *  (apache-arrow returns iterables for some list element types). */
-function toStringArray(v: any): string[] {
+function toStringArray(v: unknown): string[] {
   if (v == null) return [];
   if (Array.isArray(v)) return v.map((x) => String(x));
-  if (typeof v.toArray === "function") return v.toArray().map((x: any) => String(x));
-  if (typeof v[Symbol.iterator] === "function") {
+  if (typeof v !== "object") return [];
+  const candidate = v as Partial<ArrayLikeValue>;
+  if (typeof candidate.toArray === "function") return candidate.toArray().map(String);
+  if (typeof candidate[Symbol.iterator] === "function") {
     const out: string[] = [];
-    for (const x of v) out.push(String(x));
+    for (const x of candidate as ArrayLikeValue) out.push(String(x));
     return out;
   }
   return [];
+}
+
+type AttachedTableInfo = TableInfo & { _columnInfo: ColumnInfo[] };
+type AttachedViewInfo = ViewInfo & { _columnInfo: ColumnInfo[] };
+type AttachedFunctionInfo = FunctionInfo & {
+  _parameters: string[];
+  _parameterTypes: string[];
+  _returnType: string;
+};
+
+function schemaInfo(name: string, comment: string | null): SchemaInfo {
+  return { name, comment, tags: {}, attach_opaque_data: new Uint8Array(0) };
+}
+
+function normalizeFunctionType(value: string): FunctionInfo["function_type"] {
+  switch (value.toLowerCase()) {
+    case "table":
+    case "table_function": return "TABLE";
+    case "table_buffering": return "TABLE_BUFFERING";
+    case "aggregate": return "AGGREGATE";
+    default: return "SCALAR";
+  }
 }
 
 /** DuckDB function_type values that represent macros (as opposed to regular
@@ -74,7 +109,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     let s = schemaMap.get(name);
     if (!s) {
       s = {
-        info: { name, comment, tags: {} } as any,
+        info: schemaInfo(name, comment),
         tables: [],
         views: [],
         functions: [],
@@ -90,7 +125,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     if (!name) continue;
     const comment = row.comment == null ? null : String(row.comment);
     // Overwrite the default-created slot with the real comment
-    getSchema(name, comment).info = { name, comment, tags: {} } as any;
+    getSchema(name, comment).info = schemaInfo(name, comment);
   }
 
   // Group columns by schema.table into a map so we can attach them as
@@ -146,7 +181,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     // camelCase here (as this did through v0.4.103) left every one of those
     // reads `undefined`, so attached DuckDB catalogs silently rendered with no
     // primary-key or NOT NULL badges and no constraint section at all.
-    const entry: any = {
+    const entry: AttachedTableInfo = {
       name,
       schema_name: schemaName,
       comment,
@@ -157,6 +192,12 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
       check_constraints: [],
       primary_key_constraints: [],
       foreign_key_constraints: emptyFkBytes,
+      supports_insert: false,
+      supports_update: false,
+      supports_delete: false,
+      supports_returning: false,
+      supports_column_statistics: false,
+      required_filters: [],
       _columnInfo: cols.map((c) => ({
         name: c.name,
         arrowType: c.duckdbType,
@@ -178,18 +219,13 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     const cols = colsByTable.get(`${schemaName}.${name}`) ?? [];
 
     // Snake_case TableInfo/ViewInfo shape — see the note on the table entry above.
-    const entry: any = {
+    const entry: AttachedViewInfo = {
       name,
       schema_name: schemaName,
       comment,
       tags: {},
       definition,
-      columns: emptyColumns,
-      not_null_constraints: [],
-      unique_constraints: [],
-      check_constraints: [],
-      primary_key_constraints: [],
-      foreign_key_constraints: emptyFkBytes,
+      column_comments: {},
       _columnInfo: cols.map((c) => ({
         name: c.name,
         arrowType: c.duckdbType,
@@ -213,39 +249,55 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     const returnType = row.return_type == null ? "" : String(row.return_type);
 
     if (MACRO_TYPES.has(functionType)) {
-      const macroType = functionType === "table_macro" ? "table" : "scalar";
+      const macroType = functionType === "table_macro" ? "TABLE" : "SCALAR";
       const definition = row.macro_definition == null ? "" : String(row.macro_definition);
-      const entry: any = {
+      const entry: MacroInfo = {
         name,
-        schemaName,
-        macroType,
+        schema_name: schemaName,
+        macro_type: macroType,
         parameters,
-        parameterDefaultValues: null,
+        parameter_default_values: null,
         definition,
         comment,
         tags: {},
       };
       getSchema(schemaName).macros.push(entry);
     } else {
-      const entry: any = {
+      const entry: AttachedFunctionInfo = {
         name,
-        schemaName,
-        functionType,
-        functionArguments: emptyColumns,
-        outputSchema: emptyColumns,
+        schema_name: schemaName,
+        function_type: normalizeFunctionType(functionType),
+        arguments: emptyColumns,
+        output_schema: emptyColumns,
         stability: null,
-        nullHandling: null,
+        null_handling: null,
         description,
         examples: [],
         categories: [],
-        projectionPushdown: null,
-        filterPushdown: null,
-        orderPreservation: null,
-        maxWorkers: null,
-        orderDependent: "NOT_ORDER_DEPENDENT",
-        distinctDependent: "NOT_DISTINCT_DEPENDENT",
-        requiredSettings: [],
-        requiredSecrets: [],
+        projection_pushdown: null,
+        filter_pushdown: null,
+        sampling_pushdown: null,
+        late_materialization: null,
+        supported_expression_filters: [],
+        order_preservation: null,
+        max_workers: null,
+        supports_batch_index: false,
+        supports_splits: false,
+        filters_exactly_applied: false,
+        supports_positions: false,
+        split_token_ttl_seconds: null,
+        partition_kind: "NOT_PARTITIONED",
+        order_dependent: "NOT_ORDER_DEPENDENT",
+        distinct_dependent: "NOT_DISTINCT_DEPENDENT",
+        supports_window: false,
+        streaming_partitioned: false,
+        has_finalize: false,
+        source_order_dependent: false,
+        sink_order_dependent: false,
+        requires_input_batch_index: false,
+        input_from_args: false,
+        required_settings: [],
+        required_secrets: [],
         comment,
         tags: {},
         // Overrides consumed by any future parameter-rendering UI that

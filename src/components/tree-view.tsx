@@ -270,12 +270,12 @@ const TreeItem = React.forwardRef<HTMLDivElement, TreeItemProps>(
         }
         const isRoot = (level ?? 0) === 0
         return (
-            <div ref={ref} role={isRoot ? "tree" : "group"} className={className}>
+            <div ref={ref} className={className}>
                 {/* role="none" on the list wrappers: a `tree` (or `group`) must
                     contain `treeitem` children directly, and <ul>/<li> would
                     otherwise interpose implicit list/listitem roles and break
                     that relationship. */}
-                <ul role="none">
+                <ul role={isRoot ? "tree" : "group"}>
                     {data.map((item) => (
                         <li role="none" key={item.id}>
                             {item.children ? (
@@ -402,7 +402,7 @@ const TreeNode = ({
                         </>
                     )}
                 </AccordionTrigger>
-                <AccordionContent className="ml-4 pl-1 border-l">
+                <AccordionContent role="group" className="ml-4 pl-1 border-l">
                     <TreeItem
                         data={item.children ? item.children : item}
                         selectedItemId={selectedItemId}

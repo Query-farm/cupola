@@ -239,9 +239,9 @@ export function ThemeBuilder() {
   const logoUrl = logo || DEFAULT_LOGO;
 
   return (
-    <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden">
+    <div className="flex flex-col h-dvh bg-background text-foreground overflow-hidden">
       {/* Top bar */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-border bg-card shrink-0">
+      <header className="flex items-center justify-between gap-2 px-3 sm:px-4 py-3 border-b border-border bg-card shrink-0 overflow-x-auto">
         <div className="flex items-center gap-3">
           <img
             src={DEFAULT_LOGO}
@@ -267,9 +267,9 @@ export function ThemeBuilder() {
       </header>
 
       {/* Main content */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
         {/* Left: Controls */}
-        <div className="w-[380px] shrink-0 border-r border-border overflow-y-auto p-4 space-y-4">
+        <div className="w-full md:w-[380px] max-h-[48%] md:max-h-none shrink-0 border-b md:border-b-0 md:border-r border-border overflow-y-auto p-4 space-y-4">
           {/* Name and logo */}
           <div className="space-y-3">
             <div className="space-y-1.5">

@@ -21,6 +21,7 @@ import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { initShell } from "@/lib/shell-init";
 
 import type { CatalogData } from "@/lib/service";
+import type { TableInfo, ViewInfo } from "vgi/client";
 
 // Imported (not just re-exported) because this module uses the type itself —
 // `export type { X } from "..."` forwards the name without binding it locally,
@@ -89,7 +90,7 @@ const READLINE_CDN = "https://cdn.jsdelivr.net/npm/xterm-readline@1.1.2/+esm";
  *  (e.g. low-cardinality VARCHAR) come back with empty values. Reading the
  *  record batches explicitly and constructing the Table keeps them. Falls back
  *  to the plain path for anything the file reader can't parse. */
-function tableFromIPCWithDictionaries(buf: any): any {
+function tableFromIPCWithDictionaries(buf: ArrayBuffer | Uint8Array): ArrowTable {
   try {
     const reader = RecordBatchFileReader.from(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
     const batches = [...reader];
@@ -157,7 +158,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   // In-memory Arrow table to show in the Preview tab when the user runs
   // `.preview` in the shell. Takes precedence over the selection-driven table
   // preview, and is cleared when the sidebar selection changes (see below).
-  const [resultPreview, setResultPreview] = useState<any>(null);
+  const [resultPreview, setResultPreview] = useState<ArrowTable | null>(null);
   const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
 
   // CatalogApp only mounts this component once an engine-backed tab has been
@@ -178,16 +179,23 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
 
   // Resolve selected table or view for Data Preview and Perspective tabs
   // Search both VGI catalog and memory catalog
-  const allCatalogs = [catalogData, ui.memoryCatalog].filter(Boolean);
-  const findInCatalogs = (type: "table" | "view", name?: string, schema?: string) => {
+  const allCatalogs = [catalogData, ui.memoryCatalog].filter((catalog): catalog is CatalogData => catalog !== null && catalog !== undefined);
+  function findInCatalogs(type: "table", name?: string, schema?: string): TableInfo | null;
+  function findInCatalogs(type: "view", name?: string, schema?: string): ViewInfo | null;
+  function findInCatalogs(type: "table" | "view", name?: string, schema?: string): TableInfo | ViewInfo | null {
     if (!name || !schema) return null;
     for (const cat of allCatalogs) {
-      const s = cat.schemas.find((s: any) => s.info.name === schema);
-      if (type === "table") { const t = s?.tables.find((t: any) => t.name === name); if (t) return t; }
-      if (type === "view") { const v = s?.views.find((v: any) => v.name === name); if (v) return v; }
+      const resolvedSchema = cat.schemas.find((candidate) => candidate.info.name === schema);
+      if (type === "table") {
+        const table = resolvedSchema?.tables.find((candidate) => candidate.name === name);
+        if (table) return table;
+      } else {
+        const view = resolvedSchema?.views.find((candidate) => candidate.name === name);
+        if (view) return view;
+      }
     }
     return null;
-  };
+  }
   const selectedTable = selection?.type === "table" ? findInCatalogs("table", selection.name, selection.schema) : null;
   const selectedView = selection?.type === "view" ? findInCatalogs("view", selection.name, selection.schema) : null;
   const hasSelectedTableOrView = !!(selectedTable || selectedView || (selection && (selection.type === "table" || selection.type === "view")));
@@ -205,7 +213,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
       setPerspectiveLoading(true);
       try {
         await loadPerspective(perspectiveRef.current!, arrowBuffer);
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error("Perspective load error:", e);
         Sentry.captureException(e, { tags: { component: "perspective", path: "showPerspective" } });
       } finally {
@@ -225,7 +233,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
       try {
         setResultPreview(tableFromIPC(arrowBuffer));
         setActiveTab("preview");
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error("Preview decode error:", e);
         Sentry.captureException(e, { tags: { component: "preview", path: "showPreview" } });
       }
@@ -420,7 +428,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         await viewer.restore(restoreConfig);
         await viewer.toggleConfig(true);
         perspectiveTableRef.current = tableId;
-      } catch (e: any) {
+      } catch (e: unknown) {
         console.error("Perspective virtual server error:", e);
         Sentry.captureException(e, {
           tags: { component: "perspective", path: "auto-load" },
@@ -795,4 +803,3 @@ async function loadPerspective(container: HTMLElement, arrowBuffer: ArrayBuffer)
   const table = await perspectiveWorker.table(copy.buffer);
   await viewer.load(table);
 }
-

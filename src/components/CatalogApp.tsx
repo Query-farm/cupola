@@ -1,9 +1,11 @@
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
-import { fetchCatalog, type CatalogData, type ResolvedSchema } from "@/lib/service";
+import { fetchCatalog, type CatalogData, type ColumnInfo, type ResolvedSchema } from "@/lib/service";
+import type { SchemaInfo, TableInfo, ViewInfo } from "vgi/client";
+import { useMediaQuery } from "@/lib/use-media-query";
 import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql, clearSharedSql } from "@/lib/url-params";
 import type { PendingEditorSql } from "./editor/SqlEditorView";
 import { fetchAttachedCatalog } from "@/lib/duckdb-catalog";
-import { readRows, quoteLiteral } from "@/lib/duckdb-query";
+import { readRows, readRowsTyped, quoteLiteral } from "@/lib/duckdb-query";
 import { isRecoverableAuthError } from "@/lib/auth-errors";
 import { type Selection } from "@/lib/tree";
 import { getAuthTokenForService, getUserInfo, hadAuthToken } from "@/lib/auth";
@@ -66,6 +68,34 @@ const CUPOLA_MARK = `${import.meta.env.BASE_URL}cupola-logo-large.png`;
 /** Minimum spacing between two login redirects before we call it a loop. */
 const AUTH_REDIRECT_LOOP_WINDOW_MS = 10_000;
 
+interface MemoryColumnRow {
+  schema_name: unknown;
+  table_name: unknown;
+  column_name: unknown;
+  data_type: unknown;
+  comment: unknown;
+  nullable: unknown;
+}
+
+interface MemoryCommentRow {
+  schema_name: unknown;
+  table_name: unknown;
+  comment: unknown;
+}
+
+interface MemoryViewRow {
+  schema_name: unknown;
+  view_name: unknown;
+  sql: unknown;
+}
+
+type MemoryTableInfo = TableInfo & { _columnInfo: ColumnInfo[] };
+type MemoryViewInfo = ViewInfo & { _columnInfo: ColumnInfo[] };
+
+function memorySchemaInfo(name: string): SchemaInfo {
+  return { name, comment: "", tags: {}, attach_opaque_data: new Uint8Array(0) };
+}
+
 /** Start an OAuth login redirect, refusing to do so twice in quick succession.
  *
  *  Both entry points into the login flow — the `loadCatalog` pre-check and the
@@ -113,6 +143,17 @@ export function CatalogApp() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem("vgi-sidebar-collapsed") === "1"; } catch { return false; }
   });
+  const isNarrow = useMediaQuery("(max-width: 767px)");
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const sidebarVisible = isNarrow ? mobileSidebarOpen : !sidebarCollapsed;
+  useEffect(() => {
+    if (!mobileSidebarOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileSidebarOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [mobileSidebarOpen]);
   const [queryHistoryCount, setQueryHistoryCount] = useState(0);
   // AI turns in flight, per surface. Both panels stay mounted (or, for the
   // editor's, can be collapsed) while a turn runs, so the tab bar is the only
@@ -174,7 +215,7 @@ export function CatalogApp() {
     if (!engine.query) { setMemoryCatalog(null); return; }
 
     try {
-      const colRows = await readRows(
+      const colRows = await readRowsTyped<MemoryColumnRow>(
         `SELECT schema_name, table_name, column_name, data_type, comment, CASE WHEN is_nullable = 'YES' THEN true ELSE false END as nullable
          FROM duckdb_columns()
          WHERE database_name = 'memory'
@@ -188,7 +229,7 @@ export function CatalogApp() {
 
       // Fetch table comments
       const commentMap = new Map<string, string>(); // "schema.table" → comment
-      const commentRows = await readRows(
+      const commentRows = await readRowsTyped<MemoryCommentRow>(
         `SELECT schema_name, table_name, comment FROM duckdb_tables() WHERE database_name = 'memory' AND comment IS NOT NULL AND comment != ''`
       );
       for (const row of commentRows ?? []) {
@@ -198,7 +239,7 @@ export function CatalogApp() {
 
       // Fetch view names and definitions to distinguish views from tables
       const viewDefs = new Map<string, string>(); // "schema.view" → SQL definition
-      const viewRows = await readRows(
+      const viewRows = await readRowsTyped<MemoryViewRow>(
         `SELECT schema_name, view_name, sql FROM duckdb_views() WHERE database_name = 'memory'`
       );
       for (const row of viewRows ?? []) {
@@ -224,39 +265,52 @@ export function CatalogApp() {
       // Build CatalogData structure — separate tables from views
       const schemas: ResolvedSchema[] = [];
       for (const [schemaName, tableMap] of schemaMap) {
-        const tables: any[] = [];
-        const views: any[] = [];
+        const tables: MemoryTableInfo[] = [];
+        const views: MemoryViewInfo[] = [];
         for (const [tableName, columns] of tableMap) {
           const viewKey = `${schemaName}.${tableName}`;
           const isView = viewDefs.has(viewKey);
-          const entry = {
-            name: tableName,
-            schema_name: schemaName,
-            tags: {},
-            comment: commentMap.get(`${schemaName}.${tableName}`) || "",
-            columns: new Uint8Array(0),
-            primary_key_constraints: [],
-            unique_constraints: [],
-            check_constraints: [],
-            not_null_constraints: [],
-            foreign_key_constraints: [],
-            ...(isView ? { definition: viewDefs.get(viewKey) || "" } : {}),
-            _columnInfo: columns.map((c) => ({
+          const columnInfo: ColumnInfo[] = columns.map((c) => ({
               name: c.name,
               arrowType: c.type,
               duckdbType: c.type,
               nullable: c.nullable,
               comment: c.comment,
-            })),
-          };
+          }));
           if (isView) {
-            views.push(entry);
+            views.push({
+              name: tableName,
+              schema_name: schemaName,
+              tags: {},
+              comment: commentMap.get(`${schemaName}.${tableName}`) || "",
+              definition: viewDefs.get(viewKey) || "",
+              column_comments: {},
+              _columnInfo: columnInfo,
+            });
           } else {
-            tables.push(entry);
+            tables.push({
+              name: tableName,
+              schema_name: schemaName,
+              tags: {},
+              comment: commentMap.get(`${schemaName}.${tableName}`) || "",
+              columns: new Uint8Array(0),
+              primary_key_constraints: [],
+              unique_constraints: [],
+              check_constraints: [],
+              not_null_constraints: [],
+              foreign_key_constraints: [],
+              supports_insert: false,
+              supports_update: false,
+              supports_delete: false,
+              supports_returning: false,
+              supports_column_statistics: false,
+              required_filters: [],
+              _columnInfo: columnInfo,
+            });
           }
         }
         schemas.push({
-          info: { name: schemaName, comment: "" } as any,
+          info: memorySchemaInfo(schemaName),
           tables,
           views,
           functions: [],
@@ -718,7 +772,7 @@ export function CatalogApp() {
 
   return (
     <SettingsProvider>
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-dvh">
       <Header
         catalogName={data.catalogName}
         serviceUrl={serviceUrl}
@@ -728,20 +782,35 @@ export function CatalogApp() {
         onSelect={setActiveTab}
         queryHistoryCount={queryHistoryCount}
         busyTabs={{ askai: askAiBusy, editor: editorAiBusy }}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
+        sidebarCollapsed={!sidebarVisible}
+        onToggleSidebar={() => isNarrow ? setMobileSidebarOpen((open) => !open) : setSidebarCollapsed((c) => !c)}
       />
-      <div className="flex flex-1 overflow-hidden">
-        {!sidebarCollapsed && (
+      <div className="relative flex flex-1 overflow-hidden">
+        {sidebarVisible && (
           <>
-            <div style={{ width: sidebarWidth, minWidth: sidebarWidth }}>
+            {isNarrow && (
+              <button
+                type="button"
+                className="absolute inset-0 z-20 bg-black/35"
+                aria-label="Close catalog sidebar"
+                onClick={() => setMobileSidebarOpen(false)}
+              />
+            )}
+            <div
+              className={isNarrow ? "absolute inset-y-0 left-0 z-30 w-[min(85vw,320px)] shadow-xl" : undefined}
+              style={isNarrow ? undefined : { width: sidebarWidth, minWidth: sidebarWidth }}
+              data-testid="catalog-sidebar"
+              role={isNarrow ? "dialog" : undefined}
+              aria-modal={isNarrow ? "true" : undefined}
+              aria-label={isNarrow ? "Catalog sidebar" : undefined}
+            >
               <Sidebar
                 catalog={data}
                 memoryCatalog={memoryCatalog}
                 attachedCatalogs={attachedCatalogs}
                 selection={selection}
-                onSelect={(sel) => navigate(sel)}
-                onOpenShell={() => setActiveTab("shell")}
+                onSelect={(sel) => { navigate(sel); if (isNarrow) setMobileSidebarOpen(false); }}
+                onOpenShell={() => { setActiveTab("shell"); if (isNarrow) setMobileSidebarOpen(false); }}
                 onShellInsert={(text) => {
                   // In editor mode, route table/column clicks into the SQL
                   // editor at the cursor; otherwise into the xterm shell.
@@ -755,12 +824,12 @@ export function CatalogApp() {
                 refreshing={refreshing}
               />
             </div>
-            <div
+            {!isNarrow && <div
               onPointerDown={onResizeStart}
               className="w-2 -ml-1 -mr-1 z-10 cursor-col-resize group flex-shrink-0 flex items-stretch justify-center"
             >
               <div className="w-0.5 bg-border group-hover:bg-accent/60 group-active:bg-accent transition-colors" />
-            </div>
+            </div>}
           </>
         )}
         {/* Content area — one tab visible at a time. Only the catalog is
@@ -771,7 +840,7 @@ export function CatalogApp() {
             still have a layout box to measure against while hidden. */}
         <div className="flex-1 relative overflow-hidden">
           {activeTab === "catalog" && (
-            <main className="absolute inset-0 overflow-y-auto p-6">
+            <main className="absolute inset-0 overflow-y-auto p-3 sm:p-6">
               <ErrorBoundary>
                 <ContentPanel data={data} memoryCatalog={memoryCatalog} attachedCatalogs={attachedCatalogs} selection={selection} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={navigate} onOpenShell={() => setActiveTab("shell")} />
               </ErrorBoundary>

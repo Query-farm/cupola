@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Cupola
+        uses: actions/checkout@v4
+        with:
+          path: cupola
+
+      - name: Checkout vgi-typescript
+        uses: actions/checkout@v4
+        with:
+          repository: Query-farm/vgi-typescript
+          token: ${{ secrets.SIBLING_REPOS_TOKEN }}
+          path: vgi-typescript
+
+      - name: Checkout vgi-rpc-typescript
+        uses: actions/checkout@v4
+        with:
+          repository: Query-farm/vgi-rpc-typescript
+          path: vgi-rpc-typescript
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        working-directory: cupola
+        run: |
+          bun install --frozen-lockfile --cwd ../vgi-typescript
+          bun install --frozen-lockfile --cwd ../vgi-rpc-typescript
+          bun install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: cupola
+        run: bun run check
+
+      - name: Unit tests
+        working-directory: cupola
+        run: bun run test
+
+      - name: Production build
+        working-directory: cupola
+        run: bun run build
+
+      - name: Bundle-size budget
+        working-directory: cupola
+        run: bun run check:bundle
+
+      - name: Install Chromium
+        working-directory: cupola
+        run: bunx playwright install --with-deps chromium
+
+      - name: Browser smoke tests
+        working-directory: cupola
+        env:
+          VGI_SERVICE_URL: https://vgi-open-meteo.rusty-bb6.workers.dev
+        run: bun run test:e2e:smoke
+
+      # Keep advisories visible while the current transitive backlog is being
+      # resolved. Remove continue-on-error once the baseline is clean.
+      - name: Dependency audit
+        continue-on-error: true
+        working-directory: cupola
+        run: bun run audit

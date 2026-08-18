@@ -97,6 +97,8 @@ BUILD_LOG=$(mktemp)
 NODE_OPTIONS="--max-old-space-size=8192" bun run build 2>&1 | tee "$BUILD_LOG"
 
 echo "==> dist/ size: $(du -sh dist/ | cut -f1)"
+echo "==> Checking JavaScript bundle budget..."
+bun run check:bundle
 
 # ---- Source-map sanity check + strip ----
 # With SENTRY_AUTH_TOKEN set, the @sentry/astro integration uploads the maps

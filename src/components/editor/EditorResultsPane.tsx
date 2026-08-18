@@ -120,7 +120,7 @@ export function EditorResultsPane({ state, onPopout, onExport, onOpenInPerspecti
             <p className="text-sm text-muted-foreground">
               Run a query to see results here.
             </p>
-            <p className="text-xs text-muted-foreground/70 mt-1">
+            <p className="text-xs text-muted-foreground mt-1">
               ⌘/Ctrl+Enter runs the statement at the cursor.
             </p>
           </div>

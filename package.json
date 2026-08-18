@@ -15,8 +15,11 @@
     "publish": "./publish.sh",
     "astro": "astro",
     "check": "astro check",
+    "check:bundle": "node scripts/check-bundle-size.mjs",
+    "audit": "bun audit --production",
     "test": "bun test ./tests/unit",
     "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test tests/sidebar.spec.ts tests/settings.spec.ts tests/app-tabs.spec.ts tests/responsive.spec.ts tests/accessibility.spec.ts",
     "build:landing-client": "bun build ./src/landing/vgi-client-entry.ts --outfile public/vgi-client.js --target browser --format esm --minify"
   },
   "dependencies": {
@@ -63,6 +66,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.9",
+    "@axe-core/playwright": "^4.13.0",
     "@happy-dom/global-registrator": "^20.9.0",
     "@playwright/test": "^1.59.1",
     "@testing-library/dom": "^10.4.1",

@@ -58,6 +58,10 @@ Without `?service=`, a welcome / connect page is shown.
 | `bun run build`   | Build the production site to `./dist/`       |
 | `bun run preview` | Preview the production build locally         |
 | `bun run test`    | Run unit tests                               |
+| `bun run test:e2e:smoke` | Run the Chromium CI smoke suite against `VGI_SERVICE_URL` |
+| `bun run check`   | Type-check Astro, React, and test sources    |
+| `bun run check:bundle` | Enforce the production JS size budget after a build |
+| `bun run audit`   | Report production dependency advisories     |
 | `./publish.sh`    | Publish a new version (build, upload to R2, deploy) |
 
 ## URL Parameters
@@ -79,6 +83,8 @@ Assets are served from Cloudflare R2 via a Worker with a versioned URL scheme (`
 
 1. Bump `version` in `package.json`
 2. Run `./publish.sh`
+
+Pull requests and pushes to `main` run the **CI** workflow (`.github/workflows/ci.yml`): frozen installs, type checking, unit tests, a production build, bundle-size enforcement, and Chromium smoke tests against the hosted Open-Meteo VGI service. Dependency advisories are reported there without failing the build until the existing audit backlog is resolved.
 
 **Publish from GitHub Actions:** run the **Publish** workflow (`.github/workflows/publish.yml`, manual trigger). It checks out the sibling repos (`vgi-typescript`, `vgi-rpc-typescript`), runs the tests, executes `./publish.sh --skip-commit` against the pushed commit, and tags the release. Required repository secrets:
 

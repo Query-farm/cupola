@@ -62,18 +62,14 @@ export function SqlEditorTabs({ docs, activeId, busyDocIds, onSelect, onAdd, onC
       `?theme=<url>` only rewrites semantic tokens; hardcoding soil-* here
       would leave custom themes with a mismatched tab strip.
     */
-    <div className="flex items-stretch gap-1 px-1.5 pt-1.5 bg-muted border-b border-border overflow-x-auto shrink-0" data-testid="editor-tabs">
+    <div className="flex items-stretch gap-1 px-1.5 pt-1.5 bg-muted border-b border-border overflow-x-auto shrink-0" data-testid="editor-tabs" role="toolbar" aria-label="Query documents">
       {docs.map((doc) => {
         const active = doc.id === activeId;
         return (
           <div
             key={doc.id}
-            role="tab"
-            aria-selected={active}
-            onClick={() => onSelect(doc.id)}
-            onDoubleClick={() => startRename(doc)}
             className={cn(
-              "relative group flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-t-md cursor-pointer whitespace-nowrap border border-b-0 transition-colors max-w-[200px]",
+              "relative group flex items-center text-xs rounded-t-md whitespace-nowrap border border-b-0 transition-colors max-w-[200px]",
               active
                 ? "bg-card border-border text-foreground font-semibold shadow-sm"
                 : "bg-card/40 border-border text-muted-foreground hover:bg-card/70 hover:text-foreground",
@@ -102,25 +98,34 @@ export function SqlEditorTabs({ docs, activeId, busyDocIds, onSelect, onAdd, onC
                   if (e.key === "Enter") commitRename();
                   else if (e.key === "Escape") setEditingId(null);
                 }}
-                className="w-24 bg-transparent border-b border-accent outline-none text-xs"
+                aria-label={`Rename ${doc.name}`}
+                className="w-24 mx-3 my-1.5 bg-transparent border-b border-accent outline-none text-xs"
               />
             ) : (
-              <span className="truncate">{doc.name}</span>
-            )}
-            {busyDocIds?.has(doc.id) && (
-              <span
-                className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse shrink-0"
-                data-testid={`editor-tab-ai-busy-${doc.id}`}
-                title="Ask AI is working on this tab"
-                aria-label="Ask AI is working"
-              />
+              <button
+                type="button"
+                aria-pressed={active}
+                onClick={() => onSelect(doc.id)}
+                onDoubleClick={() => startRename(doc)}
+                className="flex items-center gap-1.5 min-w-0 pl-3 pr-1 py-1.5"
+              >
+                <span className="truncate">{doc.name}</span>
+                {busyDocIds?.has(doc.id) && (
+                  <span
+                    className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse shrink-0"
+                    data-testid={`editor-tab-ai-busy-${doc.id}`}
+                    title="Ask AI is working on this tab"
+                    aria-label="Ask AI is working"
+                  />
+                )}
+              </button>
             )}
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 onClose(doc.id);
               }}
-              className="opacity-0 group-hover:opacity-100 hover:text-destructive transition-opacity shrink-0"
+              className="opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-destructive transition-opacity shrink-0 mr-2"
               title="Close tab"
               aria-label={`Close ${doc.name}`}
             >

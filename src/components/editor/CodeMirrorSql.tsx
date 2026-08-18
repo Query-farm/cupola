@@ -77,6 +77,7 @@ export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function Cod
             onSelRef.current?.(!u.state.selection.main.empty);
           }
         }),
+        EditorView.contentAttributes.of({ "aria-label": "SQL query editor" }),
         // Intercept drops (sidebar tree ids) so CodeMirror doesn't insert the
         // raw payload — move the cursor to the drop point, then delegate.
         EditorView.domEventHandlers({

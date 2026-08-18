@@ -38,6 +38,7 @@ test.describe("Unified tab bar", () => {
     await openEditor(page);
     await typeInEditor(page, "SELECT 1 AS one");
     const downloadPromise = page.waitForEvent("download");
+    await page.getByTestId("editor-script-menu").click();
     await page.getByTestId("editor-download-sql").click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toMatch(/\.sql$/);
@@ -48,5 +49,19 @@ test.describe("Unified tab bar", () => {
     await typeInEditor(page, "SELECT count(*) FROM foo");
     await page.getByTestId("editor-ask-ai").click();
     await expect(page.getByTestId("editor-ai-panel")).toBeVisible({ timeout: T_NORMAL });
+  });
+
+  test("starting prompt uses an accessible, keyboard-dismissable dialog", async ({ page }) => {
+    await page.getByTestId("tab-askai").click();
+    const trigger = page.getByRole("button", { name: "Starting prompt" });
+    await trigger.click();
+
+    const dialog = page.getByRole("dialog", { name: "Starting Prompt" });
+    await expect(dialog).toBeVisible({ timeout: T_NORMAL });
+    await expect(dialog.getByRole("button", { name: "Copy starting prompt" })).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden({ timeout: T_NORMAL });
+    await expect(trigger).toBeFocused();
   });
 });

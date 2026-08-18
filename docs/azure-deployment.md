@@ -36,12 +36,9 @@ Cross-Origin-Resource-Policy: cross-origin
 
 Without them the SQL shell silently fails to initialize. The `Caddyfile` sets
 them globally, matching what `worker/index.ts` (`respond()`) sends in
-production.
-
-> Note: the legacy `public/_headers` file uses COEP `credentialless`, but the
-> live Worker uses `require-corp`. We matched `require-corp` because that's
-> what's proven in production. `credentialless` is the more lenient fallback if
-> cross-origin subresource loads become a problem.
+production. These are the two supported deployment configurations; there is
+intentionally no platform-specific `public/_headers` file that could drift
+from them.
 
 ### Flat build (`base: '/'`)
 The normal build version-prefixes every asset path (`base: /v{version}/`) for

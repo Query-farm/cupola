@@ -40,7 +40,7 @@ interface Props {
 
 export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs, sidebarCollapsed, onToggleSidebar }: Props) {
   return (
-    <div className="flex items-center gap-1 px-2 h-10 border-b border-border bg-card shrink-0 overflow-x-auto" role="tablist" aria-label="Workspace">
+    <div className="flex items-center gap-1 px-2 h-10 border-b border-border bg-card shrink-0 overflow-x-auto">
       <button
         onClick={onToggleSidebar}
         className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-foreground/5 transition-colors shrink-0"
@@ -51,6 +51,7 @@ export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs
         {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
       </button>
       <span className="h-5 w-px bg-border mx-0.5 shrink-0" aria-hidden="true" />
+      <div className="flex items-center gap-1" role="tablist" aria-label="Workspace">
       {TABS.map((tab) => {
         const active = activeTab === tab.id;
         const Icon = tab.icon;
@@ -59,6 +60,7 @@ export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs
             key={tab.id}
             role="tab"
             aria-selected={active}
+            aria-label={tab.label}
             onClick={() => onSelect(tab.id)}
             data-testid={`tab-${tab.id}`}
             className={cn(
@@ -73,7 +75,7 @@ export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs
             ) : Icon ? (
               <Icon className="h-3.5 w-3.5" />
             ) : null}
-            {tab.label}
+            <span className={active ? "inline" : "hidden sm:inline"}>{tab.label}</span>
             {busyTabs?.[tab.id] && (
               <span
                 className={cn(
@@ -93,6 +95,7 @@ export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs
           </button>
         );
       })}
+      </div>
     </div>
   );
 }

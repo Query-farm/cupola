@@ -56,6 +56,10 @@ export interface CatalogData {
   schemas: ResolvedSchema[];
 }
 
+interface TableWithColumnInfo extends TableInfo {
+  _columnInfo?: ColumnInfo[];
+}
+
 // URL-param accessors moved to lib/url-params.ts. Re-exported here so existing
 // import sites keep working without an immediate sweep.
 export { getServiceUrl, hasExplicitService, getAttachOptionsFromUrl } from "./url-params";
@@ -64,7 +68,7 @@ export { getServiceUrl, hasExplicitService, getAttachOptionsFromUrl } from "./ur
  *  Also supports a pre-built _columnInfo override (used for in-memory tables). */
 export function getColumns(table: TableInfo): ColumnInfo[] {
   // Check for pre-built column info (e.g., from DuckDB memory tables)
-  const override = (table as any)._columnInfo;
+  const override = (table as TableWithColumnInfo)._columnInfo;
   if (Array.isArray(override)) return override;
 
   try {
@@ -171,8 +175,8 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
 /** Per-column statistics from vgi_table_statistics(). */
 export interface ColumnStats {
   columnType: string;
-  min: any;
-  max: any;
+  min: unknown;
+  max: unknown;
   hasNull: boolean;
   hasNotNull: boolean;
   distinctCount: number;
@@ -216,7 +220,7 @@ export async function fetchColumnStats(
 /** Query result page from a table function call. */
 export interface QueryPage {
   columns: string[];
-  rows: Record<string, any>[];
+  rows: Record<string, unknown>[];
   hasMore: boolean;
   totalFetched: number;
 }
@@ -239,7 +243,7 @@ export async function createTableQuery(
   });
   const client = new VgiClient(rpc);
 
-  let iterator: AsyncIterator<Record<string, any>[]> | null = null;
+  let iterator: AsyncIterator<Record<string, unknown>[]> | null = null;
   let columns: string[] = [];
   let totalFetched = 0;
   let exhausted = false;
@@ -257,7 +261,7 @@ export async function createTableQuery(
   }
 
   // Buffer for rows from partial batches
-  let buffer: Record<string, any>[] = [];
+  let buffer: Record<string, unknown>[] = [];
 
   async function loadNextPage(): Promise<QueryPage> {
     await ensureAttached();
@@ -265,7 +269,7 @@ export async function createTableQuery(
       return { columns, rows: [], hasMore: false, totalFetched };
     }
 
-    const pageRows: Record<string, any>[] = [...buffer];
+    const pageRows: Record<string, unknown>[] = [...buffer];
     buffer = [];
 
     while (pageRows.length < PAGE_SIZE && !exhausted) {

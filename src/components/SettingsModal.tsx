@@ -21,10 +21,11 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
 import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
+import { useMediaQuery } from "@/lib/use-media-query";
 
 function SettingRow({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={`flex items-center justify-between gap-6 py-3 ${className ?? ""}`}>
+    <div className={`flex items-center justify-between gap-3 sm:gap-6 py-3 ${className ?? ""}`}>
       {children}
     </div>
   );
@@ -52,6 +53,7 @@ const AI_MODELS: { value: string; label: string }[] = [
 export function SettingsModal() {
   const { settings, updateSettings } = useSettings();
   const selectedModel = AI_MODELS.find(m => m.value === settings.aiModel);
+  const isNarrow = useMediaQuery("(max-width: 639px)");
 
   return (
     <Dialog>
@@ -66,7 +68,7 @@ export function SettingsModal() {
         frame with only the panel scrolling keeps the header and the Done
         button in one place.
       */}
-      <DialogContent className="sm:max-w-[760px] w-full h-[min(560px,85vh)] p-0 grid grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden">
+      <DialogContent className="sm:max-w-[760px] w-full h-[min(560px,90dvh)] p-0 grid grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden">
         <DialogHeader className="px-5 py-4 border-b border-border">
           <DialogTitle className="flex items-center gap-2">
             <Settings className="h-5 w-5 text-primary" />
@@ -74,27 +76,27 @@ export function SettingsModal() {
           </DialogTitle>
         </DialogHeader>
 
-        <Tabs defaultValue="display" orientation="vertical" className="min-h-0 gap-0 flex-row">
+        <Tabs defaultValue="display" orientation={isNarrow ? "horizontal" : "vertical"} className="min-h-0 gap-0 flex-col sm:flex-row">
           {/* Left rail. A vertical list is the convention for settings once
               there is more than a handful of groups (VS Code, Slack, macOS),
               and unlike top tabs it has room to grow without wrapping. */}
           <TabsList
             variant="line"
-            className="w-[168px] shrink-0 group-data-vertical/tabs:h-full items-stretch justify-start gap-0.5 p-2 border-r border-border bg-muted/40 rounded-none overflow-y-auto"
+            className="w-full sm:w-[168px] shrink-0 group-data-vertical/tabs:h-full items-stretch justify-start gap-0.5 p-2 border-b sm:border-b-0 sm:border-r border-border bg-muted/40 rounded-none overflow-x-auto sm:overflow-y-auto"
           >
-            <TabsTrigger value="display" className="gap-2 justify-start w-full flex-none h-auto px-2.5 py-2">
+            <TabsTrigger value="display" className="gap-2 justify-start sm:w-full flex-none h-auto px-2.5 py-2 text-foreground">
               <Database className="h-3.5 w-3.5 shrink-0" />
               Display
             </TabsTrigger>
-            <TabsTrigger value="shell" className="gap-2 justify-start w-full flex-none h-auto px-2.5 py-2">
+            <TabsTrigger value="shell" className="gap-2 justify-start sm:w-full flex-none h-auto px-2.5 py-2 text-foreground">
               <TerminalSquare className="h-3.5 w-3.5 shrink-0" />
               Shell
             </TabsTrigger>
-            <TabsTrigger value="editor" className="gap-2 justify-start w-full flex-none h-auto px-2.5 py-2">
+            <TabsTrigger value="editor" className="gap-2 justify-start sm:w-full flex-none h-auto px-2.5 py-2 text-foreground">
               <FileCode2 className="h-3.5 w-3.5 shrink-0" />
               Editor
             </TabsTrigger>
-            <TabsTrigger value="ai" className="gap-2 justify-start w-full flex-none h-auto px-2.5 py-2">
+            <TabsTrigger value="ai" className="gap-2 justify-start sm:w-full flex-none h-auto px-2.5 py-2 text-foreground">
               <Bot className="h-3.5 w-3.5 shrink-0" />
               AI
             </TabsTrigger>

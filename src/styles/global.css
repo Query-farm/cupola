@@ -256,7 +256,25 @@
     }
   html {
     @apply font-sans;
-    }
+  }
+}
+
+/* Respect the operating system's reduced-motion preference across Tailwind,
+   tw-animate-css, and the app's component-local keyframes. A tiny non-zero
+   duration lets stateful animations reach their final frame, so accordions,
+   dialogs, progress bars, and other controls still end in the correct visual
+   state while decorative pulses, spins, sweeps, and bouncing dots stop. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-delay: 0s !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* xterm.js scrollbar — make it visible against the dark terminal background */
@@ -282,4 +300,3 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-

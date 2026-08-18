@@ -21,6 +21,7 @@ import { sampleRowsForAI, QueryResultCache, executeReadQueryResults } from "@/li
 import { cacheChartRows, cacheChartExtra, evictChartRows } from "@/lib/chart-rows-store";
 import { compileChartSpec, renderChartToPng } from "./chat/chart-embed";
 import type { ToolResult } from "@/lib/ai-agent";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 const uid = () => crypto.randomUUID();
 
 import { ChatInput } from "./chat/ChatInput";
@@ -809,33 +810,29 @@ export function AskAIChat({ catalogData, serviceUrl, isActive, onBusyChange }: P
         </div>
       )}
 
-      {showSystemPrompt && systemPrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowSystemPrompt(false)}>
-          <div className="bg-card rounded-lg shadow-xl border border-border w-full max-w-2xl max-h-[80vh] flex flex-col m-4" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
-              <div className="flex items-center gap-2 text-sm font-semibold">
-                <FileText className="h-4 w-4 text-primary" />
-                Starting Prompt
+      {systemPrompt && (
+        <Dialog open={showSystemPrompt} onOpenChange={setShowSystemPrompt}>
+          <DialogContent className="!max-w-2xl max-h-[80vh] grid grid-rows-[auto_minmax(0,1fr)] gap-0 p-0 overflow-hidden">
+            <DialogHeader className="flex-row items-center gap-2 border-b border-border px-4 py-3 pr-12">
+              <FileText className="h-4 w-4 text-primary shrink-0" aria-hidden="true" />
+              <div className="min-w-0">
+                <DialogTitle>Starting Prompt</DialogTitle>
+                <DialogDescription className="sr-only">
+                  The instructions and catalog context sent to the AI at the start of this conversation.
+                </DialogDescription>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => navigator.clipboard.writeText(systemPrompt)}
-                  className="p-1.5 text-muted-foreground hover:text-primary transition-colors rounded-md hover:bg-muted"
-                  title="Copy to clipboard"
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  onClick={() => setShowSystemPrompt(false)}
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-            <pre className="flex-1 overflow-auto p-4 text-xs font-mono text-foreground/80 leading-relaxed whitespace-pre-wrap break-words text-left">{systemPrompt}</pre>
-          </div>
-        </div>
+              <button
+                onClick={() => navigator.clipboard.writeText(systemPrompt)}
+                className="ml-auto p-1.5 text-muted-foreground hover:text-primary transition-colors rounded-md hover:bg-muted"
+                title="Copy to clipboard"
+                aria-label="Copy starting prompt"
+              >
+                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </DialogHeader>
+            <pre className="overflow-auto p-4 text-xs font-mono text-foreground/80 leading-relaxed whitespace-pre-wrap break-words text-left">{systemPrompt}</pre>
+          </DialogContent>
+        </Dialog>
       )}
 
       <ChatInput

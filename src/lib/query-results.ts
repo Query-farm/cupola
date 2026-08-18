@@ -16,6 +16,9 @@
  */
 
 import { formatCellValue, safeGetArrowValue } from "./format";
+import type { Field, Table, Vector } from "@query-farm/apache-arrow";
+
+export type AiRow = Record<string, unknown>;
 
 // ---------------------------------------------------------------------------
 // Result cache — one instance per conversation
@@ -24,7 +27,7 @@ import { formatCellValue, safeGetArrowValue } from "./format";
 interface CachedResult {
   columns: string[];
   types: string[];
-  rows: Record<string, any>[];
+  rows: AiRow[];
   rowCount: number;
 }
 
@@ -101,7 +104,7 @@ const AI_CELL_MAX_LEN = 200;
  * but meaningful geometry (type + coordinates) instead of an opaque `[binary]`, matching what the
  * user sees in the shell/grid. Only genuine non-geo blobs collapse.
  */
-export function formatCellForAI(column: any, row: number, field: any): any {
+export function formatCellForAI(column: Vector | null, row: number, field: Field): string | null {
   const raw = safeGetArrowValue(column, row, field);
   if (raw === null || raw === undefined) return null;
   // Genuine BLOBs arrive as bare bytes. Extension types (hugeint/uhugeint/uuid/time_tz) are
@@ -129,7 +132,7 @@ export function formatCellForAI(column: any, row: number, field: any): any {
  * and blow the model's input limit. This mirrors formatCellForAI's intent:
  * binary collapses to a short tag, long strings truncate, structs recurse.
  */
-export function capValueForAI(v: any): any {
+export function capValueForAI(v: unknown): unknown {
   if (v === null || v === undefined) return v;
   // Same blob check as formatCellForAI — genuine binary only. Decimal128/
   // HUGEINT arrive as Uint32Array subclasses and must NOT be collapsed.
@@ -138,7 +141,7 @@ export function capValueForAI(v: any): any {
   if (typeof v === "string") return v.length > AI_CELL_MAX_LEN ? v.slice(0, AI_CELL_MAX_LEN - 1) + "…" : v;
   if (Array.isArray(v)) return v.map(capValueForAI);
   if (typeof v === "object" && v.constructor === Object) {
-    const out: Record<string, any> = {};
+    const out: AiRow = {};
     for (const [k, val] of Object.entries(v)) out[k] = capValueForAI(val);
     return out;
   }
@@ -147,32 +150,32 @@ export function capValueForAI(v: any): any {
 
 /** Build a context-safe sample of plain-JS rows (from readRows) for an AI
  *  tool_result — slices to `maxRows` and caps every cell via capValueForAI. */
-export function sampleRowsForAI(rows: Record<string, any>[], maxRows = 3): Record<string, any>[] {
+export function sampleRowsForAI(rows: AiRow[], maxRows = 3): AiRow[] {
   return rows.slice(0, maxRows).map((row) => {
-    const out: Record<string, any> = {};
+    const out: AiRow = {};
     for (const [k, v] of Object.entries(row)) out[k] = capValueForAI(v);
     return out;
   });
 }
 
 export function formatArrowTableAsJson(
-  table: any,
+  table: Table,
   cache: QueryResultCache,
   maxRows = 20
 ): { json: string; resultId: string } {
   const fields = table.schema.fields;
-  const columns = fields.map((f: any) => f.name);
-  const types = fields.map((f: any) => f.type?.toString() || "unknown");
-  const cols = fields.map((_: any, c: number) => table.getChildAt(c));
+  const columns = fields.map((field) => field.name);
+  const types = fields.map((field) => field.type?.toString() || "unknown");
+  const cols = fields.map((_, index) => table.getChildAt(index));
   const numRows = table.numRows;
   const limit = Math.min(maxRows, numRows);
 
   // Build up to CACHE_LIMIT rows once; the response shows the first `limit` of them.
   const CACHE_LIMIT = 10_000;
   const rowsToCache = Math.min(numRows, CACHE_LIMIT);
-  const allRows: Record<string, any>[] = [];
+  const allRows: AiRow[] = [];
   for (let r = 0; r < rowsToCache; r++) {
-    const row: Record<string, any> = {};
+    const row: AiRow = {};
     for (let c = 0; c < fields.length; c++) {
       row[columns[c]] = formatCellForAI(cols[c], r, fields[c]);
     }
@@ -226,6 +229,21 @@ interface PrunableMessage {
   content: unknown;
 }
 
+interface PrunableContentPart {
+  type?: unknown;
+  text?: unknown;
+}
+
+interface PrunableToolResult {
+  type: "tool_result";
+  content: PrunableContentPart[] | string;
+}
+
+function isToolResult(value: unknown): value is PrunableToolResult {
+  return typeof value === "object" && value !== null &&
+    "type" in value && value.type === "tool_result" && "content" in value;
+}
+
 /**
  * Drop chart images (render_chart tool_results) from every message except the
  * last one. An image is only sent back so the model can SEE the chart it just
@@ -248,11 +266,11 @@ export function pruneCarriedToolImages(messages: PrunableMessage[]): void {
     const content = messages[i].content;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
-      if (!block || block.type !== "tool_result" || !Array.isArray(block.content)) continue;
-      if (!block.content.some((p: any) => p?.type === "image")) continue;
+      if (!isToolResult(block) || !Array.isArray(block.content)) continue;
+      if (!block.content.some((part) => part?.type === "image")) continue;
       const text = block.content
-        .filter((p: any) => p?.type === "text")
-        .map((p: any) => p.text)
+        .filter((part) => part?.type === "text" && typeof part.text === "string")
+        .map((part) => part.text)
         .join(" ");
       block.content = text ? `${text}\n${PLACEHOLDER}` : PLACEHOLDER;
     }

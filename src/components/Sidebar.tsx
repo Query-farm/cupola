@@ -134,7 +134,7 @@ export function Sidebar({ catalog, memoryCatalog, attachedCatalogs, selection, o
         )}
         <SettingsModal />
         <div className="border-t border-border mt-3 pt-3 mx-2" />
-        <div className="px-2 pb-1 text-xs text-muted-foreground/60">
+        <div className="px-2 pb-1 text-xs text-muted-foreground">
           &copy; 2026 &#x1F69C; <a href="https://query.farm" className="hover:text-primary transition-colors">Query.Farm LLC</a>
           <div>v{__APP_VERSION__}</div>
         </div>
@@ -142,4 +142,3 @@ export function Sidebar({ catalog, memoryCatalog, attachedCatalogs, selection, o
     </div>
   );
 }
-

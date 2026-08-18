@@ -24,6 +24,7 @@ import {
 } from "@/lib/editor/editor-store";
 import { sqlAutoCompleteSource } from "@/lib/editor/sql-autocomplete";
 import { buildTableSelect, isTableRef } from "@/lib/sql/table-select";
+import { useMediaQuery } from "@/lib/use-media-query";
 import { treeIdToShellText } from "@/lib/tree";
 import { exportResult, triggerDownload, safeFileStem, type ExportFormat } from "@/lib/editor/result-export";
 import { CodeMirrorSql, type CodeMirrorSqlHandle } from "./CodeMirrorSql";
@@ -60,6 +61,7 @@ interface Props {
 
 export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEditor, pendingSql, onPendingConsumed, onAiBusyChange }: Props) {
   const { settings } = useSettings();
+  const isNarrow = useMediaQuery("(max-width: 767px)");
   // Transient "Copied" confirmation on the Share button.
   const [shareCopied, setShareCopied] = useState(false);
   const [docState, setDocState] = useState<EditorDocState>(() => loadEditorState(serviceUrl));
@@ -521,8 +523,8 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
       {/* Horizontal split: editor+results on the left, Ask AI panel on the
           right. The panel stays mounted (display:none when closed) so its
           per-tab conversations survive open/close toggles. */}
-      <div className="flex flex-1 min-h-0">
-        <div ref={splitColRef} className="flex flex-col flex-1 min-w-0">
+      <div className="flex flex-col md:flex-row flex-1 min-h-0">
+        <div ref={splitColRef} className={`flex flex-col flex-1 min-w-0 ${aiOpen && isNarrow ? "min-h-0 basis-[55%]" : ""}`}>
           <div className="min-h-[120px] overflow-hidden" style={{ height: `${editorFrac * 100}%` }}>
             <CodeMirrorSql
               key={activeDoc?.id ?? "none"}
@@ -549,15 +551,17 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
             />
           </div>
         </div>
-        {aiOpen && (
+        {aiOpen && !isNarrow && (
           <div
             onPointerDown={onAiResizeStart}
             className="w-1.5 shrink-0 cursor-col-resize bg-border hover:bg-accent/60 active:bg-accent transition-colors"
           />
         )}
         <div
-          className="shrink-0 overflow-hidden"
-          style={aiOpen ? { width: aiWidth } : { width: 0, display: "none" }}
+          className={isNarrow ? "min-h-0 border-t border-border overflow-hidden" : "shrink-0 overflow-hidden"}
+          style={aiOpen
+            ? (isNarrow ? { width: "100%", flex: "1 1 45%" } : { width: aiWidth })
+            : { width: 0, display: "none" }}
         >
           <EditorAiPanel
             docId={activeDoc?.id ?? "none"}

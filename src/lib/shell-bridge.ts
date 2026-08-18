@@ -22,6 +22,7 @@
  * catalog rather than just a live connection.
  */
 import type { Selection } from "./tree";
+import type { CatalogData } from "./service";
 
 export interface QueryResult {
   ok: boolean;
@@ -131,7 +132,7 @@ export const ui = {
    *  while the editor is mounted; used by the sidebar's click-to-insert. */
   insertIntoEditor: null as ((text: string) => void) | null,
 
-  memoryCatalog: null as any,
+  memoryCatalog: null as CatalogData | null,
   refreshMemoryTables: null as (() => Promise<void>) | null,
   onAttachedCatalogsChanged: null as (() => Promise<void>) | null,
   navigateToSelection: null as ((sel: Selection) => void) | null,
