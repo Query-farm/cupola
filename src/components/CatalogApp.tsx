@@ -36,6 +36,7 @@ import {
 } from "./ui/dialog";
 const DuckDBShell = lazy(() => import("./DuckDBShell").then(m => ({ default: m.DuckDBShell })));
 const SqlEditorView = lazy(() => import("./editor/SqlEditorView").then(m => ({ default: m.SqlEditorView })));
+const ReportsWorkspace = lazy(() => import("./reports/ReportsWorkspace").then(m => ({ default: m.ReportsWorkspace })));
 import { AppTabBar, type TabId } from "./AppTabBar";
 import { CatalogOverview } from "./content/CatalogOverview";
 import { MemoryCatalogOverview } from "./content/MemoryCatalogOverview";
@@ -138,7 +139,7 @@ export function CatalogApp() {
       // survive a page load. Restoring it would therefore open an empty
       // surface; start on the safe Catalog tab instead.
       if (stored === "perspective") return "catalog";
-      if (stored && ["catalog", "editor", "shell", "askai", "preview", "queries"].includes(stored)) return stored;
+      if (stored && ["catalog", "editor", "shell", "askai", "reports", "preview", "queries"].includes(stored)) return stored;
       if (localStorage.getItem("vgi-app-view") === "editor") return "editor";
     } catch {}
     return "catalog";
@@ -169,7 +170,7 @@ export function CatalogApp() {
   // (a) DuckDB boots + ATTACHes once (column stats, previews work on the
   // catalog tab), and (b) terminal / chat / perspective state survives tab
   // switches. It's visible only on an engine-backed tab.
-  const engineVisible = activeTab !== "catalog" && activeTab !== "editor";
+  const engineVisible = activeTab !== "catalog" && activeTab !== "editor" && activeTab !== "reports";
   // The editor mounts on its first visit and then stays mounted (hidden the
   // same way as the engine host) for the rest of the session. Its result grid
   // holds a decoded Arrow table in component state, so unmounting on every tab
@@ -177,9 +178,16 @@ export function CatalogApp() {
   // and column widths. Mounting lazily rather than always keeps the CodeMirror
   // chunk off the critical path for someone who only browses the catalog.
   const [editorMounted, setEditorMounted] = useState(activeTab === "editor");
+  const [reportsMounted, setReportsMounted] = useState(activeTab === "reports");
   useEffect(() => {
     if (activeTab === "editor") setEditorMounted(true);
+    if (activeTab === "reports") setReportsMounted(true);
   }, [activeTab]);
+  useEffect(() => {
+    const openReports = () => setActiveTab("reports");
+    window.addEventListener("cupola:promote-report", openReports);
+    return () => window.removeEventListener("cupola:promote-report", openReports);
+  }, []);
   // SQL pushed into the editor from elsewhere (example queries, shell history,
   // shared query links). `autoRun` is false for shared links: the recipient
   // gets the query staged and ready, but chooses when to execute it.
@@ -864,6 +872,22 @@ export function CatalogApp() {
                     pendingSql={pendingEditorSql}
                     onPendingConsumed={() => { setPendingEditorSql(null); clearSharedSql(); }}
                     onAiBusyChange={setEditorAiBusy}
+                  />
+                </Suspense>
+              </ErrorBoundary>
+            </div>
+          )}
+          {reportsMounted && (
+            <div
+              className="absolute inset-0 overflow-hidden"
+              style={activeTab === "reports" ? undefined : { visibility: "hidden", zIndex: -1 }}
+            >
+              <ErrorBoundary>
+                <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading reports…</div>}>
+                  <ReportsWorkspace
+                    catalogData={data}
+                    serviceUrl={serviceUrl}
+                    attachedCatalogNames={attachedCatalogs.map((c) => c.catalogName)}
                   />
                 </Suspense>
               </ErrorBoundary>

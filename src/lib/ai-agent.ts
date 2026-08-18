@@ -653,8 +653,9 @@ export async function runAgentTurn(
   maxToolRounds = 20,
   tools: Tool[] = TOOLS,
   maxTokens: number = DEFAULT_AI_MAX_TOKENS,
+  telemetry = true,
 ): Promise<void> {
-  if (!isAiTelemetryEnabled()) {
+  if (!telemetry || !isAiTelemetryEnabled()) {
     return runAgentTurnInner(
       apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, null
     );

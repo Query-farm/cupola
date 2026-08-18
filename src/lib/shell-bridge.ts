@@ -69,6 +69,9 @@ export const engine = {
   /** Run SQL. Becomes callable at worker boot — well BEFORE the VGI catalog is
    *  attached, so anything needing the catalog must await `attached` too. */
   query: null as ((sql: string) => Promise<QueryResult>) | null,
+  /** Execute one prepared statement with positional values. Report datasets
+   *  use this path so parameter values never become SQL source text. */
+  queryPrepared: null as ((sql: string, params: unknown[]) => Promise<QueryResult>) | null,
   querySync: null as ((sql: string) => Promise<QueryResult>) | null,
   cancelQuery: null as (() => void) | null,
   progress: null as ((pct: number) => void) | null,

@@ -1,0 +1,37 @@
+import { describe, expect, test } from "bun:test";
+import { compileReportQuery } from "../../src/lib/reports/parameters";
+import type { ReportParameter } from "../../src/lib/reports/types";
+
+const parameters: ReportParameter[] = [
+  { id: "p1", key: "region", label: "Region", type: "text", defaultValue: "East" },
+  { id: "p2", key: "period", label: "Period", type: "date_range", defaultValue: { start: "2026-01-01", end: "2026-02-01" } },
+  { id: "p3", key: "categories", label: "Categories", type: "multi_select", defaultValue: ["A", "B"] },
+];
+
+describe("compileReportQuery", () => {
+  test("binds scalar, repeated, range, and list values in source order", () => {
+    const result = compileReportQuery(
+      "SELECT * FROM sales WHERE region = $region AND backup = $region AND day >= $period_start AND day < $period_end AND category IN ($categories)",
+      { parameters },
+      { region: "West", period: { start: "2026-03-01", end: "2026-04-01" }, categories: ["C", "D", "E"] },
+    );
+    expect(result.sql).toBe("SELECT * FROM sales WHERE region = ? AND backup = ? AND day >= ? AND day < ? AND category IN (?, ?, ?)");
+    expect(result.params).toEqual(["West", "West", "2026-03-01", "2026-04-01", "C", "D", "E"]);
+  });
+
+  test("does not replace tokens inside strings, identifiers, comments, or dollar quotes", () => {
+    const result = compileReportQuery(
+      `SELECT '$region', "$region", $$ $region $$, $region -- $region\n/* $region */`,
+      { parameters },
+      { region: "West" },
+    );
+    expect(result.sql).toBe(`SELECT '$region', "$region", $$ $region $$, ? -- $region\n/* $region */`);
+    expect(result.params).toEqual(["West"]);
+  });
+
+  test("expands an empty multi-select to NULL without bindings", () => {
+    const result = compileReportQuery("SELECT 1 WHERE 'x' IN ($categories)", { parameters }, { categories: [] });
+    expect(result.sql).toBe("SELECT 1 WHERE 'x' IN (NULL)");
+    expect(result.params).toEqual([]);
+  });
+});

@@ -1,11 +1,12 @@
 import { lazy, Suspense } from "react";
-import { Sparkles, X, Loader2 } from "lucide-react";
+import { Sparkles, X, Loader2, FileChartColumn } from "lucide-react";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { SqlToolCallBlock } from "./SqlToolCallBlock";
 import { AskUserBlock } from "./AskUserBlock";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { toolActivityLabel } from "@/lib/ai/tool-labels";
 import { estimateCost, formatCost } from "@/lib/pricing";
+import { promoteToReport } from "@/lib/reports/events";
 
 // Lazy: pulls vega-embed (and transitively vega + vega-lite runtime) only
 // when a chart block is actually present. Keeps the AskAIChat entry chunk
@@ -123,6 +124,7 @@ function CancelChip({ onCancel }: { onCancel: () => void }) {
 export function ChatMessageAssistant({
   blocks, isStreaming, onAskUserSelect, onCancel, onUpdateBlock, usage, model, renderSqlToolCall,
 }: Props) {
+  const narrative = blocks.filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text").map((b) => b.content).join("\n\n");
   return (
     <div className="flex gap-2.5">
       <div className="shrink-0 mt-1">
@@ -142,6 +144,14 @@ export function ChatMessageAssistant({
                   {renderSqlToolCall
                     ? renderSqlToolCall(tc, onCancel)
                     : <SqlToolCallBlock toolCall={tc} onCancel={onCancel} />}
+                  {!tc.isExecuting && tc.input?.sql && !tc.error && (
+                    <button
+                      className="mt-1 inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-primary"
+                      onClick={() => promoteToReport({ sql: tc.input.sql, title: "AI query", markdown: narrative || undefined })}
+                    >
+                      <FileChartColumn className="h-3 w-3" /> Add to report
+                    </button>
+                  )}
                 </div>
               );
             }
@@ -204,15 +214,20 @@ export function ChatMessageAssistant({
               );
             }
             return (
-              <Suspense
-                key={block.id}
-                fallback={<div className="text-xs text-muted-foreground/60 py-2">Loading chart…</div>}
-              >
-                <VegaChartBlock
-                  chart={block.chart}
-                  onUpdate={(patch) => onUpdateBlock?.(block.id, patch)}
-                />
-              </Suspense>
+              <div key={block.id}>
+                <Suspense fallback={<div className="text-xs text-muted-foreground/60 py-2">Loading chart…</div>}>
+                  <VegaChartBlock
+                    chart={block.chart}
+                    onUpdate={(patch) => onUpdateBlock?.(block.id, patch)}
+                  />
+                </Suspense>
+                <button
+                  className="mt-1 inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-primary"
+                  onClick={() => promoteToReport({ sql: block.chart.sql, title: block.chart.title || "AI chart", chartSpec: block.chart.spec, markdown: narrative || undefined })}
+                >
+                  <FileChartColumn className="h-3 w-3" /> Add to report
+                </button>
+              </div>
             );
           }
           return null;

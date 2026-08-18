@@ -1,4 +1,4 @@
-import { Play, Square, Sparkles, WandSparkles, Loader2 } from "lucide-react";
+import { Play, Square, Sparkles, WandSparkles, Loader2, FileChartColumn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScriptMenu } from "./ScriptMenu";
 
@@ -14,6 +14,7 @@ interface Props {
   onStop: () => void;
   onFormat: () => void;
   onAskAI: () => void;
+  onAddToReport: () => void;
   /** Whether the Ask AI panel is currently open (renders the button pressed). */
   aiActive?: boolean;
   /** A turn is in flight in some sub-tab's conversation. The panel may be
@@ -52,6 +53,7 @@ export function EditorToolbar({
   onStop,
   onFormat,
   onAskAI,
+  onAddToReport,
   aiActive,
   aiBusy,
   onDownloadSql,
@@ -111,6 +113,18 @@ export function EditorToolbar({
           ? <Loader2 className="h-3.5 w-3.5 animate-spin" data-testid="editor-ask-ai-busy" />
           : <Sparkles className="h-3.5 w-3.5" />}
         Ask AI
+      </Button>
+
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={onAddToReport}
+        className="h-7 gap-1.5"
+        title="Use the current selection or statement as the basis of a report"
+        data-testid="editor-add-to-report"
+      >
+        <FileChartColumn className="h-3.5 w-3.5" />
+        Add to report
       </Button>
 
       {!queryReady && !running && (

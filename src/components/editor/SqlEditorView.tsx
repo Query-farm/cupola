@@ -35,6 +35,7 @@ import { EditorAiPanel } from "./EditorAiPanel";
 import { openPopout, updateLatest } from "@/lib/editor/result-popout";
 import type { SqlApplyActions } from "./EditorSqlToolCallBlock";
 import { buildShareQueryUrl } from "@/lib/share-query";
+import { promoteToReport } from "@/lib/reports/events";
 
 /** SQL pushed into the editor from outside. Always lands in a new tab, which
  *  becomes the active one; `autoRun` decides whether it also executes. */
@@ -343,6 +344,13 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, pendingS
     triggerDownload(new Blob([sql], { type: "text/plain;charset=utf-8" }), `${safeFileStem(activeDoc?.name ?? "query")}.sql`);
   }, [activeDoc?.name, activeDoc?.sql]);
 
+  const handleAddToReport = useCallback(() => {
+    const ed = editorRef.current;
+    const sql = ed?.getSelectionText().trim() || ed?.getStatementAtCursor()?.text || ed?.getDoc() || activeDoc?.sql || "";
+    if (!sql.trim()) return;
+    promoteToReport({ sql, title: activeDoc?.name || "Query" });
+  }, [activeDoc?.name, activeDoc?.sql]);
+
   // Pop the current result out into a snapshot window. Must run synchronously in
   // the click gesture (openPopout does the window.open) or the popup is blocked.
   // Returns false when blocked so the results pane can fall back to Maximize.
@@ -501,6 +509,7 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, pendingS
         onStop={handleStop}
         onFormat={handleFormat}
         onAskAI={() => setAiOpen((o) => !o)}
+        onAddToReport={handleAddToReport}
         aiActive={aiOpen}
         aiBusy={aiBusyDocs.size > 0}
         onDownloadSql={handleDownloadSql}

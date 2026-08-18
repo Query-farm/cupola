@@ -13,6 +13,11 @@ const SENSITIVE_URL_KEYS = new Set([
   "refresh_token",
   "client_secret",
   "ai_key",
+  // Shared query/report definitions can contain literals and business data.
+  "sql",
+  "sql_z",
+  "report_z",
+  "report_values",
 ]);
 
 /** Replace the values of sensitive keys in a URL's query string and fragment. */

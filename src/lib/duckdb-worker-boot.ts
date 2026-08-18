@@ -231,6 +231,23 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
     }
   };
   engine.query = runQueryWrapped;
+  engine.queryPrepared = async (sql: string, params: unknown[]): Promise<QueryResult> => {
+    if (cancelInt32) Atomics.store(cancelInt32, 0, 0);
+    let statementId: number | null = null;
+    try {
+      statementId = await db.createPrepared(connId, sql);
+      const bytes = await db.runPrepared(connId, statementId, params);
+      const copy = new Uint8Array(bytes.byteLength);
+      copy.set(bytes);
+      return { ok: true, arrowBuffers: [copy.buffer] };
+    } catch (e: unknown) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      if (statementId !== null) {
+        try { await db.closePrepared(connId, statementId); } catch {}
+      }
+    }
+  };
   // Pending vs non-streaming distinction (today's `query-sync`) is moot under
   // AsyncDuckDB.runQuery, which always returns a single File-format buffer.
   engine.querySync = runQueryWrapped;

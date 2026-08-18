@@ -779,7 +779,7 @@ async function ensurePerspectiveLoaded(): Promise<void> {
   }
 }
 
-async function loadPerspective(container: HTMLElement, arrowBuffer: ArrayBuffer) {
+export async function loadPerspective(container: HTMLElement, arrowBuffer: ArrayBuffer) {
   await ensurePerspectiveLoaded();
 
   // Create or reuse the viewer element

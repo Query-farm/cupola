@@ -23,6 +23,12 @@ describe("scrubUrl", () => {
     );
   });
 
+  test("filters shared query and report definitions from fragments", () => {
+    expect(scrubUrl("https://app.example/#report_z=packed&report_values=filters&sql=SELECT+secret")).toBe(
+      "https://app.example/#report_z=[Filtered]&report_values=[Filtered]&sql=[Filtered]",
+    );
+  });
+
   test("does not filter refresh_token via a bare token= prefix match", () => {
     expect(scrubUrl("https://app.example/#refresh_token=def")).toBe(
       "https://app.example/#refresh_token=[Filtered]",

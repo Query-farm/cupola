@@ -3,10 +3,10 @@
  * header "Catalog / Query Editor" toggle and the bottom shell drawer's own tab
  * strip — one place to drive the whole UI.
  */
-import { Database, FileCode2, Sparkles, Table2, History, BarChart3, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Database, FileCode2, Sparkles, Table2, History, BarChart3, PanelLeftClose, PanelLeftOpen, FileChartColumn } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type TabId = "catalog" | "editor" | "shell" | "askai" | "preview" | "queries" | "perspective";
+export type TabId = "catalog" | "editor" | "shell" | "askai" | "reports" | "preview" | "queries" | "perspective";
 
 interface TabDef {
   id: TabId;
@@ -21,6 +21,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: "editor", label: "Query Editor", icon: FileCode2, accent: "editor" },
   { id: "askai", label: "Ask AI", icon: Sparkles, accent: "ai" },
+  { id: "reports", label: "Reports", icon: FileChartColumn },
   { id: "shell", label: "SQL Shell", img: true },
   { id: "preview", label: "Data Viewer", icon: Table2 },
   { id: "catalog", label: "Catalog", icon: Database },
@@ -69,17 +70,19 @@ export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs
               "inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md border border-transparent whitespace-nowrap transition-colors shrink-0",
               active
                 ? "bg-primary text-primary-foreground"
-                : tab.accent === "editor"
-                  ? "border-sky-500/25 bg-sky-500/10 text-sky-700 hover:bg-sky-500/20 dark:text-sky-300"
-                  : tab.accent === "ai"
-                    ? "border-violet-500/25 bg-violet-500/10 text-violet-700 hover:bg-violet-500/20 dark:text-violet-300"
-                    : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+                : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
             )}
           >
             {tab.img ? (
               <img src={`${import.meta.env.BASE_URL}duckdb-icon-light.svg`} alt="" className="h-4 w-4" />
             ) : Icon ? (
-              <Icon className="h-3.5 w-3.5" />
+              <Icon
+                className={cn(
+                  "h-3.5 w-3.5",
+                  !active && tab.accent === "editor" && "text-sky-500",
+                  !active && tab.accent === "ai" && "text-violet-500",
+                )}
+              />
             ) : null}
             <span className={active ? "inline" : "hidden sm:inline"}>{tab.label}</span>
             {busyTabs?.[tab.id] && (

@@ -300,3 +300,26 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+@media print {
+  body * { visibility: hidden !important; }
+  .report-canvas, .report-canvas * { visibility: visible !important; }
+  .report-canvas {
+    position: absolute !important;
+    inset: 0 !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    background: white !important;
+    color: black !important;
+  }
+  .report-authoring-control { display: none !important; }
+  .print-only { display: block !important; }
+  .react-grid-layout { height: auto !important; display: grid !important; grid-template-columns: repeat(12, 1fr); gap: 12px; }
+  .react-grid-item {
+    position: static !important;
+    transform: none !important;
+    width: auto !important;
+    min-height: 180px !important;
+    break-inside: avoid;
+    grid-column: span 12;
+  }
+}
