@@ -149,6 +149,23 @@ export function validateReport(report: ReportDocumentV1): string[] {
     const { x, y, w, h } = b.layout;
     if (![x, y, w, h].every(Number.isFinite) || x < 0 || y < 0 || w < 1 || h < 1 || x + w > 12) errors.push(`${b.title ?? b.id}: invalid layout.`);
     if (b.type === "chart") errors.push(...validateChartSpec(b.spec).errors.map((e) => `${b.title ?? b.id}: ${e}`));
+    if (b.type === "map") {
+      const hasGeometry = Boolean(b.geometryColumn?.trim());
+      const hasLatitude = Boolean(b.latitudeColumn?.trim());
+      const hasLongitude = Boolean(b.longitudeColumn?.trim());
+      if (!hasGeometry && !(hasLatitude && hasLongitude)) errors.push(`${b.title ?? b.id}: map requires geometryColumn or both latitudeColumn and longitudeColumn.`);
+      if (!hasGeometry && hasLatitude !== hasLongitude) errors.push(`${b.title ?? b.id}: map latitudeColumn and longitudeColumn must be provided together.`);
+      if (b.basemap && !["none", "openstreetmap"].includes(b.basemap)) errors.push(`${b.title ?? b.id}: unsupported map basemap.`);
+      if (b.tooltipColumns && (!Array.isArray(b.tooltipColumns) || b.tooltipColumns.some((column) => typeof column !== "string" || !column.trim()))) errors.push(`${b.title ?? b.id}: map tooltipColumns must contain column names.`);
+      if (b.palette && (!Array.isArray(b.palette) || b.palette.length === 0 || b.palette.length > 20 || b.palette.some((color) => typeof color !== "string" || !color.trim()))) errors.push(`${b.title ?? b.id}: map palette must contain 1–20 colors.`);
+      const style = b.style;
+      if (style) {
+        if (style.opacity !== undefined && (!Number.isFinite(style.opacity) || style.opacity < 0 || style.opacity > 1)) errors.push(`${b.title ?? b.id}: map opacity must be between 0 and 1.`);
+        if (style.fillOpacity !== undefined && (!Number.isFinite(style.fillOpacity) || style.fillOpacity < 0 || style.fillOpacity > 1)) errors.push(`${b.title ?? b.id}: map fillOpacity must be between 0 and 1.`);
+        if (style.weight !== undefined && (!Number.isFinite(style.weight) || style.weight < 0 || style.weight > 20)) errors.push(`${b.title ?? b.id}: map weight must be between 0 and 20.`);
+        if (style.radius !== undefined && (!Number.isFinite(style.radius) || style.radius < 1 || style.radius > 50)) errors.push(`${b.title ?? b.id}: map radius must be between 1 and 50.`);
+      }
+    }
   }
   return errors;
 }

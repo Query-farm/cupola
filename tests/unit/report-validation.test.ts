@@ -45,4 +45,33 @@ describe("report document validation", () => {
     );
     expect(validateReport(report).join(" ")).toContain("dependency cycle");
   });
+
+  test("validates declarative map configuration", () => {
+    const report = createEmptyReport("Locations");
+    report.datasets.push({ id: "locations", name: "Locations", sql: "SELECT * FROM locations" });
+    report.blocks.push({
+      id: "map",
+      type: "map",
+      datasetId: "locations",
+      latitudeColumn: "latitude",
+      longitudeColumn: "longitude",
+      basemap: "none",
+      style: { radius: 8, fillOpacity: 0.4 },
+      layout: { x: 0, y: 0, w: 12, h: 6 },
+    });
+    expect(validateReport(report)).toEqual([]);
+
+    report.blocks[0] = {
+      id: "map",
+      type: "map",
+      datasetId: "locations",
+      latitudeColumn: "latitude",
+      style: { radius: 100, opacity: 2 },
+      layout: { x: 0, y: 0, w: 12, h: 6 },
+    };
+    const errors = validateReport(report).join(" ");
+    expect(errors).toContain("latitudeColumn and longitudeColumn");
+    expect(errors).toContain("opacity");
+    expect(errors).toContain("radius");
+  });
 });

@@ -25,6 +25,10 @@ export function toolInputLabel(name: string): string {
       return "Looking up tables";
     case "read_query_results":
       return "Reading more results";
+    case "preview_sql":
+      return "Writing report query";
+    case "replace_report_draft":
+      return "Composing report";
     case "ask_user":
       return "Preparing a question";
     default:
@@ -43,6 +47,10 @@ export function toolActivityLabel(name: string, input?: any): string {
       return "Reading more results";
     case "render_chart":
       return "Rendering chart";
+    case "preview_sql":
+      return "Running report query";
+    case "replace_report_draft":
+      return "Building and running report";
     default:
       return name;
   }

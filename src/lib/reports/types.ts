@@ -48,12 +48,37 @@ interface ReportBlockBase {
   layout: ReportLayout;
 }
 
+export interface ReportMapStyle {
+  color?: string;
+  fillColor?: string;
+  opacity?: number;
+  fillOpacity?: number;
+  weight?: number;
+  radius?: number;
+}
+
+export interface ReportMapBlock extends ReportBlockBase {
+  type: "map";
+  datasetId: string;
+  /** WKB or GeoJSON geometry column. Takes precedence over coordinate columns. */
+  geometryColumn?: string;
+  latitudeColumn?: string;
+  longitudeColumn?: string;
+  labelColumn?: string;
+  colorColumn?: string;
+  tooltipColumns?: string[];
+  basemap?: "none" | "openstreetmap";
+  palette?: string[];
+  style?: ReportMapStyle;
+}
+
 export type ReportBlock =
   | (ReportBlockBase & { type: "markdown"; markdown: string })
   | (ReportBlockBase & { type: "kpi"; datasetId: string; valueColumn: string; labelColumn?: string; format?: "number" | "currency" | "percent" | "text" })
   | (ReportBlockBase & { type: "table"; datasetId: string; columns?: string[]; pageSize?: number })
   | (ReportBlockBase & { type: "chart"; datasetId: string; spec: Record<string, any> })
-  | (ReportBlockBase & { type: "perspective"; datasetId: string; config?: Record<string, any> });
+  | (ReportBlockBase & { type: "perspective"; datasetId: string; config?: Record<string, any> })
+  | ReportMapBlock;
 
 export interface ReportSourceRequirement {
   catalog: string;

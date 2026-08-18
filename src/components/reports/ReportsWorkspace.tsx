@@ -2,13 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ResponsiveGridLayout, useContainerWidth, type Layout, type ResponsiveLayouts } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-import { ArrowLeft, BarChart3, Bot, Check, Download, FileJson, FilePlus2, Loader2, Play, Plus, Printer, RefreshCw, Save, Share2, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, BarChart3, Bot, Check, Download, FileJson, FilePlus2, Loader2, Play, Plus, Printer, Save, Share2, Sparkles, Trash2, X } from "lucide-react";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import type { CatalogData } from "@/lib/service";
 import { engine } from "@/lib/shell-bridge";
 import { decodeArrowBuffer, tableToRows } from "@/lib/duckdb-query";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
+import { ChatMessageAssistant, type ContentBlock, type ToolCallEntry } from "@/components/chat/ChatMessageAssistant";
+import { ChatMessageUser } from "@/components/chat/ChatMessageUser";
 import { QueryResultTable } from "@/components/chat/QueryResultTable";
+import { ReportMap } from "@/components/reports/ReportMap";
 import { embedChart, downloadPNG, downloadSVG, type VegaView } from "@/components/chat/chart-embed";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,8 +22,11 @@ import { runAgentTurn, executeListTables, executeDescribeTable, type MessagePara
 import { executeRunSql } from "@/lib/ai-tool-executor";
 import { QueryResultCache } from "@/lib/query-results";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
+import { toolInputLabel } from "@/lib/ai/tool-labels";
 import { exportResult, safeFileStem, triggerDownload } from "@/lib/editor/result-export";
 import { consumeReportPromotion, type ReportPromotion } from "@/lib/reports/events";
+import { reportDisplayRows, reportMapRows } from "@/lib/reports/display";
+import { validateReportResultColumns } from "@/lib/reports/execution";
 import { compileReportQuery } from "@/lib/reports/parameters";
 import { buildShareReportUrl, clearSharedReport, consumeSharedReport } from "@/lib/reports/share";
 import { deleteReport, exportReportJson, getStoredReport, importReportJson, listReports, restoreReportRevision, saveReport } from "@/lib/reports/store";
@@ -42,11 +48,30 @@ interface DatasetResult {
   fetchedAt?: number;
 }
 
+interface DatasetRunSummary {
+  datasetId: string;
+  name: string;
+  ok: boolean;
+  rowCount?: number;
+  columns?: string[];
+  sample?: Record<string, any>[];
+  error?: string;
+}
+
+interface ReportAgentMessage {
+  id: string;
+  role: "user" | "assistant";
+  content?: string;
+  blocks?: ContentBlock[];
+  isStreaming?: boolean;
+  usage?: { inputTokens: number; outputTokens: number };
+}
+
 const REPORT_TOOLS: Tool[] = [
   { name: "list_tables", description: "List the connected catalog's schemas, tables, and views.", input_schema: { type: "object", properties: {} } },
   { name: "describe_table", description: "Describe a table before writing SQL for it.", input_schema: { type: "object", properties: { catalog: { type: "string" }, schema: { type: "string" }, table: { type: "string" } }, required: ["schema", "table"] } },
   { name: "preview_sql", description: "Run one read-only SQL query to verify columns and sample results.", input_schema: { type: "object", properties: { sql: { type: "string" } }, required: ["sql"] } },
-  { name: "replace_report_draft", description: "Replace the complete report draft. Preserve schemaVersion=1 and all stable IDs when editing. The draft is validated and previewed before the user can accept it.", input_schema: { type: "object", properties: { report: { type: "object" }, summary: { type: "string" } }, required: ["report", "summary"] } },
+  { name: "replace_report_draft", description: "Replace and execute the complete report draft. Preserve schemaVersion=1 and all stable IDs when editing. Returns each dataset's columns, row count, sample rows, or execution error so you can correct the draft before finishing.", input_schema: { type: "object", properties: { report: { type: "object" }, summary: { type: "string" } }, required: ["report", "summary"] } },
 ];
 
 function defaultValues(report: ReportDocumentV1): Record<string, ReportParameterValue> {
@@ -89,18 +114,44 @@ function ReportChart({ block, rows }: { block: Extract<ReportBlock, { type: "cha
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let disposed = false;
-    if (!elRef.current || !rows.length) return;
-    embedChart(elRef.current, block.spec, rows).then((view) => {
-      if (disposed) view.finalize(); else viewRef.current = view;
-    }).catch((e) => setError(e instanceof Error ? e.message : String(e)));
-    return () => { disposed = true; viewRef.current?.finalize(); viewRef.current = null; };
+    let frame = 0;
+    let renderVersion = 0;
+    let lastSize = "";
+    const el = elRef.current;
+    if (!el || !rows.length) return;
+    const render = async () => {
+      const width = el.clientWidth;
+      const height = el.clientHeight;
+      if (disposed || width < 50 || height < 50) return;
+      const size = `${width}x${height}`;
+      if (size === lastSize) return;
+      lastSize = size;
+      const version = ++renderVersion;
+      viewRef.current?.finalize();
+      viewRef.current = null;
+      setError(null);
+      try {
+        const view = await embedChart(el, block.spec, rows, undefined, { forceHeight: Math.max(80, height) });
+        if (disposed || version !== renderVersion) view.finalize();
+        else viewRef.current = view;
+      } catch (e) {
+        if (!disposed && version === renderVersion) setError(e instanceof Error ? e.message : String(e));
+      }
+    };
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => { void render(); });
+    });
+    observer.observe(el);
+    frame = requestAnimationFrame(() => { void render(); });
+    return () => { disposed = true; renderVersion++; cancelAnimationFrame(frame); observer.disconnect(); viewRef.current?.finalize(); viewRef.current = null; };
   }, [block.spec, rows]);
   return <div className="h-full flex flex-col min-h-0">
     <div className="flex justify-end gap-1 report-authoring-control">
       <button className="text-[10px] text-muted-foreground hover:text-foreground" onClick={() => viewRef.current && downloadPNG(viewRef.current, block.title || "chart")}>PNG</button>
       <button className="text-[10px] text-muted-foreground hover:text-foreground" onClick={() => viewRef.current && downloadSVG(viewRef.current, block.title || "chart")}>SVG</button>
     </div>
-    {error ? <div className="text-xs text-destructive">{error}</div> : <div ref={elRef} className="flex-1 min-h-0 overflow-auto" />}
+    {error ? <div className="text-xs text-destructive">{error}</div> : <div ref={elRef} data-testid="report-chart-container" className="flex-1 min-h-0 w-full overflow-hidden" />}
   </div>;
 }
 
@@ -153,13 +204,15 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentPrompt, setAgentPrompt] = useState("");
-  const [agentText, setAgentText] = useState("");
+  const [agentConversation, setAgentConversation] = useState<ReportAgentMessage[]>([]);
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentSummary, setAgentSummary] = useState<string | null>(null);
   const [pendingPromotion, setPendingPromotion] = useState<ReportPromotion | null>(null);
   const [shareStatus, setShareStatus] = useState<string | null>(null);
   const [revisionOptions, setRevisionOptions] = useState<ReportDocumentV1[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  const agentMessagesRef = useRef<MessageParam[]>([]);
+  const agentThreadRef = useRef<HTMLDivElement>(null);
   const runGeneration = useRef(0);
   const resultCache = useRef(new QueryResultCache());
   const { width, containerRef, mounted } = useContainerWidth({ initialWidth: 1000 });
@@ -167,11 +220,19 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const reload = useCallback(async () => setReports(await listReports()), []);
   useEffect(() => { reload(); const listener = () => reload(); window.addEventListener("cupola:reports-changed", listener); return () => window.removeEventListener("cupola:reports-changed", listener); }, [reload]);
   useEffect(() => { onBusyChange?.(agentBusy || Object.values(results).some((r) => r.running)); }, [agentBusy, results, onBusyChange]);
+  useEffect(() => {
+    const thread = agentThreadRef.current;
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }, [agentConversation, agentBusy]);
 
   const openReport = useCallback((report: ReportDocumentV1, initialValues?: Record<string, ReportParameterValue>, autoRun = true, persisted = true) => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    agentMessagesRef.current = [];
+    resultCache.current = new QueryResultCache();
     const copy = cloneReport(report);
     const defaults = { ...defaultValues(copy), ...initialValues };
-    setSelected(persisted ? copy : null); setDraft(copy); setValues(defaults); setAppliedValues(defaults); setResults({}); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null);
+    setSelected(persisted ? copy : null); setDraft(copy); setValues(defaults); setAppliedValues(defaults); setResults({}); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
     void getStoredReport(copy.id).then((stored) => setRevisionOptions(stored?.revisions ?? []));
     if (autoRun) setTimeout(() => runDatasets(copy, defaults), 0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -186,16 +247,25 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     consume(); window.addEventListener("cupola:promote-report", consume); return () => window.removeEventListener("cupola:promote-report", consume);
   }, []);
 
-  const runDatasets = useCallback(async (report: ReportDocumentV1, runValues: Record<string, ReportParameterValue>, onlyIds?: Set<string>) => {
-    const valueErrors = report.parameters.map((p) => validateParameterValue(p, runValues[p.key] ?? p.defaultValue)).filter(Boolean);
-    if (valueErrors.length) { setShareStatus(valueErrors.join(" ")); return; }
-    if (engine.attached) await engine.attached;
-    if (!engine.queryPrepared) { setShareStatus("DuckDB is still starting up."); return; }
-    const generation = ++runGeneration.current;
+  const runDatasets = useCallback(async (report: ReportDocumentV1, runValues: Record<string, ReportParameterValue>, onlyIds?: Set<string>): Promise<DatasetRunSummary[]> => {
     const datasets = report.datasets.filter((d) => !onlyIds || onlyIds.has(d.id));
+    const valueErrors = report.parameters.map((p) => validateParameterValue(p, runValues[p.key] ?? p.defaultValue)).filter(Boolean);
+    if (valueErrors.length) {
+      const error = valueErrors.join(" ");
+      setShareStatus(error);
+      return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error }));
+    }
+    if (engine.attached) await engine.attached;
+    if (!engine.queryPrepared) {
+      const error = "DuckDB is still starting up.";
+      setShareStatus(error);
+      return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error }));
+    }
+    const generation = ++runGeneration.current;
+    const summaries: DatasetRunSummary[] = [];
     setResults((prev) => ({ ...prev, ...Object.fromEntries(datasets.map((d) => [d.id, { ...(prev[d.id] ?? { table: null, rows: [] }), running: true, error: undefined }])) }));
     for (const dataset of datasets) {
-      if (generation !== runGeneration.current) return;
+      if (generation !== runGeneration.current) return summaries;
       try {
         const readErrors = validateReadOnlySql(dataset.sql);
         if (readErrors.length) throw new Error(readErrors.join(" "));
@@ -203,13 +273,24 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         const response = await engine.queryPrepared(compiled.sql, compiled.params);
         if (!response.ok || !response.arrowBuffers?.[0]) throw new Error(response.error || "Query returned no result.");
         const table = decodeArrowBuffer(response.arrowBuffers[0]);
-        setResults((prev) => ({ ...prev, [dataset.id]: { table, rows: tableToRows(table), running: false, fetchedAt: Date.now() } }));
+        const rows = tableToRows(table);
+        setResults((prev) => ({ ...prev, [dataset.id]: { table, rows, running: false, fetchedAt: Date.now() } }));
+        summaries.push({ datasetId: dataset.id, name: dataset.name, ok: true, rowCount: table.numRows, columns: table.schema.fields.map((field) => field.name), sample: rows.slice(0, 3) });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         setResults((prev) => ({ ...prev, [dataset.id]: { ...(prev[dataset.id] ?? { table: null, rows: [] }), running: false, error: message } }));
+        summaries.push({ datasetId: dataset.id, name: dataset.name, ok: false, error: message });
       }
     }
+    return summaries;
   }, []);
+
+  const runFullReport = useCallback(() => {
+    if (!draft) return;
+    const nextValues = structuredClone(values);
+    setAppliedValues(nextValues);
+    void runDatasets(draft, nextValues);
+  }, [draft, values, runDatasets]);
 
   const handleApply = useCallback(() => {
     if (!draft) return;
@@ -231,14 +312,83 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => { const item = layout.find((l) => l.i === b.id); return item ? { ...b, layout: { x: item.x, y: item.y, w: item.w, h: item.h } } : b; }) } : current);
   }, []);
 
+  const resetAgentConversation = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    agentMessagesRef.current = [];
+    resultCache.current = new QueryResultCache();
+    setAgentConversation([]);
+    setAgentPrompt("");
+    setAgentBusy(false);
+  }, []);
+
   const runAgent = useCallback(async () => {
-    if (!draft || !agentPrompt.trim() || agentBusy) return;
-    if (!settings.anthropicApiKey) { setAgentText("Add an Anthropic API key in Settings first."); return; }
-    const controller = new AbortController(); abortRef.current = controller; setAgentBusy(true); setAgentText(""); setAgentSummary(null);
-    const messages: MessageParam[] = [{ role: "user", content: agentPrompt }];
-    const system = `You are Cupola's report-authoring agent. Build and revise a declarative report JSON document. Never add JavaScript. Inspect every table before using it. SQL datasets must be one read-only SELECT/VALUES/WITH query. Parameter references use $key, date ranges use $key_start/$key_end, and multi-select values appear in IN ($key). Charts are Vega-Lite v5 specs without data, datasets, url, href, or src. Use a 12-column layout. Always finish by calling replace_report_draft with the complete document and a concise summary.\n\nCurrent report:\n${JSON.stringify(draft)}`;
+    const prompt = agentPrompt.trim();
+    if (!draft || !prompt || agentBusy) return;
+    if (!settings.anthropicApiKey) {
+      setAgentConversation((messages) => [...messages, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        blocks: [{ type: "text", id: crypto.randomUUID(), content: "Add an Anthropic API key in **Settings** first." }],
+      }]);
+      return;
+    }
+    const controller = new AbortController();
+    const assistantId = crypto.randomUUID();
+    const seedThinking: ContentBlock = { type: "thinking", id: crypto.randomUUID(), label: "Thinking" };
+    abortRef.current = controller;
+    agentMessagesRef.current.push({ role: "user", content: prompt });
+    setAgentConversation((messages) => [...messages,
+      { id: crypto.randomUUID(), role: "user", content: prompt },
+      { id: assistantId, role: "assistant", blocks: [seedThinking], isStreaming: true },
+    ]);
+    setAgentPrompt("");
+    setAgentBusy(true);
+    setAgentSummary(null);
+
+    let blocks: ContentBlock[] = [seedThinking];
+    let errorShown = false;
+    const updateBlocks = (next: ContentBlock[]) => {
+      blocks = next;
+      setAgentConversation((messages) => messages.map((message) => message.id === assistantId
+        ? { ...message, blocks: [...blocks] }
+        : message));
+    };
+    const updateAssistant = (patch: Partial<ReportAgentMessage>) => {
+      setAgentConversation((messages) => messages.map((message) => message.id === assistantId
+        ? { ...message, ...patch }
+        : message));
+    };
+    const ensureTextBlock = (): number => {
+      if (blocks[blocks.length - 1]?.type === "text") return blocks.length - 1;
+      blocks = [...blocks, { type: "text", id: crypto.randomUUID(), content: "" }];
+      return blocks.length - 1;
+    };
+    const removeThinking = () => { blocks = blocks.filter((block) => block.type !== "thinking"); };
+    const showThinking = (label: string) => {
+      removeThinking();
+      updateBlocks([...blocks, { type: "thinking", id: crypto.randomUUID(), label }]);
+    };
+    const appendText = (chunk: string) => {
+      removeThinking();
+      const index = ensureTextBlock();
+      const textBlock = blocks[index] as Extract<ContentBlock, { type: "text" }>;
+      updateBlocks(blocks.map((block, blockIndex) => blockIndex === index
+        ? { ...textBlock, content: textBlock.content + chunk }
+        : block));
+    };
+    const showError = (error: string) => {
+      errorShown = true;
+      removeThinking();
+      const index = ensureTextBlock();
+      const textBlock = blocks[index] as Extract<ContentBlock, { type: "text" }>;
+      updateBlocks(blocks.map((block, blockIndex) => blockIndex === index
+        ? { ...textBlock, content: textBlock.content + (textBlock.content ? "\n\n" : "") + `**Error:** ${error}` }
+        : block));
+    };
+    const system = `You are Cupola's report-authoring agent. Build and revise a declarative report JSON document. Never add JavaScript. Inspect every table before using it. SQL datasets must be one read-only SELECT/VALUES/WITH query. Parameter references use $key, date ranges use $key_start/$key_end, and multi-select values appear in IN ($key). Supported blocks are markdown, kpi, table, chart, perspective, and map. Charts are Vega-Lite v5 specs without data, datasets, url, href, or src. Maps are declarative Leaflet blocks: set type=\"map\", datasetId, and either geometryColumn for WKB/GeoJSON or both latitudeColumn and longitudeColumn. Maps may also set labelColumn, colorColumn, tooltipColumns, basemap (\"openstreetmap\" or \"none\"), palette, and style. Use a 12-column layout. Always finish by calling replace_report_draft with the complete document and a concise summary. That tool executes every dataset. If it returns an execution error, correct the report and call replace_report_draft again so the user receives a populated, working report.\n\nCurrent report:\n${JSON.stringify(draft)}`;
     try {
-      await runAgentTurn(settings.anthropicApiKey, settings.aiModel, messages, system, async (name, input) => {
+      await runAgentTurn(settings.anthropicApiKey, settings.aiModel, agentMessagesRef.current, system, async (name, input) => {
         if (name === "list_tables") return executeListTables(catalogData);
         if (name === "describe_table") return executeDescribeTable(catalogData, input.schema, input.table);
         if (name === "preview_sql") {
@@ -249,17 +399,60 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         if (name === "replace_report_draft") {
           const proposed = input.report as ReportDocumentV1;
           const errors = validateReport(proposed); if (errors.length) throw new Error(errors.join("\n"));
-          setDraft(cloneReport(proposed)); setSourceText(exportReportJson(proposed)); setAgentSummary(String(input.summary ?? "Draft updated"));
-          return JSON.stringify({ ok: true, message: "Draft validated. The user will review and accept it." });
+          const proposedValues = defaultValues(proposed);
+          setDraft(cloneReport(proposed)); setSourceText(exportReportJson(proposed)); setValues(proposedValues); setAppliedValues(proposedValues); setResults({});
+          const execution = await runDatasets(proposed, proposedValues);
+          const failures = execution.filter((result) => !result.ok);
+          const blockErrors = validateReportResultColumns(proposed, execution);
+          const summary = String(input.summary ?? "Draft updated");
+          const needsCorrection = failures.length > 0 || blockErrors.length > 0;
+          setAgentSummary(needsCorrection ? `${summary} The draft needs correction.` : `${summary} Data loaded.`);
+          return JSON.stringify({ ok: !needsCorrection, message: needsCorrection ? "The draft ran, but has dataset or block-column errors. Correct them and replace the draft again." : "Draft validated and all datasets executed. The report is populated for user review.", datasets: execution, blockErrors });
         }
         throw new Error(`Unknown tool ${name}`);
       }, {
-        onText: (chunk) => setAgentText((t) => t + chunk), onToolCall: () => {}, onToolResult: () => {},
-        onDone: () => setAgentBusy(false), onError: (error) => { setAgentText((t) => `${t}\n${error}`); setAgentBusy(false); },
-      }, controller.signal, 20, REPORT_TOOLS, settings.aiMaxTokens ?? DEFAULT_AI_MAX_TOKENS, false);
-      setAgentPrompt("");
-    } catch (e) { if ((e as any)?.name !== "AbortError") setAgentText((t) => `${t}\n${e instanceof Error ? e.message : String(e)}`); setAgentBusy(false); }
-  }, [draft, agentPrompt, agentBusy, settings, catalogData]);
+        onText: appendText,
+        onToolInputStart: (name) => showThinking(toolInputLabel(name)),
+        onToolCall: (name, input) => {
+          removeThinking();
+          const toolCall: ToolCallEntry = { name, input, isExecuting: true };
+          updateBlocks([...blocks, { type: "tool_call", id: crypto.randomUUID(), toolCall }]);
+        },
+        onToolResult: (_name, summary) => {
+          const reverseIndex = [...blocks].reverse().findIndex((block) => block.type === "tool_call" && block.toolCall.isExecuting);
+          if (reverseIndex >= 0) {
+            const index = blocks.length - 1 - reverseIndex;
+            const block = blocks[index] as Extract<ContentBlock, { type: "tool_call" }>;
+            const isError = summary.startsWith("Error:");
+            blocks = blocks.map((item, blockIndex) => blockIndex === index
+              ? { ...block, toolCall: { ...block.toolCall, isExecuting: false, error: isError ? summary.slice(7) : undefined, result: isError ? undefined : summary } }
+              : item);
+          }
+          showThinking("Thinking");
+        },
+        onDone: (usage) => {
+          removeThinking();
+          updateBlocks(blocks);
+          updateAssistant({ isStreaming: false, usage });
+          setAgentBusy(false);
+        },
+        onRetry: (message) => showThinking(message ? message.replace("...", "") : "Thinking"),
+        onError: showError,
+      }, controller.signal, settings.aiMaxToolRounds ?? 20, REPORT_TOOLS, settings.aiMaxTokens ?? DEFAULT_AI_MAX_TOKENS, false);
+    } catch (e) {
+      if ((e as any)?.name !== "AbortError" && !errorShown) showError(e instanceof Error ? e.message : String(e));
+      removeThinking();
+      blocks = blocks.map((block) => block.type === "tool_call" && block.toolCall.isExecuting
+        ? { ...block, toolCall: { ...block.toolCall, isExecuting: false, error: "Cancelled" } }
+        : block);
+      if (blocks.length === 0 && (e as any)?.name === "AbortError") blocks = [{ type: "text", id: crypto.randomUUID(), content: "Stopped." }];
+      updateBlocks(blocks);
+      updateAssistant({ isStreaming: false });
+      setAgentBusy(false);
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  }, [draft, agentPrompt, agentBusy, settings, catalogData, runDatasets]);
 
   const compatibleCatalogs = useMemo(() => new Set([catalogData.catalogName, ...attachedCatalogNames, "memory"]), [catalogData.catalogName, attachedCatalogNames]);
   const isCompatible = (r: ReportDocumentV1) => r.requiredSources.every((s) => compatibleCatalogs.has(s.catalog));
@@ -299,7 +492,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       <Button size="sm" variant="outline" onClick={() => setAgentOpen((v) => !v)}><Bot className="h-4 w-4" /> Agent</Button>
       {revisionOptions.length > 0 && <select className="h-8 rounded-md border bg-background px-2 text-xs" defaultValue="" aria-label="Restore report revision" onChange={async (e) => { const revision = Number(e.target.value); if (!revision) return; const restored = await restoreReportRevision(draft.id, revision); openReport(restored, undefined, false); }}><option value="">History</option>{revisionOptions.slice().reverse().map((r) => <option key={r.revision} value={r.revision}>Restore revision {r.revision}</option>)}</select>}
       <Button size="sm" variant="outline" onClick={() => { setInspectorOpen((v) => !v); setSourceText(exportReportJson(draft)); }}><FileJson className="h-4 w-4" /> Source</Button>
-      <Button size="sm" variant="outline" onClick={() => runDatasets(draft, appliedValues)}><RefreshCw className="h-4 w-4" /> Refresh</Button>
+      <Button size="sm" data-testid="reports-run" disabled={reportErrors.length > 0 || Object.values(results).some((result) => result.running)} onClick={runFullReport}>{Object.values(results).some((result) => result.running) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {Object.values(results).some((result) => result.running) ? "Running report…" : "Run report"}</Button>
       <Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
       <Button size="sm" variant="outline" onClick={() => triggerDownload(new Blob([exportReportJson(draft)], { type: "application/json" }), `${safeFileStem(draft.title)}.cupola-report.json`)}><Download className="h-4 w-4" /> JSON</Button>
       <Button size="sm" variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(draft, { serviceUrl, values: appliedValues })); setShareStatus("Share link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}><Share2 className="h-4 w-4" /> Share</Button>
@@ -310,19 +503,19 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     <div className="flex-1 min-h-0 flex">
       <div ref={containerRef} className="flex-1 min-w-0 overflow-y-auto report-canvas p-3">
         <div className="print-only hidden mb-4"><h1 className="text-2xl font-bold">{draft.title}</h1><p className="text-sm text-muted-foreground">{draft.description}</p></div>
-        {draft.blocks.length === 0 ? <div className="h-full flex items-center justify-center"><div className="text-center"><FilePlus2 className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" /><p className="font-medium">Start with a request</p><p className="text-sm text-muted-foreground mb-4">Open the agent and describe the report you need.</p><Button onClick={() => setAgentOpen(true)}><Sparkles className="h-4 w-4" /> Open report agent</Button></div></div> : mounted && <ResponsiveGridLayout width={width} breakpoints={{ lg: 768, sm: 0 }} cols={{ lg: 12, sm: 1 }} layouts={layouts} rowHeight={56} margin={[12, 12]} dragConfig={{ handle: ".report-drag-handle" }} resizeConfig={{ enabled: true }} onLayoutChange={(layout, all) => { if (width >= 768) updateLayout(layout); }}>
+        {draft.blocks.length === 0 ? <div className="h-full flex items-center justify-center"><div className="text-center"><FilePlus2 className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" /><p className="font-medium">Start with a request</p><p className="text-sm text-muted-foreground mb-4">Open the agent and describe the report you need.</p><Button onClick={() => setAgentOpen(true)}><Sparkles className="h-4 w-4" /> Open report agent</Button></div></div> : mounted && <ResponsiveGridLayout width={width} breakpoints={{ lg: 768, sm: 0 }} cols={{ lg: 12, sm: 1 }} layouts={layouts} rowHeight={56} margin={[12, 12]} dragConfig={{ handle: ".report-drag-handle" }} resizeConfig={{ enabled: true }} onLayoutChange={(layout) => { if (width >= 768) updateLayout(layout); }}>
           {draft.blocks.map((block) => {
             const result = block.type === "markdown" ? null : results[block.datasetId];
             return <div key={block.id} className="rounded-lg border bg-card shadow-sm overflow-hidden flex flex-col print:shadow-none">
               <div className="report-drag-handle report-authoring-control cursor-move px-3 py-2 border-b flex items-center gap-2 text-sm font-medium"><span className="truncate">{block.title || (block.type === "markdown" ? "Text" : block.type[0].toUpperCase() + block.type.slice(1))}</span><div className="flex-1" />{result?.running && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{result?.fetchedAt && <span className="text-[10px] text-muted-foreground">{new Date(result.fetchedAt).toLocaleTimeString()}</span>}</div>
-              <div className="flex-1 min-h-0 overflow-auto p-3">{block.type === "markdown" ? <ChatMarkdown content={block.markdown} /> : result?.error ? <div className="text-xs text-destructive">{result.error}</div> : !result?.table ? <div className="h-full flex items-center justify-center text-xs text-muted-foreground">Run report to load data</div> : block.type === "table" ? <div><div className="report-authoring-control flex justify-end gap-2 mb-1"><button className="text-[10px]" onClick={() => exportResult(result.table!, "csv", block.title || "report-table")}>CSV</button><button className="text-[10px]" onClick={() => exportResult(result.table!, "excel", block.title || "report-table")}>XLSX</button></div><QueryResultTable columns={block.columns ?? result.table.schema.fields.map((f: any) => f.name)} rows={result.rows.slice(0, block.pageSize ?? 50)} rowCount={result.rows.length} showing={Math.min(result.rows.length, block.pageSize ?? 50)} /></div> : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "chart" ? <ReportChart block={block} rows={result.rows} /> : <ReportPerspective table={result.table} config={block.config} onConfig={(config) => setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current)} />}</div>
+              <div className={`flex-1 min-h-0 p-3 ${block.type === "chart" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={block.markdown} /> : result?.error ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className="text-xs text-destructive">{result.error}</div><Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report</Button></div> : block.type === "table" ? <div><div className="report-authoring-control flex justify-end gap-2 mb-1"><button className="text-[10px]" onClick={() => exportResult(result.table!, "csv", block.title || "report-table")}>CSV</button><button className="text-[10px]" onClick={() => exportResult(result.table!, "excel", block.title || "report-table")}>XLSX</button></div>{(() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })()}</div> : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "chart" ? <ReportChart block={block} rows={result.rows} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : <ReportPerspective table={result.table} config={block.config} onConfig={(config) => setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current)} />}</div>
             </div>;
           })}
         </ResponsiveGridLayout>}
       </div>
       {(agentOpen || inspectorOpen) && <aside className="report-authoring-control w-[min(42vw,520px)] min-w-[340px] border-l bg-card flex flex-col min-h-0">
-        <div className="flex items-center border-b"><button className={`px-4 py-2 text-sm ${agentOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setAgentOpen(true); setInspectorOpen(false); }}>Agent</button><button className={`px-4 py-2 text-sm ${inspectorOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setInspectorOpen(true); setAgentOpen(false); setSourceText(exportReportJson(draft)); }}>Source</button><div className="flex-1" /><button className="p-2" onClick={() => { setAgentOpen(false); setInspectorOpen(false); }}><X className="h-4 w-4" /></button></div>
-        {agentOpen ? <><div className="flex-1 overflow-y-auto p-4 text-sm"><p className="text-muted-foreground mb-4">Describe the report or revision. The agent edits a draft; nothing is saved until you accept it.</p>{agentText && <ChatMarkdown content={agentText} />}{agentBusy && <div className="flex items-center gap-2 mt-3 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Working on report…</div>}</div><div className="p-3 border-t"><textarea className="w-full min-h-24 rounded-md border bg-background p-2 text-sm" value={agentPrompt} onChange={(e) => setAgentPrompt(e.target.value)} placeholder="Build a monthly sales report with a date range and region filter…" /><div className="flex justify-end mt-2">{agentBusy ? <Button variant="destructive" size="sm" onClick={() => abortRef.current?.abort()}>Stop</Button> : <Button size="sm" onClick={runAgent}><Sparkles className="h-4 w-4" /> Send</Button>}</div></div></> : <><textarea className="flex-1 min-h-0 resize-none bg-background p-3 font-mono text-xs" spellCheck={false} value={sourceText} onChange={(e) => setSourceText(e.target.value)} />{sourceError && <div className="px-3 py-2 text-xs text-destructive border-t">{sourceError}</div>}<div className="p-3 border-t flex justify-end"><Button size="sm" onClick={() => { try { const parsed = importReportJson(sourceText); setDraft(parsed); setSourceError(null); } catch (e) { setSourceError(e instanceof Error ? e.message : String(e)); } }}>Preview source</Button></div></>}
+        <div className="flex items-center border-b"><button className={`px-4 py-2 text-sm ${agentOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setAgentOpen(true); setInspectorOpen(false); }}>Agent</button><button className={`px-4 py-2 text-sm ${inspectorOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setInspectorOpen(true); setAgentOpen(false); setSourceText(exportReportJson(draft)); }}>Source</button><div className="flex-1" />{agentOpen && agentConversation.length > 0 && <Button size="sm" variant="ghost" disabled={agentBusy} onClick={resetAgentConversation}>New conversation</Button>}<button className="p-2" onClick={() => { setAgentOpen(false); setInspectorOpen(false); }}><X className="h-4 w-4" /></button></div>
+        {agentOpen ? <><div ref={agentThreadRef} data-testid="report-agent-thread" className="flex-1 overflow-y-auto p-4 text-sm"><p className="text-muted-foreground mb-4">Describe the report or revision. The agent edits a draft; nothing is saved until you accept it.</p><div className="space-y-5">{agentConversation.map((message) => <div key={message.id} data-role={message.role}>{message.role === "user" ? <ChatMessageUser content={message.content ?? ""} /> : <ChatMessageAssistant blocks={message.blocks ?? []} isStreaming={message.isStreaming} usage={message.usage} model={settings.aiModel} onCancel={message.isStreaming ? () => abortRef.current?.abort() : undefined} />}</div>)}</div></div><div className="p-3 border-t"><textarea className="w-full min-h-24 rounded-md border bg-background p-2 text-sm" value={agentPrompt} onChange={(e) => setAgentPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void runAgent(); } }} placeholder="Build a monthly sales report with a date range and region filter…" /><div className="flex justify-end mt-2">{agentBusy ? <Button variant="destructive" size="sm" onClick={() => abortRef.current?.abort()}>Stop</Button> : <Button size="sm" disabled={!agentPrompt.trim()} onClick={runAgent}><Sparkles className="h-4 w-4" /> Send</Button>}</div></div></> : <><textarea className="flex-1 min-h-0 resize-none bg-background p-3 font-mono text-xs" spellCheck={false} value={sourceText} onChange={(e) => setSourceText(e.target.value)} />{sourceError && <div className="px-3 py-2 text-xs text-destructive border-t">{sourceError}</div>}<div className="p-3 border-t flex justify-end"><Button size="sm" onClick={() => { try { const parsed = importReportJson(sourceText); setDraft(parsed); setSourceError(null); } catch (e) { setSourceError(e instanceof Error ? e.message : String(e)); } }}>Preview source</Button></div></>}
       </aside>}
     </div>
     {promotionDialog}
