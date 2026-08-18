@@ -107,7 +107,6 @@ Required repository secrets:
 
 | Secret | Purpose |
 |--------|---------|
-| `SIBLING_REPOS_TOKEN` | PAT with read access to `Query-farm/vgi-typescript` (private; `vgi` is not on npm) |
 | `SENTRY_AUTH_TOKEN` | Sentry source-map upload |
 | `CLOUDFLARE_API_TOKEN` | Worker deploy |
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 S3-API asset upload |

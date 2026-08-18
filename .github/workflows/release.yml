@@ -33,7 +33,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Query-farm/vgi-typescript
-          token: ${{ secrets.SIBLING_REPOS_TOKEN }}
           path: vgi-typescript
 
       - name: Checkout vgi-rpc-typescript
@@ -101,7 +100,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Query-farm/vgi-typescript
-          token: ${{ secrets.SIBLING_REPOS_TOKEN }}
           path: vgi-typescript
 
       - name: Checkout vgi-rpc-typescript
@@ -200,7 +198,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Query-farm/vgi-typescript
-          token: ${{ secrets.SIBLING_REPOS_TOKEN }}
           path: vgi-typescript
 
       - name: Checkout vgi-rpc-typescript
