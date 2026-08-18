@@ -10,7 +10,7 @@
 
 // One Arrow, everywhere. `@query-farm/apache-arrow` is the build vgi/client
 // returns Fields from, and `vite.resolve.dedupe` + the matching tsconfig
-// `paths` entry pin every importer (including the aliased sibling sources) to
+// `paths` entry pin every importer (including published client packages) to
 // this single copy — so a Field crossing the vgi boundary is the same nominal
 // type it is here.
 import type { Field, DataType } from "@query-farm/apache-arrow";

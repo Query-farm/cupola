@@ -381,15 +381,14 @@ Points worth not re-deriving:
 - **The logo is `/cupola-icon.png`** — the illustrated barn cupola `BrandMark` renders, referenced unversioned (the latest-version fallback resolves it) rather than inlined, since base64 would add ~126KB per response. `public/cupola-icon.svg` is a different lineart mark the app never shows. An `onerror` hook hides the image in the one case the fallback can't resolve: the empty-bucket 503.
 - All error responses are `Cache-Control: no-store` — a version that 404s today may be restored.
 
-**CI publishing** (`.github/workflows/publish.yml`): manual-dispatch workflow that checks out the sibling repos, runs tests, runs `./publish.sh --skip-commit`, and tags the release. Inactive until the repository secrets listed in the README's Deployment section are configured.
+**CI publishing** (`.github/workflows/release.yml`): tag-driven workflow that installs published npm dependencies, runs validation, publishes the multi-architecture container image, deploys Cloudflare, and creates the GitHub release.
 
-## Dependencies on Sibling Repos
+## VGI Dependencies
 
-The `package.json` references local sibling repos:
-- `vgi` → npm alias for the exact published `@query-farm/vgi` release
-- `@query-farm/vgi-rpc` → `../vgi-rpc-typescript` (public repo; `astro.config.mjs` aliases directly into its source)
-
-The CI publish workflow checks these out side-by-side; locally they must exist as sibling directories.
+Both VGI clients use exact published npm releases, making local and CI builds
+self-contained:
+- `vgi` → npm alias for `@query-farm/vgi`
+- `@query-farm/vgi-rpc` → published `@query-farm/vgi-rpc`
 
 A third sibling is needed only to **rebuild** Perspective, not to build or run cupola:
 - `~/Development/perspective` → the Query-farm fork, branch `duckdb-type-support-v5`. Consumed as prebuilt artifacts committed under `public/perspective/`, so a normal `bun run build` does not need it. See "Vendored Perspective" above and `./build-perspective.sh`.

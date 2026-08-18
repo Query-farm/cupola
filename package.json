@@ -34,7 +34,7 @@
     "@codemirror/view": "^6.43.1",
     "@haybarn/haybarn-wasm": "1.5.5-rc1",
     "@query-farm/apache-arrow": "21.1.1",
-    "@query-farm/vgi-rpc": "../vgi-rpc-typescript",
+    "@query-farm/vgi-rpc": "0.21.3",
     "@radix-ui/react-accordion": "^1.2.12",
     "@sentry/astro": "^10.55.0",
     "@sentry/cloudflare": "^10.55.0",

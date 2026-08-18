@@ -2,8 +2,8 @@
  * VGI service wrapper — connects to a VGI HTTP server and fetches catalog metadata.
  */
 
-// Import from client-only connect alias to avoid bundling Node.js server-side code.
-// See astro.config.mjs for the alias resolution.
+// Import the client-only entry point to avoid bundling Node.js server code.
+// astro.config.mjs resolves this to the browser artifact from the npm package.
 import { httpConnect } from "@query-farm/vgi-rpc/connect";
 import { VgiClient, Arguments, deserializeSchema, deserializeBatch, iterRows } from "vgi/client";
 import type {

@@ -29,12 +29,6 @@ jobs:
         with:
           path: cupola
 
-      - name: Checkout vgi-rpc-typescript
-        uses: actions/checkout@v4
-        with:
-          repository: Query-farm/vgi-rpc-typescript
-          path: vgi-rpc-typescript
-
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -49,9 +43,7 @@ jobs:
           }
 
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile --cwd ../vgi-rpc-typescript
-          bun install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Typecheck
         run: bun run check
@@ -89,21 +81,13 @@ jobs:
         with:
           path: cupola
 
-      - name: Checkout vgi-rpc-typescript
-        uses: actions/checkout@v4
-        with:
-          repository: Query-farm/vgi-rpc-typescript
-          path: vgi-rpc-typescript
-
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile --cwd ../vgi-rpc-typescript
-          bun install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Build flat static bundle
         env:
@@ -180,21 +164,13 @@ jobs:
         with:
           path: cupola
 
-      - name: Checkout vgi-rpc-typescript
-        uses: actions/checkout@v4
-        with:
-          repository: Query-farm/vgi-rpc-typescript
-          path: vgi-rpc-typescript
-
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile --cwd ../vgi-rpc-typescript
-          bun install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Deploy versioned site and Worker
         env:

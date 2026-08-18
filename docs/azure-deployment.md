@@ -104,12 +104,10 @@ breaks.
 | `astro.config.mjs` | `base: process.env.BASE_PATH \|\| \`/v${pkg.version}/\`` |
 
 ### Why the image doesn't build in-container
-`@query-farm/vgi` comes from npm, but `package.json` still points
-`@query-farm/vgi-rpc` at the local `../vgi-rpc-typescript` sibling, which isn't
-in the Docker build context. So the bundle is built on the host (where that
-sibling is linked, same as a Cloudflare publish) and the image just serves the
-prebuilt `dist/`. A fully self-contained multi-stage build would first require
-using a published VGI RPC package too.
+Both VGI clients come from npm. The release workflow builds and tests the flat
+bundle first, then copies that exact `dist/` into a minimal Caddy image. Keeping
+compilation outside the serving image avoids shipping Bun and build tooling in
+the final image.
 
 ## Azure Container Apps notes
 - **Target port 80.** Container Apps terminates TLS at the ingress and forwards

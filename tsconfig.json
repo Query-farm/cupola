@@ -20,17 +20,11 @@
     // No `baseUrl`: it is deprecated in TypeScript 6 and makes a plain `tsc`
     // run fail with TS5101 before it checks a single file. `paths` resolves
     // relative to this file's directory without it.
-    // These MUST mirror `vite.resolve.alias` in astro.config.mjs. The bundler
-    // resolves these specifiers to sibling-repo source; without the same
-    // mapping here, `astro check` reports them as unresolved modules.
     "paths": {
       "@/*": ["./src/*"],
-      "@query-farm/vgi-rpc/connect": ["../vgi-rpc-typescript/src/client/connect.ts"],
-      "@query-farm/vgi-rpc": ["../vgi-rpc-typescript/src/index.ts"],
-      // Mirrors `vite.resolve.dedupe`: pin every importer — including the
-      // sibling sources above, which would otherwise resolve their own copy —
-      // to this project's single Arrow install, so `Field` is one nominal type
-      // across the boundary.
+      // Mirrors `vite.resolve.dedupe`: pin every importer to this project's
+      // single Arrow install, so `Field` is one nominal type across the client
+      // package boundary.
       "@query-farm/apache-arrow": ["./node_modules/@query-farm/apache-arrow"],
       "@query-farm/apache-arrow/*": ["./node_modules/@query-farm/apache-arrow/*"]
     },

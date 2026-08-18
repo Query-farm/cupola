@@ -223,15 +223,13 @@ export default defineConfig({
       // `paths` entry in tsconfig.json, which does the same for typechecking.
       dedupe: ['@query-farm/apache-arrow'],
       alias: {
-        // Use the client-only connect module directly to avoid bundling
-        // Node.js server-side code (node:crypto, node:zlib, etc.)
-        '@query-farm/vgi-rpc/connect': resolve('../vgi-rpc-typescript/src/client/connect.ts'),
-        // vgi/client's error module imports
-        // RpcError from "@query-farm/vgi-rpc", whose dist/index.js exports
-        // launcher symbols (tryAcquireLock) that bun dropped from the bundle.
-        // Rollup fails on the dangling export; source resolution tree-shakes
-        // the Node-only launcher away instead.
-        '@query-farm/vgi-rpc': resolve('../vgi-rpc-typescript/src/index.ts'),
+        // vgi-rpc 0.21.3 publishes this browser build on its `./connect`
+        // export. Resolve the published artifact explicitly because Vite's
+        // SSR-aware resolver does not select that conditional subpath while
+        // Astro collects the static entrypoints.
+        '@query-farm/vgi-rpc/connect': resolve(
+          'node_modules/@query-farm/vgi-rpc/dist/browser/client/connect.js',
+        ),
         'node:stream': resolve('src/lib/node-stubs.ts'),
         'node:zlib': resolve('src/lib/node-stubs.ts'),
         'node:crypto': resolve('src/lib/node-stubs.ts'),
