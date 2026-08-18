@@ -81,27 +81,119 @@ function buildSnippets(catalogName: string, serviceUrl: string, opts: string) {
   } satisfies Record<LangId, string>;
 }
 
-/**
- * Minimal highlighting, deliberately not a parser: whole-line comments go
- * muted, quoted strings take the accent, everything else is foreground. It
- * covers the only two things worth picking out of these snippets — which bits
- * are prose and which bits are the catalog name and URL you might edit.
- */
-function CodeLine({ line }: { line: string }) {
-  if (line.trim().startsWith("#") || line.trim().startsWith("//")) {
-    return <span className="text-muted-foreground">{line}</span>;
+/*
+  Code colours, copied verbatim from query.farm's Shiki `farmTheme`
+  (astro.config.mjs) so a snippet here and a snippet on the marketing site are
+  the same system. They are literal hex rather than semantic tokens on
+  purpose: this is a code palette on a fixed dark slab, not chrome, so a
+  `?theme=<url>` override must NOT repaint it — the slab stays rock-* in every
+  theme and these values are measured against it.
+*/
+const CODE = {
+  plain: "#e9e1d3",
+  comment: "#8a7f70",
+  string: "#9fc48c",
+  keyword: "#d9a441",
+  fn: "#d3a6e0",
+  num: "#e0a44f",
+  variable: "#8fc7d8",
+  punct: "#a2988a",
+} as const;
+
+type TokType = keyof typeof CODE;
+interface Tok { t: TokType; s: string }
+
+interface Rule { t: TokType; re: RegExp; call?: true }
+
+/*
+  A scanner, not a parser. It runs sticky regexes at the cursor and takes the
+  first that matches, falling back to one plain character. That is enough for
+  these snippets — three statements and an import — and it stays honest: there
+  is no language server here, so anything it cannot classify renders as plain
+  text rather than being guessed at.
+*/
+const RULES: Record<LangId, Rule[]> = {
+  duckdb: [
+    { t: "string", re: /'[^']*'|"[^"]*"/y },
+    { t: "keyword", re: /\b(?:INSTALL|LOAD|ATTACH|AS|TYPE|LOCATION|FROM|SHOW|ALL|TABLES|SELECT|WHERE|LIMIT|ORDER|BY|GROUP)\b/iy },
+    { t: "num", re: /\d+(?:\.\d+)?/y },
+    { t: "punct", re: /[(){}[\].,;:=]/y },
+  ],
+  python: [
+    { t: "comment", re: /#.*/y },
+    { t: "string", re: /'[^']*'|"[^"]*"/y },
+    { t: "fn", re: /[A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)*(?=\s*\()/y, call: true },
+    { t: "keyword", re: /\b(?:import|from|as|def|return|await|async|with|for|in|if|else|None|True|False)\b/y },
+    { t: "num", re: /\d+(?:\.\d+)?/y },
+    { t: "punct", re: /[(){}[\].,;:=]/y },
+  ],
+  typescript: [
+    { t: "comment", re: /\/\/.*/y },
+    { t: "string", re: /'[^']*'|"[^"]*"|`[^`]*`/y },
+    { t: "fn", re: /[A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)*(?=\s*\()/y, call: true },
+    { t: "keyword", re: /\b(?:import|from|const|let|var|await|async|new|return|export|default|function|type|interface)\b/y },
+    { t: "num", re: /\d+(?:\.\d+)?/y },
+    { t: "punct", re: /[(){}[\].,;:=<>]/y },
+  ],
+};
+
+function tokenize(line: string, lang: LangId): Tok[] {
+  const out: Tok[] = [];
+  const push = (t: TokType, s: string) => {
+    const last = out[out.length - 1];
+    if (last && last.t === t) last.s += s;
+    else out.push({ t, s });
+  };
+
+  let i = 0;
+  while (i < line.length) {
+    let hit = false;
+    for (const rule of RULES[lang]) {
+      rule.re.lastIndex = i;
+      const m = rule.re.exec(line);
+      if (m && m[0].length > 0) {
+        if (rule.call) {
+          // `con.execute` — the receiver reads as a variable, only the final
+          // segment is the call. Colouring the whole dotted path as a function
+          // makes every object look like one.
+          const dot = m[0].lastIndexOf(".");
+          if (dot === -1) push("fn", m[0]);
+          else {
+            push("variable", m[0].slice(0, dot));
+            push("punct", ".");
+            push("fn", m[0].slice(dot + 1));
+          }
+        } else {
+          push(rule.t, m[0]);
+        }
+        i += m[0].length;
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) {
+      push("plain", line[i]);
+      i += 1;
+    }
   }
-  // Split on single- or double-quoted runs, keeping the delimiters.
-  const parts = line.split(/('[^']*'|"[^"]*")/g);
+  return out;
+}
+
+function CodeLine({ line, lang }: { line: string; lang: LangId }) {
   return (
     <>
-      {parts.map((part, i) =>
-        /^['"]/.test(part) ? (
-          <span key={i} className="text-accent">{part}</span>
-        ) : (
-          <span key={i} className="text-foreground">{part}</span>
-        ),
-      )}
+      {tokenize(line, lang).map((tok, i) => (
+        <span
+          key={i}
+          style={{
+            color: CODE[tok.t],
+            fontStyle: tok.t === "comment" ? "italic" : undefined,
+            fontWeight: tok.t === "keyword" ? 600 : undefined,
+          }}
+        >
+          {tok.s}
+        </span>
+      ))}
     </>
   );
 }
@@ -160,11 +252,13 @@ export function ConnectBox({ catalogName, serviceUrl, attachOptions }: Props) {
           </Button>
         </div>
 
-        <pre className="bg-muted rounded-md px-4 py-3 overflow-x-auto text-sm">
+        {/* rock-900 in light, rock-950 in dark: in dark the featured card is
+            already near rock-900, so the slab drops a step to keep an edge. */}
+        <pre className="bg-rock-900 dark:bg-rock-950 rounded-md px-4 py-3 overflow-x-auto text-sm leading-relaxed">
           <code className="font-mono">
             {source.split("\n").map((line, i) => (
               <span key={i}>
-                <CodeLine line={line} />
+                <CodeLine line={line} lang={lang} />
                 {"\n"}
               </span>
             ))}

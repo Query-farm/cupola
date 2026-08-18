@@ -1,10 +1,12 @@
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -30,9 +32,13 @@ function SettingRow({ children, className }: { children: React.ReactNode; classN
 
 function SettingLabel({ title, description, htmlFor }: { title: string; description: string; htmlFor?: string }) {
   return (
-    <Label htmlFor={htmlFor} className="flex flex-col gap-1 cursor-pointer min-w-0 flex-1">
+    /* items-start is load-bearing: the base Label class is `flex items-center`,
+       and adding flex-col here turns that into horizontal centring, so every
+       title and description in this dialog was centred. It was merely less
+       obvious at the old 580px width. */
+    <Label htmlFor={htmlFor} className="flex flex-col items-start gap-1 text-left cursor-pointer min-w-0 flex-1">
       <span className="font-medium text-sm">{title}</span>
-      <span className="text-xs text-muted-foreground font-normal leading-relaxed">{description}</span>
+      <span className="text-xs text-muted-foreground font-normal leading-relaxed max-w-[58ch]">{description}</span>
     </Label>
   );
 }
@@ -53,36 +59,49 @@ export function SettingsModal() {
         <Settings className="h-4 w-4" />
         Settings
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[580px] max-h-[85vh] overflow-y-auto p-0">
-        <DialogHeader className="px-6 pt-6 pb-0">
+      {/*
+        Fixed height, not max-height. The four sections differ a lot in length,
+        and on a purely intrinsic height the dialog jumped every time you
+        switched — the footer button moved out from under the cursor. A stable
+        frame with only the panel scrolling keeps the header and the Done
+        button in one place.
+      */}
+      <DialogContent className="sm:max-w-[760px] w-full h-[min(560px,85vh)] p-0 grid grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden">
+        <DialogHeader className="px-5 py-4 border-b border-border">
           <DialogTitle className="flex items-center gap-2">
             <Settings className="h-5 w-5 text-primary" />
             Settings
           </DialogTitle>
         </DialogHeader>
 
-        <Tabs defaultValue="display" className="px-6 pb-6">
-          <TabsList variant="line" className="w-full justify-start mb-4">
-            <TabsTrigger value="display" className="gap-1.5">
-              <Database className="h-3.5 w-3.5" />
+        <Tabs defaultValue="display" orientation="vertical" className="min-h-0 gap-0 flex-row">
+          {/* Left rail. A vertical list is the convention for settings once
+              there is more than a handful of groups (VS Code, Slack, macOS),
+              and unlike top tabs it has room to grow without wrapping. */}
+          <TabsList
+            variant="line"
+            className="w-[168px] shrink-0 group-data-vertical/tabs:h-full items-stretch justify-start gap-0.5 p-2 border-r border-border bg-muted/40 rounded-none overflow-y-auto"
+          >
+            <TabsTrigger value="display" className="gap-2 justify-start w-full flex-none h-auto px-2.5 py-2">
+              <Database className="h-3.5 w-3.5 shrink-0" />
               Display
             </TabsTrigger>
-            <TabsTrigger value="shell" className="gap-1.5">
-              <TerminalSquare className="h-3.5 w-3.5" />
+            <TabsTrigger value="shell" className="gap-2 justify-start w-full flex-none h-auto px-2.5 py-2">
+              <TerminalSquare className="h-3.5 w-3.5 shrink-0" />
               Shell
             </TabsTrigger>
-            <TabsTrigger value="editor" className="gap-1.5">
-              <FileCode2 className="h-3.5 w-3.5" />
+            <TabsTrigger value="editor" className="gap-2 justify-start w-full flex-none h-auto px-2.5 py-2">
+              <FileCode2 className="h-3.5 w-3.5 shrink-0" />
               Editor
             </TabsTrigger>
-            <TabsTrigger value="ai" className="gap-1.5">
-              <Bot className="h-3.5 w-3.5" />
+            <TabsTrigger value="ai" className="gap-2 justify-start w-full flex-none h-auto px-2.5 py-2">
+              <Bot className="h-3.5 w-3.5 shrink-0" />
               AI
             </TabsTrigger>
           </TabsList>
 
           {/* Display settings */}
-          <TabsContent value="display">
+          <TabsContent value="display" className="min-w-0 overflow-y-auto px-5 py-3">
             <div className="divide-y divide-border">
               <SettingRow>
                 <SettingLabel
@@ -148,7 +167,7 @@ export function SettingsModal() {
           </TabsContent>
 
           {/* Shell settings */}
-          <TabsContent value="shell">
+          <TabsContent value="shell" className="min-w-0 overflow-y-auto px-5 py-3">
             <div className="divide-y divide-border">
               <SettingRow>
                 <SettingLabel
@@ -207,7 +226,7 @@ export function SettingsModal() {
           </TabsContent>
 
           {/* SQL Editor settings */}
-          <TabsContent value="editor">
+          <TabsContent value="editor" className="min-w-0 overflow-y-auto px-5 py-3">
             <div className="divide-y divide-border">
               <SettingRow>
                 <SettingLabel
@@ -246,7 +265,7 @@ export function SettingsModal() {
           </TabsContent>
 
           {/* AI settings */}
-          <TabsContent value="ai">
+          <TabsContent value="ai" className="min-w-0 overflow-y-auto px-5 py-3">
             <div className="divide-y divide-border">
               <div className="pb-3">
                 <SettingLabel
@@ -339,6 +358,22 @@ export function SettingsModal() {
             </div>
           </TabsContent>
         </Tabs>
+
+        {/*
+          Settings are instant-apply — every control writes straight through to
+          localStorage — so this commits nothing and is labelled "Done" rather
+          than "Save". It exists because the only way out used to be a ghost
+          ✕ in the corner, Esc, or a backdrop click, and people were missing
+          all three. Filled and full-height so it cannot be missed.
+        */}
+        <div className="flex items-center justify-between gap-4 px-5 py-3 border-t border-border bg-muted/30">
+          <p className="text-xs text-muted-foreground">Changes are saved as you make them.</p>
+          <DialogClose
+            render={<Button size="sm" className="h-8 px-5" data-testid="settings-done" />}
+          >
+            Done
+          </DialogClose>
+        </div>
       </DialogContent>
     </Dialog>
   );

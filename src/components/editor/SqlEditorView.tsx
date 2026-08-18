@@ -506,13 +506,10 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
         running={activeResult.running}
         queryReady={queryReady}
         bootPhase={bootPhase}
-        hasResult={!!activeResult.table}
         hasSelection={hasSelection}
         onRun={handleRun}
         onStop={handleStop}
         onFormat={handleFormat}
-        onExport={handleExport}
-        onOpenInPerspective={handleOpenInPerspective}
         onOpenInShell={handleOpenInShell}
         onAskAI={() => setAiOpen((o) => !o)}
         aiActive={aiOpen}
@@ -544,7 +541,12 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, onExitEd
             className="h-1.5 shrink-0 cursor-row-resize bg-border hover:bg-accent/60 active:bg-accent transition-colors"
           />
           <div className="flex-1 min-h-0">
-            <EditorResultsPane state={activeResult} onPopout={handlePopout} />
+            <EditorResultsPane
+              state={activeResult}
+              onPopout={handlePopout}
+              onExport={handleExport}
+              onOpenInPerspective={handleOpenInPerspective}
+            />
           </div>
         </div>
         {aiOpen && (

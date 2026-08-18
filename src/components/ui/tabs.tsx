@@ -11,6 +11,10 @@ function Tabs({
   return (
     <TabsPrimitive.Root
       data-slot="tabs"
+      // Forwarded, not just stamped as a data attribute: base-ui drives arrow-
+      // key navigation off it, so a vertical tab list was still using Left/Right
+      // instead of Up/Down. Horizontal is the default, so nothing else changes.
+      orientation={orientation}
       data-orientation={orientation}
       className={cn(
         "group/tabs flex gap-2 data-horizontal:flex-col",

@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { Loader2, AlertCircle, TableProperties, CheckCircle2, Maximize2, SquareArrowOutUpRight } from "lucide-react";
+import { Loader2, AlertCircle, TableProperties, CheckCircle2, Maximize2, SquareArrowOutUpRight, BarChart3 } from "lucide-react";
 import { DataPreview } from "@/components/content/DataPreview";
 import { ExplainView } from "@/components/editor/ExplainView";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { SaveResultsMenu } from "./SaveResultsMenu";
+import type { ExportFormat } from "@/lib/editor/result-export";
 
 export interface ResultState {
   table: any | null;
@@ -32,9 +34,14 @@ interface Props {
   /** Detach the current result into a snapshot pop-out window. Returns false if the
    *  browser blocked the popup (caller falls back to Maximize). Absent → no button. */
   onPopout?: () => boolean;
+  /** Write these results to a file. Lives here rather than in the editor
+   *  toolbar so the control sits next to the grid it acts on. */
+  onExport?: (format: ExportFormat) => void | Promise<void>;
+  /** Hand this result set to the Perspective pivot surface. */
+  onOpenInPerspective?: () => void;
 }
 
-export function EditorResultsPane({ state, onPopout }: Props) {
+export function EditorResultsPane({ state, onPopout, onExport, onOpenInPerspective }: Props) {
   const [maximized, setMaximized] = useState(false);
   // The header + maximize/pop-out only apply to an actual data grid, not to
   // error / running / EXPLAIN / DDL-success states.
@@ -43,7 +50,23 @@ export function EditorResultsPane({ state, onPopout }: Props) {
   return (
     <div className="flex flex-col h-full min-h-0">
       {isGrid && (
-        <div className="flex items-center justify-end gap-0.5 px-2 py-1 border-b border-border bg-muted/20 shrink-0">
+        <div className="flex items-center justify-end gap-1 px-2 py-1 border-b border-border bg-muted/20 shrink-0">
+          {onExport && <SaveResultsMenu onExport={onExport} />}
+          {onOpenInPerspective && (
+            /* Its own button, not an item inside Save Results: it opens a view,
+               it does not write a file, and under that menu's name it read as
+               another export format. */
+            <button
+              onClick={onOpenInPerspective}
+              title="Open these results in the Perspective pivot"
+              data-testid="editor-open-perspective"
+              className="flex items-center gap-1.5 px-2 py-1 text-xs rounded border border-border hover:bg-foreground/5 transition-colors"
+            >
+              <BarChart3 className="h-3.5 w-3.5" />
+              <span>Pivot</span>
+            </button>
+          )}
+          <span className="h-4 w-px bg-border mx-0.5" aria-hidden="true" />
           {onPopout && (
             <Button
               variant="ghost"
