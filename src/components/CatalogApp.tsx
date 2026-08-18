@@ -134,7 +134,11 @@ export function CatalogApp() {
   const [activeTab, setActiveTab] = useState<TabId>(() => {
     try {
       const stored = localStorage.getItem("vgi-active-tab") as TabId | null;
-      if (stored && ["catalog", "editor", "shell", "askai", "preview", "queries", "perspective"].includes(stored)) return stored;
+      // Perspective is backed by transient query/table data that does not
+      // survive a page load. Restoring it would therefore open an empty
+      // surface; start on the safe Catalog tab instead.
+      if (stored === "perspective") return "catalog";
+      if (stored && ["catalog", "editor", "shell", "askai", "preview", "queries"].includes(stored)) return stored;
       if (localStorage.getItem("vgi-app-view") === "editor") return "editor";
     } catch {}
     return "catalog";

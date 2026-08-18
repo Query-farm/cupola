@@ -49,7 +49,7 @@ export async function handleDotCommand(trimmed: string, state: ShellState, io: S
     writeln(".download csv      Download last result as CSV");
     writeln(".download excel    Download last result as Excel (.xlsx)");
     writeln(".reset             Reload with a fresh database");
-    writeln(".preview           Open last result in the Data Preview tab");
+    writeln(".preview           Open last result in the Data Viewer tab");
     writeln(".perspective       Open last result in Perspective viewer");
     return true;
   }
@@ -110,10 +110,10 @@ export async function handleDotCommand(trimmed: string, state: ShellState, io: S
     if (!state.lastArrowBuffer) {
       writeln("No result to preview. Run a query first.", "31");
     } else if (!ui.showPreview) {
-      writeln("Data Preview is unavailable.", "31");
+      writeln("Data Viewer is unavailable.", "31");
     } else {
       ui.showPreview(state.lastArrowBuffer);
-      writeln("Opened last result in the Data Preview tab", "32");
+      writeln("Opened last result in the Data Viewer tab", "32");
     }
     return true;
   }

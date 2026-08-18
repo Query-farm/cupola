@@ -15,10 +15,30 @@ test.describe("Unified tab bar", () => {
     for (const id of ["catalog", "editor", "shell", "askai", "preview", "queries", "perspective"]) {
       await expect(page.getByTestId(`tab-${id}`)).toBeVisible();
     }
+    await expect(page.getByRole("tablist", { name: "Workspace" }).getByRole("tab")).toHaveText([
+      "Query Editor",
+      "Ask AI",
+      "SQL Shell",
+      "Data Viewer",
+      "Catalog",
+      "Query History",
+      "Perspective",
+    ]);
     await page.getByTestId("tab-shell").click();
     await expect(page.getByTestId("tab-shell")).toHaveAttribute("aria-selected", "true");
     await page.getByTestId("tab-perspective").click();
     await expect(page.getByTestId("tab-perspective")).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("does not restore the transient Perspective tab after a reload", async ({ page }) => {
+    await page.getByTestId("tab-perspective").click();
+    await expect(page.getByTestId("tab-perspective")).toHaveAttribute("aria-selected", "true");
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("vgi-active-tab"))).toBe("perspective");
+
+    await page.reload();
+
+    await expect(page.getByTestId("tab-catalog")).toHaveAttribute("aria-selected", "true");
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("vgi-active-tab"))).toBe("catalog");
   });
 
   test("sidebar collapses and expands", async ({ page }) => {
@@ -29,8 +49,9 @@ test.describe("Unified tab bar", () => {
     await expect(page.getByRole("tree").first()).toBeVisible();
   });
 
-  test("Preview tab shows an empty state with no selection/result", async ({ page }) => {
+  test("Data Viewer tab shows an empty state with no selection/result", async ({ page }) => {
     await page.getByTestId("tab-preview").click();
+    await expect(page.getByRole("tab", { name: "Data Viewer" })).toBeVisible();
     await expect(page.getByText(/Select a table in the sidebar, or run a query/i)).toBeVisible({ timeout: T_NORMAL });
   });
 

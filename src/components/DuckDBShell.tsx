@@ -45,7 +45,7 @@ interface Props {
   onShellReady?: (insertText: (text: string) => void) => void;
   /** Catalog metadata for AI agent tools. */
   catalogData?: CatalogData;
-  /** Current selection — used for Data Preview tab when a table is selected. */
+  /** Current selection — used for Data Viewer tab when a table is selected. */
   selection?: import("@/lib/tree").Selection | null;
   /**
    * Called when ATTACH fails with an unrecoverable OAuth error (e.g. the IdP
@@ -155,7 +155,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   }, []);
   const [error, setError] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
-  // In-memory Arrow table to show in the Preview tab when the user runs
+  // In-memory Arrow table to show in the Data Viewer tab when the user runs
   // `.preview` in the shell. Takes precedence over the selection-driven table
   // preview, and is cleared when the sidebar selection changes (see below).
   const [resultPreview, setResultPreview] = useState<ArrowTable | null>(null);
@@ -177,7 +177,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   }, [onQueryHistoryCountChange]);
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
 
-  // Resolve selected table or view for Data Preview and Perspective tabs
+  // Resolve selected table or view for Data Viewer and Perspective tabs
   // Search both VGI catalog and memory catalog
   const allCatalogs = [catalogData, ui.memoryCatalog].filter((catalog): catalog is CatalogData => catalog !== null && catalog !== undefined);
   function findInCatalogs(type: "table", name?: string, schema?: string): TableInfo | null;
@@ -226,7 +226,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   }, [setActiveTab]);
 
   // Expose a callback for the shell's `.preview` command to open the last
-  // query result in the Data Preview tab. The Arrow IPC buffer is decoded
+  // query result in the Data Viewer tab. The Arrow IPC buffer is decoded
   // here and handed to DataPreview's client-side (result) pagination mode.
   useEffect(() => {
     ui.showPreview = (arrowBuffer: ArrayBuffer) => {
@@ -242,7 +242,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   }, [setActiveTab]);
 
   // A result preview belongs to a specific query, not to the sidebar. When the
-  // user navigates to a different table/view, drop it so the Preview tab falls
+  // user navigates to a different table/view, drop it so Data Viewer falls
   // back to previewing that selection.
   useEffect(() => {
     setResultPreview(null);
@@ -474,7 +474,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         <div ref={containerRef} className="h-full w-full overflow-hidden" />
       </div>
 
-      {/* Data Preview — a `.preview`/editor result (client-paginated,
+      {/* Data Viewer — a `.preview`/editor result (client-paginated,
           in-memory) takes precedence over the selection-driven table preview.
           The key forces a clean remount when switching between the two
           sources. Shows an empty state when there's nothing to preview. */}
@@ -490,7 +490,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-center p-8">
               <Table2 className="h-8 w-8 text-muted-foreground/30 mb-3" />
-              <p className="text-sm text-muted-foreground">Select a table in the sidebar, or run a query, to preview it here.</p>
+              <p className="text-sm text-muted-foreground">Select a table in the sidebar, or run a query, to view it here.</p>
             </div>
           )}
         </div>

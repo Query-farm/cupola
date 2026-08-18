@@ -12,16 +12,18 @@ interface TabDef {
   id: TabId;
   label: string;
   icon?: React.ComponentType<{ className?: string }>;
+  /** Persistent emphasis for the two primary ways into the product. */
+  accent?: "editor" | "ai";
   /** Use the DuckDB logo image instead of a lucide icon. */
   img?: boolean;
 }
 
 const TABS: TabDef[] = [
-  { id: "catalog", label: "Catalog", icon: Database },
-  { id: "editor", label: "Query Editor", icon: FileCode2 },
+  { id: "editor", label: "Query Editor", icon: FileCode2, accent: "editor" },
+  { id: "askai", label: "Ask AI", icon: Sparkles, accent: "ai" },
   { id: "shell", label: "SQL Shell", img: true },
-  { id: "askai", label: "Ask AI", icon: Sparkles },
-  { id: "preview", label: "Preview", icon: Table2 },
+  { id: "preview", label: "Data Viewer", icon: Table2 },
+  { id: "catalog", label: "Catalog", icon: Database },
   { id: "queries", label: "Query History", icon: History },
   { id: "perspective", label: "Perspective", icon: BarChart3 },
 ];
@@ -64,10 +66,14 @@ export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs
             onClick={() => onSelect(tab.id)}
             data-testid={`tab-${tab.id}`}
             className={cn(
-              "inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md whitespace-nowrap transition-colors shrink-0",
+              "inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md border border-transparent whitespace-nowrap transition-colors shrink-0",
               active
                 ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+                : tab.accent === "editor"
+                  ? "border-sky-500/25 bg-sky-500/10 text-sky-700 hover:bg-sky-500/20 dark:text-sky-300"
+                  : tab.accent === "ai"
+                    ? "border-violet-500/25 bg-violet-500/10 text-violet-700 hover:bg-violet-500/20 dark:text-violet-300"
+                    : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
             )}
           >
             {tab.img ? (

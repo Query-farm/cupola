@@ -138,7 +138,7 @@ export const ui = {
   navigateToSelection: null as ((sel: Selection) => void) | null,
 
   showPerspective: null as ((arrowBuf: ArrayBuffer) => void) | null,
-  /** Open the last shell result (Arrow IPC) in the Data Preview tab. Invoked by
+  /** Open the last shell result (Arrow IPC) in the Data Viewer tab. Invoked by
    *  the `.preview` dot-command. */
   showPreview: null as ((arrowBuf: ArrayBuffer) => void) | null,
   addQueryHistoryEntry: null as ((entry: QueryHistoryEntry) => void) | null,
