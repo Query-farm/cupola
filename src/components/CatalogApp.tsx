@@ -721,7 +721,6 @@ export function CatalogApp() {
     <div className="flex flex-col h-screen">
       <Header
         catalogName={data.catalogName}
-        catalogComment={data.catalogComment}
         serviceUrl={serviceUrl}
       />
       <AppTabBar

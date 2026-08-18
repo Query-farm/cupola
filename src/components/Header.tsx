@@ -3,27 +3,27 @@ import { BrandMark } from "./BrandMark";
 
 interface Props {
   catalogName: string;
-  catalogComment?: string | null;
   serviceUrl: string;
 }
 
 /**
- * Top bar. Layout: [🚜 Query.Farm] ⌁ [catalog name · comment]   [switcher]
+ * Top bar. Layout: [🚜 Query.Farm]   [switcher]
+ *
+ * This bar used to also carry the catalog's name and its comment. Both are
+ * gone: the comment is the same string `CatalogOverview` prints under the
+ * catalog title (and here it was a one-line truncate in a 56px bar, so this
+ * copy was usually the cut-off one), and the name is already the root node of
+ * the sidebar tree — which is where it stays legible regardless of who is
+ * signed in.
+ *
+ * `catalogName` is still a prop: `ServiceSwitcher` needs it, both as the
+ * avatar's fallback initial and as its trigger label when nobody is
+ * authenticated. It just isn't rendered by this component any more.
  */
-export function Header({ catalogName, catalogComment, serviceUrl }: Props) {
+export function Header({ catalogName, serviceUrl }: Props) {
   return (
     <header className="sticky top-0 z-40 flex items-center justify-between gap-4 px-4 h-14 border-b border-border bg-card/95 backdrop-blur-sm shadow-sm">
-      <div className="flex items-center gap-3 min-w-0">
-        <BrandMark />
-        <span className="h-5 w-px bg-border select-none" aria-hidden="true" />
-        <div className="flex items-baseline gap-2 min-w-0">
-          <span className="font-heading font-semibold text-foreground truncate">{catalogName}</span>
-          {catalogComment && (
-            <span className="text-xs text-muted-foreground hidden sm:inline truncate">{catalogComment}</span>
-          )}
-        </div>
-      </div>
-
+      <BrandMark />
       <ServiceSwitcher currentUrl={serviceUrl} currentCatalogName={catalogName} />
     </header>
   );
