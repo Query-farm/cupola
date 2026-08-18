@@ -33,6 +33,28 @@ describe("report document validation", () => {
     expect(errors).toContain("not allowed");
   });
 
+  test("reports a precise path for a missing nested layout instead of throwing", () => {
+    const report = createEmptyReport("Broken layout") as any;
+    report.blocks.push({
+      id: "chart",
+      type: "chart",
+      datasetId: "dataset",
+      spec: { mark: "bar" },
+      col: 0,
+      width: 12,
+    });
+    expect(() => validateReport(report)).not.toThrow();
+    expect(validateReport(report)).toContain("report.blocks[0].layout is required and must be {x, y, w, h}.");
+  });
+
+  test("rejects malformed map fields without throwing", () => {
+    const report = createEmptyReport("Broken map") as any;
+    report.datasets.push({ id: "dataset", name: "Places", sql: "SELECT 1" });
+    report.blocks.push({ id: "map", type: "map", datasetId: "dataset", geometryColumn: 42, layout: { x: 0, y: 0, w: 12, h: 5 } });
+    expect(() => validateReport(report)).not.toThrow();
+    expect(validateReport(report).join(" ")).toContain("report.blocks[0].geometryColumn must be a string");
+  });
+
   test("rejects cycles between SQL-driven parameter choices", () => {
     const report = createEmptyReport("Filters");
     report.parameters.push(

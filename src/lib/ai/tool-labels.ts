@@ -27,6 +27,14 @@ export function toolInputLabel(name: string): string {
       return "Reading more results";
     case "preview_sql":
       return "Writing report query";
+    case "configure_report":
+      return "Planning report";
+    case "upsert_report_dataset":
+      return "Composing dataset";
+    case "upsert_report_block":
+      return "Composing report block";
+    case "finalize_report":
+      return "Finalizing report";
     case "replace_report_draft":
       return "Composing report";
     case "ask_user":
@@ -49,6 +57,14 @@ export function toolActivityLabel(name: string, input?: any): string {
       return "Rendering chart";
     case "preview_sql":
       return "Running report query";
+    case "configure_report":
+      return "Configuring report";
+    case "upsert_report_dataset":
+      return "Building and running dataset";
+    case "upsert_report_block":
+      return "Building and rendering block";
+    case "finalize_report":
+      return "Validating and running report";
     case "replace_report_draft":
       return "Building and running report";
     default:

@@ -12,21 +12,22 @@ import { ChatMessageAssistant, type ContentBlock, type ToolCallEntry } from "@/c
 import { ChatMessageUser } from "@/components/chat/ChatMessageUser";
 import { QueryResultTable } from "@/components/chat/QueryResultTable";
 import { ReportMap } from "@/components/reports/ReportMap";
-import { embedChart, downloadPNG, downloadSVG, type VegaView } from "@/components/chat/chart-embed";
+import { compileChartSpec, embedChart, downloadPNG, downloadSVG, renderChartToPng, type VegaView } from "@/components/chat/chart-embed";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSettings } from "@/lib/settings";
-import { runAgentTurn, executeListTables, executeDescribeTable, type MessageParam, type Tool } from "@/lib/ai-agent";
-import { executeRunSql } from "@/lib/ai-tool-executor";
+import { runAgentTurn, executeListTables, executeDescribeTable, type MessageParam, type ToolResult, type ToolResultContent } from "@/lib/ai-agent";
+import { executeRunSql, validateChartSpec } from "@/lib/ai-tool-executor";
 import { QueryResultCache } from "@/lib/query-results";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import { toolInputLabel } from "@/lib/ai/tool-labels";
 import { exportResult, safeFileStem, triggerDownload } from "@/lib/editor/result-export";
 import { consumeReportPromotion, type ReportPromotion } from "@/lib/reports/events";
 import { reportDisplayRows, reportMapRows } from "@/lib/reports/display";
-import { validateReportResultColumns } from "@/lib/reports/execution";
+import { isBlockingVegaWarning, validateReportResultColumns } from "@/lib/reports/execution";
+import { REPORT_TOOLS, upsertAgentBlock, upsertAgentDataset, type SemanticBlockHeight, type SemanticBlockWidth } from "@/lib/reports/agent-tools";
 import { compileReportQuery } from "@/lib/reports/parameters";
 import { buildShareReportUrl, clearSharedReport, consumeSharedReport } from "@/lib/reports/share";
 import { deleteReport, exportReportJson, getStoredReport, importReportJson, listReports, restoreReportRevision, saveReport } from "@/lib/reports/store";
@@ -67,15 +68,71 @@ interface ReportAgentMessage {
   usage?: { inputTokens: number; outputTokens: number };
 }
 
-const REPORT_TOOLS: Tool[] = [
-  { name: "list_tables", description: "List the connected catalog's schemas, tables, and views.", input_schema: { type: "object", properties: {} } },
-  { name: "describe_table", description: "Describe a table before writing SQL for it.", input_schema: { type: "object", properties: { catalog: { type: "string" }, schema: { type: "string" }, table: { type: "string" } }, required: ["schema", "table"] } },
-  { name: "preview_sql", description: "Run one read-only SQL query to verify columns and sample results.", input_schema: { type: "object", properties: { sql: { type: "string" } }, required: ["sql"] } },
-  { name: "replace_report_draft", description: "Replace and execute the complete report draft. Preserve schemaVersion=1 and all stable IDs when editing. Returns each dataset's columns, row count, sample rows, or execution error so you can correct the draft before finishing.", input_schema: { type: "object", properties: { report: { type: "object" }, summary: { type: "string" } }, required: ["report", "summary"] } },
-];
-
 function defaultValues(report: ReportDocumentV1): Record<string, ReportParameterValue> {
   return Object.fromEntries(report.parameters.map((p) => [p.key, structuredClone(p.defaultValue)]));
+}
+
+function sanitizeReportChartSpecs(report: ReportDocumentV1): { report: ReportDocumentV1; errors: string[] } {
+  const next = cloneReport(report);
+  const errors: string[] = [];
+  next.blocks = next.blocks.map((block) => {
+    if (block.type !== "chart") return block;
+    const validation = validateChartSpec(block.spec);
+    errors.push(...validation.errors.map((error) => `${block.title ?? block.id}: ${error}`));
+    return { ...block, spec: validation.sanitized };
+  });
+  return { report: next, errors };
+}
+
+interface ChartPreflightResult {
+  errors: string[];
+  warnings: string[];
+  feedback: ToolResultContent[];
+}
+
+async function preflightReportCharts(
+  report: ReportDocumentV1,
+  rowsByDataset: Map<string, Record<string, any>[]>,
+  includeImages: boolean,
+  maxImages = 3,
+): Promise<ChartPreflightResult> {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const feedback: ToolResultContent[] = [];
+  let imageCount = 0;
+  for (const block of report.blocks) {
+    if (block.type !== "chart") continue;
+    const label = block.title ?? block.id;
+    const compile = await compileChartSpec(block.spec);
+    warnings.push(...compile.warnings.map((warning) => `${label}: ${warning}`));
+    errors.push(...compile.warnings
+      .filter(isBlockingVegaWarning)
+      .map((warning) => `${label}: Vega-Lite warning requires correction: ${warning}`));
+    if (compile.error) {
+      errors.push(`${label}: Vega-Lite compile failed: ${compile.error}`);
+      continue;
+    }
+    const rows = rowsByDataset.get(block.datasetId);
+    if (!rows) continue;
+    // Rendering is both a smoke test for Vega runtime failures and optional
+    // visual feedback for the multimodal model.
+    const rendered = await renderChartToPng(block.spec, rows);
+    if ("error" in rendered) {
+      errors.push(`${label}: chart render failed: ${rendered.error}`);
+      continue;
+    }
+    if (includeImages && imageCount < maxImages) {
+      feedback.push({ type: "text", text: `Rendered chart preview for ${label}:` });
+      feedback.push({ type: "image", source: { type: "base64", media_type: rendered.mediaType, data: rendered.data } });
+      imageCount++;
+    }
+  }
+  return { errors, warnings, feedback };
+}
+
+function toolResult(payload: Record<string, unknown>, feedback: ToolResultContent[] = []): ToolResult {
+  const text = JSON.stringify(payload);
+  return feedback.length ? [{ type: "text", text }, ...feedback] : text;
 }
 
 function nextY(report: ReportDocumentV1): number {
@@ -247,7 +304,12 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     consume(); window.addEventListener("cupola:promote-report", consume); return () => window.removeEventListener("cupola:promote-report", consume);
   }, []);
 
-  const runDatasets = useCallback(async (report: ReportDocumentV1, runValues: Record<string, ReportParameterValue>, onlyIds?: Set<string>): Promise<DatasetRunSummary[]> => {
+  const runDatasets = useCallback(async (
+    report: ReportDocumentV1,
+    runValues: Record<string, ReportParameterValue>,
+    onlyIds?: Set<string>,
+    captureRows?: Map<string, Record<string, any>[]>,
+  ): Promise<DatasetRunSummary[]> => {
     const datasets = report.datasets.filter((d) => !onlyIds || onlyIds.has(d.id));
     const valueErrors = report.parameters.map((p) => validateParameterValue(p, runValues[p.key] ?? p.defaultValue)).filter(Boolean);
     if (valueErrors.length) {
@@ -274,6 +336,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         if (!response.ok || !response.arrowBuffers?.[0]) throw new Error(response.error || "Query returned no result.");
         const table = decodeArrowBuffer(response.arrowBuffers[0]);
         const rows = tableToRows(table);
+        captureRows?.set(dataset.id, rows);
         setResults((prev) => ({ ...prev, [dataset.id]: { table, rows, running: false, fetchedAt: Date.now() } }));
         summaries.push({ datasetId: dataset.id, name: dataset.name, ok: true, rowCount: table.numRows, columns: table.schema.fields.map((field) => field.name), sample: rows.slice(0, 3) });
       } catch (e) {
@@ -386,7 +449,54 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         ? { ...textBlock, content: textBlock.content + (textBlock.content ? "\n\n" : "") + `**Error:** ${error}` }
         : block));
     };
-    const system = `You are Cupola's report-authoring agent. Build and revise a declarative report JSON document. Never add JavaScript. Inspect every table before using it. SQL datasets must be one read-only SELECT/VALUES/WITH query. Parameter references use $key, date ranges use $key_start/$key_end, and multi-select values appear in IN ($key). Supported blocks are markdown, kpi, table, chart, perspective, and map. Charts are Vega-Lite v5 specs without data, datasets, url, href, or src. Maps are declarative Leaflet blocks: set type=\"map\", datasetId, and either geometryColumn for WKB/GeoJSON or both latitudeColumn and longitudeColumn. Maps may also set labelColumn, colorColumn, tooltipColumns, basemap (\"openstreetmap\" or \"none\"), palette, and style. Use a 12-column layout. Always finish by calling replace_report_draft with the complete document and a concise summary. That tool executes every dataset. If it returns an execution error, correct the report and call replace_report_draft again so the user receives a populated, working report.\n\nCurrent report:\n${JSON.stringify(draft)}`;
+    let workingReport = cloneReport(draft);
+    const workingRows = new Map<string, Record<string, any>[]>();
+    const applyWorkingReport = (report: ReportDocumentV1, clearResults = false) => {
+      workingReport = cloneReport(report);
+      const nextValues = defaultValues(workingReport);
+      setDraft(cloneReport(workingReport));
+      setSourceText(exportReportJson(workingReport));
+      setValues(nextValues);
+      setAppliedValues(nextValues);
+      if (clearResults) setResults({});
+    };
+    const finalizeWorkingReport = async (candidate: ReportDocumentV1, summary: string, clearResults = false): Promise<ToolResult> => {
+      const structureErrors = validateReport(candidate);
+      if (structureErrors.length) return toolResult({ ok: false, errors: structureErrors, message: "Correct the report structure before finalizing." });
+      const sanitized = sanitizeReportChartSpecs(candidate);
+      if (sanitized.errors.length) return toolResult({ ok: false, errors: sanitized.errors, message: "Correct the chart specifications before finalizing." });
+      applyWorkingReport(sanitized.report, clearResults);
+      workingRows.clear();
+      const execution = await runDatasets(workingReport, defaultValues(workingReport), undefined, workingRows);
+      const failures = execution.filter((result) => !result.ok);
+      const blockErrors = validateReportResultColumns(workingReport, execution);
+      const charts = await preflightReportCharts(workingReport, workingRows, settings.aiChartFeedback !== false);
+      const needsCorrection = failures.length > 0 || blockErrors.length > 0 || charts.errors.length > 0;
+      setAgentSummary(needsCorrection ? `${summary} The draft needs correction.` : `${summary} Data and visualizations loaded.`);
+      return toolResult({
+        ok: !needsCorrection,
+        message: needsCorrection
+          ? "The report ran, but has dataset, column, or visualization errors. Correct the affected item and finalize again."
+          : "Every dataset executed and every chart compiled and rendered. The populated report is ready for user review.",
+        datasets: execution,
+        blockErrors,
+        chartErrors: charts.errors,
+        chartWarnings: charts.warnings,
+      }, charts.feedback);
+    };
+    const system = `You are Cupola's report-authoring agent. Build and revise a declarative, rerunnable report. Never add JavaScript.
+
+Use a compositional workflow: (1) inspect tables, (2) call configure_report, (3) call upsert_report_dataset for one dataset and fix its SQL before continuing, (4) call upsert_report_block for one block and fix any compile/render error before continuing, and (5) call finalize_report. Do not finish until finalize_report returns ok=true. Prefer these tools over replace_report_draft.
+
+Cupola owns grid placement for compositional blocks. upsert_report_block may request only the semantic width values quarter/third/half/full and height values compact/medium/tall; never send numeric col/x/y/w/h fields. The strict bulk fallback is different: every full-document block must contain layout nested exactly as {"layout":{"x":0,"y":0,"w":12,"h":6}}; layout fields are never top-level.
+
+Inspect every table before using it. SQL datasets must be one read-only SELECT/VALUES/WITH query. Parameter references use $key, date ranges use $key_start/$key_end, and multi-select values appear in IN ($key). Do not add a WHERE clause unless the user's request actually requires filtering.
+
+Supported blocks are markdown, kpi, table, chart, perspective, and map. Charts are minimal Vega-Lite v5 specs without data, datasets, url, href, or src. Vega-Lite y2 is valid only as an encoding definition such as {"y2":{"field":"high"}}; use layers only when the visual itself needs layers, not as a generic error workaround. The block tool compiles and renders charts with real rows and may return an image. Treat its exact compiler/render error as authoritative; do not guess at causes.
+
+Maps are declarative Leaflet blocks: set type="map", datasetId, and either geometryColumn for WKB/GeoJSON or both latitudeColumn and longitudeColumn. Maps may also set labelColumn, colorColumn, tooltipColumns, basemap ("openstreetmap" or "none"), palette, and style.
+
+Current report:\n${JSON.stringify(draft)}`;
     try {
       await runAgentTurn(settings.anthropicApiKey, settings.aiModel, agentMessagesRef.current, system, async (name, input) => {
         if (name === "list_tables") return executeListTables(catalogData);
@@ -396,18 +506,65 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
           if (!engine.query) throw new Error("DuckDB is not ready.");
           return executeRunSql(input.sql, { query: engine.query, resultCache: resultCache.current });
         }
+        if (name === "configure_report") {
+          const next = cloneReport(workingReport);
+          next.title = String(input.title ?? "").trim();
+          if ("description" in input) next.description = String(input.description ?? "");
+          if (Array.isArray(input.requiredSources)) next.requiredSources = structuredClone(input.requiredSources);
+          if (Array.isArray(input.parameters)) next.parameters = structuredClone(input.parameters);
+          next.updatedAt = Date.now();
+          const errors = validateReport(next);
+          if (errors.length) return toolResult({ ok: false, errors });
+          applyWorkingReport(next);
+          return toolResult({ ok: true, reportId: next.id, title: next.title, parameterKeys: next.parameters.map((parameter) => parameter.key) });
+        }
+        if (name === "upsert_report_dataset") {
+          const updated = upsertAgentDataset(workingReport, input.dataset ?? {});
+          const errors = validateReport(updated.report);
+          if (errors.length) return toolResult({ ok: false, datasetId: updated.dataset.id, errors });
+          applyWorkingReport(updated.report);
+          const execution = await runDatasets(workingReport, defaultValues(workingReport), new Set([updated.dataset.id]), workingRows);
+          const result = execution[0];
+          setAgentSummary(result?.ok ? `${updated.dataset.name} loaded.` : `${updated.dataset.name} needs correction.`);
+          return toolResult({
+            ok: Boolean(result?.ok),
+            datasetId: updated.dataset.id,
+            message: result?.ok ? "Dataset executed. Reuse datasetId when adding blocks or revising this query." : "Fix this dataset and call upsert_report_dataset again with the same datasetId.",
+            result,
+          });
+        }
+        if (name === "upsert_report_block") {
+          const updated = upsertAgentBlock(workingReport, input.block ?? {}, input.width as SemanticBlockWidth | undefined, input.height as SemanticBlockHeight | undefined);
+          const sanitized = sanitizeReportChartSpecs(updated.report);
+          const errors = [...sanitized.errors, ...validateReport(sanitized.report)];
+          if (errors.length) return toolResult({ ok: false, blockId: updated.block.id, errors, message: "Correct the block and call upsert_report_block again with this blockId." });
+          const block = sanitized.report.blocks.find((candidate) => candidate.id === updated.block.id)!;
+          applyWorkingReport(sanitized.report);
+          if (block.type === "markdown") {
+            setAgentSummary(`${block.title ?? "Text block"} added.`);
+            return toolResult({ ok: true, blockId: block.id, layout: block.layout, message: "Text block rendered without requiring a dataset." });
+          }
+          const execution = await runDatasets(workingReport, defaultValues(workingReport), new Set([block.datasetId]), workingRows);
+          const blockErrors = validateReportResultColumns({ ...workingReport, blocks: [block] }, execution);
+          const charts = await preflightReportCharts({ ...workingReport, blocks: [block] }, workingRows, settings.aiChartFeedback !== false, 1);
+          const needsCorrection = execution.some((result) => !result.ok) || blockErrors.length > 0 || charts.errors.length > 0;
+          setAgentSummary(needsCorrection ? `${block.title ?? block.type} needs correction.` : `${block.title ?? block.type} loaded.`);
+          return toolResult({
+            ok: !needsCorrection,
+            blockId: block.id,
+            layout: block.layout,
+            message: needsCorrection ? "Correct this block and call upsert_report_block again with the same blockId." : "Block validated against live data and rendered successfully.",
+            dataset: execution[0],
+            blockErrors,
+            chartErrors: charts.errors,
+            chartWarnings: charts.warnings,
+          }, charts.feedback);
+        }
+        if (name === "finalize_report") {
+          return finalizeWorkingReport(workingReport, String(input.summary ?? "Report updated"));
+        }
         if (name === "replace_report_draft") {
-          const proposed = input.report as ReportDocumentV1;
-          const errors = validateReport(proposed); if (errors.length) throw new Error(errors.join("\n"));
-          const proposedValues = defaultValues(proposed);
-          setDraft(cloneReport(proposed)); setSourceText(exportReportJson(proposed)); setValues(proposedValues); setAppliedValues(proposedValues); setResults({});
-          const execution = await runDatasets(proposed, proposedValues);
-          const failures = execution.filter((result) => !result.ok);
-          const blockErrors = validateReportResultColumns(proposed, execution);
-          const summary = String(input.summary ?? "Draft updated");
-          const needsCorrection = failures.length > 0 || blockErrors.length > 0;
-          setAgentSummary(needsCorrection ? `${summary} The draft needs correction.` : `${summary} Data loaded.`);
-          return JSON.stringify({ ok: !needsCorrection, message: needsCorrection ? "The draft ran, but has dataset or block-column errors. Correct them and replace the draft again." : "Draft validated and all datasets executed. The report is populated for user review.", datasets: execution, blockErrors });
+          return finalizeWorkingReport(input.report as ReportDocumentV1, String(input.summary ?? "Draft updated"), true);
         }
         throw new Error(`Unknown tool ${name}`);
       }, {

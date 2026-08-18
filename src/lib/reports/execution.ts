@@ -6,6 +6,13 @@ export interface ReportDatasetShape {
   columns?: string[];
 }
 
+/** True when Vega-Lite discarded or could not understand part of a spec.
+ * Benign advisories (for example, a log domain containing zero) stay
+ * non-blocking, but silently dropped encodings must be repaired by the agent. */
+export function isBlockingVegaWarning(warning: string): boolean {
+  return /\b(?:dropping|dropped|incompatible|invalid|unsupported|cannot|does not contain any data field)\b/i.test(warning);
+}
+
 function referencedColumns(block: ReportBlock): string[] {
   if (block.type === "table") return block.columns ?? [];
   if (block.type === "kpi") return [block.valueColumn, block.labelColumn].filter((column): column is string => !!column);
