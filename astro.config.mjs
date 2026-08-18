@@ -216,9 +216,8 @@ export default defineConfig({
     },
     resolve: {
       // Force ONE Apache Arrow copy into the bundle. Arrow objects cross the
-      // boundary between cupola and the aliased sibling sources (vgi/client's
-      // deserializeSchema hands us Fields), and the siblings resolve
-      // @query-farm/apache-arrow from their OWN node_modules. Without dedupe
+      // boundary between cupola and its VGI dependencies (vgi/client's
+      // deserializeSchema hands us Fields). Without dedupe
       // the bundle carried two builds and the two `Field` types were nominally
       // distinct even at identical versions. Keep in sync with the matching
       // `paths` entry in tsconfig.json, which does the same for typechecking.
@@ -227,13 +226,7 @@ export default defineConfig({
         // Use the client-only connect module directly to avoid bundling
         // Node.js server-side code (node:crypto, node:zlib, etc.)
         '@query-farm/vgi-rpc/connect': resolve('../vgi-rpc-typescript/src/client/connect.ts'),
-        // Resolve vgi/client to its browser-safe source, matching the `bun`
-        // export condition dev uses. The package's `import` condition points at
-        // dist/client-entry.js, which bun's bundler mis-emits as a binding-less
-        // re-export barrel; Rollup then fails ("deserializeSchema is not
-        // defined"). Building from source avoids the broken prebuilt dist.
-        'vgi/client': resolve('../vgi-typescript/src/client-entry.ts'),
-        // Same mis-emit on the root barrel: vgi/client's error module imports
+        // vgi/client's error module imports
         // RpcError from "@query-farm/vgi-rpc", whose dist/index.js exports
         // launcher symbols (tryAcquireLock) that bun dropped from the bundle.
         // Rollup fails on the dangling export; source resolution tree-shakes

@@ -104,12 +104,12 @@ breaks.
 | `astro.config.mjs` | `base: process.env.BASE_PATH \|\| \`/v${pkg.version}/\`` |
 
 ### Why the image doesn't build in-container
-`package.json` points the `vgi` and `@query-farm/vgi-rpc` deps at **local
-sibling repos** (`../vgi-typescript`, `../vgi-rpc-typescript`) that aren't in
-the Docker build context. So the bundle is built on the host (where the
-siblings are linked, same as a Cloudflare publish) and the image just serves
-the prebuilt `dist/`. A fully self-contained multi-stage build would first
-require publishing or vendoring those two packages.
+`@query-farm/vgi` comes from npm, but `package.json` still points
+`@query-farm/vgi-rpc` at the local `../vgi-rpc-typescript` sibling, which isn't
+in the Docker build context. So the bundle is built on the host (where that
+sibling is linked, same as a Cloudflare publish) and the image just serves the
+prebuilt `dist/`. A fully self-contained multi-stage build would first require
+using a published VGI RPC package too.
 
 ## Azure Container Apps notes
 - **Target port 80.** Container Apps terminates TLS at the ingress and forwards

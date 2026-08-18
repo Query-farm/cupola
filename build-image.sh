@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # Build the flat single-version Cupola Docker image (Docker / Azure Container
-# Apps). Run on a machine that has the sibling repos (../vgi-typescript,
-# ../vgi-rpc-typescript) linked, same as a normal Cloudflare publish.
+# Apps). Run on a machine that has the vgi-rpc-typescript sibling linked,
+# same as a normal Cloudflare publish.
 #
 #   ./build-image.sh                 # -> image tagged cupola:flat
 #   ./build-image.sh myregistry/cupola:1.2.3

@@ -27,7 +27,6 @@
       "@/*": ["./src/*"],
       "@query-farm/vgi-rpc/connect": ["../vgi-rpc-typescript/src/client/connect.ts"],
       "@query-farm/vgi-rpc": ["../vgi-rpc-typescript/src/index.ts"],
-      "vgi/client": ["../vgi-typescript/src/client-entry.ts"],
       // Mirrors `vite.resolve.dedupe`: pin every importer — including the
       // sibling sources above, which would otherwise resolve their own copy —
       // to this project's single Arrow install, so `Field` is one nominal type

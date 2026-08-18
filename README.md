@@ -128,8 +128,8 @@ release and minor-line tags are also published, for example `0.4.116` and
 `0.4`. The image is a static Caddy server and does not embed a VGI endpoint;
 the `service` URL remains runtime-configurable.
 
-To build locally (with the sibling VGI repositories checked out beside this
-one), run `bun run image:build`, followed by `bun run image:test`.
+To build locally (with `vgi-rpc-typescript` checked out beside this repository),
+run `bun run image:build`, followed by `bun run image:test`.
 
 ## License
 

@@ -386,7 +386,7 @@ Points worth not re-deriving:
 ## Dependencies on Sibling Repos
 
 The `package.json` references local sibling repos:
-- `vgi` → `../vgi-typescript` (private repo; not published to npm)
+- `vgi` → npm alias for the exact published `@query-farm/vgi` release
 - `@query-farm/vgi-rpc` → `../vgi-rpc-typescript` (public repo; `astro.config.mjs` aliases directly into its source)
 
 The CI publish workflow checks these out side-by-side; locally they must exist as sibling directories.

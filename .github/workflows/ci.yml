@@ -21,12 +21,6 @@ jobs:
         with:
           path: cupola
 
-      - name: Checkout vgi-typescript
-        uses: actions/checkout@v4
-        with:
-          repository: Query-farm/vgi-typescript
-          path: vgi-typescript
-
       - name: Checkout vgi-rpc-typescript
         uses: actions/checkout@v4
         with:
@@ -41,7 +35,6 @@ jobs:
       - name: Install dependencies
         working-directory: cupola
         run: |
-          bun install --frozen-lockfile --cwd ../vgi-typescript
           bun install --frozen-lockfile --cwd ../vgi-rpc-typescript
           bun install --frozen-lockfile
 
