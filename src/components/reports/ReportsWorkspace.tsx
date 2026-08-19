@@ -3,7 +3,7 @@ import { ResponsiveGridLayout, useContainerWidth, type Layout, type ResponsiveLa
 import { noCompactor } from "react-grid-layout/core";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Download, Eye, FileJson, FilePlus2, GripVertical, Loader2, Pencil, Play, Plus, Printer, Save, Send, Share2, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Database, Download, Eye, FileJson, FilePlus2, GripVertical, Loader2, Pencil, Play, Plus, Printer, Save, Send, Share2, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import type { CatalogData } from "@/lib/service";
 import { engine, getEngineLifecycleSnapshot, ui, waitForEngineReady } from "@/lib/shell-bridge";
@@ -15,6 +15,7 @@ import { ChatMessageUser } from "@/components/chat/ChatMessageUser";
 import { QueryResultTable } from "@/components/chat/QueryResultTable";
 import { ReportMap } from "@/components/reports/ReportMap";
 import { ReportSparkline } from "@/components/reports/ReportSparkline";
+import { ReportDatasetsView } from "@/components/reports/ReportDatasetsView";
 import { compileChartSpec, embedChart, downloadPNG, downloadSVG, renderChartToPng, type VegaView } from "@/components/chat/chart-embed";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,6 +60,7 @@ interface DatasetResult {
   retryable?: boolean;
   retryAfterSeconds?: number;
   fetchedAt?: number;
+  durationMs?: number;
 }
 
 interface ReportRunProgress {
@@ -500,6 +502,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const [appliedValues, setAppliedValues] = useState<Record<string, ReportParameterValue>>({});
   const [parameterIssues, setParameterIssues] = useState<ReportParameterIssue[]>([]);
   const [parametersExpanded, setParametersExpanded] = useState(false);
+  const [workspaceView, setWorkspaceView] = useState<"report" | "datasets">("report");
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sourceText, setSourceText] = useState("");
   const [sourceError, setSourceError] = useState<string | null>(null);
@@ -558,7 +561,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const observer = new ResizeObserver(() => measureWidth());
     observer.observe(node);
     return () => observer.disconnect();
-  }, [draft?.id, containerRef, measureWidth]);
+  }, [draft?.id, workspaceView, containerRef, measureWidth]);
 
   const reload = useCallback(async () => {
     const records = await listStoredReports();
@@ -633,7 +636,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const publishedCopy = publishedSnapshot ? cloneReport(publishedSnapshot) : null;
     const viewed = mode === "reader" && publishedCopy ? publishedCopy : copy;
     const defaults = { ...defaultValues(viewed), ...initialValues };
-    setSelected(persisted ? copy : null); setDraft(copy); setPublished(publishedCopy); setPublishedAt(publicationTime ?? null); setReaderMode(mode === "reader" && Boolean(publishedCopy)); setValues(defaults); setAppliedValues(defaults); setParameterIssues([]); setParametersExpanded(false); setResults({}); setNarrativeStates({}); setRunProgress(null); setRunFailureNotice(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
+    setSelected(persisted ? copy : null); setDraft(copy); setPublished(publishedCopy); setPublishedAt(publicationTime ?? null); setReaderMode(mode === "reader" && Boolean(publishedCopy)); setValues(defaults); setAppliedValues(defaults); setParameterIssues([]); setParametersExpanded(false); setWorkspaceView("report"); setResults({}); setNarrativeStates({}); setRunProgress(null); setRunFailureNotice(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
     void getStoredReport(copy.id).then((stored) => {
       setRevisionOptions(stored?.revisions ?? []);
       if (!publishedSnapshot && stored?.publishedDocument) {
@@ -736,6 +739,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       setRunProgress((progress) => progress?.generation === generation
         ? { ...progress, currentDatasetName: dataset.name }
         : progress);
+      const startedAt = performance.now();
       try {
         const readErrors = validateReadOnlySql(dataset.sql);
         if (readErrors.length) throw new Error(readErrors.join(" "));
@@ -746,7 +750,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         const table = decodeArrowBuffer(response.arrowBuffers[0]);
         const rows = tableToRows(table);
         captureRows?.set(dataset.id, rows);
-        setResults((prev) => ({ ...prev, [dataset.id]: { table, rows, status: "success", fetchedAt: Date.now() } }));
+        setResults((prev) => ({ ...prev, [dataset.id]: { table, rows, status: "success", fetchedAt: Date.now(), durationMs: Math.round(performance.now() - startedAt) } }));
         summaries.push({ datasetId: dataset.id, name: dataset.name, ok: true, rowCount: table.numRows, columns: table.schema.fields.map((field) => field.name), sample: rows.slice(0, 3) });
       } catch (e) {
         if (generation !== runGeneration.current) return summaries;
@@ -762,6 +766,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
             errorCode: classified.code,
             retryable: classified.retryable,
             retryAfterSeconds: classified.retryAfterSeconds,
+            durationMs: Math.round(performance.now() - startedAt),
           },
         }));
         summaries.push({ datasetId: dataset.id, name: dataset.name, ok: false, error: classified.message, errorDetails: classified.technicalDetails, errorCode: classified.code, retryable: classified.retryable, retryAfterSeconds: classified.retryAfterSeconds, stale });
@@ -1506,6 +1511,10 @@ Current report:\n${JSON.stringify(draft)}`;
       <Button size="sm" variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(report, { serviceUrl, values: appliedValues, mode: "reader" })); setShareStatus("Reader link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}><Share2 className="h-4 w-4" /> Share</Button>
       <Button size="sm" variant="outline" onClick={() => switchReportMode("edit")}><Pencil className="h-4 w-4" /> Edit report</Button>
     </div>}
+    <div role="tablist" aria-label="Report views" className="report-authoring-control flex h-10 shrink-0 items-end gap-1 border-b bg-card px-3">
+      <button type="button" role="tab" id="report-view-tab" aria-selected={workspaceView === "report"} aria-controls="report-view-panel" data-testid="report-view-tab" onClick={() => setWorkspaceView("report")} className={`inline-flex h-10 items-center gap-1.5 border-b-2 px-3 text-sm ${workspaceView === "report" ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}><BarChart3 className="h-3.5 w-3.5" /> Report</button>
+      <button type="button" role="tab" id="report-datasets-tab" aria-selected={workspaceView === "datasets"} aria-controls="report-datasets-panel" data-testid="report-datasets-tab" onClick={() => setWorkspaceView("datasets")} className={`inline-flex h-10 items-center gap-1.5 border-b-2 px-3 text-sm ${workspaceView === "datasets" ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}><Database className="h-3.5 w-3.5" /> Datasets <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none">{report.datasets.length}</span></button>
+    </div>
     {!engineReady && <div data-testid="report-engine-waiting" role={engineLifecycle.status === "error" ? "alert" : "status"} className={engineLifecycle.status === "error" ? "border-b border-destructive/25 bg-destructive/5 px-4 py-2 text-xs text-destructive" : "border-b border-sky-300/50 bg-sky-50/50 px-4 py-2 text-xs text-sky-950 dark:border-sky-800 dark:bg-sky-950/25 dark:text-sky-100"}>
       <div className="flex items-center gap-2">{engineLifecycle.status === "error" ? null : <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />}<span className="font-medium">{engineLifecycle.status === "error" ? "Report data is unavailable because the local data engine did not start." : "Preparing the local data engine. This report will run automatically when it is ready."}</span></div>
     </div>}
@@ -1562,7 +1571,24 @@ Current report:\n${JSON.stringify(draft)}`;
       })} />)}<Button size="sm" disabled={reportRunning || !engineReady} onClick={handleApply}><Play className="h-4 w-4" /> Apply</Button>{parameterIssues.some((issue) => !issue.parameterKey) && <div role="alert" className="basis-full text-xs text-destructive">{parameterIssues.filter((issue) => !issue.parameterKey).map((issue) => issue.message).join(" ")}</div>}</div>}
     </div>}
     <div className="flex-1 min-h-0 flex">
-      <div className="flex-1 min-w-0 overflow-y-auto report-canvas p-3">
+      {workspaceView === "datasets" ? <div id="report-datasets-panel" role="tabpanel" aria-labelledby="report-datasets-tab" className="min-h-0 min-w-0 flex-1">
+        <ReportDatasetsView
+          report={report}
+          results={results}
+          appliedValues={appliedValues}
+          running={reportRunning}
+          engineReady={engineReady}
+          onRunDataset={(datasetId) => {
+            const existing = results[datasetId];
+            setRunFailureNotice(null);
+            void runDatasets(report, appliedValues, new Set([datasetId]), undefined, existing?.table ? "refresh" : "load");
+          }}
+          onOpenSql={(datasetId) => {
+            const dataset = report.datasets.find((candidate) => candidate.id === datasetId);
+            if (dataset) openDatasetInEditor(dataset);
+          }}
+        />
+      </div> : <div id="report-view-panel" role="tabpanel" aria-labelledby="report-view-tab" className="flex-1 min-w-0 overflow-y-auto report-canvas p-3">
         <div ref={containerRef} className="min-h-full min-w-0">
         <div className="print-only hidden mb-4"><h1 className="text-2xl font-bold">{report.title}</h1><p className="text-sm text-muted-foreground">{report.description}</p></div>
         {report.blocks.length === 0 ? <div className="h-full flex items-center justify-center"><div className="text-center"><FilePlus2 className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" /><p className="font-medium">Start with a request</p><p className="text-sm text-muted-foreground mb-4">Open the agent and describe the report you need.</p>{!readerMode && <Button onClick={() => setAgentOpen(true)}><Sparkles className="h-4 w-4" /> Open report agent</Button>}</div></div> : mounted && <div className="report-grid-stack relative" style={{ paddingTop: REPORT_GRID_TOP_PADDING }}>
@@ -1697,7 +1723,7 @@ Current report:\n${JSON.stringify(draft)}`;
           </ResponsiveGridLayout>
         </div>}
         </div>
-      </div>
+      </div>}
       {!readerMode && (agentOpen || inspectorOpen) && <aside className="report-authoring-control w-[min(42vw,520px)] min-w-[340px] border-l bg-card flex flex-col min-h-0">
         <div className="flex items-center border-b"><button className={`px-4 py-2 text-sm ${agentOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setAgentOpen(true); setInspectorOpen(false); }}>Agent</button><button className={`px-4 py-2 text-sm ${inspectorOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setInspectorOpen(true); setAgentOpen(false); setSourceText(exportReportJson(draft)); }}>Source</button><div className="flex-1" />{agentOpen && agentConversation.length > 0 && <Button size="sm" variant="ghost" disabled={agentBusy} onClick={resetAgentConversation}>New conversation</Button>}<button className="p-2" onClick={() => { setAgentOpen(false); setInspectorOpen(false); }}><X className="h-4 w-4" /></button></div>
         {agentOpen ? <><div ref={agentThreadRef} data-testid="report-agent-thread" className="flex-1 overflow-y-auto p-4 text-sm"><p className="text-muted-foreground mb-4">Describe the report or revision. The agent edits a draft; nothing is saved until you accept it.</p><div className="space-y-5">{agentConversation.map((message) => <div key={message.id} data-role={message.role}>{message.role === "user" ? <ChatMessageUser content={message.content ?? ""} /> : <ChatMessageAssistant blocks={message.blocks ?? []} isStreaming={message.isStreaming} usage={message.usage} model={settings.aiModel} onCancel={message.isStreaming ? () => abortRef.current?.abort() : undefined} />}</div>)}</div></div><div className="p-3 border-t"><textarea className="w-full min-h-24 rounded-md border bg-background p-2 text-sm" value={agentPrompt} onChange={(e) => setAgentPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void runAgent(); } }} placeholder="Build a monthly sales report with a date range and region filter…" /><div className="flex justify-end mt-2">{agentBusy ? <Button variant="destructive" size="sm" onClick={() => abortRef.current?.abort()}>Stop</Button> : <Button size="sm" disabled={!agentPrompt.trim()} onClick={runAgent}><Sparkles className="h-4 w-4" /> Send</Button>}</div></div></> : <><textarea className="flex-1 min-h-0 resize-none bg-background p-3 font-mono text-xs" spellCheck={false} value={sourceText} onChange={(e) => setSourceText(e.target.value)} />{sourceError && <div className="px-3 py-2 text-xs text-destructive border-t">{sourceError}</div>}<div className="p-3 border-t flex justify-end"><Button size="sm" onClick={() => { try { const parsed = importReportJson(sourceText); setDraft(parsed); setSourceError(null); } catch (e) { setSourceError(e instanceof Error ? e.message : String(e)); } }}>Preview source</Button></div></>}

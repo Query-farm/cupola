@@ -94,6 +94,59 @@ test("renders report text blocks without waiting for a dataset", async ({ page }
   await expect(page.getByText("Location:").locator("..")).toContainText("Norfolk");
 });
 
+test("browses the shared report datasets without issuing another query", async ({ page }) => {
+  await page.getByTestId("tab-reports").click();
+  await page.evaluate(() => {
+    const bridge = (window as any).__bridge;
+    const queryPrepared = bridge.queryPrepared;
+    if (!queryPrepared) throw new Error("Prepared query bridge is not ready");
+    (window as any).__datasetBrowserCalls = 0;
+    bridge.queryPrepared = async (sql: string, params: unknown[]) => {
+      (window as any).__datasetBrowserCalls += 1;
+      return queryPrepared(sql, params);
+    };
+  });
+  const now = Date.now();
+  const report = {
+    schemaVersion: 1,
+    id: "dataset-browser-example",
+    title: "Dataset browser example",
+    createdAt: now,
+    updatedAt: now,
+    revision: 1,
+    requiredSources: [],
+    parameters: [{ id: "humidity", key: "humidity", label: "Humidity", type: "number", defaultValue: 68 }],
+    datasets: [{ id: "conditions", name: "Current conditions", description: "A shared result", sql: "SELECT $humidity AS humidity, TIMESTAMP '2026-08-19 12:30:00' AS observed_at" }],
+    blocks: [
+      { id: "humidity-kpi", type: "kpi", datasetId: "conditions", title: "Humidity", valueColumn: "humidity", layout: { x: 0, y: 0, w: 4, h: 2 } },
+      { id: "conditions-table", type: "table", datasetId: "conditions", title: "Conditions", layout: { x: 4, y: 0, w: 8, h: 3 } },
+    ],
+  };
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "dataset-browser.cupola-report.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(report)),
+  });
+  await page.getByTestId("reports-run").click();
+  await expect(page.getByTestId("report-block-humidity-kpi")).toContainText("68", { timeout: T_NORMAL });
+  expect(await page.evaluate(() => (window as any).__datasetBrowserCalls)).toBe(1);
+
+  await page.getByTestId("report-datasets-tab").click();
+  await expect(page.getByTestId("report-datasets-view")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Current conditions" })).toBeVisible();
+  await expect(page.getByText("1 row · 2 columns")).toBeVisible();
+  await expect(page.getByText("Humidity (kpi)")).toBeVisible();
+  await expect(page.getByText("Conditions (table)")).toBeVisible();
+  await expect(page.getByTestId("report-dataset-sql")).toContainText("SELECT ? AS humidity");
+  await expect(page.getByTestId("report-dataset-param-1")).toHaveText("Parameter 1 = 68");
+  await expect(page.getByRole("cell", { name: "68", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: /Aug.*2026|2026/ })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__datasetBrowserCalls)).toBe(1);
+
+  await page.getByTestId("report-view-tab").click();
+  await expect(page.getByTestId("report-block-humidity-kpi")).toBeVisible();
+});
+
 test("keeps the last valid report active when a parameter fails validation", async ({ page }) => {
   await page.getByTestId("tab-reports").click();
   await page.evaluate(() => {
