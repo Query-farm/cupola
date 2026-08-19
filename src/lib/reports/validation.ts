@@ -118,6 +118,7 @@ export function validateReportStructure(input: unknown): string[] {
     if (!Number.isFinite(input[key])) errors.push(`report.${key} must be a finite number.`);
   }
   for (const key of ["requiredSources", "parameters", "datasets", "blocks"] as const) requireArray(key);
+  if (input.groups !== undefined && !Array.isArray(input.groups)) errors.push("report.groups must be an array.");
   if (errors.length) return errors;
 
   input.requiredSources.forEach((source: unknown, index: number) => {
@@ -141,6 +142,14 @@ export function validateReportStructure(input: unknown): string[] {
     requireString(dataset, "name", path);
     requireString(dataset, "sql", path);
   });
+  (input.groups ?? []).forEach((group: unknown, index: number) => {
+    const path = `report.groups[${index}]`;
+    if (!isRecord(group)) { errors.push(`${path} must be an object.`); return; }
+    requireString(group, "id", path);
+    requireString(group, "title", path);
+    if (group.description !== undefined && typeof group.description !== "string") errors.push(`${path}.description must be a string.`);
+    if (group.tone !== undefined && !["neutral", "blue", "green", "amber", "violet", "rose"].includes(group.tone)) errors.push(`${path}.tone is unsupported.`);
+  });
   input.blocks.forEach((block: unknown, index: number) => {
     const path = `report.blocks[${index}]`;
     if (!isRecord(block)) { errors.push(`${path} must be an object.`); return; }
@@ -157,6 +166,31 @@ export function validateReportStructure(input: unknown): string[] {
       if (typeof block.markdown !== "string") errors.push(`${path}.markdown must be a string.`);
     } else {
       requireString(block, "datasetId", path);
+    }
+    if (block.title !== undefined && typeof block.title !== "string") errors.push(`${path}.title must be a string.`);
+    if (block.groupId !== undefined && typeof block.groupId !== "string") errors.push(`${path}.groupId must be a string.`);
+    if (block.appearance !== undefined) {
+      if (!isRecord(block.appearance)) errors.push(`${path}.appearance must be an object.`);
+      else {
+        const appearance = block.appearance;
+        if (appearance.tone !== undefined && !["neutral", "info", "success", "warning", "danger"].includes(appearance.tone)) errors.push(`${path}.appearance.tone is unsupported.`);
+        if (appearance.emphasis !== undefined && !["subtle", "prominent"].includes(appearance.emphasis)) errors.push(`${path}.appearance.emphasis is unsupported.`);
+        if (appearance.label !== undefined && typeof appearance.label !== "string") errors.push(`${path}.appearance.label must be a string.`);
+        if (appearance.rules !== undefined && (!Array.isArray(appearance.rules) || appearance.rules.length > 5)) errors.push(`${path}.appearance.rules must contain at most five rules.`);
+        else (appearance.rules ?? []).forEach((rule: unknown, ruleIndex: number) => {
+          const rulePath = `${path}.appearance.rules[${ruleIndex}]`;
+          if (!isRecord(rule)) { errors.push(`${rulePath} must be an object.`); return; }
+          requireString(rule, "column", rulePath);
+          requireString(rule, "label", rulePath);
+          if (!["less_than", "less_than_or_equal", "greater_than", "greater_than_or_equal", "equal", "not_equal", "between"].includes(rule.operator)) errors.push(`${rulePath}.operator is unsupported.`);
+          if (!("value" in rule)) errors.push(`${rulePath}.value is required.`);
+          if (!["neutral", "info", "success", "warning", "danger"].includes(rule.tone)) errors.push(`${rulePath}.tone is unsupported.`);
+          if (rule.emphasis !== undefined && !["subtle", "prominent"].includes(rule.emphasis)) errors.push(`${rulePath}.emphasis is unsupported.`);
+          if (rule.rowMatch !== undefined && !["first", "any", "all"].includes(rule.rowMatch)) errors.push(`${rulePath}.rowMatch is unsupported.`);
+          if (["less_than", "less_than_or_equal", "greater_than", "greater_than_or_equal", "between"].includes(rule.operator) && !Number.isFinite(rule.value)) errors.push(`${rulePath}.value must be a finite number for ${rule.operator}.`);
+          if (rule.operator === "between" && !Number.isFinite(rule.value2)) errors.push(`${rulePath}.value2 must be a finite number for between.`);
+        });
+      }
     }
     if (block.type === "kpi" || block.type === "sparkline") requireString(block, "valueColumn", path);
     if (block.type === "sparkline") {
@@ -246,6 +280,11 @@ export function validateReport(input: unknown): string[] {
   for (const p of report.parameters) {
     if (p.options?.kind === "dataset" && !datasetIds.has(p.options.datasetId)) errors.push(`${p.label}: options dataset is missing.`);
   }
+  const groupIds = new Set<string>();
+  for (const group of report.groups ?? []) {
+    takeId(group.id, "Group");
+    groupIds.add(group.id);
+  }
   const dependencies = new Map<string, Set<string>>();
   for (const p of report.parameters) {
     const options = p.options;
@@ -265,6 +304,8 @@ export function validateReport(input: unknown): string[] {
   if ([...dependencies.keys()].some(hasCycle)) errors.push("SQL-driven parameter choices contain a dependency cycle.");
   for (const b of report.blocks) {
     takeId(b.id, "Block");
+    if (b.groupId && !groupIds.has(b.groupId)) errors.push(`${b.title ?? b.id}: group is missing.`);
+    if (b.type === "markdown" && b.appearance?.rules?.length) errors.push(`${b.title ?? b.id}: conditional appearance requires a dataset-backed block.`);
     const datasetId = blockDatasetId(b);
     if (datasetId && !datasetIds.has(datasetId)) errors.push(`${b.title ?? b.id}: dataset is missing.`);
     const { x, y, w, h } = b.layout;

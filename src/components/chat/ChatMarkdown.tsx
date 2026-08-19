@@ -25,6 +25,16 @@ export function ChatMarkdown({ content }: Props) {
               {children}
             </a>
           ),
+          img: ({ src, alt, title }) => (
+            <img
+              src={src}
+              alt={alt ?? ""}
+              title={title}
+              loading="lazy"
+              decoding="async"
+              className="my-2 h-auto max-h-full max-w-full rounded-md object-contain"
+            />
+          ),
           strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
           em: ({ children }) => <em>{children}</em>,
           code: ({ className, children }) => {

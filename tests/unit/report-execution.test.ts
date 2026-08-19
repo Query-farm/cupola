@@ -44,3 +44,18 @@ test("reports missing sparkline value and label columns", () => {
   expect(validateReportResultColumns(report, [{ datasetId: "weather", ok: true, columns: ["other"] }]))
     .toEqual(["temperature: missing result columns temperature, observed_at."]);
 });
+
+test("validates appearance rule columns for free-form charts", () => {
+  const report = createEmptyReport("Alerts");
+  report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 1" });
+  report.blocks.push({
+    id: "trend",
+    type: "chart",
+    datasetId: "weather",
+    spec: { mark: "line" },
+    appearance: { rules: [{ column: "alert_level", operator: "equal", value: "high", tone: "danger", label: "High alert" }] },
+    layout: { x: 0, y: 0, w: 12, h: 6 },
+  });
+  expect(validateReportResultColumns(report, [{ datasetId: "weather", ok: true, columns: ["value"] }]))
+    .toEqual(["trend: missing result column alert_level."]);
+});

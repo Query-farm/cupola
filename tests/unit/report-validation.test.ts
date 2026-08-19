@@ -55,6 +55,53 @@ describe("report document validation", () => {
     expect(validateReport(report)).toContain("report.blocks[0].layout is required and must be {x, y, w, h}.");
   });
 
+  test("allows an omitted markdown title but rejects malformed titles", () => {
+    const report = createEmptyReport("Narrative");
+    report.blocks.push({ id: "context", type: "markdown", markdown: "No separate title needed.", layout: { x: 0, y: 0, w: 12, h: 2 } });
+    expect(validateReport(report)).toEqual([]);
+
+    (report.blocks[0] as any).title = 42;
+    expect(validateReport(report)).toContain("report.blocks[0].title must be a string.");
+  });
+
+  test("validates block group references while accepting legacy reports without groups", () => {
+    const report = createEmptyReport("Grouped weather");
+    report.groups = [{ id: "glen-allen", title: "Glen Allen", tone: "green" }];
+    report.blocks.push({ id: "conditions", type: "markdown", groupId: "glen-allen", markdown: "Conditions", layout: { x: 0, y: 0, w: 12, h: 2 } });
+    expect(validateReport(report)).toEqual([]);
+
+    report.blocks[0].groupId = "missing-city";
+    expect(validateReport(report).join(" ")).toContain("group is missing");
+
+    delete report.groups;
+    delete report.blocks[0].groupId;
+    expect(validateReport(report)).toEqual([]);
+  });
+
+  test("validates safe conditional block appearance rules", () => {
+    const report = createEmptyReport("Humidity alerts");
+    report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 68 AS humidity" });
+    report.blocks.push({
+      id: "humidity",
+      type: "kpi",
+      datasetId: "weather",
+      valueColumn: "humidity",
+      appearance: {
+        tone: "success",
+        label: "In range",
+        rules: [{ column: "humidity", operator: "greater_than", value: 65, tone: "warning", emphasis: "prominent", label: "Above preferred range" }],
+      },
+      layout: { x: 0, y: 0, w: 3, h: 2 },
+    });
+    expect(validateReport(report)).toEqual([]);
+
+    report.blocks[0].appearance!.rules![0] = { ...report.blocks[0].appearance!.rules![0], operator: "between", value2: undefined };
+    expect(validateReport(report).join(" ")).toContain("value2 must be a finite number");
+
+    report.blocks[0] = { id: "note", type: "markdown", markdown: "Alert", appearance: { rules: [{ column: "humidity", operator: "equal", value: 68, tone: "danger", label: "Alert" }] }, layout: { x: 0, y: 0, w: 3, h: 2 } };
+    expect(validateReport(report).join(" ")).toContain("conditional appearance requires a dataset-backed block");
+  });
+
   test("rejects malformed map fields without throwing", () => {
     const report = createEmptyReport("Broken map") as any;
     report.datasets.push({ id: "dataset", name: "Places", sql: "SELECT 1" });

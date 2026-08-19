@@ -31,6 +31,8 @@ export function toolInputLabel(name: string): string {
       return "Planning report";
     case "upsert_report_dataset":
       return "Composing dataset";
+    case "upsert_report_group":
+      return "Organizing report";
     case "upsert_report_block":
       return "Composing report block";
     case "finalize_report":
@@ -61,6 +63,8 @@ export function toolActivityLabel(name: string, input?: any): string {
       return "Configuring report";
     case "upsert_report_dataset":
       return "Building and running dataset";
+    case "upsert_report_group":
+      return "Creating report group";
     case "upsert_report_block":
       return "Building and rendering block";
     case "finalize_report":

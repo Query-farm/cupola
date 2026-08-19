@@ -35,6 +35,17 @@ test("renders report text blocks without waiting for a dataset", async ({ page }
       title: "Summary",
       markdown: "## Executive summary\n\nAll three datasets are ready.",
       layout: { x: 0, y: 0, w: 12, h: 3 },
+    }, {
+      id: "content-only",
+      type: "markdown",
+      markdown: "### Supporting context\n\nThis card intentionally has no separate title.\n\n![Cupola mark](/favicon.svg)",
+      layout: { x: 0, y: 3, w: 12, h: 3 },
+    }, {
+      id: "legacy-text",
+      type: "markdown",
+      title: "Text",
+      markdown: "Legacy generic titles are treated as content-only cards.",
+      layout: { x: 0, y: 6, w: 12, h: 2 },
     }],
   };
   await page.locator('input[type="file"]').setInputFiles({
@@ -45,7 +56,121 @@ test("renders report text blocks without waiting for a dataset", async ({ page }
 
   await expect(page.getByText("Executive summary", { exact: true })).toBeVisible();
   await expect(page.getByText("All three datasets are ready.")).toBeVisible();
+  await expect(page.getByTestId("report-block-header-summary")).toContainText("Summary");
+  await expect(page.getByTestId("report-block-header-content-only")).toHaveCount(0);
+  await expect(page.getByTestId("report-block-header-legacy-text")).toHaveCount(0);
+  await expect(page.getByText("Supporting context", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("report-block-content-only").locator("img")).toHaveAttribute("src", "/favicon.svg");
   await expect(page.getByText("This report has not loaded its data yet.")).toHaveCount(0);
+});
+
+test("visually groups related report boxes into labeled rounded containers", async ({ page }) => {
+  await page.getByTestId("tab-reports").click();
+  const now = Date.now();
+  const report = {
+    schemaVersion: 1,
+    id: "grouped-cities-example",
+    title: "Weather by city",
+    createdAt: now,
+    updatedAt: now,
+    revision: 1,
+    requiredSources: [],
+    parameters: [],
+    datasets: [],
+    groups: [
+      { id: "glen-allen", title: "Glen Allen", description: "Current conditions", tone: "green" },
+      { id: "norfolk", title: "Norfolk", description: "Coastal conditions", tone: "blue" },
+    ],
+    blocks: [
+      { id: "glen-kpi", type: "markdown", groupId: "glen-allen", title: "Humidity", markdown: "**68%**", layout: { x: 0, y: 0, w: 4, h: 2 } },
+      { id: "glen-trend", type: "markdown", groupId: "glen-allen", title: "Trend", markdown: "Humidity is rising.", layout: { x: 4, y: 0, w: 8, h: 2 } },
+      { id: "norfolk-kpi", type: "markdown", groupId: "norfolk", title: "Humidity", markdown: "**74%**", layout: { x: 0, y: 3, w: 4, h: 2 } },
+      { id: "norfolk-trend", type: "markdown", groupId: "norfolk", title: "Trend", markdown: "Humidity is steady.", layout: { x: 4, y: 3, w: 8, h: 2 } },
+    ],
+  };
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "grouped-cities.cupola-report.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(report)),
+  });
+
+  await expect(page.getByTestId("report-group-label-glen-allen")).toContainText("Glen Allen");
+  await expect(page.getByTestId("report-group-label-norfolk")).toContainText("Norfolk");
+  const bounds = await page.evaluate(() => {
+    const rect = (testId: string) => {
+      const value = document.querySelector(`[data-testid="${testId}"]`)!.getBoundingClientRect();
+      return { left: value.left, top: value.top, right: value.right, bottom: value.bottom };
+    };
+    return {
+      glen: rect("report-group-glen-allen"),
+      glenKpi: rect("report-block-glen-kpi"),
+      glenTrend: rect("report-block-glen-trend"),
+      norfolk: rect("report-group-norfolk"),
+      norfolkKpi: rect("report-block-norfolk-kpi"),
+    };
+  });
+  expect(bounds.glen.left).toBeLessThan(bounds.glenKpi.left);
+  expect(bounds.glen.right).toBeGreaterThan(bounds.glenTrend.right);
+  expect(bounds.glen.top).toBeLessThan(bounds.glenKpi.top);
+  expect(bounds.glen.bottom).toBeGreaterThan(bounds.glenKpi.bottom);
+  expect(bounds.norfolk.top).toBeLessThan(bounds.norfolkKpi.top);
+  expect(bounds.norfolk.top).toBeGreaterThan(bounds.glen.bottom);
+});
+
+test("applies value-driven KPI backgrounds with visible alert labels", async ({ page }) => {
+  await page.getByTestId("tab-reports").click();
+  const now = Date.now();
+  const report = {
+    schemaVersion: 1,
+    id: "conditional-kpi-example",
+    title: "Conditional KPI example",
+    createdAt: now,
+    updatedAt: now,
+    revision: 1,
+    requiredSources: [],
+    parameters: [],
+    datasets: [{ id: "weather", name: "Weather", sql: "SELECT 68 AS humidity, 82 AS temperature" }],
+    groups: [],
+    blocks: [{
+      id: "humidity",
+      type: "kpi",
+      datasetId: "weather",
+      title: "Humidity",
+      valueColumn: "humidity",
+      appearance: {
+        tone: "success",
+        label: "In preferred range",
+        rules: [
+          { column: "humidity", operator: "greater_than", value: 80, tone: "danger", emphasis: "prominent", label: "Critical humidity" },
+          { column: "humidity", operator: "greater_than", value: 65, tone: "warning", emphasis: "prominent", label: "Above preferred range" },
+        ],
+      },
+      layout: { x: 0, y: 0, w: 6, h: 3 },
+    }, {
+      id: "temperature",
+      type: "kpi",
+      datasetId: "weather",
+      title: "Temperature",
+      valueColumn: "temperature",
+      appearance: {
+        tone: "neutral",
+        rules: [{ column: "temperature", operator: "between", value: 65, value2: 85, tone: "success", label: "Comfortable" }],
+      },
+      layout: { x: 6, y: 0, w: 6, h: 3 },
+    }],
+  };
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "conditional-kpis.cupola-report.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(report)),
+  });
+  await page.getByTestId("reports-run").click();
+
+  await expect(page.getByTestId("report-block-humidity")).toHaveAttribute("data-report-tone", "warning", { timeout: T_NORMAL });
+  await expect(page.getByTestId("report-block-humidity")).toHaveAttribute("data-report-emphasis", "prominent");
+  await expect(page.getByTestId("report-block-status-humidity")).toHaveText("Above preferred range");
+  await expect(page.getByTestId("report-block-temperature")).toHaveAttribute("data-report-tone", "success");
+  await expect(page.getByTestId("report-block-status-temperature")).toHaveText("Comfortable");
 });
 
 test("shows dataset progress while loading and preserves data while refreshing", async ({ page }) => {
@@ -107,6 +232,8 @@ test("shows dataset progress while loading and preserves data while refreshing",
   await expect(page.getByTestId("report-dataset-loading-detail-table")).toContainText("Waiting to load data");
   await expect(page.getByRole("cell", { name: "ready" })).toBeVisible({ timeout: T_NORMAL });
   await expect(page.getByTestId("report-run-progress")).toHaveCount(0);
+  await expect(page.getByTestId("report-as-of")).toHaveCount(1);
+  await expect(page.locator('[data-testid^="report-block-header-"]').filter({ hasText: "as of" })).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__reportQueryCalls)).toBe(2);
 
   await page.getByTestId("reports-run").click();
@@ -180,6 +307,12 @@ test("fits a chart to its report block without an inner scrollbar", async ({ pag
   await expect(chart.locator("svg")).toBeVisible({ timeout: T_NORMAL });
   expect(await chart.evaluate((element) => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
 
+  const chartBlock = page.getByTestId("report-block-chart-block");
+  const chartActions = page.getByTestId("report-block-actions-chart-block");
+  await expect.poll(() => chartActions.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+  await chartBlock.hover();
+  await expect.poll(() => chartActions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+
   const download = page.waitForEvent("download");
   await page.getByTestId("report-download-csv-chart-block").click();
   expect((await download).suggestedFilename()).toBe("Values_by_category.csv");
@@ -202,6 +335,7 @@ test("fits a chart to its report block without an inner scrollbar", async ({ pag
   expect(printedLayout).toEqual({ columnStart: "1", columnEnd: "span 8", rowStart: "1", sideBySide: true, chartWider: true });
   await page.emulateMedia({ media: "screen" });
 
+  await chartBlock.hover();
   await page.getByTestId("report-open-sql-chart-block").click();
   await expect(page.getByTestId("tab-editor")).toHaveAttribute("aria-selected", "true", { timeout: T_NORMAL });
   await expect(page.locator(".cm-content").first()).toContainText("SELECT * FROM (VALUES ('A', 10), ('B', 20))", { timeout: T_NORMAL });
@@ -326,7 +460,9 @@ test("renders semantic Tufte comparison devices with provenance", async ({ page 
   await expect(charts).toHaveCount(4, { timeout: T_NORMAL });
   for (let index = 0; index < 4; index++) await expect(charts.nth(index).locator("svg")).toBeVisible({ timeout: T_NORMAL });
   await expect(page.getByTestId("report-note-regional-multiples")).toContainText("Source: Regional planning model");
+  await page.getByTestId("report-block-regional-bullets").hover();
   await expect(page.getByTestId("report-download-csv-regional-bullets")).toBeVisible();
+  await page.getByTestId("report-block-regional-slopes").hover();
   await expect(page.getByTestId("report-open-sql-regional-slopes")).toBeVisible();
 });
 

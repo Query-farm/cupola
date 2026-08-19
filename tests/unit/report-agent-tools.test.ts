@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { REPORT_DOCUMENT_SCHEMA, REPORT_TOOLS, upsertAgentBlock, upsertAgentDataset } from "../../src/lib/reports/agent-tools";
+import { REPORT_DOCUMENT_SCHEMA, REPORT_TOOLS, upsertAgentBlock, upsertAgentDataset, upsertAgentGroup } from "../../src/lib/reports/agent-tools";
 import { createEmptyReport } from "../../src/lib/reports/types";
 
 describe("report agent tools", () => {
@@ -20,6 +20,57 @@ describe("report agent tools", () => {
     expect(properties.type.enum).toEqual(expect.arrayContaining(["small_multiples", "bullet", "slopegraph", "range_dot"]));
     expect(properties).toHaveProperty("caption");
     expect(properties).toHaveProperty("source");
+    expect(properties).toHaveProperty("groupId");
+    expect(properties.appearance.properties.rules.items.required).toEqual(["column", "operator", "value", "tone", "label"]);
+    expect(properties.appearance.properties.tone.enum).toEqual(["neutral", "info", "success", "warning", "danger"]);
+  });
+
+  test("lets the agent create labeled groups and keeps their blocks together", () => {
+    let report = createEmptyReport("Two-city weather");
+    report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 1 AS value" });
+    const richmond = upsertAgentGroup(report, { title: "Richmond", description: "Current conditions", tone: "blue" });
+    report = richmond.report;
+    const norfolk = upsertAgentGroup(report, { title: "Norfolk", tone: "green" });
+    report = norfolk.report;
+
+    const richmondKpi = upsertAgentBlock(report, { type: "kpi", title: "Humidity", groupId: richmond.group.id, datasetId: "weather", valueColumn: "value" }, "half", "compact");
+    const richmondChart = upsertAgentBlock(richmondKpi.report, { type: "chart", title: "Trend", groupId: richmond.group.id, datasetId: "weather", spec: { mark: "line" } }, "half", "compact");
+    const norfolkKpi = upsertAgentBlock(richmondChart.report, { type: "kpi", title: "Humidity", groupId: norfolk.group.id, datasetId: "weather", valueColumn: "value" }, "half", "compact");
+
+    expect(richmondKpi.block.layout).toEqual({ x: 0, y: 0, w: 6, h: 2 });
+    expect(richmondChart.block.layout).toEqual({ x: 6, y: 0, w: 6, h: 2 });
+    expect(norfolkKpi.block.layout.y).toBeGreaterThanOrEqual(2);
+    expect(norfolkKpi.report.groups).toEqual([
+      expect.objectContaining({ id: richmond.group.id, title: "Richmond" }),
+      expect.objectContaining({ id: norfolk.group.id, title: "Norfolk" }),
+    ]);
+    expect(norfolkKpi.report.blocks).toHaveLength(3);
+    expect(norfolkKpi.report.blocks.filter((block) => block.title === "Humidity").map((block) => block.groupId)).toEqual([
+      richmond.group.id,
+      norfolk.group.id,
+    ]);
+    expect(REPORT_TOOLS.find((tool) => tool.name === "upsert_report_group")?.input_schema.properties.group.properties.tone.enum).toContain("blue");
+
+    const ungrouped = upsertAgentBlock(norfolkKpi.report, {
+      id: norfolkKpi.block.id,
+      type: "kpi",
+      title: "Humidity",
+      datasetId: "weather",
+      valueColumn: "value",
+      groupId: null,
+    });
+    expect(ungrouped.block.groupId).toBeUndefined();
+  });
+
+  test("documents content-only markdown blocks instead of generic Text titles", () => {
+    const tool = REPORT_TOOLS.find((candidate) => candidate.name === "upsert_report_block")!;
+    const title = tool.input_schema.properties.block.properties.title;
+    expect(title.description).toContain("omit it for a content-only card");
+    expect(title.description).toContain("never use generic titles");
+
+    const report = createEmptyReport("Weather");
+    const created = upsertAgentBlock(report, { type: "markdown", markdown: "Conditions remain comfortable." });
+    expect(created.block.title).toBeUndefined();
   });
 
   test("lets the agent configure or disable automatic refresh", () => {

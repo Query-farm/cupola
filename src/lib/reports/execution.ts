@@ -14,22 +14,24 @@ export function isBlockingVegaWarning(warning: string): boolean {
 }
 
 function referencedColumns(block: ReportBlock): string[] {
-  if (block.type === "table") return block.columns ?? [];
-  if (block.type === "kpi") return [block.valueColumn, block.labelColumn].filter((column): column is string => !!column);
-  if (block.type === "sparkline") return [block.valueColumn, block.labelColumn].filter((column): column is string => !!column);
-  if (block.type === "small_multiples") return [block.facetColumn, block.xColumn, block.yColumn, block.colorColumn].filter((column): column is string => !!column);
-  if (block.type === "bullet") return [block.categoryColumn, block.valueColumn, block.targetColumn, ...(block.rangeColumns ?? [])];
-  if (block.type === "slopegraph") return [block.categoryColumn, block.startColumn, block.endColumn, block.colorColumn].filter((column): column is string => !!column);
-  if (block.type === "range_dot") return [block.categoryColumn, block.lowColumn, block.highColumn, block.valueColumn].filter((column): column is string => !!column);
-  if (block.type === "map") return [
+  let columns: string[] = [];
+  if (block.type === "table") columns = block.columns ?? [];
+  else if (block.type === "kpi") columns = [block.valueColumn, block.labelColumn].filter((column): column is string => !!column);
+  else if (block.type === "sparkline") columns = [block.valueColumn, block.labelColumn].filter((column): column is string => !!column);
+  else if (block.type === "small_multiples") columns = [block.facetColumn, block.xColumn, block.yColumn, block.colorColumn].filter((column): column is string => !!column);
+  else if (block.type === "bullet") columns = [block.categoryColumn, block.valueColumn, block.targetColumn, ...(block.rangeColumns ?? [])];
+  else if (block.type === "slopegraph") columns = [block.categoryColumn, block.startColumn, block.endColumn, block.colorColumn].filter((column): column is string => !!column);
+  else if (block.type === "range_dot") columns = [block.categoryColumn, block.lowColumn, block.highColumn, block.valueColumn].filter((column): column is string => !!column);
+  else if (block.type === "map") columns = [
     block.geometryColumn,
     block.latitudeColumn,
     block.longitudeColumn,
     block.labelColumn,
     block.colorColumn,
     ...(block.tooltipColumns ?? []),
-  ].filter((column, index, all): column is string => !!column && all.indexOf(column) === index);
-  return [];
+  ].filter((column): column is string => !!column);
+  columns.push(...(block.appearance?.rules ?? []).map((rule) => rule.column));
+  return columns.filter((column, index, all) => all.indexOf(column) === index);
 }
 
 /** Validate block-level column references after datasets have actually run. */
@@ -37,7 +39,7 @@ export function validateReportResultColumns(report: ReportDocumentV1, datasets: 
   const shapes = new Map(datasets.map((dataset) => [dataset.datasetId, dataset]));
   const errors: string[] = [];
   for (const block of report.blocks) {
-    if (block.type === "markdown" || block.type === "chart" || block.type === "perspective") continue;
+    if (block.type === "markdown") continue;
     const shape = shapes.get(block.datasetId);
     if (!shape?.ok || !shape.columns) continue;
     const available = new Set(shape.columns);

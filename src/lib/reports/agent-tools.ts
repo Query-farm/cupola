@@ -1,5 +1,5 @@
 import type { Tool } from "@/lib/ai-agent";
-import { cloneReport, newReportId, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportLayout } from "./types";
+import { cloneReport, newReportId, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportGroup, type ReportLayout } from "./types";
 
 const stringSchema = { type: "string" };
 const nullableScalarSchema = { type: ["string", "number", "boolean", "null"] };
@@ -88,6 +88,52 @@ const datasetSchema = {
   required: ["id", "name", "sql"],
 };
 
+const groupProperties = {
+  id: stringSchema,
+  title: stringSchema,
+  description: stringSchema,
+  tone: { enum: ["neutral", "blue", "green", "amber", "violet", "rose"] },
+};
+
+const groupSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: groupProperties,
+  required: ["id", "title"],
+};
+
+const appearanceRuleSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    column: stringSchema,
+    operator: { enum: ["less_than", "less_than_or_equal", "greater_than", "greater_than_or_equal", "equal", "not_equal", "between"] },
+    value: nullableScalarSchema,
+    value2: { type: "number" },
+    tone: { enum: ["neutral", "info", "success", "warning", "danger"] },
+    emphasis: { enum: ["subtle", "prominent"] },
+    label: stringSchema,
+    rowMatch: { enum: ["first", "any", "all"] },
+  },
+  required: ["column", "operator", "value", "tone", "label"],
+};
+
+const appearanceSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    tone: { enum: ["neutral", "info", "success", "warning", "danger"] },
+    emphasis: { enum: ["subtle", "prominent"] },
+    label: stringSchema,
+    rules: {
+      type: "array",
+      maxItems: 5,
+      items: appearanceRuleSchema,
+      description: "Ordered alert rules; the first matching rule controls the block background.",
+    },
+  },
+};
+
 const mapStyleSchema = {
   type: "object",
   additionalProperties: false,
@@ -103,9 +149,14 @@ const mapStyleSchema = {
 
 const blockProperties = {
   id: stringSchema,
-  title: stringSchema,
+  title: {
+    type: "string",
+    description: "Optional visible block header. For markdown, omit it for a content-only card (or pass an empty string when removing an existing title); never use generic titles such as Text or Markdown.",
+  },
   caption: stringSchema,
   source: stringSchema,
+  groupId: stringSchema,
+  appearance: appearanceSchema,
   type: { enum: ["markdown", "kpi", "sparkline", "small_multiples", "bullet", "slopegraph", "range_dot", "table", "chart", "perspective", "map"] },
   layout: layoutSchema,
   markdown: stringSchema,
@@ -170,6 +221,7 @@ export const REPORT_DOCUMENT_SCHEMA: Record<string, any> = {
     requiredSources: { type: "array", items: sourceSchema },
     parameters: { type: "array", items: parameterSchema },
     datasets: { type: "array", items: datasetSchema },
+    groups: { type: "array", items: groupSchema },
     blocks: { type: "array", items: blockSchema },
   },
   required: ["schemaVersion", "id", "title", "createdAt", "updatedAt", "revision", "requiredSources", "parameters", "datasets", "blocks"],
@@ -178,7 +230,13 @@ export const REPORT_DOCUMENT_SCHEMA: Record<string, any> = {
 const compositionalBlockSchema = {
   type: "object",
   additionalProperties: false,
-  properties: Object.fromEntries(Object.entries(blockProperties).filter(([key]) => key !== "layout")),
+  properties: {
+    ...Object.fromEntries(Object.entries(blockProperties).filter(([key]) => key !== "layout")),
+    groupId: {
+      type: ["string", "null"],
+      description: "Group returned by upsert_report_group, or null to remove this block from its current group.",
+    },
+  },
   required: ["type"],
 };
 
@@ -205,6 +263,23 @@ export const REPORT_TOOLS: Tool[] = [
         parameters: { type: "array", items: parameterSchema },
       },
       required: ["title"],
+    },
+  },
+  {
+    name: "upsert_report_group",
+    description: "Create or update a rounded, labeled visual group before adding its blocks. Use groups to distinguish repeated sections such as one set of KPIs and charts per city. Omit id when creating and reuse the returned groupId on each related block.",
+    input_schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        group: {
+          type: "object",
+          additionalProperties: false,
+          properties: groupProperties,
+          required: ["title"],
+        },
+      },
+      required: ["group"],
     },
   },
   {
@@ -258,7 +333,7 @@ export const REPORT_TOOLS: Tool[] = [
 export type SemanticBlockWidth = "quarter" | "third" | "half" | "full";
 export type SemanticBlockHeight = "compact" | "medium" | "tall";
 
-type WithoutManagedLayout<T> = T extends ReportBlock ? Omit<T, "id" | "layout"> & { id?: string } : never;
+type WithoutManagedLayout<T> = T extends ReportBlock ? Omit<T, "id" | "layout" | "groupId"> & { id?: string; groupId?: string | null } : never;
 type AgentBlock = WithoutManagedLayout<ReportBlock>;
 
 function overlaps(a: ReportLayout, b: ReportLayout): boolean {
@@ -272,17 +347,41 @@ function defaultHeight(type: ReportBlock["type"]): number {
   return 6;
 }
 
-function requestedLayout(blocks: ReportBlock[], type: ReportBlock["type"], width?: SemanticBlockWidth, height?: SemanticBlockHeight): ReportLayout {
+function requestedLayout(blocks: ReportBlock[], type: ReportBlock["type"], width?: SemanticBlockWidth, height?: SemanticBlockHeight, groupId?: string): ReportLayout {
   const w = width === "quarter" ? 3 : width === "third" ? 4 : width === "half" ? 6 : width === "full" ? 12 : type === "kpi" || type === "sparkline" ? 3 : type === "bullet" || type === "range_dot" ? 6 : 12;
   const h = height === "compact" ? 2 : height === "medium" ? 5 : height === "tall" ? 8 : defaultHeight(type);
   const maxY = blocks.reduce((max, block) => Math.max(max, block.layout.y + block.layout.h), 0);
-  for (let y = 0; y <= maxY; y++) {
+  const groupBlocks = groupId ? blocks.filter((block) => block.groupId === groupId) : [];
+  // A group's first block starts after all existing content. Later members fill
+  // the group's current rows before extending it, keeping repeated sections
+  // contiguous instead of interleaving two cities in the same grid region.
+  const firstGroupRow = maxY === 0 ? 0 : maxY + 1;
+  const startY = groupId ? (groupBlocks.length ? Math.min(...groupBlocks.map((block) => block.layout.y)) : firstGroupRow) : 0;
+  const endY = groupBlocks.length
+    ? Math.max(...groupBlocks.map((block) => block.layout.y + block.layout.h))
+    : groupId ? firstGroupRow : maxY;
+  for (let y = startY; y <= endY; y++) {
     for (let x = 0; x <= 12 - w; x++) {
       const candidate = { x, y, w, h };
       if (!blocks.some((block) => overlaps(candidate, block.layout))) return candidate;
     }
   }
-  return { x: 0, y: maxY, w, h };
+  return { x: 0, y: groupBlocks.length ? endY : maxY, w, h };
+}
+
+export function upsertAgentGroup(report: ReportDocumentV1, input: Omit<ReportGroup, "id"> & { id?: string }): { report: ReportDocumentV1; group: ReportGroup } {
+  const next = cloneReport(report);
+  const groups = next.groups ?? [];
+  const existingIndex = input.id
+    ? groups.findIndex((group) => group.id === input.id)
+    : groups.findIndex((group) => group.title === input.title);
+  const existing = existingIndex >= 0 ? groups[existingIndex] : undefined;
+  const group: ReportGroup = { ...existing, ...input, id: existing?.id ?? input.id ?? newReportId("group") };
+  if (existingIndex >= 0) groups[existingIndex] = group;
+  else groups.push(group);
+  next.groups = groups;
+  next.updatedAt = Date.now();
+  return { report: next, group };
 }
 
 export function upsertAgentDataset(report: ReportDocumentV1, input: Omit<ReportDataset, "id"> & { id?: string }): { report: ReportDocumentV1; dataset: ReportDataset } {
@@ -305,15 +404,25 @@ export function upsertAgentBlock(
   height?: SemanticBlockHeight,
 ): { report: ReportDocumentV1; block: ReportBlock } {
   const next = cloneReport(report);
+  const lookupGroupId = input.groupId ?? undefined;
   const existingIndex = input.id
     ? next.blocks.findIndex((block) => block.id === input.id)
-    : next.blocks.findIndex((block) => block.type === input.type && block.title && block.title === input.title);
+    : next.blocks.findIndex((block) => block.type === input.type
+      && block.title
+      && block.title === input.title
+      && (lookupGroupId === undefined || block.groupId === lookupGroupId));
   const existing = existingIndex >= 0 ? next.blocks[existingIndex] : undefined;
   const otherBlocks = next.blocks.filter((_, index) => index !== existingIndex);
-  const layout = existing && width === undefined && height === undefined
+  const groupWasProvided = Object.prototype.hasOwnProperty.call(input, "groupId");
+  const requestedGroupId = input.groupId ?? undefined;
+  const changingGroup = groupWasProvided && existing?.groupId !== requestedGroupId;
+  const layout = existing && width === undefined && height === undefined && !changingGroup
     ? existing.layout
-    : requestedLayout(otherBlocks, input.type, width, height);
-  const block = { ...existing, ...input, id: existing?.id ?? input.id ?? newReportId("block"), layout } as ReportBlock;
+    : requestedLayout(otherBlocks, input.type, width, height, requestedGroupId);
+  const normalizedInput = { ...input } as Record<string, unknown>;
+  if (normalizedInput.groupId == null) delete normalizedInput.groupId;
+  const block = { ...existing, ...normalizedInput, id: existing?.id ?? input.id ?? newReportId("block"), layout } as ReportBlock;
+  if (groupWasProvided && !requestedGroupId) delete block.groupId;
   if (existingIndex >= 0) next.blocks[existingIndex] = block;
   else next.blocks.push(block);
   next.updatedAt = Date.now();

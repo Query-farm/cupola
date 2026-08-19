@@ -300,6 +300,26 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Report export/query actions stay out of the visual hierarchy until the
+ * reader engages with a block. Keep them available on keyboard focus and on
+ * touch devices, where hover does not exist. */
+.report-block-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+.report-canvas .react-grid-item:hover .report-block-actions,
+.report-block-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (hover: none) {
+  .report-block-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
 @page report {
   size: landscape;
   margin: 12mm;
@@ -319,6 +339,7 @@
     print-color-adjust: exact;
   }
   .report-authoring-control { display: none !important; }
+  .report-authoring-group-layer { display: none !important; }
   .print-only { display: block !important; }
   .report-drag-handle { cursor: default !important; }
   .report-canvas .react-grid-layout {

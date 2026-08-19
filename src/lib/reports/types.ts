@@ -42,6 +42,51 @@ export interface ReportLayout {
   h: number;
 }
 
+export type ReportGroupTone = "neutral" | "blue" | "green" | "amber" | "violet" | "rose";
+
+/** A visual section whose bounds follow the report blocks attached to it. */
+export interface ReportGroup {
+  id: string;
+  title: string;
+  description?: string;
+  tone?: ReportGroupTone;
+}
+
+export type ReportBlockTone = "neutral" | "info" | "success" | "warning" | "danger";
+export type ReportBlockEmphasis = "subtle" | "prominent";
+export type ReportAppearanceOperator =
+  | "less_than"
+  | "less_than_or_equal"
+  | "greater_than"
+  | "greater_than_or_equal"
+  | "equal"
+  | "not_equal"
+  | "between";
+
+export interface ReportAppearanceRule {
+  /** Result column evaluated after the block's dataset runs. */
+  column: string;
+  operator: ReportAppearanceOperator;
+  value: string | number | boolean | null;
+  /** Inclusive upper bound when operator is between. */
+  value2?: number;
+  tone: ReportBlockTone;
+  emphasis?: ReportBlockEmphasis;
+  /** Visible status text so meaning is never communicated by color alone. */
+  label: string;
+  /** Which result rows must match. Defaults to first. */
+  rowMatch?: "first" | "any" | "all";
+}
+
+export interface ReportBlockAppearance {
+  /** Static fallback/background tone. */
+  tone?: ReportBlockTone;
+  emphasis?: ReportBlockEmphasis;
+  label?: string;
+  /** First matching rule wins, so put the most severe threshold first. */
+  rules?: ReportAppearanceRule[];
+}
+
 interface ReportBlockBase {
   id: string;
   title?: string;
@@ -49,6 +94,10 @@ interface ReportBlockBase {
   caption?: string;
   /** Human-readable provenance, such as a table or agency name. */
   source?: string;
+  /** Optional visual section that contains this block. */
+  groupId?: string;
+  /** Safe semantic background styling, optionally driven by result values. */
+  appearance?: ReportBlockAppearance;
   layout: ReportLayout;
 }
 
@@ -169,6 +218,8 @@ export interface ReportDocumentV1 {
   requiredSources: ReportSourceRequirement[];
   parameters: ReportParameter[];
   datasets: ReportDataset[];
+  /** Optional for backwards compatibility with reports saved before groups. */
+  groups?: ReportGroup[];
   blocks: ReportBlock[];
 }
 
@@ -194,6 +245,7 @@ export function createEmptyReport(title = "Untitled report", catalog?: string, s
     requiredSources: catalog ? [{ catalog, serviceHint }] : [],
     parameters: [],
     datasets: [],
+    groups: [],
     blocks: [],
   };
 }

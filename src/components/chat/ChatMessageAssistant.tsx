@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Sparkles, X, Loader2, FileChartColumn } from "lucide-react";
+import { Sparkles, X, Loader2, FileChartColumn, ChevronRight } from "lucide-react";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { SqlToolCallBlock } from "./SqlToolCallBlock";
 import { AskUserBlock } from "./AskUserBlock";
@@ -121,6 +121,66 @@ function CancelChip({ onCancel }: { onCancel: () => void }) {
   );
 }
 
+function formatToolValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function ToolCallActivity({ toolCall, onCancel }: { toolCall: ToolCallEntry; onCancel?: () => void }) {
+  const label = toolActivityLabel(toolCall.name, toolCall.input);
+  const sql = typeof toolCall.input?.sql === "string" ? toolCall.input.sql : null;
+  const remainingInput = sql && toolCall.input && typeof toolCall.input === "object" && !Array.isArray(toolCall.input)
+    ? Object.fromEntries(Object.entries(toolCall.input).filter(([key]) => key !== "sql"))
+    : toolCall.input;
+  const argumentsText = formatToolValue(remainingInput);
+  const showArguments = argumentsText !== "{}" && argumentsText !== "undefined";
+  const activityLabel = toolCall.isExecuting
+    ? `${label}...`
+    : toolCall.error
+      ? `${label} failed`
+      : label;
+
+  return (
+    <div className="flex items-start gap-1.5 text-xs text-muted-foreground/70">
+      <details
+        data-testid={`tool-call-details-${toolCall.name}`}
+        className="group min-w-0 flex-1 rounded-md border border-transparent open:border-border open:bg-muted/20"
+      >
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-md py-1 pr-2 hover:bg-muted/40 [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90" aria-hidden="true" />
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${toolCall.error ? "bg-destructive/70" : toolCall.isExecuting ? "bg-primary/40 animate-pulse" : "bg-muted-foreground/30"}`} />
+          <span className="min-w-0 flex-1 truncate">{activityLabel}</span>
+          <span className="shrink-0 font-mono text-[9px] text-muted-foreground/50">{toolCall.name}</span>
+        </summary>
+        <div className="space-y-2 border-t px-3 py-2">
+          {sql && <div>
+            <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">SQL</div>
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-background p-2 font-mono text-[11px] leading-relaxed text-foreground">{sql}</pre>
+          </div>}
+          {showArguments && <div>
+            <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Arguments</div>
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-background p-2 font-mono text-[11px] leading-relaxed text-foreground">{argumentsText}</pre>
+          </div>}
+          {toolCall.error && <div>
+            <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-destructive">Error</div>
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-destructive/5 p-2 font-mono text-[11px] leading-relaxed text-destructive">{toolCall.error}</pre>
+          </div>}
+          {!toolCall.error && toolCall.result && <div>
+            <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Result</div>
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-background p-2 font-mono text-[11px] leading-relaxed text-foreground">{toolCall.result}</pre>
+          </div>}
+          {!sql && !showArguments && !toolCall.error && !toolCall.result && <div className="text-[11px] text-muted-foreground">No additional details yet.</div>}
+        </div>
+      </details>
+      {toolCall.isExecuting && onCancel && <div className="pt-1"><CancelChip onCancel={onCancel} /></div>}
+    </div>
+  );
+}
+
 export function ChatMessageAssistant({
   blocks, isStreaming, onAskUserSelect, onCancel, onUpdateBlock, usage, model, renderSqlToolCall,
 }: Props) {
@@ -161,14 +221,7 @@ export function ChatMessageAssistant({
             // `return null` and so spent its whole pipeline (compile, SQL,
             // extras, PNG render) with nothing on screen at all.
             if (tc.name === "ask_user") return null;
-            const label = toolActivityLabel(tc.name, tc.input);
-            return (
-              <div key={block.id} className="text-xs text-muted-foreground/60 flex items-center gap-1.5 py-0.5">
-                <span className={`w-1.5 h-1.5 rounded-full ${tc.isExecuting ? "bg-primary/40 animate-pulse" : "bg-muted-foreground/30"}`} />
-                <span className="flex-1">{tc.isExecuting ? `${label}...` : label}</span>
-                {tc.isExecuting && onCancel && <CancelChip onCancel={onCancel} />}
-              </div>
-            );
+            return <ToolCallActivity key={block.id} toolCall={tc} onCancel={onCancel} />;
           }
           if (block.type === "thinking") {
             return <ThinkingIndicator key={block.id} label={block.label} onCancel={onCancel} />;
