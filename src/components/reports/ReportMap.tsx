@@ -69,6 +69,7 @@ export function ReportMap({ block, rows }: Props) {
         if ((block.basemap ?? "openstreetmap") === "openstreetmap") {
           L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            crossOrigin: true,
             maxZoom: 19,
           }).addTo(map);
         }

@@ -28,5 +28,6 @@ describe("built-in report block gallery", () => {
       refreshPolicy: "manual",
       snapshot: { model: "example snapshot", rowCount: 1 },
     });
+    expect(report.blocks.find((block) => block.type === "map")).toMatchObject({ basemap: "openstreetmap" });
   });
 });

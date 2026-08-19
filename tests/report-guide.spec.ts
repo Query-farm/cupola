@@ -33,8 +33,13 @@ test("report guide is a runnable in-product gallery backed by canned local data"
   await expect(page.getByTestId("reports-run")).toHaveText(/Run report/, { timeout: T_SHELL_BOOT });
   await expect(page.getByTestId("report-block-showcase-chart").locator("svg")).toBeAttached();
   await expect(page.getByTestId("report-block-showcase-small-multiples").locator("svg")).toBeAttached();
+  const smallMultipleLabels = await page.getByTestId("report-block-showcase-small-multiples").locator("svg text").allTextContents();
+  expect(smallMultipleLabels).not.toContain("0");
+  expect(smallMultipleLabels).toContain("65% reference");
   await expect(page.getByTestId("report-block-showcase-sparkline").getByTestId("report-sparkline-split")).toHaveAttribute("aria-label", "Now · forecast begins");
   await expect(page.getByTestId("report-block-showcase-map").locator(".leaflet-container")).toBeAttached();
+  await expect(page.getByTestId("report-block-showcase-map").locator("img.leaflet-tile").first()).toBeVisible({ timeout: T_SHELL_BOOT });
+  await expect(page.getByTestId("report-block-showcase-map").locator("img.leaflet-tile").first()).toHaveAttribute("crossorigin", "");
   await expect(page.getByTestId("report-block-showcase-perspective").locator("perspective-viewer")).toBeAttached({ timeout: T_SHELL_BOOT });
   await expect(page.getByText("This page is a real report")).toBeAttached();
   await expect(page.getByText("AI-generated", { exact: false })).toBeAttached();

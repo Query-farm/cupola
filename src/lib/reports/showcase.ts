@@ -315,7 +315,7 @@ export function createReportShowcase(): ReportDocumentV1 {
         labelColumn: "station",
         colorColumn: "air_quality",
         tooltipColumns: ["city", "station", "air_quality"],
-        basemap: "none",
+        basemap: "openstreetmap",
         palette: ["#059669", "#d97706"],
         style: { radius: 8, fillOpacity: 0.75, weight: 2 },
         layout: { x: 7, y: 18, w: 5, h: 6 },

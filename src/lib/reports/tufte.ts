@@ -50,7 +50,7 @@ function smallMultiplesSpec(block: ReportSmallMultiplesBlock): Record<string, an
         : { type: mainMark, ...(mainMark === "point" ? { filled: true, size: 42 } : {}) },
     encoding: {
       x: { field: block.xColumn, type: block.xType ?? "temporal", axis: { title: null, grid: false, labelAngle: 0 } },
-      y: { field: block.yColumn, type: "quantitative", axis: { title: null, zero: false } },
+      y: { field: block.yColumn, type: "quantitative", axis: { title: null }, scale: { zero: false } },
       ...(block.colorColumn
         ? { color: { field: block.colorColumn, type: "nominal" } }
         : { color: { value: BLUE } }),
@@ -66,13 +66,13 @@ function smallMultiplesSpec(block: ReportSmallMultiplesBlock): Record<string, an
   if (block.referenceValue !== undefined) {
     layers.push({
       mark: { type: "rule", color: MUTED, strokeDash: [4, 3] },
-      encoding: { y: { datum: block.referenceValue, type: "quantitative" } },
+      encoding: { y: { datum: block.referenceValue, type: "quantitative", scale: { zero: false } } },
     });
     if (block.referenceLabel) layers.push({
       mark: { type: "text", align: "left", dx: 4, dy: -5, color: INK, fontSize: 9 },
       encoding: {
         x: { value: 0 },
-        y: { datum: block.referenceValue, type: "quantitative" },
+        y: { datum: block.referenceValue, type: "quantitative", scale: { zero: false } },
         text: { value: block.referenceLabel },
       },
     });

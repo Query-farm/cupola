@@ -37,6 +37,19 @@ describe("Tufte report blocks", () => {
     }
   });
 
+  test("small multiples fit their observed range instead of forcing a zero baseline", () => {
+    const block = blocks()[0];
+    expect(block.type).toBe("small_multiples");
+    if (block.type !== "small_multiples") return;
+    const spec = tufteBlockToVegaSpec(block);
+    expect(spec.spec.layer[0].encoding.y).toEqual(expect.objectContaining({
+      field: "sales",
+      scale: { zero: false },
+    }));
+    expect(spec.spec.layer[0].encoding.y.axis).not.toHaveProperty("zero");
+    expect(spec.spec.layer[1].encoding.y.scale).toEqual({ zero: false });
+  });
+
   test("validates semantic fields, captions, sources, and live result columns", () => {
     const report = createEmptyReport("Comparisons");
     report.datasets.push({ id: "data", name: "Data", sql: "SELECT 1" });
