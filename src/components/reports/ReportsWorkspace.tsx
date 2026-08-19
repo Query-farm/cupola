@@ -1401,7 +1401,8 @@ Current report:\n${JSON.stringify(draft)}`;
       })} />)}<Button size="sm" disabled={reportRunning} onClick={handleApply}><Play className="h-4 w-4" /> Apply</Button>{parameterIssues.some((issue) => !issue.parameterKey) && <div role="alert" className="basis-full text-xs text-destructive">{parameterIssues.filter((issue) => !issue.parameterKey).map((issue) => issue.message).join(" ")}</div>}</div>}
     </div>}
     <div className="flex-1 min-h-0 flex">
-      <div ref={containerRef} className="flex-1 min-w-0 overflow-y-auto report-canvas p-3">
+      <div className="flex-1 min-w-0 overflow-y-auto report-canvas p-3">
+        <div ref={containerRef} className="min-h-full min-w-0">
         <div className="print-only hidden mb-4"><h1 className="text-2xl font-bold">{report.title}</h1><p className="text-sm text-muted-foreground">{report.description}</p></div>
         {report.blocks.length === 0 ? <div className="h-full flex items-center justify-center"><div className="text-center"><FilePlus2 className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" /><p className="font-medium">Start with a request</p><p className="text-sm text-muted-foreground mb-4">Open the agent and describe the report you need.</p>{!readerMode && <Button onClick={() => setAgentOpen(true)}><Sparkles className="h-4 w-4" /> Open report agent</Button>}</div></div> : mounted && <div className="report-grid-stack relative" style={{ paddingTop: REPORT_GRID_TOP_PADDING }}>
           <div className="report-group-layer report-authoring-group-layer pointer-events-none absolute inset-0 z-0" aria-hidden="true">
@@ -1532,6 +1533,7 @@ Current report:\n${JSON.stringify(draft)}`;
           })}
           </ResponsiveGridLayout>
         </div>}
+        </div>
       </div>
       {!readerMode && (agentOpen || inspectorOpen) && <aside className="report-authoring-control w-[min(42vw,520px)] min-w-[340px] border-l bg-card flex flex-col min-h-0">
         <div className="flex items-center border-b"><button className={`px-4 py-2 text-sm ${agentOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setAgentOpen(true); setInspectorOpen(false); }}>Agent</button><button className={`px-4 py-2 text-sm ${inspectorOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setInspectorOpen(true); setAgentOpen(false); setSourceText(exportReportJson(draft)); }}>Source</button><div className="flex-1" />{agentOpen && agentConversation.length > 0 && <Button size="sm" variant="ghost" disabled={agentBusy} onClick={resetAgentConversation}>New conversation</Button>}<button className="p-2" onClick={() => { setAgentOpen(false); setInspectorOpen(false); }}><X className="h-4 w-4" /></button></div>

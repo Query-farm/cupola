@@ -58,6 +58,11 @@ test("report guide is a runnable in-product gallery backed by canned local data"
   await expect(page.locator(".react-resizable-handle").first()).toBeHidden();
   await expect(page.getByTestId("report-block-header-showcase-kpi")).toHaveCSS("cursor", "default");
   await expect(page.getByTestId("report-parameters-toggle")).toContainText("Glen Allen, Virginia");
+  const readerCanvasWidth = await page.locator(".report-canvas").evaluate((canvas) => ({
+    client: canvas.clientWidth,
+    scroll: canvas.scrollWidth,
+  }));
+  expect(readerCanvasWidth.scroll).toBeLessThanOrEqual(readerCanvasWidth.client + 1);
 
   await page.getByRole("button", { name: "Edit report" }).click();
   await page.locator('input[value="Cupola report block gallery"]').fill("Unpublished gallery draft");
