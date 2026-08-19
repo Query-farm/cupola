@@ -48,6 +48,76 @@ test("renders report text blocks without waiting for a dataset", async ({ page }
   await expect(page.getByText("This report has not loaded its data yet.")).toHaveCount(0);
 });
 
+test("shows dataset progress while loading and preserves data while refreshing", async ({ page }) => {
+  await page.getByTestId("tab-reports").click();
+  await page.evaluate(() => {
+    const bridge = (window as any).__bridge;
+    const queryPrepared = bridge.queryPrepared;
+    if (!queryPrepared) throw new Error("Prepared query bridge is not ready");
+    (window as any).__reportQueryCalls = 0;
+    bridge.queryPrepared = async (sql: string, params: unknown[]) => {
+      (window as any).__reportQueryCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return queryPrepared(sql, params);
+    };
+  });
+
+  const now = Date.now();
+  const report = {
+    schemaVersion: 1,
+    id: "loading-progress-example",
+    title: "Loading progress example",
+    createdAt: now,
+    updatedAt: now,
+    revision: 1,
+    requiredSources: [],
+    parameters: [],
+    datasets: [{ id: "shared", name: "Shared metrics", sql: "SELECT 42 AS value" }, { id: "detail", name: "Detail rows", sql: "SELECT 'ready' AS state" }],
+    blocks: [{
+      id: "shared-kpi",
+      type: "kpi",
+      datasetId: "shared",
+      title: "Shared KPI",
+      valueColumn: "value",
+      layout: { x: 0, y: 0, w: 4, h: 3 },
+    }, {
+      id: "shared-table",
+      type: "table",
+      datasetId: "shared",
+      title: "Shared table",
+      layout: { x: 4, y: 0, w: 4, h: 3 },
+    }, {
+      id: "detail-table",
+      type: "table",
+      datasetId: "detail",
+      title: "Detail table",
+      layout: { x: 8, y: 0, w: 4, h: 3 },
+    }],
+  };
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "loading.cupola-report.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(report)),
+  });
+
+  await page.getByTestId("reports-run").click();
+  await expect(page.getByTestId("report-run-progress")).toContainText("Loading 0 of 2 datasets");
+  await expect(page.getByTestId("report-dataset-loading-shared-kpi")).toContainText("Loading data");
+  await expect(page.getByTestId("report-dataset-loading-shared-table")).toContainText("Loading data");
+  await expect(page.getByTestId("report-dataset-loading-detail-table")).toContainText("Waiting to load data");
+  await expect(page.getByRole("cell", { name: "ready" })).toBeVisible({ timeout: T_NORMAL });
+  await expect(page.getByTestId("report-run-progress")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__reportQueryCalls)).toBe(2);
+
+  await page.getByTestId("reports-run").click();
+  await expect(page.getByTestId("report-run-progress")).toContainText("Refreshing 0 of 2 datasets");
+  await expect(page.getByTestId("report-dataset-status-shared-kpi")).toContainText("Refreshing");
+  await expect(page.getByTestId("report-dataset-status-detail-table")).toContainText("Refresh queued");
+  await expect(page.getByRole("cell", { name: "ready" })).toBeVisible();
+  await expect(page.getByTestId("report-run-progress")).toHaveCount(0, { timeout: T_NORMAL });
+  expect(await page.evaluate(() => (window as any).__reportQueryCalls)).toBe(4);
+});
+
 test("promotes the current editor statement into a runnable report table", async ({ page }) => {
   await openEditor(page);
   await typeInEditor(page, "SELECT 42 AS answer, 'North & <South>' AS note, TIMESTAMP '2021-01-01 00:00:00.123456' AS occurred_at");

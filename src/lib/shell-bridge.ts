@@ -207,6 +207,8 @@ export function setBootPhase(phase: string | null, progress: number | null = nul
 if (typeof window !== "undefined") {
   (window as any).__bridge = {
     get query() { return engine.query; },
+    get queryPrepared() { return engine.queryPrepared; },
+    set queryPrepared(value) { engine.queryPrepared = value; },
     get querySync() { return engine.querySync; },
     get cancelQuery() { return engine.cancelQuery; },
     get catalogName() { return engine.catalogName; },

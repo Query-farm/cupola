@@ -46,9 +46,21 @@ interface Props {
 interface DatasetResult {
   table: ArrowTable | null;
   rows: Record<string, any>[];
-  running: boolean;
+  status: "idle" | "queued" | "running" | "success" | "error";
   error?: string;
   fetchedAt?: number;
+}
+
+interface ReportRunProgress {
+  generation: number;
+  mode: "load" | "refresh";
+  total: number;
+  completed: number;
+  currentDatasetName?: string;
+}
+
+function isDatasetPending(result?: DatasetResult): boolean {
+  return result?.status === "queued" || result?.status === "running";
 }
 
 interface DatasetRunSummary {
@@ -273,6 +285,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const [selected, setSelected] = useState<ReportDocumentV1 | null>(null);
   const [draft, setDraft] = useState<ReportDocumentV1 | null>(null);
   const [results, setResults] = useState<Record<string, DatasetResult>>({});
+  const [runProgress, setRunProgress] = useState<ReportRunProgress | null>(null);
   const [values, setValues] = useState<Record<string, ReportParameterValue>>({});
   const [appliedValues, setAppliedValues] = useState<Record<string, ReportParameterValue>>({});
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -301,7 +314,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
 
   const reload = useCallback(async () => setReports(await listReports()), []);
   useEffect(() => { reload(); const listener = () => reload(); window.addEventListener("cupola:reports-changed", listener); return () => window.removeEventListener("cupola:reports-changed", listener); }, [reload]);
-  useEffect(() => { onBusyChange?.(agentBusy || Object.values(results).some((r) => r.running)); }, [agentBusy, results, onBusyChange]);
+  useEffect(() => { onBusyChange?.(agentBusy || Object.values(results).some(isDatasetPending)); }, [agentBusy, results, onBusyChange]);
   useEffect(() => {
     const thread = agentThreadRef.current;
     if (thread) thread.scrollTop = thread.scrollHeight;
@@ -310,13 +323,14 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const openReport = useCallback((report: ReportDocumentV1, initialValues?: Record<string, ReportParameterValue>, autoRun = true, persisted = true) => {
     abortRef.current?.abort();
     abortRef.current = null;
+    const generation = ++runGeneration.current;
     agentMessagesRef.current = [];
     resultCache.current = new QueryResultCache();
     const copy = cloneReport(report);
     const defaults = { ...defaultValues(copy), ...initialValues };
-    setSelected(persisted ? copy : null); setDraft(copy); setValues(defaults); setAppliedValues(defaults); setResults({}); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
+    setSelected(persisted ? copy : null); setDraft(copy); setValues(defaults); setAppliedValues(defaults); setResults({}); setRunProgress(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
     void getStoredReport(copy.id).then((stored) => setRevisionOptions(stored?.revisions ?? []));
-    if (autoRun) setTimeout(() => runDatasets(copy, defaults), 0);
+    if (autoRun) setTimeout(() => { if (runGeneration.current === generation) void runDatasets(copy, defaults); }, 0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -334,6 +348,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     runValues: Record<string, ReportParameterValue>,
     onlyIds?: Set<string>,
     captureRows?: Map<string, Record<string, any>[]>,
+    mode: "load" | "refresh" = "load",
   ): Promise<DatasetRunSummary[]> => {
     const datasets = report.datasets.filter((d) => !onlyIds || onlyIds.has(d.id));
     const valueErrors = report.parameters.map((p) => validateParameterValue(p, runValues[p.key] ?? p.defaultValue)).filter(Boolean);
@@ -348,28 +363,52 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       setShareStatus(error);
       return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error }));
     }
+    if (datasets.length === 0) return [];
     const generation = ++runGeneration.current;
     const summaries: DatasetRunSummary[] = [];
-    setResults((prev) => ({ ...prev, ...Object.fromEntries(datasets.map((d) => [d.id, { ...(prev[d.id] ?? { table: null, rows: [] }), running: true, error: undefined }])) }));
+    setRunProgress({ generation, mode, total: datasets.length, completed: 0 });
+    setResults((prev) => {
+      const next: Record<string, DatasetResult> = { ...prev };
+      for (const [id, result] of Object.entries(next)) {
+        if (isDatasetPending(result)) next[id] = { ...result, status: result.table ? "success" : "idle" };
+      }
+      for (const dataset of datasets) {
+        next[dataset.id] = { ...(next[dataset.id] ?? { table: null, rows: [] }), status: "queued", error: undefined };
+      }
+      return next;
+    });
     for (const dataset of datasets) {
       if (generation !== runGeneration.current) return summaries;
+      setResults((prev) => ({
+        ...prev,
+        [dataset.id]: { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "running", error: undefined },
+      }));
+      setRunProgress((progress) => progress?.generation === generation
+        ? { ...progress, currentDatasetName: dataset.name }
+        : progress);
       try {
         const readErrors = validateReadOnlySql(dataset.sql);
         if (readErrors.length) throw new Error(readErrors.join(" "));
         const compiled = compileReportQuery(dataset.sql, report, runValues);
         const response = await engine.queryPrepared(compiled.sql, compiled.params);
+        if (generation !== runGeneration.current) return summaries;
         if (!response.ok || !response.arrowBuffers?.[0]) throw new Error(response.error || "Query returned no result.");
         const table = decodeArrowBuffer(response.arrowBuffers[0]);
         const rows = tableToRows(table);
         captureRows?.set(dataset.id, rows);
-        setResults((prev) => ({ ...prev, [dataset.id]: { table, rows, running: false, fetchedAt: Date.now() } }));
+        setResults((prev) => ({ ...prev, [dataset.id]: { table, rows, status: "success", fetchedAt: Date.now() } }));
         summaries.push({ datasetId: dataset.id, name: dataset.name, ok: true, rowCount: table.numRows, columns: table.schema.fields.map((field) => field.name), sample: rows.slice(0, 3) });
       } catch (e) {
+        if (generation !== runGeneration.current) return summaries;
         const message = e instanceof Error ? e.message : String(e);
-        setResults((prev) => ({ ...prev, [dataset.id]: { ...(prev[dataset.id] ?? { table: null, rows: [] }), running: false, error: message } }));
+        setResults((prev) => ({ ...prev, [dataset.id]: { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "error", error: message } }));
         summaries.push({ datasetId: dataset.id, name: dataset.name, ok: false, error: message });
       }
+      setRunProgress((progress) => progress?.generation === generation
+        ? { ...progress, completed: progress.completed + 1, currentDatasetName: undefined }
+        : progress);
     }
+    setRunProgress((progress) => progress?.generation === generation ? null : progress);
     return summaries;
   }, []);
 
@@ -377,22 +416,24 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     if (!draft) return;
     const nextValues = structuredClone(values);
     setAppliedValues(nextValues);
-    void runDatasets(draft, nextValues);
-  }, [draft, values, runDatasets]);
+    const mode = draft.datasets.some((dataset) => Boolean(results[dataset.id]?.table)) ? "refresh" : "load";
+    void runDatasets(draft, nextValues, undefined, undefined, mode);
+  }, [draft, values, results, runDatasets]);
 
   const handleApply = useCallback(() => {
     if (!draft) return;
     const changed = new Set(Object.keys(values).filter((k) => JSON.stringify(values[k]) !== JSON.stringify(appliedValues[k])));
     const ids = changed.size ? new Set(draft.datasets.filter((d) => parameterTokens(d.sql).some((t) => changed.has(t) || changed.has(t.replace(/_(?:start|end)$/, "")))).map((d) => d.id)) : undefined;
     setAppliedValues(structuredClone(values));
-    runDatasets(draft, values, ids);
-  }, [draft, values, appliedValues, runDatasets]);
+    const mode = draft.datasets.some((dataset) => (!ids || ids.has(dataset.id)) && Boolean(results[dataset.id]?.table)) ? "refresh" : "load";
+    void runDatasets(draft, values, ids, undefined, mode);
+  }, [draft, values, appliedValues, results, runDatasets]);
 
   useEffect(() => {
     autoRefreshStateRef.current = {
       report: draft,
       values: appliedValues,
-      busy: agentBusy || Object.values(results).some((result) => result.running),
+      busy: agentBusy || Object.values(results).some(isDatasetPending),
     };
   }, [draft, appliedValues, agentBusy, results]);
 
@@ -403,7 +444,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       const current = autoRefreshStateRef.current;
       if (!current.report || current.busy || autoRefreshRunningRef.current || document.visibilityState !== "visible") return;
       autoRefreshRunningRef.current = true;
-      void runDatasets(current.report, structuredClone(current.values))
+      void runDatasets(current.report, structuredClone(current.values), undefined, undefined, "refresh")
         .finally(() => { autoRefreshRunningRef.current = false; });
     }, seconds * 1_000);
     return () => window.clearInterval(interval);
@@ -718,16 +759,20 @@ Current report:\n${JSON.stringify(draft)}`;
     lg: draft.blocks.map((b) => ({ i: b.id, ...b.layout })),
     sm: [...draft.blocks].sort((a, b) => a.layout.y - b.layout.y || a.layout.x - b.layout.x).map((b, i) => ({ i: b.id, x: 0, y: i * b.layout.h, w: 1, h: b.layout.h })),
   };
+  const reportRunning = Object.values(results).some(isDatasetPending);
+  const progressLabel = runProgress
+    ? `${runProgress.mode === "refresh" ? "Refreshing" : "Loading"} ${runProgress.completed} of ${runProgress.total} datasets`
+    : null;
 
-  return <div className="h-full flex flex-col bg-background" data-testid="reports-workspace">
+  return <div className="h-full flex flex-col bg-background" data-testid="reports-workspace" aria-busy={reportRunning}>
     <div className="report-authoring-control flex items-center gap-2 px-3 py-2 border-b bg-card overflow-x-auto">
-      <Button size="sm" variant="ghost" onClick={() => { setDraft(null); setSelected(null); setResults({}); }}><ArrowLeft className="h-4 w-4" /> Library</Button>
+      <Button size="sm" variant="ghost" onClick={() => { runGeneration.current += 1; setRunProgress(null); setDraft(null); setSelected(null); setResults({}); }}><ArrowLeft className="h-4 w-4" /> Library</Button>
       <Input className="h-8 min-w-48 max-w-sm font-medium" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
       <div className="flex-1" />
       <Button size="sm" variant="outline" onClick={() => setAgentOpen((v) => !v)}><Bot className="h-4 w-4" /> Agent</Button>
       {revisionOptions.length > 0 && <select className="h-8 rounded-md border bg-background px-2 text-xs" defaultValue="" aria-label="Restore report revision" onChange={async (e) => { const revision = Number(e.target.value); if (!revision) return; const restored = await restoreReportRevision(draft.id, revision); openReport(restored, undefined, false); }}><option value="">History</option>{revisionOptions.slice().reverse().map((r) => <option key={r.revision} value={r.revision}>Restore revision {r.revision}</option>)}</select>}
       <Button size="sm" variant="outline" onClick={() => { setInspectorOpen((v) => !v); setSourceText(exportReportJson(draft)); }}><FileJson className="h-4 w-4" /> Source</Button>
-      <Button size="sm" data-testid="reports-run" disabled={reportErrors.length > 0 || Object.values(results).some((result) => result.running)} onClick={runFullReport}>{Object.values(results).some((result) => result.running) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {Object.values(results).some((result) => result.running) ? "Running report…" : "Run report"}</Button>
+      <Button size="sm" data-testid="reports-run" disabled={reportErrors.length > 0 || reportRunning} onClick={runFullReport}>{reportRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {progressLabel ?? "Run report"}</Button>
       <select
         className="h-8 rounded-md border bg-background px-2 text-xs"
         aria-label="Auto refresh"
@@ -748,6 +793,23 @@ Current report:\n${JSON.stringify(draft)}`;
       <Button size="sm" variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(draft, { serviceUrl, values: appliedValues })); setShareStatus("Share link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}><Share2 className="h-4 w-4" /> Share</Button>
       <Button size="sm" disabled={!dirty || reportErrors.length > 0} onClick={acceptDraft}><Save className="h-4 w-4" /> Accept & save</Button>
     </div>
+    {runProgress && <div data-testid="report-run-progress" className="report-authoring-control border-b bg-muted/30 px-4 py-2" aria-live="polite">
+      <div className="flex items-center gap-2 text-xs">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+        <span className="font-medium">{progressLabel}</span>
+        {runProgress.currentDatasetName && <span className="truncate text-muted-foreground">Running {runProgress.currentDatasetName}</span>}
+      </div>
+      <div
+        role="progressbar"
+        aria-label={runProgress.mode === "refresh" ? "Report refresh progress" : "Report loading progress"}
+        aria-valuemin={0}
+        aria-valuemax={runProgress.total}
+        aria-valuenow={runProgress.completed}
+        className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted"
+      >
+        <div className="h-full bg-primary transition-[width] duration-200" style={{ width: `${(runProgress.completed / runProgress.total) * 100}%` }} />
+      </div>
+    </div>}
     {(!isCompatible(draft) || reportErrors.length > 0 || shareStatus || agentSummary) && <div className="px-4 py-2 border-b text-xs space-y-1">{!isCompatible(draft) && <div className="text-amber-700">Missing required catalogs: {draft.requiredSources.filter((s) => !compatibleCatalogs.has(s.catalog)).map((s) => s.catalog).join(", ")}</div>}{reportErrors.length > 0 && <div className="text-destructive">{reportErrors.join(" ")}</div>}{shareStatus && <div>{shareStatus}</div>}{agentSummary && <div className="text-primary"><Check className="inline h-3 w-3 mr-1" />Agent draft: {agentSummary}</div>}</div>}
     {draft.parameters.length > 0 && <div className="report-parameters report-authoring-control flex flex-wrap items-end gap-3 px-4 py-3 border-b bg-muted/20">{draft.parameters.map((p) => <ParameterInput key={p.id} parameter={p} value={values[p.key] ?? p.defaultValue} options={optionValues(p)} onChange={(value) => setValues((v) => ({ ...v, [p.key]: value }))} />)}<Button size="sm" onClick={handleApply}><Play className="h-4 w-4" /> Apply</Button></div>}
     <div className="flex-1 min-h-0 flex">
@@ -757,6 +819,15 @@ Current report:\n${JSON.stringify(draft)}`;
           {draft.blocks.map((block) => {
             const result = block.type === "markdown" ? null : results[block.datasetId];
             const dataset = block.type === "markdown" ? null : draft.datasets.find((candidate) => candidate.id === block.datasetId);
+            const pending = isDatasetPending(result ?? undefined);
+            const hasData = Boolean(result?.table);
+            const datasetStatusLabel = result?.status === "queued"
+              ? (hasData ? "Refresh queued" : "Queued")
+              : result?.status === "running"
+                ? (hasData ? "Refreshing" : "Loading")
+                : result?.status === "error" && hasData
+                  ? "Refresh failed"
+                  : null;
             const visualBlock = block.type === "chart"
               ? block
               : isReportTufteBlock(block)
@@ -768,13 +839,20 @@ Current report:\n${JSON.stringify(draft)}`;
               "--report-grid-width": block.layout.w,
               "--report-grid-height": block.layout.h,
             } as CSSProperties;
-            return <div key={block.id} style={gridStyle} data-testid={`report-block-${block.id}`} className="rounded-lg border bg-card shadow-sm overflow-hidden flex flex-col print:shadow-none">
+            return <div key={block.id} style={gridStyle} data-testid={`report-block-${block.id}`} aria-busy={pending} className="rounded-lg border bg-card shadow-sm overflow-hidden flex flex-col print:shadow-none">
               <div className="report-drag-handle cursor-move px-3 py-2 border-b flex items-center gap-2 text-sm font-medium">
                 <span className="truncate">{block.title || (block.type === "markdown" ? "Text" : reportBlockLabel(block.type))}</span>
                 <div className="flex-1" />
                 {result?.fetchedAt && <span className="text-[10px] font-normal text-muted-foreground">as of {new Date(result.fetchedAt).toLocaleTimeString()}</span>}
                 <div className="report-authoring-control flex items-center gap-2" onMouseDown={(event) => event.stopPropagation()}>
-                  {result?.running && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {datasetStatusLabel && <span
+                    data-testid={`report-dataset-status-${block.id}`}
+                    className={`inline-flex items-center gap-1 text-[10px] font-normal ${result?.status === "error" ? "text-destructive" : "text-muted-foreground"}`}
+                    title={result?.status === "error" ? result.error : undefined}
+                  >
+                    {pending && <Loader2 className={`h-3 w-3 ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} />}
+                    {datasetStatusLabel}
+                  </span>}
                   {block.type !== "markdown" && block.type !== "chart" && !isReportTufteBlock(block) && <>
                     <button
                       type="button"
@@ -798,7 +876,7 @@ Current report:\n${JSON.stringify(draft)}`;
                   </>}
                 </div>
               </div>
-              <div className={`flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={block.markdown} /> : result?.error ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className="text-xs text-destructive">{result.error}</div><Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report</Button></div> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart
+              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={block.markdown} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className="text-xs text-destructive">{result.error}</div><Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report</Button></div> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart
                 block={visualBlock}
                 rows={result.rows}
                 onCsv={() => void exportResult(result.table!, "csv", block.title || dataset?.name || "report-data")}
