@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import { AlertCircle, CheckCircle2, Clock3, Database, ExternalLink, Loader2, Play, RefreshCw } from "lucide-react";
 import { QueryResultTable } from "@/components/chat/QueryResultTable";
+import { ColumnTypeBadge } from "@/components/content/ColumnTypeBadge";
 import { Button } from "@/components/ui/button";
+import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 import { reportDisplayRows } from "@/lib/reports/display";
 import { compileReportQuery } from "@/lib/reports/parameters";
 import type { ReportDocumentV1, ReportParameterValue } from "@/lib/reports/types";
@@ -15,6 +17,8 @@ interface DatasetResult {
   errorDetails?: string;
   fetchedAt?: number;
   durationMs?: number;
+  dependencies?: string[];
+  materialized?: boolean;
 }
 
 interface Props {
@@ -66,6 +70,8 @@ export function ReportDatasetsView({ report, results, appliedValues, running, en
   const dataset = report.datasets.find((candidate) => candidate.id === selectedId) ?? report.datasets[0];
   const result = dataset ? results[dataset.id] : undefined;
   const consumers = useMemo(() => dataset ? report.blocks.filter((block) => "datasetId" in block && block.datasetId === dataset.id) : [], [dataset, report.blocks]);
+  const dependencies = useMemo(() => (result?.dependencies ?? []).map((id) => report.datasets.find((candidate) => candidate.id === id)).filter((candidate) => candidate !== undefined), [report.datasets, result?.dependencies]);
+  const dependents = useMemo(() => dataset ? report.datasets.filter((candidate) => results[candidate.id]?.dependencies?.includes(dataset.id)) : [], [dataset, report.datasets, results]);
   const compiled = useMemo(() => {
     if (!dataset) return null;
     try {
@@ -100,15 +106,28 @@ export function ReportDatasetsView({ report, results, appliedValues, running, en
 
     <section aria-label={`${dataset.name} dataset details`} className="min-h-0 overflow-y-auto p-4 sm:p-5">
       <div className="flex flex-wrap items-start gap-3">
-        <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{dataset.name}</h2><span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusClasses(result)}`}>{statusLabel(result)}</span><span className="rounded-full border bg-muted/30 px-2 py-0.5 text-[10px] text-muted-foreground">{roleLabel(dataset.role)}</span></div>{dataset.description && <p className="mt-1 text-sm text-muted-foreground">{dataset.description}</p>}<div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>ID: <code>{dataset.id}</code></span>{result?.table && <span>{rowLabel(result.table.numRows)} · {columns.length.toLocaleString()} columns</span>}{result?.durationMs !== undefined && <span>{result.durationMs.toLocaleString()} ms</span>}{result?.fetchedAt && <span className="inline-flex items-center gap-1"><Clock3 className="h-3 w-3" />{new Date(result.fetchedAt).toLocaleString()}</span>}</div></div>
+        <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{dataset.name}</h2><span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusClasses(result)}`}>{statusLabel(result)}</span><span className="rounded-full border bg-muted/30 px-2 py-0.5 text-[10px] text-muted-foreground">{roleLabel(dataset.role)}</span>{result?.materialized && <span className="rounded-full border border-violet-300 bg-violet-50 px-2 py-0.5 text-[10px] text-violet-800 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-200">Shared this refresh</span>}</div>{dataset.description && <p className="mt-1 text-sm text-muted-foreground">{dataset.description}</p>}<div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>ID: <code>{dataset.id}</code></span>{result?.table && <span>{rowLabel(result.table.numRows)} · {columns.length.toLocaleString()} columns</span>}{result?.durationMs !== undefined && <span>{result.durationMs.toLocaleString()} ms</span>}{result?.fetchedAt && <span className="inline-flex items-center gap-1"><Clock3 className="h-3 w-3" />{new Date(result.fetchedAt).toLocaleString()}</span>}</div></div>
         <div className="flex items-center gap-2"><Button size="sm" variant="outline" onClick={() => onOpenSql(dataset.id)}><ExternalLink className="h-3.5 w-3.5" /> Open SQL</Button><Button size="sm" disabled={running || !engineReady} onClick={() => onRunDataset(dataset.id)}>{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : result?.table ? <RefreshCw className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}{result?.table ? "Refresh dataset" : "Run dataset"}</Button></div>
       </div>
 
       {(result?.error || compiled?.error) && <div role="alert" className="mt-4 rounded-md border border-destructive/25 bg-destructive/5 p-3 text-xs text-destructive"><div className="font-medium">{result?.error ?? compiled?.error}</div>{result?.errorDetails && result.errorDetails !== result.error && <details className="mt-2 text-muted-foreground"><summary className="cursor-pointer">Technical details</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap font-mono text-[10px]">{result.errorDetails}</pre></details>}</div>}
 
-      <div className="mt-5 grid gap-4 xl:grid-cols-2">
-        <div className="rounded-lg border p-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Used by</h3>{consumers.length ? <div className="mt-2 flex flex-wrap gap-2">{consumers.map((block) => <span key={block.id} className="rounded-md border bg-muted/20 px-2 py-1 text-xs"><span className="font-medium">{block.title || block.type.replaceAll("_", " ")}</span><span className="ml-1 text-muted-foreground">({block.type.replaceAll("_", " ")})</span></span>)}</div> : <p className="mt-2 text-xs text-muted-foreground">No report blocks currently reference this dataset.</p>}</div>
-        <div className="rounded-lg border p-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Schema</h3>{fields.length ? <div className="mt-2 flex max-h-32 flex-wrap gap-1.5 overflow-y-auto">{fields.map((field) => <span key={field.name} className="rounded border bg-muted/20 px-2 py-1 font-mono text-[10px]"><span className="font-semibold">{field.name}</span><span className="ml-1 text-muted-foreground">{String(field.type)}</span></span>)}</div> : <p className="mt-2 text-xs text-muted-foreground">Run the dataset to inspect its returned columns and types.</p>}</div>
+      <div className="mt-5 grid gap-3 lg:grid-cols-2">
+        <div className="rounded-lg border p-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Data lineage</h3>{dependencies.length || dependents.length ? <div className="mt-2 space-y-2 text-xs">{dependencies.length > 0 && <div><span className="text-muted-foreground">Reads from </span>{dependencies.map((source) => <code key={source.id} className="mr-1 rounded bg-muted px-1.5 py-0.5">{source.id}</code>)}</div>}{dependents.length > 0 && <div><span className="text-muted-foreground">Feeds </span>{dependents.map((consumer) => <code key={consumer.id} className="mr-1 rounded bg-muted px-1.5 py-0.5">{consumer.id}</code>)}</div>}</div> : <p className="mt-2 text-xs text-muted-foreground">No report-dataset dependencies were inferred from this SQL.</p>}</div>
+        <div className="rounded-lg border p-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Used by blocks</h3>{consumers.length ? <div className="mt-2 flex flex-wrap gap-2">{consumers.map((block) => <span key={block.id} className="rounded-md border bg-muted/20 px-2 py-1 text-xs"><span className="font-medium">{block.title || block.type.replaceAll("_", " ")}</span><span className="ml-1 text-muted-foreground">({block.type.replaceAll("_", " ")})</span></span>)}</div> : <p className="mt-2 text-xs text-muted-foreground">No report blocks currently reference this dataset.</p>}</div>
+      </div>
+
+      <div className="mt-5">
+        <div className="mb-2 flex items-baseline justify-between gap-2"><h3 className="text-sm font-semibold">Schema</h3>{fields.length > 0 && <span className="text-[10px] text-muted-foreground">{fields.length.toLocaleString()} {fields.length === 1 ? "column" : "columns"} · DuckDB types</span>}</div>
+        {fields.length ? <div className="max-h-64 overflow-auto rounded-md border">
+          <table data-testid="report-dataset-schema" className="w-full border-collapse text-left text-xs">
+            <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur-sm"><tr><th scope="col" className="w-12 border-b px-3 py-2 font-medium text-muted-foreground">#</th><th scope="col" className="border-b px-3 py-2 font-medium text-muted-foreground">Column</th><th scope="col" className="border-b px-3 py-2 font-medium text-muted-foreground">DuckDB type</th><th scope="col" className="w-24 border-b px-3 py-2 font-medium text-muted-foreground">Nullable</th></tr></thead>
+            <tbody>{fields.map((field, index) => {
+              const duckdbType = arrowFieldToDuckDB(field);
+              return <tr key={field.name} data-testid={`report-dataset-schema-row-${field.name}`} className="border-b last:border-b-0 even:bg-muted/15"><td className="px-3 py-2 font-mono text-[10px] tabular-nums text-muted-foreground">{index + 1}</td><th scope="row" className="px-3 py-2 font-mono text-xs font-medium">{field.name}</th><td className="px-3 py-2"><ColumnTypeBadge type={duckdbType} /></td><td className="px-3 py-2 text-muted-foreground">{field.nullable ? "Yes" : "No"}</td></tr>;
+            })}</tbody>
+          </table>
+        </div> : <div className="rounded-md border border-dashed p-6 text-center text-xs text-muted-foreground">Run the dataset to inspect its returned columns and DuckDB types.</div>}
       </div>
 
       <div className="mt-5"><div className="mb-2 flex items-baseline justify-between gap-2"><h3 className="text-sm font-semibold">Executed query</h3><span className="text-[10px] text-muted-foreground">Prepared SQL and applied parameter values</span></div>{compiled?.value ? <><pre data-testid="report-dataset-sql" className="max-h-64 overflow-auto rounded-md border bg-muted/20 p-3 whitespace-pre-wrap font-mono text-xs leading-relaxed">{compiled.value.sql}</pre>{compiled.value.params.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{compiled.value.params.map((value, index) => <span key={index} data-testid={`report-dataset-param-${index + 1}`} className="rounded-md border bg-background px-2 py-1 font-mono text-[10px]"><span className="text-muted-foreground">Parameter {index + 1} = </span>{value === null ? "NULL" : Array.isArray(value) ? value.join(", ") : String(value)}</span>)}</div>}{compiled.value.sql !== dataset.sql && <details className="mt-3"><summary className="cursor-pointer text-xs font-medium text-muted-foreground">Query template</summary><pre className="mt-2 max-h-48 overflow-auto rounded-md border bg-muted/10 p-3 whitespace-pre-wrap font-mono text-xs">{dataset.sql}</pre></details>}</> : null}</div>

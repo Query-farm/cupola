@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Popover as BaseUIPopover } from "@base-ui/react/popover";
 import { ResponsiveGridLayout, useContainerWidth, type Layout, type ResponsiveLayouts } from "react-grid-layout";
 import { noCompactor } from "react-grid-layout/core";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Database, Download, Eye, FileJson, FilePlus2, GripVertical, Loader2, Pencil, Play, Plus, Printer, Save, Send, Share2, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Clock3, Database, Download, FileCode2, FileJson, FilePlus2, GripVertical, History, Link2, Loader2, MoreHorizontal, Pencil, Play, Plus, Printer, RefreshCw, Save, Send, Share2, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import type { CatalogData } from "@/lib/service";
 import { engine, getEngineLifecycleSnapshot, ui, waitForEngineReady } from "@/lib/shell-bridge";
@@ -20,6 +21,7 @@ import { compileChartSpec, embedChart, downloadPNG, downloadSVG, renderChartToPn
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSettings } from "@/lib/settings";
 import { runAgentTurn, executeListTables, executeDescribeTable, type MessageParam, type ToolResult, type ToolResultContent } from "@/lib/ai-agent";
@@ -30,6 +32,7 @@ import { toolInputLabel } from "@/lib/ai/tool-labels";
 import { exportResult, safeFileStem, triggerDownload } from "@/lib/editor/result-export";
 import { consumeReportPromotion, type ReportPromotion } from "@/lib/reports/events";
 import { reportDisplayRows, reportMapRows } from "@/lib/reports/display";
+import { buildReportDatasetExecutionPlan, inferReportDatasetDependencies, quoteReportDatasetIdentifier, type ReportDatasetExecutionPlan } from "@/lib/reports/dependencies";
 import { buildReportRunFailureNotice, classifyReportQueryError, isBlockingVegaWarning, validateReportResultColumns, type ReportQueryErrorCode, type ReportRunFailureNotice } from "@/lib/reports/execution";
 import { resolveReportAppearance } from "@/lib/reports/appearance";
 import { REPORT_TOOLS, upsertAgentBlock, upsertAgentDataset, upsertAgentGroup, type SemanticBlockHeight, type SemanticBlockWidth } from "@/lib/reports/agent-tools";
@@ -61,6 +64,8 @@ interface DatasetResult {
   retryAfterSeconds?: number;
   fetchedAt?: number;
   durationMs?: number;
+  dependencies?: string[];
+  materialized?: boolean;
 }
 
 interface ReportRunProgress {
@@ -485,6 +490,106 @@ function ParameterInput({ parameter, value, options, errors, onChange }: { param
   return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><Input className="h-8 min-w-36" type={parameter.type === "number" ? "number" : parameter.type === "date" ? "date" : "text"} value={value == null ? "" : String(value)} required={parameter.required} min={validation?.min} max={validation?.max} step={parameter.type === "number" ? (validation?.step ?? (validation?.integer ? 1 : "any")) : undefined} minLength={validation?.minLength} maxLength={validation?.maxLength} pattern={validation?.pattern} {...accessibility} onChange={(e) => onChange(parameter.type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value)} />{feedback}</div>;
 }
 
+const reportMenuItemClass = "flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+const refreshChoices = [
+  { value: 0, label: "Off" },
+  { value: 30, label: "Every 30 seconds" },
+  { value: 60, label: "Every minute" },
+  { value: 300, label: "Every 5 minutes" },
+  { value: 900, label: "Every 15 minutes" },
+];
+
+function ReportRunControl({ reader, running, disabled, label, interval, onRun, onIntervalChange }: {
+  reader: boolean;
+  running: boolean;
+  disabled: boolean;
+  label: string;
+  interval?: number;
+  onRun: () => void;
+  onIntervalChange: (seconds?: number) => void;
+}) {
+  const choices = interval && !refreshChoices.some((choice) => choice.value === interval)
+    ? [refreshChoices[0], { value: interval, label: `Every ${interval} seconds` }, ...refreshChoices.slice(1)]
+    : refreshChoices;
+  return <div className="inline-flex shrink-0" data-testid="report-run-control">
+    <Button size="sm" variant="outline" className="rounded-r-none" data-testid="reports-run" aria-label={label} title={label} disabled={disabled} onClick={onRun}>
+      {running ? <Loader2 className="h-4 w-4 animate-spin" /> : reader ? <RefreshCw className="h-4 w-4" /> : <Play className="h-4 w-4" />} <span className="hidden sm:inline">{label}</span>
+    </Button>
+    <Popover>
+      <PopoverTrigger
+        aria-label="Report refresh options"
+        title="Automatic refresh settings"
+        disabled={running}
+        className="inline-flex h-8 w-8 items-center justify-center rounded-r-md border border-l-0 bg-background transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+      >
+        <ChevronDown className="h-3.5 w-3.5" />
+      </PopoverTrigger>
+      <PopoverContent className="min-w-[220px] p-1" aria-label="Automatic refresh">
+        <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Automatic refresh</div>
+        {choices.map((choice) => <BaseUIPopover.Close
+          key={choice.value}
+          role="menuitemradio"
+          aria-checked={(interval ?? 0) === choice.value}
+          data-testid={`report-auto-refresh-${choice.value}`}
+          className={reportMenuItemClass}
+          onClick={() => onIntervalChange(choice.value || undefined)}
+        >
+          <span className="flex h-4 w-4 items-center justify-center">{(interval ?? 0) === choice.value && <Check className="h-3.5 w-3.5" />}</span>
+          <span>{choice.label}</span>
+        </BaseUIPopover.Close>)}
+      </PopoverContent>
+    </Popover>
+  </div>;
+}
+
+function ReportMoreMenu({ reader, revisions, onRestoreRevision, onShareDraft, onPrint, onEditSource, onDownload }: {
+  reader: boolean;
+  revisions: ReportDocumentV1[];
+  onRestoreRevision?: (revision: number) => void | Promise<void>;
+  onShareDraft?: () => void | Promise<void>;
+  onPrint: () => void;
+  onEditSource?: () => void;
+  onDownload: () => void;
+}) {
+  return <Popover>
+    <PopoverTrigger
+      className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border px-2 text-xs transition-colors hover:bg-muted"
+      aria-label="More report actions"
+      data-testid="report-more-menu"
+    >
+      <MoreHorizontal className="h-4 w-4" /><span className="hidden sm:inline">More</span>
+    </PopoverTrigger>
+    <PopoverContent className="max-h-[min(70vh,520px)] min-w-[250px] overflow-y-auto p-1" aria-label="More report actions">
+      {!reader && revisions.length > 0 && <div className="border-b pb-1">
+        <div className="flex items-center gap-2 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"><History className="h-3.5 w-3.5" /> Revision history</div>
+        {revisions.slice().reverse().map((revision) => <BaseUIPopover.Close key={revision.revision} className={reportMenuItemClass} onClick={() => onRestoreRevision?.(revision.revision)}>
+          <span className="w-4" />
+          <span className="flex-1">Restore revision {revision.revision}</span>
+          <span className="text-[10px] text-muted-foreground">{new Date(revision.updatedAt).toLocaleDateString()}</span>
+        </BaseUIPopover.Close>)}
+      </div>}
+      {!reader && onShareDraft && <BaseUIPopover.Close className={reportMenuItemClass} onClick={onShareDraft} data-testid="report-copy-draft-link"><Link2 className="h-4 w-4" /><span>Copy draft review link</span></BaseUIPopover.Close>}
+      <BaseUIPopover.Close className={reportMenuItemClass} onClick={onPrint}><Printer className="h-4 w-4" /><span>Print / Save as PDF</span></BaseUIPopover.Close>
+      <BaseUIPopover.Close className={reportMenuItemClass} onClick={onDownload}><Download className="h-4 w-4" /><span>Download report definition</span><span className="ml-auto text-[10px] text-muted-foreground">.json</span></BaseUIPopover.Close>
+      {!reader && onEditSource && <div className="mt-1 border-t pt-1">
+        <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Advanced</div>
+        <BaseUIPopover.Close className={reportMenuItemClass} onClick={onEditSource} data-testid="report-edit-json"><FileCode2 className="h-4 w-4" /><span>Edit report JSON</span></BaseUIPopover.Close>
+      </div>}
+    </PopoverContent>
+  </Popover>;
+}
+
+function freshnessLabel(timestamp: number): string {
+  if (!timestamp) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1_000));
+  if (seconds < 60) return "Updated just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `Updated ${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `Updated ${hours} hr ago`;
+  return `Updated ${Math.round(hours / 24)} d ago`;
+}
+
 export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames = [], onBusyChange, initialReport }: Props) {
   const { settings } = useSettings();
   const [reports, setReports] = useState<ReportDocumentV1[]>([]);
@@ -674,8 +779,9 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     onlyIds?: Set<string>,
     captureRows?: Map<string, Record<string, any>[]>,
     mode: "load" | "refresh" = "load",
+    includeDependents = false,
   ): Promise<DatasetRunSummary[]> => {
-    const datasets = report.datasets.filter((d) => !onlyIds || onlyIds.has(d.id));
+    let datasets = report.datasets.filter((d) => !onlyIds || onlyIds.has(d.id));
     const valueErrors = validateReportParameterValues(report, runValues).map((issue) => issue.message);
     if (valueErrors.length) {
       const error = valueErrors.join(" ");
@@ -719,8 +825,10 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     }
     if (generation !== runGeneration.current) return summaries;
     const queryPrepared = engine.queryPrepared;
-    if (!queryPrepared) {
-      const error = "The data engine reported ready before prepared queries became available.";
+    const query = engine.query;
+    const getTableNames = engine.getTableNames;
+    if (!queryPrepared || !query || !getTableNames) {
+      const error = "The data engine reported ready before report query planning became available.";
       setResults((prev) => {
         const next = { ...prev };
         for (const dataset of datasets) next[dataset.id] = { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "error", error, errorDetails: error, errorCode: "service_unavailable", retryable: true };
@@ -728,80 +836,168 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       });
       return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error, errorDetails: error, errorCode: "service_unavailable", retryable: true }));
     }
-    setRunProgress({ generation, mode, total: datasets.length, completed: 0 });
-    for (let datasetIndex = 0; datasetIndex < datasets.length; datasetIndex++) {
-      const dataset = datasets[datasetIndex];
+    let plan: ReportDatasetExecutionPlan;
+    try {
+      const dependencies = await inferReportDatasetDependencies(
+        report.datasets,
+        getTableNames,
+        // DuckDB's table-name parser binds the statement and therefore rejects
+        // unresolved prepared placeholders. Materialize already-validated
+        // parameter values as escaped literals for planning only; execution of
+        // ordinary datasets continues to use prepared statements below.
+        (dataset) => materializeReportQuery(dataset.sql, report, runValues),
+      );
+      plan = buildReportDatasetExecutionPlan(report.datasets, dependencies, onlyIds, includeDependents);
+      datasets = plan.datasets;
+    } catch (cause) {
+      const classified = classifyReportQueryError(cause);
       if (generation !== runGeneration.current) return summaries;
-      setResults((prev) => ({
-        ...prev,
-        [dataset.id]: { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "running", error: undefined, errorDetails: undefined, errorCode: undefined, retryable: undefined, retryAfterSeconds: undefined },
-      }));
-      setRunProgress((progress) => progress?.generation === generation
-        ? { ...progress, currentDatasetName: dataset.name }
-        : progress);
-      const startedAt = performance.now();
-      try {
-        const readErrors = validateReadOnlySql(dataset.sql);
-        if (readErrors.length) throw new Error(readErrors.join(" "));
-        const compiled = compileReportQuery(dataset.sql, report, runValues);
-        const response = await queryPrepared(compiled.sql, compiled.params);
+      setResults((prev) => {
+        const next = { ...prev };
+        for (const dataset of datasets) next[dataset.id] = {
+          ...(prev[dataset.id] ?? { table: null, rows: [] }),
+          status: "error",
+          error: "Cupola could not plan the report dataset dependencies.",
+          errorDetails: classified.technicalDetails,
+          errorCode: "query_failed",
+          retryable: false,
+        };
+        return next;
+      });
+      return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error: "Cupola could not plan the report dataset dependencies.", errorDetails: classified.technicalDetails, errorCode: "query_failed", retryable: false }));
+    }
+    if (generation !== runGeneration.current) return summaries;
+    setResults((prev) => {
+      const next = { ...prev };
+      for (const dataset of datasets) next[dataset.id] = {
+        ...(prev[dataset.id] ?? { table: null, rows: [] }),
+        status: "queued",
+        error: undefined,
+        errorDetails: undefined,
+        errorCode: undefined,
+        retryable: undefined,
+        retryAfterSeconds: undefined,
+        dependencies: [...(plan.dependencies.get(dataset.id) ?? [])],
+        materialized: plan.materialized.has(dataset.id),
+      };
+      return next;
+    });
+
+    setRunProgress({ generation, mode, total: datasets.length, completed: 0 });
+    const failed = new Set<string>();
+    const createdTempTables: string[] = [];
+    try {
+      for (let datasetIndex = 0; datasetIndex < datasets.length; datasetIndex++) {
+        const dataset = datasets[datasetIndex];
         if (generation !== runGeneration.current) return summaries;
-        if (!response.ok || !response.arrowBuffers?.[0]) throw new Error(response.error || "Query returned no result.");
-        const table = decodeArrowBuffer(response.arrowBuffers[0]);
-        const rows = tableToRows(table);
-        captureRows?.set(dataset.id, rows);
-        setResults((prev) => ({ ...prev, [dataset.id]: { table, rows, status: "success", fetchedAt: Date.now(), durationMs: Math.round(performance.now() - startedAt) } }));
-        summaries.push({ datasetId: dataset.id, name: dataset.name, ok: true, rowCount: table.numRows, columns: table.schema.fields.map((field) => field.name), sample: rows.slice(0, 3) });
-      } catch (e) {
-        if (generation !== runGeneration.current) return summaries;
-        const classified = classifyReportQueryError(e);
-        const stale = captureRows?.has(dataset.id) ?? false;
+        const failedDependency = [...(plan.dependencies.get(dataset.id) ?? [])].find((id) => failed.has(id));
+        if (failedDependency) {
+          const dependencyName = report.datasets.find((candidate) => candidate.id === failedDependency)?.name ?? failedDependency;
+          const blockedMessage = `Not refreshed because ${dependencyName} failed.`;
+          failed.add(dataset.id);
+          setResults((prev) => ({ ...prev, [dataset.id]: {
+            ...(prev[dataset.id] ?? { table: null, rows: [] }),
+            status: "blocked",
+            error: blockedMessage,
+            errorDetails: `${dataset.name} depends on ${dependencyName}, so its query was not attempted.`,
+            errorCode: "blocked",
+            retryable: false,
+            dependencies: [...(plan.dependencies.get(dataset.id) ?? [])],
+            materialized: plan.materialized.has(dataset.id),
+          } }));
+          summaries.push({ datasetId: dataset.id, name: dataset.name, ok: false, error: blockedMessage, errorDetails: `${dataset.name} depends on ${dependencyName}, so its query was not attempted.`, errorCode: "blocked", retryable: false, stale: captureRows?.has(dataset.id) ?? false });
+          setRunProgress((progress) => progress?.generation === generation ? { ...progress, completed: progress.completed + 1, currentDatasetName: undefined } : progress);
+          continue;
+        }
         setResults((prev) => ({
           ...prev,
-          [dataset.id]: {
-            ...(prev[dataset.id] ?? { table: null, rows: [] }),
-            status: "error",
-            error: classified.message,
-            errorDetails: classified.technicalDetails,
-            errorCode: classified.code,
-            retryable: classified.retryable,
-            retryAfterSeconds: classified.retryAfterSeconds,
-            durationMs: Math.round(performance.now() - startedAt),
-          },
+          [dataset.id]: { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "running", error: undefined, errorDetails: undefined, errorCode: undefined, retryable: undefined, retryAfterSeconds: undefined, dependencies: [...(plan.dependencies.get(dataset.id) ?? [])], materialized: plan.materialized.has(dataset.id) },
         }));
-        summaries.push({ datasetId: dataset.id, name: dataset.name, ok: false, error: classified.message, errorDetails: classified.technicalDetails, errorCode: classified.code, retryable: classified.retryable, retryAfterSeconds: classified.retryAfterSeconds, stale });
-        if (classified.stopRun) {
-          const remaining = datasets.slice(datasetIndex + 1);
-          const blockedMessage = `Not refreshed because ${dataset.name} hit a data-service rate limit.`;
-          setResults((prev) => {
-            const next = { ...prev };
-            for (const blocked of remaining) {
-              next[blocked.id] = {
-                ...(prev[blocked.id] ?? { table: null, rows: [] }),
-                status: "blocked",
-                error: blockedMessage,
-                errorDetails: `The refresh stopped before ${blocked.name} was requested, preventing more calls to the rate-limited service.`,
-                errorCode: "blocked",
-                retryable: true,
-                retryAfterSeconds: classified.retryAfterSeconds,
-              };
-            }
-            return next;
-          });
-          for (const blocked of remaining) {
-            summaries.push({ datasetId: blocked.id, name: blocked.name, ok: false, error: blockedMessage, errorDetails: `Not attempted after ${dataset.name} returned a rate limit.`, errorCode: "blocked", retryable: true, retryAfterSeconds: classified.retryAfterSeconds, stale: captureRows?.has(blocked.id) ?? false });
+        setRunProgress((progress) => progress?.generation === generation
+          ? { ...progress, currentDatasetName: dataset.name }
+          : progress);
+        const startedAt = performance.now();
+        try {
+          const readErrors = validateReadOnlySql(dataset.sql);
+          if (readErrors.length) throw new Error(readErrors.join(" "));
+          let response;
+          if (plan.materialized.has(dataset.id)) {
+            const identifier = quoteReportDatasetIdentifier(dataset.id);
+            const create = await query(`CREATE TEMP TABLE ${identifier} AS ${materializeReportQuery(dataset.sql, report, runValues)}`);
+            if (!create.ok) throw new Error(create.error || "The shared dataset could not be materialized.");
+            createdTempTables.push(dataset.id);
+            response = await queryPrepared(`SELECT * FROM temp.main.${identifier}`, []);
+          } else {
+            const compiled = compileReportQuery(dataset.sql, report, runValues);
+            response = await queryPrepared(compiled.sql, compiled.params);
           }
-          setRunProgress((progress) => progress?.generation === generation
-            ? { ...progress, completed: datasets.length, currentDatasetName: undefined }
-            : progress);
-          break;
+          if (generation !== runGeneration.current) return summaries;
+          if (!response.ok || !response.arrowBuffers?.[0]) throw new Error(response.error || "Query returned no result.");
+          const table = decodeArrowBuffer(response.arrowBuffers[0]);
+          const rows = tableToRows(table);
+          captureRows?.set(dataset.id, rows);
+          setResults((prev) => ({ ...prev, [dataset.id]: { table, rows, status: "success", fetchedAt: Date.now(), durationMs: Math.round(performance.now() - startedAt), dependencies: [...(plan.dependencies.get(dataset.id) ?? [])], materialized: plan.materialized.has(dataset.id) } }));
+          summaries.push({ datasetId: dataset.id, name: dataset.name, ok: true, rowCount: table.numRows, columns: table.schema.fields.map((field) => field.name), sample: rows.slice(0, 3) });
+        } catch (e) {
+          if (generation !== runGeneration.current) return summaries;
+          failed.add(dataset.id);
+          const classified = classifyReportQueryError(e);
+          const stale = captureRows?.has(dataset.id) ?? false;
+          setResults((prev) => ({
+            ...prev,
+            [dataset.id]: {
+              ...(prev[dataset.id] ?? { table: null, rows: [] }),
+              status: "error",
+              error: classified.message,
+              errorDetails: classified.technicalDetails,
+              errorCode: classified.code,
+              retryable: classified.retryable,
+              retryAfterSeconds: classified.retryAfterSeconds,
+              durationMs: Math.round(performance.now() - startedAt),
+              dependencies: [...(plan.dependencies.get(dataset.id) ?? [])],
+              materialized: plan.materialized.has(dataset.id),
+            },
+          }));
+          summaries.push({ datasetId: dataset.id, name: dataset.name, ok: false, error: classified.message, errorDetails: classified.technicalDetails, errorCode: classified.code, retryable: classified.retryable, retryAfterSeconds: classified.retryAfterSeconds, stale });
+          if (classified.stopRun) {
+            const remaining = datasets.slice(datasetIndex + 1);
+            const blockedMessage = `Not refreshed because ${dataset.name} hit a data-service rate limit.`;
+            setResults((prev) => {
+              const next = { ...prev };
+              for (const blocked of remaining) {
+                next[blocked.id] = {
+                  ...(prev[blocked.id] ?? { table: null, rows: [] }),
+                  status: "blocked",
+                  error: blockedMessage,
+                  errorDetails: `The refresh stopped before ${blocked.name} was requested, preventing more calls to the rate-limited service.`,
+                  errorCode: "blocked",
+                  retryable: true,
+                  retryAfterSeconds: classified.retryAfterSeconds,
+                  dependencies: [...(plan.dependencies.get(blocked.id) ?? [])],
+                  materialized: plan.materialized.has(blocked.id),
+                };
+              }
+              return next;
+            });
+            for (const blocked of remaining) {
+              summaries.push({ datasetId: blocked.id, name: blocked.name, ok: false, error: blockedMessage, errorDetails: `Not attempted after ${dataset.name} returned a rate limit.`, errorCode: "blocked", retryable: true, retryAfterSeconds: classified.retryAfterSeconds, stale: captureRows?.has(blocked.id) ?? false });
+            }
+            setRunProgress((progress) => progress?.generation === generation
+              ? { ...progress, completed: datasets.length, currentDatasetName: undefined }
+              : progress);
+            break;
+          }
         }
+        setRunProgress((progress) => progress?.generation === generation
+          ? { ...progress, completed: progress.completed + 1, currentDatasetName: undefined }
+          : progress);
       }
-      setRunProgress((progress) => progress?.generation === generation
-        ? { ...progress, completed: progress.completed + 1, currentDatasetName: undefined }
-        : progress);
+    } finally {
+      for (const id of createdTempTables.reverse()) {
+        try { await query(`DROP TABLE IF EXISTS temp.main.${quoteReportDatasetIdentifier(id)}`); } catch {}
+      }
+      setRunProgress((progress) => progress?.generation === generation ? null : progress);
     }
-    setRunProgress((progress) => progress?.generation === generation ? null : progress);
     return summaries;
   }, []);
 
@@ -811,9 +1007,10 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     onlyIds?: Set<string>,
     mode: "load" | "refresh" = "load",
     seedRows?: Map<string, Record<string, any>[]>,
+    includeDependents = false,
   ): Promise<DatasetRunSummary[]> => {
     const rows = seedRows ?? new Map<string, Record<string, any>[]>();
-    const summaries = await runDatasets(report, runValues, onlyIds, rows, mode);
+    const summaries = await runDatasets(report, runValues, onlyIds, rows, mode, includeDependents);
     // A failed refresh may leave stale rows in the display cache. Keep those
     // rows visible, but never generate a new narrative from data we know did
     // not refresh successfully in this run.
@@ -904,11 +1101,11 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       ? new Set(dataDatasets.filter((dataset) => parameterTokens(dataset.sql).some((token) => changed.has(token) || changed.has(token.replace(/_(?:start|end)$/, "")))).map((dataset) => dataset.id))
       : new Set(dataDatasets.map((dataset) => dataset.id));
     const mode = dataDatasets.some((dataset) => ids.has(dataset.id) && Boolean(results[dataset.id]?.table)) ? "refresh" : "load";
-    const execution = await runDatasetsAndNarratives(report, candidate, ids, mode, rows);
+    const execution = await runDatasetsAndNarratives(report, candidate, ids, mode, rows, true);
     const failures = execution.filter((summary) => !summary.ok);
     if (getEngineLifecycleSnapshot().status === "error") return false;
     if (failures.length) {
-      const notice = buildReportRunFailureNotice(failures, ids.size);
+      const notice = buildReportRunFailureNotice(failures, execution.length);
       setRunFailureNotice(notice);
       const rateLimit = failures.find((failure) => failure.errorCode === "rate_limited");
       if (rateLimit && allowAutomaticRetry && rateLimitRetryTimerRef.current === null) {
@@ -1213,7 +1410,7 @@ Use report groups when two or more blocks belong to the same subject and the gro
 
 Blocks may set appearance for semantic backgrounds. Use tone neutral/info/success/warning/danger and emphasis subtle/prominent. For value-driven alerts, add up to five ordered rules with column, operator, value, tone, label, and optional value2/emphasis/rowMatch; the first matching rule wins. Put severe rules first. Always provide a concise label such as "Above preferred range" so color is not the only signal. Only use thresholds supplied by the user or clearly defined by the data/domain—never invent alert boundaries. Prefer this for KPIs and compact status boxes; use it sparingly on large charts and tables.
 
-Inspect every table before using it. SQL datasets must be one read-only SELECT/VALUES/WITH query. Parameter references use $key, date ranges use $key_start/$key_end, and multi-select values appear in IN ($key). Do not add a WHERE clause unless the user's request actually requires filtering.
+Inspect every external table before using it. SQL datasets must be one read-only SELECT/VALUES/WITH query. When several datasets need the same expensive source query, create one upstream dataset with a short snake_case id (for example weather_base), then query that id from downstream dataset SQL with FROM weather_base or JOIN weather_base. Cupola uses DuckDB's parser to infer these dependencies, executes them in dependency order, and materializes shared upstream results once for the refresh; never write CREATE/DROP statements or duplicate the source query. A dataset may read an external relation with the same name as its own id, which is treated as a source rather than a self-dependency. Parameter references use $key, date ranges use $key_start/$key_end, and multi-select values appear in IN ($key). Put parameters used by several outputs in the upstream dataset when possible so its downstream datasets refresh together. Do not add a WHERE clause unless the user's request actually requires filtering.
 
 Supported blocks are markdown, ai_narrative, kpi, sparkline, small_multiples, bullet, slopegraph, range_dot, table, chart, perspective, and map. Every block may include a concise caption and source note. Markdown content and reader-facing block and group titles may contain parameter tokens such as $city; Cupola replaces them with the currently applied value at render time. A markdown block may have a meaningful visible title or omit title for a clean content-only card; never title one "Text" or "Markdown", and omit the block title when the markdown already begins with its own heading. Markdown supports safe HTTPS and relative image URLs with ![alt text](url), but Cupola does not upload or persist image files.
 
@@ -1286,7 +1483,7 @@ Current report:\n${JSON.stringify(draft)}`;
           if (errors.length) return toolResult({ ...reportAgentRepair("dataset", `dataset ${updated.dataset.id}`, errors, "upsert_report_dataset"), datasetId: updated.dataset.id });
           applyWorkingReport(updated.report);
           const execution = await runDatasets(workingReport, defaultValues(workingReport), new Set([updated.dataset.id]), workingRows);
-          const result = execution[0];
+          const result = execution.find((candidate) => candidate.datasetId === updated.dataset.id);
           const transient = Boolean(result?.retryable);
           setAgentSummary(result?.ok ? `${updated.dataset.name} loaded.` : transient ? `${updated.dataset.name} validation was delayed by its data source.` : `${updated.dataset.name} needs correction.`);
           return toolResult({
@@ -1469,47 +1666,42 @@ Current report:\n${JSON.stringify(draft)}`;
     : null;
 
   return <div className="h-full flex flex-col bg-background" data-testid="reports-workspace" data-report-mode={readerMode ? "reader" : "edit"} aria-busy={reportRunning}>
-    {!readerMode ? <div className="report-authoring-control flex items-center gap-2 px-3 py-2 border-b bg-card overflow-x-auto">
-      <Button size="sm" variant="ghost" onClick={() => { runGeneration.current += 1; setRunProgress(null); setDraft(null); setSelected(null); setResults({}); }}><ArrowLeft className="h-4 w-4" /> Library</Button>
-      <Input className="h-8 min-w-48 max-w-sm font-medium" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
-      <div className="flex-1" />
-      {published && <Button size="sm" variant="outline" onClick={() => switchReportMode("reader")}><Eye className="h-4 w-4" /> View published</Button>}
-      <Button size="sm" variant="outline" onClick={() => setAgentOpen((v) => !v)}><Bot className="h-4 w-4" /> Agent</Button>
-      {revisionOptions.length > 0 && <select className="h-8 rounded-md border bg-background px-2 text-xs" defaultValue="" aria-label="Restore report revision" onChange={async (e) => { const revision = Number(e.target.value); if (!revision) return; const restored = await restoreReportRevision(draft.id, revision); openReport(restored, undefined, false); }}><option value="">History</option>{revisionOptions.slice().reverse().map((r) => <option key={r.revision} value={r.revision}>Restore revision {r.revision}</option>)}</select>}
-      <Button size="sm" variant="outline" onClick={() => { setInspectorOpen((v) => !v); setSourceText(exportReportJson(draft)); }}><FileJson className="h-4 w-4" /> Source</Button>
-      {reportFetchedAt > 0 && <span data-testid="report-as-of" className="shrink-0 text-[10px] text-muted-foreground">as of {new Date(reportFetchedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" })}</span>}
-      <Button size="sm" data-testid="reports-run" disabled={reportErrors.length > 0 || reportRunning || !engineReady} onClick={runFullReport}>{reportRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {engineWaiting ? "Preparing…" : progressLabel ?? "Run report"}</Button>
-      <select
-        className="h-8 rounded-md border bg-background px-2 text-xs"
-        aria-label="Auto refresh"
-        value={draft.refreshIntervalSeconds ?? 0}
-        onChange={(event) => updateAutoRefresh(Number(event.target.value) || undefined)}
-      >
-        <option value={0}>Auto refresh off</option>
-        {draft.refreshIntervalSeconds && ![30, 60, 300, 900].includes(draft.refreshIntervalSeconds)
-          ? <option value={draft.refreshIntervalSeconds}>Every {draft.refreshIntervalSeconds} seconds</option>
-          : null}
-        <option value={30}>Every 30 seconds</option>
-        <option value={60}>Every minute</option>
-        <option value={300}>Every 5 minutes</option>
-        <option value={900}>Every 15 minutes</option>
-      </select>
-      <Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
-      <Button size="sm" variant="outline" onClick={() => triggerDownload(new Blob([exportReportJson(draft)], { type: "application/json" }), `${safeFileStem(draft.title)}.cupola-report.json`)}><Download className="h-4 w-4" /> JSON</Button>
-      <Button size="sm" variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(draft, { serviceUrl, values: appliedValues })); setShareStatus("Share link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}><Share2 className="h-4 w-4" /> Share</Button>
-      <Button size="sm" variant="outline" disabled={!dirty || reportErrors.length > 0} onClick={acceptDraft}><Save className="h-4 w-4" /> Save draft</Button>
-      <Button size="sm" disabled={reportErrors.length > 0 || reportRunning || !engineReady || !isCompatible(draft)} onClick={publishDraft}><Send className="h-4 w-4" /> Publish</Button>
-    </div> : <div className="flex items-center gap-3 border-b bg-card px-4 py-3 overflow-x-auto">
-      <Button size="sm" variant="ghost" onClick={() => { runGeneration.current += 1; setRunProgress(null); setDraft(null); setSelected(null); setPublished(null); setReaderMode(false); setResults({}); }}><ArrowLeft className="h-4 w-4" /> Library</Button>
-      <div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-base font-semibold">{report.title}</h1><span className="shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700">Published</span></div>{report.description && <p className="max-w-xl truncate text-xs text-muted-foreground">{report.description}</p>}</div>
-      <div className="flex-1" />
-      {publishedAt && <span className="shrink-0 text-[10px] text-muted-foreground">Published {new Date(publishedAt).toLocaleString()}</span>}
-      {report.refreshIntervalSeconds && <span className="shrink-0 text-[10px] text-muted-foreground">Auto refresh every {report.refreshIntervalSeconds}s</span>}
-      {reportFetchedAt > 0 && <span data-testid="report-as-of" className="shrink-0 text-[10px] text-muted-foreground">as of {new Date(reportFetchedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" })}</span>}
-      <Button size="sm" data-testid="reports-run" disabled={reportErrors.length > 0 || reportRunning || !engineReady} onClick={runFullReport}>{reportRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {engineWaiting ? "Preparing…" : progressLabel ?? "Refresh"}</Button>
-      <Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
-      <Button size="sm" variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(report, { serviceUrl, values: appliedValues, mode: "reader" })); setShareStatus("Reader link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}><Share2 className="h-4 w-4" /> Share</Button>
-      <Button size="sm" variant="outline" onClick={() => switchReportMode("edit")}><Pencil className="h-4 w-4" /> Edit report</Button>
+    {!readerMode ? <div className="report-authoring-control flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2">
+      <Button size="sm" variant="ghost" className="shrink-0" onClick={() => { runGeneration.current += 1; setRunProgress(null); setDraft(null); setSelected(null); setResults({}); }}><ArrowLeft className="h-4 w-4" /> Reports</Button>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+        <Input aria-label="Report title" className="h-8 min-w-40 flex-1 font-medium sm:max-w-sm" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
+        <span data-testid="report-save-status" className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${dirty ? "bg-amber-500/10 text-amber-800 dark:text-amber-200" : "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200"}`}>{published ? (dirty ? "Unsaved changes" : "Saved") : (dirty ? "Draft · Unsaved" : "Draft · Saved")}</span>
+        {published && <div role="group" aria-label="Report mode" className="inline-flex shrink-0 rounded-md border bg-muted/20 p-0.5 text-[10px]"><span className="rounded bg-background px-2 py-1 font-medium shadow-sm">Draft</span><button type="button" className="rounded px-2 py-1 text-muted-foreground hover:text-foreground" onClick={() => switchReportMode("reader")}>Published</button></div>}
+        {(reportFetchedAt > 0 || draft.refreshIntervalSeconds) && <span className="hidden shrink-0 items-center gap-1 text-[10px] text-muted-foreground lg:inline-flex" title={reportFetchedAt ? new Date(reportFetchedAt).toLocaleString() : undefined}>{reportFetchedAt > 0 && <><Clock3 className="h-3 w-3" /><span data-testid="report-as-of">{freshnessLabel(reportFetchedAt)}</span></>}{reportFetchedAt > 0 && draft.refreshIntervalSeconds ? <span>·</span> : null}{draft.refreshIntervalSeconds ? <span>Auto · {refreshChoices.find((choice) => choice.value === draft.refreshIntervalSeconds)?.label.replace(/^Every /, "") ?? `${draft.refreshIntervalSeconds}s`}</span> : null}</span>}
+      </div>
+      <div className="flex w-full items-center justify-end gap-1 sm:gap-2 md:w-auto">
+        <Button size="sm" variant="outline" aria-label="Edit with AI" title="Edit with AI" onClick={() => setAgentOpen((v) => !v)}><Bot className="h-4 w-4" /><span className="hidden sm:inline">Edit with AI</span></Button>
+        <ReportRunControl reader={false} running={reportRunning} disabled={reportErrors.length > 0 || reportRunning || !engineReady} label={engineWaiting ? "Preparing…" : progressLabel ?? "Run report"} interval={draft.refreshIntervalSeconds} onRun={runFullReport} onIntervalChange={updateAutoRefresh} />
+        <Button size="sm" variant="outline" disabled={!dirty || reportErrors.length > 0} onClick={acceptDraft}><Save className="h-4 w-4" /><span className="hidden sm:inline">Save</span></Button>
+        <Button size="sm" disabled={reportErrors.length > 0 || reportRunning || !engineReady || !isCompatible(draft)} onClick={publishDraft}><Send className="h-4 w-4" /> Publish{published ? <span className="hidden sm:inline"> changes</span> : null}</Button>
+        <ReportMoreMenu
+          reader={false}
+          revisions={revisionOptions}
+          onRestoreRevision={async (revision) => { const restored = await restoreReportRevision(draft.id, revision); openReport(restored, undefined, false); }}
+          onShareDraft={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(draft, { serviceUrl, values: appliedValues })); setShareStatus("Draft review link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}
+          onPrint={() => window.print()}
+          onEditSource={() => { setAgentOpen(false); setInspectorOpen(true); setSourceText(exportReportJson(draft)); }}
+          onDownload={() => triggerDownload(new Blob([exportReportJson(draft)], { type: "application/json" }), `${safeFileStem(draft.title)}.cupola-report.json`)}
+        />
+      </div>
+    </div> : <div className="flex flex-wrap items-center gap-3 border-b bg-card px-4 py-3">
+      <Button size="sm" variant="ghost" className="shrink-0" onClick={() => { runGeneration.current += 1; setRunProgress(null); setDraft(null); setSelected(null); setPublished(null); setReaderMode(false); setResults({}); }}><ArrowLeft className="h-4 w-4" /> Reports</Button>
+      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h1 className="truncate text-base font-semibold">{report.title}</h1><span className="shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700">Published</span></div><p className="truncate text-[10px] text-muted-foreground" title={reportFetchedAt ? new Date(reportFetchedAt).toLocaleString() : undefined}>{publishedAt ? `Published ${new Date(publishedAt).toLocaleString()}` : "Published report"}{reportFetchedAt > 0 ? ` · ${freshnessLabel(reportFetchedAt)}` : ""}{report.refreshIntervalSeconds ? ` · Auto ${report.refreshIntervalSeconds}s` : ""}</p></div>
+      <div className="flex w-full items-center justify-end gap-1 sm:gap-2 md:w-auto">
+        <ReportRunControl reader running={reportRunning} disabled={reportErrors.length > 0 || reportRunning || !engineReady} label={engineWaiting ? "Preparing…" : progressLabel ?? "Refresh"} interval={report.refreshIntervalSeconds} onRun={runFullReport} onIntervalChange={(seconds) => setPublished((current) => {
+          if (!current) return current;
+          const { refreshIntervalSeconds: _interval, ...withoutInterval } = current;
+          return seconds ? { ...withoutInterval, refreshIntervalSeconds: seconds } : withoutInterval;
+        })} />
+        <Button size="sm" variant="outline" aria-label="Share" title="Share" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(report, { serviceUrl, values: appliedValues, mode: "reader" })); setShareStatus("Reader link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}><Share2 className="h-4 w-4" /><span className="hidden sm:inline">Share</span></Button>
+        <Button size="sm" variant="outline" aria-label="Edit report" title="Edit report" onClick={() => switchReportMode("edit")}><Pencil className="h-4 w-4" /><span className="hidden sm:inline">Edit report</span></Button>
+        <ReportMoreMenu reader revisions={[]} onPrint={() => window.print()} onDownload={() => triggerDownload(new Blob([exportReportJson(report)], { type: "application/json" }), `${safeFileStem(report.title)}.cupola-report.json`)} />
+      </div>
     </div>}
     <div role="tablist" aria-label="Report views" className="report-authoring-control flex h-10 shrink-0 items-end gap-1 border-b bg-card px-3">
       <button type="button" role="tab" id="report-view-tab" aria-selected={workspaceView === "report"} aria-controls="report-view-panel" data-testid="report-view-tab" onClick={() => setWorkspaceView("report")} className={`inline-flex h-10 items-center gap-1.5 border-b-2 px-3 text-sm ${workspaceView === "report" ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}><BarChart3 className="h-3.5 w-3.5" /> Report</button>
@@ -1725,7 +1917,7 @@ Current report:\n${JSON.stringify(draft)}`;
         </div>
       </div>}
       {!readerMode && (agentOpen || inspectorOpen) && <aside className="report-authoring-control w-[min(42vw,520px)] min-w-[340px] border-l bg-card flex flex-col min-h-0">
-        <div className="flex items-center border-b"><button className={`px-4 py-2 text-sm ${agentOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setAgentOpen(true); setInspectorOpen(false); }}>Agent</button><button className={`px-4 py-2 text-sm ${inspectorOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setInspectorOpen(true); setAgentOpen(false); setSourceText(exportReportJson(draft)); }}>Source</button><div className="flex-1" />{agentOpen && agentConversation.length > 0 && <Button size="sm" variant="ghost" disabled={agentBusy} onClick={resetAgentConversation}>New conversation</Button>}<button className="p-2" onClick={() => { setAgentOpen(false); setInspectorOpen(false); }}><X className="h-4 w-4" /></button></div>
+        <div className="flex items-center border-b"><button className={`px-4 py-2 text-sm ${agentOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setAgentOpen(true); setInspectorOpen(false); }}>Edit with AI</button><button className={`px-4 py-2 text-sm ${inspectorOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setInspectorOpen(true); setAgentOpen(false); setSourceText(exportReportJson(draft)); }}>Report JSON</button><div className="flex-1" />{agentOpen && agentConversation.length > 0 && <Button size="sm" variant="ghost" disabled={agentBusy} onClick={resetAgentConversation}>New conversation</Button>}<button className="p-2" onClick={() => { setAgentOpen(false); setInspectorOpen(false); }}><X className="h-4 w-4" /></button></div>
         {agentOpen ? <><div ref={agentThreadRef} data-testid="report-agent-thread" className="flex-1 overflow-y-auto p-4 text-sm"><p className="text-muted-foreground mb-4">Describe the report or revision. The agent edits a draft; nothing is saved until you accept it.</p><div className="space-y-5">{agentConversation.map((message) => <div key={message.id} data-role={message.role}>{message.role === "user" ? <ChatMessageUser content={message.content ?? ""} /> : <ChatMessageAssistant blocks={message.blocks ?? []} isStreaming={message.isStreaming} usage={message.usage} model={settings.aiModel} onCancel={message.isStreaming ? () => abortRef.current?.abort() : undefined} />}</div>)}</div></div><div className="p-3 border-t"><textarea className="w-full min-h-24 rounded-md border bg-background p-2 text-sm" value={agentPrompt} onChange={(e) => setAgentPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void runAgent(); } }} placeholder="Build a monthly sales report with a date range and region filter…" /><div className="flex justify-end mt-2">{agentBusy ? <Button variant="destructive" size="sm" onClick={() => abortRef.current?.abort()}>Stop</Button> : <Button size="sm" disabled={!agentPrompt.trim()} onClick={runAgent}><Sparkles className="h-4 w-4" /> Send</Button>}</div></div></> : <><textarea className="flex-1 min-h-0 resize-none bg-background p-3 font-mono text-xs" spellCheck={false} value={sourceText} onChange={(e) => setSourceText(e.target.value)} />{sourceError && <div className="px-3 py-2 text-xs text-destructive border-t">{sourceError}</div>}<div className="p-3 border-t flex justify-end"><Button size="sm" onClick={() => { try { const parsed = importReportJson(sourceText); setDraft(parsed); setSourceError(null); } catch (e) { setSourceError(e instanceof Error ? e.message : String(e)); } }}>Preview source</Button></div></>}
       </aside>}
     </div>

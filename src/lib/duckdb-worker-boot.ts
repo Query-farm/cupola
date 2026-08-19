@@ -249,6 +249,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
       }
     }
   };
+  engine.getTableNames = (sql: string) => conn.getTableNames(sql);
   // Pending vs non-streaming distinction (today's `query-sync`) is moot under
   // AsyncDuckDB.runQuery, which always returns a single File-format buffer.
   engine.querySync = runQueryWrapped;

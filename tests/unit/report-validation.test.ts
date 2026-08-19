@@ -163,6 +163,15 @@ describe("report document validation", () => {
     expect(validateReport(report).join(" ")).toContain("report.groups[0].titleSize is unsupported");
   });
 
+  test("rejects dataset IDs that collide as DuckDB relation names", () => {
+    const report = createEmptyReport("Relations");
+    report.datasets.push(
+      { id: "Weather_Base", name: "First", sql: "SELECT 1" },
+      { id: "weather_base", name: "Second", sql: "SELECT 2" },
+    );
+    expect(validateReport(report).join(" ")).toContain("conflict as SQL relation names");
+  });
+
   test("validates safe conditional block appearance rules", () => {
     const report = createEmptyReport("Humidity alerts");
     report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 68 AS humidity" });

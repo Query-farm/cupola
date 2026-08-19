@@ -82,6 +82,9 @@ export const engine = {
   /** Execute one prepared statement with positional values. Report datasets
    *  use this path so parameter values never become SQL source text. */
   queryPrepared: null as ((sql: string, params: unknown[]) => Promise<QueryResult>) | null,
+  /** Parse SQL with DuckDB and return the relations it reads. Reports use
+   *  this to infer dataset dependencies from ordinary FROM/JOIN references. */
+  getTableNames: null as ((sql: string) => Promise<string[]>) | null,
   querySync: null as ((sql: string) => Promise<QueryResult>) | null,
   cancelQuery: null as (() => void) | null,
   progress: null as ((pct: number) => void) | null,
@@ -280,6 +283,7 @@ if (typeof window !== "undefined") {
     get query() { return engine.query; },
     get queryPrepared() { return engine.queryPrepared; },
     set queryPrepared(value) { engine.queryPrepared = value; },
+    get getTableNames() { return engine.getTableNames; },
     get querySync() { return engine.querySync; },
     get cancelQuery() { return engine.cancelQuery; },
     get catalogName() { return engine.catalogName; },

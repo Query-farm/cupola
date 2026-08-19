@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { cleanup, fireEvent, render } from "@testing-library/react";
+import { tableFromArrays } from "@query-farm/apache-arrow";
 import { ReportDatasetsView } from "../../src/components/reports/ReportDatasetsView";
 import type { ReportDocumentV1 } from "../../src/lib/reports/types";
 
@@ -68,5 +69,27 @@ describe("report dataset browser", () => {
     fireEvent.click(view.getByTestId("report-dataset-item-choices"));
     expect(view.getAllByText("Parameter options").length).toBeGreaterThan(0);
     expect(view.getByText("No report blocks currently reference this dataset.")).toBeTruthy();
+  });
+
+  test("presents result schemas as a table using DuckDB type names", () => {
+    const table = tableFromArrays({ city: ["Norfolk"], humidity: [68] });
+    const view = render(<ReportDatasetsView
+      report={report}
+      results={{ conditions: { table, rows: [{ city: "Norfolk", humidity: 68 }], status: "success" } }}
+      appliedValues={{ city: "Norfolk" }}
+      running={false}
+      engineReady
+      onRunDataset={() => {}}
+      onOpenSql={() => {}}
+    />);
+
+    const schema = view.getByTestId("report-dataset-schema");
+    expect(schema.textContent).toContain("DuckDB type");
+    const city = view.getByTestId("report-dataset-schema-row-city");
+    expect(city.textContent).toContain("VARCHAR");
+    expect(city.textContent).not.toContain("Utf8");
+    const humidity = view.getByTestId("report-dataset-schema-row-humidity");
+    expect(humidity.textContent).toContain("DOUBLE");
+    expect(humidity.textContent).not.toContain("Float64");
   });
 });

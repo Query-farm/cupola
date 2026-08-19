@@ -33,6 +33,17 @@ test("report guide is a runnable in-product gallery backed by canned local data"
   await expect(page.locator(".report-authoring-control input").first()).toHaveValue("Cupola report block gallery", { timeout: T_SHELL_BOOT });
   await expect(page.getByText(/canned data queried locally/i)).toBeVisible();
   await expect(page.getByTestId("report-parameters-toggle")).toContainText("Glen Allen, Virginia");
+  await expect(page.getByRole("button", { name: "Edit with AI" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Publish", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Report refresh options" }).click();
+  await expect(page.getByTestId("report-auto-refresh-0")).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "More report actions" }).click();
+  await expect(page.getByRole("button", { name: "Print / Save as PDF" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Download report definition" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit report JSON" })).toBeVisible();
+  await page.keyboard.press("Escape");
 
   for (const id of [
     "showcase-markdown",
@@ -68,6 +79,14 @@ test("report guide is a runnable in-product gallery backed by canned local data"
   await expect(page.getByText("AI-generated", { exact: false })).toBeAttached();
   await expect(page.getByText(/Run report to load data/i)).toHaveCount(0);
 
+  await page.setViewportSize({ width: 360, height: 800 });
+  const authorToolbarWidth = await page.locator(".report-authoring-control").first().evaluate((toolbar) => ({
+    client: toolbar.clientWidth,
+    scroll: toolbar.scrollWidth,
+  }));
+  expect(authorToolbarWidth.scroll).toBeLessThanOrEqual(authorToolbarWidth.client + 1);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   await expect(page.getByTestId("report-block-showcase-kpi")).toHaveAttribute("data-report-tone", "warning");
   await page.getByTestId("report-parameters-toggle").click();
   await page.locator('input[type="number"]').fill("70");
@@ -77,7 +96,7 @@ test("report guide is a runnable in-product gallery backed by canned local data"
   await page.getByRole("button", { name: "Publish" }).click();
   await expect(page.getByTestId("reports-workspace")).toHaveAttribute("data-report-mode", "reader");
   await expect(page.getByRole("heading", { name: "Cupola report block gallery" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Agent" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit with AI" })).toHaveCount(0);
   await expect(page.locator(".react-resizable-handle").first()).toBeHidden();
   await expect(page.getByTestId("report-block-header-showcase-kpi")).toHaveCSS("cursor", "default");
   await expect(page.getByTestId("report-parameters-toggle")).toContainText("Glen Allen, Virginia");
@@ -89,10 +108,45 @@ test("report guide is a runnable in-product gallery backed by canned local data"
 
   await page.getByRole("button", { name: "Edit report" }).click();
   await page.locator('input[value="Cupola report block gallery"]').fill("Unpublished gallery draft");
-  await page.getByRole("button", { name: "Save draft" }).click();
-  await page.getByRole("button", { name: "View published" }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByRole("button", { name: "Published", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Cupola report block gallery" })).toBeVisible();
   await expect(page.getByText("Unpublished gallery draft")).toHaveCount(0);
+});
+
+test("infers dataset dependencies and reuses a refresh-scoped materialization", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto(`${APP_ORIGIN}${BASE}report-guide/`);
+  await waitForShellBridge(page);
+  const now = Date.now();
+  const report = {
+    schemaVersion: 1,
+    id: "dataset-dependency-example",
+    title: "Dataset dependency example",
+    createdAt: now,
+    updatedAt: now,
+    revision: 1,
+    requiredSources: [],
+    parameters: [],
+    datasets: [
+      { id: "weather_base", name: "Weather source", sql: "SELECT 10 AS temperature, 60 AS humidity" },
+      { id: "weather_summary", name: "Weather summary", sql: "SELECT temperature * 2 AS score, humidity FROM weather_base" },
+    ],
+    blocks: [{ id: "summary-table", type: "table", datasetId: "weather_summary", title: "Summary", layout: { x: 0, y: 0, w: 12, h: 3 } }],
+  };
+  await page.getByRole("button", { name: "More report actions" }).click();
+  await page.getByRole("button", { name: "Edit report JSON" }).click();
+  await page.locator("textarea.font-mono").fill(JSON.stringify(report));
+  await page.getByRole("button", { name: "Preview source" }).click();
+
+  await page.getByTestId("reports-run").click();
+  await expect(page.getByRole("cell", { name: "20", exact: true })).toBeVisible({ timeout: T_SHELL_BOOT });
+  await page.getByTestId("report-datasets-tab").click();
+  await page.getByTestId("report-dataset-item-weather_base").click();
+  await expect(page.getByText("Shared this refresh")).toBeVisible();
+  await expect(page.getByText("Feeds").locator("..")).toContainText("weather_summary");
+  await page.getByTestId("report-dataset-item-weather_summary").click();
+  await expect(page.getByText("Reads from").locator("..")).toContainText("weather_base");
 });
 
 test("pauses a refresh after a rate limit and preserves dependent block data", async ({ page }) => {
@@ -115,7 +169,7 @@ test("pauses a refresh after a rate limit and preserves dependent block data", a
       return queryPrepared(sql, params);
     };
   });
-  await page.getByRole("button", { name: "Library" }).click();
+  await page.getByRole("button", { name: "Reports", exact: true }).click();
   const now = Date.now();
   const report = {
     schemaVersion: 1,

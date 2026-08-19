@@ -118,7 +118,7 @@ const parameterSchema = {
 };
 
 const datasetProperties = {
-  id: stringSchema,
+  id: { type: "string", description: "Stable SQL relation name. Use a short snake_case identifier when another dataset will query this result." },
   name: stringSchema,
   sql: stringSchema,
   description: stringSchema,
@@ -413,7 +413,7 @@ export const REPORT_TOOLS: Tool[] = [
   },
   {
     name: "upsert_report_dataset",
-    description: "Create or update one report dataset, then execute it immediately. Omit id when creating; reuse the returned id for later updates and blocks. Fix any SQL error before adding dependent blocks.",
+    description: "Create or update one report dataset, then execute it immediately. Dataset SQL may query another report dataset by its id; Cupola infers that dependency with DuckDB and materializes shared results once per refresh. Use short snake_case ids for referenced datasets. Omit id to derive one from the name, and reuse the returned id for later updates and blocks. Fix any SQL error before adding dependent blocks.",
     input_schema: {
       type: "object",
       additionalProperties: false,
@@ -520,7 +520,11 @@ export function upsertAgentDataset(report: ReportDocumentV1, input: Omit<ReportD
     ? next.datasets.findIndex((dataset) => dataset.id === input.id)
     : next.datasets.findIndex((dataset) => dataset.name === input.name);
   const existing = existingIndex >= 0 ? next.datasets[existingIndex] : undefined;
-  const dataset: ReportDataset = { ...existing, ...input, id: existing?.id ?? input.id ?? newReportId("dataset") };
+  const baseId = input.name.trim().toLocaleLowerCase("en-US").replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "") || "dataset";
+  const sqlSafeBaseId = /^[a-z_]/.test(baseId) ? baseId : `dataset_${baseId}`;
+  let generatedId = sqlSafeBaseId;
+  for (let suffix = 2; next.datasets.some((candidate) => candidate.id.toLocaleLowerCase("en-US") === generatedId.toLocaleLowerCase("en-US")); suffix++) generatedId = `${sqlSafeBaseId}_${suffix}`;
+  const dataset: ReportDataset = { ...existing, ...input, id: existing?.id ?? input.id ?? generatedId };
   if (existingIndex >= 0) next.datasets[existingIndex] = dataset;
   else next.datasets.push(dataset);
   next.updatedAt = Date.now();

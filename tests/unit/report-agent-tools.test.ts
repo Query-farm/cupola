@@ -155,6 +155,7 @@ describe("report agent tools", () => {
     const byName = upsertAgentDataset(created.report, { name: "Conditions", sql: "SELECT 2" });
     const byId = upsertAgentDataset(byName.report, { id: created.dataset.id, name: "Conditions", sql: "SELECT 3" });
     expect(byName.dataset.id).toBe(created.dataset.id);
+    expect(created.dataset.id).toBe("conditions");
     expect(byId.dataset.id).toBe(created.dataset.id);
     expect(byId.report.datasets).toHaveLength(1);
     expect(byId.dataset.sql).toBe("SELECT 3");

@@ -397,7 +397,7 @@ test("promotes the current editor statement into a runnable report table", async
   await expect(page.getByRole("cell", { name: "2021-01-01 00:00:00.123456" })).toBeVisible({ timeout: T_NORMAL });
 
   await page.getByRole("button", { name: "Accept & save" }).click();
-  await page.getByRole("button", { name: "Library" }).click();
+  await page.getByRole("button", { name: "Reports", exact: true }).click();
   await expect(page.getByRole("button", { name: /^Query 1 Ready/ })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("button", { name: /^Query 1 Ready/ })).toBeVisible({ timeout: T_NORMAL });
@@ -513,7 +513,9 @@ test("automatically refreshes a report with its saved cadence", async ({ page })
     mimeType: "application/json",
     buffer: Buffer.from(JSON.stringify(report)),
   });
-  await expect(page.getByLabel("Auto refresh")).toHaveValue("5");
+  await page.getByRole("button", { name: "Report refresh options" }).click();
+  await expect(page.getByTestId("report-auto-refresh-5")).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
   await page.getByTestId("reports-run").click();
   const timestamp = page.getByRole("cell").first();
   await expect(timestamp).toBeVisible({ timeout: T_NORMAL });

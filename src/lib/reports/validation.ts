@@ -470,8 +470,13 @@ export function validateReport(input: unknown): string[] {
     }
   }
   const datasetIds = new Set<string>();
+  const datasetRelationIds = new Map<string, string>();
   for (const d of report.datasets) {
     takeId(d.id, "Dataset"); datasetIds.add(d.id);
+    const relationKey = d.id.toLocaleLowerCase("en-US");
+    const conflictingId = datasetRelationIds.get(relationKey);
+    if (conflictingId && conflictingId !== d.id) errors.push(`Dataset IDs ${conflictingId} and ${d.id} conflict as SQL relation names.`);
+    else datasetRelationIds.set(relationKey, d.id);
     errors.push(...validateReadOnlySql(d.sql).map((e) => `${d.name}: ${e}`));
     for (const token of parameterTokens(d.sql)) {
       const rangeBase = token.replace(/_(?:start|end)$/, "");
