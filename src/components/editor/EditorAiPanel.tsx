@@ -16,6 +16,7 @@ import { Sparkles, RotateCcw, X } from "lucide-react";
 import * as Sentry from "@sentry/astro";
 import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
 import { engine, ui } from "@/lib/shell-bridge";
+import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
@@ -87,6 +88,7 @@ interface Props {
 }
 
 export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, apply, runIdRef, setActiveResult, onClose, onBusyChange }: Props) {
+  const engineLifecycle = useEngineLifecycle();
   const { settings } = useSettings();
   const convos = useRef<Map<string, ConversationState>>(new Map());
   const [, bump] = useReducer((x: number) => x + 1, 0);
@@ -453,7 +455,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
         )}
       </div>
 
-      <ChatInput onSend={send} onStop={stop} isLoading={convo.isLoading} disabled={!hasApiKey} focused placeholder="Ask AI about your query…" />
+      <ChatInput onSend={send} onStop={stop} isLoading={convo.isLoading} disabled={!hasApiKey || engineLifecycle.status !== "ready"} focused placeholder="Ask AI about your query…" />
     </div>
   );
 }

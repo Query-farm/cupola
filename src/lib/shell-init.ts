@@ -18,7 +18,7 @@ import { printBoxTable, printLineTable, cellWidth, type TerminalOutput } from ".
 import { handleDotCommand, type ShellState, type ShellIO } from "./shell-commands";
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "./shell-ai-mode";
 import { attachInputHandlers, type CompletionItem } from "./shell-input";
-import { engine, terminal, ui, notifyQueryChange, recordQuery, setBootPhase } from "./shell-bridge";
+import { engine, terminal, ui, notifyQueryChange, recordQuery, setBootPhase, setEngineLifecycleError } from "./shell-bridge";
 import { quoteLiteral, quoteIdent } from "./duckdb-query";
 import { SHELL_EXTENSIONS, recordExtensionLoaded } from "./duckdb-engine";
 import { QueryResultCache } from "./query-results";
@@ -403,7 +403,7 @@ export function initShell(
     if (postReadyInvoked) return;
     postReadyInvoked = true;
     currentWasmVersion = readyWasmVersion;
-    (async () => {
+    void (async () => {
       // Disable both autoload AND autoinstall so subsequent queries can
       // never trigger a synchronous extension fetch mid-statement. We saw
       // `SET TimeZone='America/...'` deadlock the wasm worker when it tried
@@ -421,7 +421,7 @@ export function initShell(
       // describe it, and a second hardcoded copy there drifted from this one.
       for (const ext of SHELL_EXTENSIONS) {
         writeln(`Loading ${ext.name} extension...`, "33");
-        setBootPhase(`Loading ${ext.name} extension`);
+        setBootPhase(`Loading ${ext.name} extension`, null, "attaching");
         const fromClause = ext.source ? ` FROM ${ext.source}` : "";
         const install = await engine.query!(`INSTALL ${ext.name}${fromClause}`);
         if (!install.ok) {
@@ -430,6 +430,8 @@ export function initShell(
             console.error("[shell]", msg);
             writeln(msg, "31");
             writeln("The haybarn extension repository may be unreachable.", "31");
+            engine.markAttached?.();
+            setEngineLifecycleError(msg);
             return;
           }
           console.warn("[shell]", msg, "(continuing)");
@@ -441,6 +443,8 @@ export function initShell(
           if (ext.required) {
             console.error("[shell]", msg);
             writeln(msg, "31");
+            engine.markAttached?.();
+            setEngineLifecycleError(msg);
             return;
           }
           console.warn("[shell]", msg, "(continuing)");
@@ -466,7 +470,7 @@ export function initShell(
       // warning, most visible in Safari). Still time-boxed so a stall can't hold
       // up boot; the display path falls back to the browser zone regardless.
       console.log("[shell] syncing timezone…");
-      setBootPhase("Syncing timezone");
+      setBootPhase("Syncing timezone", null, "attaching");
       const tzSync = (async () => {
         try {
           const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -503,7 +507,7 @@ export function initShell(
 
       if (config.serviceUrl && config.catalogName) {
         writeln(`Connecting to ${config.catalogName}...`, "33");
-        setBootPhase(`Connecting to ${config.catalogName}`);
+        setBootPhase(`Connecting to ${config.catalogName}`, null, "attaching");
         const attachSql = buildAttachSql();
         console.log("[shell] ATTACH SQL:", attachSql.replace(/(oauth_refresh_token|bearer_token) '[^']*'/g, "$1 '***'"));
         const result = await engine.query!(attachSql);
@@ -525,6 +529,8 @@ export function initShell(
           // Resolve attached even on failure so downstream consumers fail
           // fast with their own "catalog not found" error instead of hanging.
           engine.markAttached?.();
+          setEngineLifecycleError(errStr || `Could not connect to ${config.catalogName}.`);
+          return;
         }
         writeln("");
       } else {
@@ -565,7 +571,12 @@ export function initShell(
       ui.onAttachedCatalogsChanged?.();
       window.dispatchEvent(new Event("duckdb-ready"));
       readLoop();
-    })();
+    })().catch((error) => {
+      console.error("[shell] post-ready initialization failed:", error);
+      engine.markAttached?.();
+      setEngineLifecycleError(error);
+      writeln(`Failed to finish starting the data engine: ${error instanceof Error ? error.message : String(error)}`, "31");
+    });
   };
 
   // Query execution. Both async (streaming-shape) and sync (single-buffer for
@@ -894,6 +905,8 @@ export function initShell(
         runPostReady(ready?.wasmVersion ?? "");
       } catch (err) {
         console.error("[shell] ensureDuckDB failed:", err);
+        engine.markAttached?.();
+        setEngineLifecycleError(err);
         writeln(`Failed to initialize DuckDB: ${err instanceof Error ? err.message : String(err)}`, "31");
       }
     })();

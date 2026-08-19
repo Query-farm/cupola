@@ -43,6 +43,16 @@ export interface QueryHistoryEntry {
   conversationName?: string;
 }
 
+export type EngineLifecycleStatus = "idle" | "starting" | "attaching" | "ready" | "error";
+
+export interface EngineLifecycleSnapshot {
+  status: EngineLifecycleStatus;
+  phase: string | null;
+  progress: number | null;
+  error: string | null;
+  startedAt: number;
+}
+
 /** Create and record a query history entry. */
 export function recordQuery(opts: {
   sql: string;
@@ -90,6 +100,9 @@ export const engine = {
    *  instantiate phase only (other phases are indeterminate). */
   bootPhase: null as string | null,
   bootProgress: null as number | null,
+  lifecycleStatus: "idle" as EngineLifecycleStatus,
+  bootError: null as string | null,
+  lifecycleStartedAt: 0,
 
   /** Sentry identity for the shell worker. Held here so duckdb-worker-boot can
    *  replay it on worker creation — the worker may boot before CatalogApp's
@@ -187,10 +200,68 @@ export function onBootChange(cb: () => void): () => void {
   bootListeners.add(cb);
   return () => { bootListeners.delete(cb); };
 }
-export function setBootPhase(phase: string | null, progress: number | null = null): void {
+export function getEngineLifecycleSnapshot(): EngineLifecycleSnapshot {
+  return {
+    status: engine.lifecycleStatus,
+    phase: engine.bootPhase,
+    progress: engine.bootProgress,
+    error: engine.bootError,
+    startedAt: engine.lifecycleStartedAt,
+  };
+}
+
+function notifyBootChange(): void {
+  for (const cb of bootListeners) cb();
+}
+
+export function setBootPhase(
+  phase: string | null,
+  progress: number | null = null,
+  stage: "starting" | "attaching" = "starting",
+): void {
   engine.bootPhase = phase;
   engine.bootProgress = progress;
-  for (const cb of bootListeners) cb();
+  engine.bootError = null;
+  if (phase === null) {
+    engine.lifecycleStatus = "ready";
+  } else {
+    engine.lifecycleStatus = stage;
+    if (!engine.lifecycleStartedAt) engine.lifecycleStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  }
+  notifyBootChange();
+}
+
+export function setEngineLifecycleError(error: unknown): void {
+  engine.lifecycleStatus = "error";
+  engine.bootError = error instanceof Error ? error.message : String(error || "The data engine failed to start.");
+  engine.bootProgress = null;
+  notifyBootChange();
+}
+
+/** Resolve only after the complete boot flow, including extension loading and
+ * catalog ATTACH. Query functions become callable earlier and are therefore
+ * not themselves a sufficient readiness signal. */
+export function waitForEngineReady(timeoutMs = 60_000): Promise<void> {
+  if (engine.lifecycleStatus === "ready") return Promise.resolve();
+  if (engine.lifecycleStatus === "error") return Promise.reject(new Error(engine.bootError ?? "The data engine failed to start."));
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      unsubscribe();
+      if (error) reject(error);
+      else resolve();
+    };
+    const onChange = () => {
+      if (engine.lifecycleStatus === "ready") finish();
+      else if (engine.lifecycleStatus === "error") finish(new Error(engine.bootError ?? "The data engine failed to start."));
+    };
+    const unsubscribe = onBootChange(onChange);
+    const timeout = window.setTimeout(() => finish(new Error("The data engine did not finish starting.")), timeoutMs);
+    onChange();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +285,8 @@ if (typeof window !== "undefined") {
     get catalogName() { return engine.catalogName; },
     get worker() { return engine.worker; },
     get bootPhase() { return engine.bootPhase; },
+    get engineStatus() { return engine.lifecycleStatus; },
+    get engineError() { return engine.bootError; },
     get attached() { return engine.attached; },
     get shellTerm() { return terminal.term; },
     get shellFitAddon() { return terminal.fitAddon; },

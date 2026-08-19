@@ -38,6 +38,7 @@ const DuckDBShell = lazy(() => import("./DuckDBShell").then(m => ({ default: m.D
 const SqlEditorView = lazy(() => import("./editor/SqlEditorView").then(m => ({ default: m.SqlEditorView })));
 const ReportsWorkspace = lazy(() => import("./reports/ReportsWorkspace").then(m => ({ default: m.ReportsWorkspace })));
 import { AppTabBar, type TabId } from "./AppTabBar";
+import { EngineStatusRibbon } from "./EngineStatusRibbon";
 import { CatalogOverview } from "./content/CatalogOverview";
 import { MemoryCatalogOverview } from "./content/MemoryCatalogOverview";
 import { SchemaDetail } from "./content/SchemaDetail";
@@ -825,6 +826,7 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
         sidebarCollapsed={!sidebarVisible}
         onToggleSidebar={() => isNarrow ? setMobileSidebarOpen((open) => !open) : setSidebarCollapsed((c) => !c)}
       />
+      <EngineStatusRibbon />
       <div className="relative flex flex-1 overflow-hidden">
         {sidebarVisible && (
           <>

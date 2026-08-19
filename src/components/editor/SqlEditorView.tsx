@@ -9,7 +9,8 @@ import { format as formatSql } from "sql-formatter";
 import * as Sentry from "@sentry/astro";
 import { tableToIPC } from "@query-farm/apache-arrow";
 import { decodeArrowBuffer } from "@/lib/duckdb-query";
-import { engine, ui, onBootChange, recordQuery } from "@/lib/shell-bridge";
+import { engine, ui, recordQuery, waitForEngineReady } from "@/lib/shell-bridge";
+import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { useSettings } from "@/lib/settings";
 import type { CatalogData } from "@/lib/service";
 import {
@@ -100,12 +101,9 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, pendingS
     return 0.42;
   });
   const splitColRef = useRef<HTMLDivElement>(null);
-  // engine.query availability — re-checked after the shell finishes booting.
-  const [queryReady, setQueryReady] = useState<boolean>(() => !!engine.query);
-  // Live engine boot phase (e.g. "Downloading DuckDB") shown in the toolbar
-  // while the WASM engine initializes — the user can't see the shell boot
-  // screen when the editor is the active surface.
-  const [bootPhase, setBootPhase] = useState<string | null>(() => engine.bootPhase);
+  const engineLifecycle = useEngineLifecycle();
+  const queryReady = engineLifecycle.status === "ready";
+  const bootPhase = engineLifecycle.phase;
 
   const editorRef = useRef<CodeMirrorSqlHandle | null>(null);
   const runIdRef = useRef(0);
@@ -123,22 +121,6 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, pendingS
     [docState, activeId],
   );
   const activeResult = (activeId && results[activeId]) || emptyResult;
-
-  // Poll briefly for engine.query becoming available (shell boots async).
-  useEffect(() => {
-    if (queryReady) return;
-    const t = setInterval(() => {
-      if (engine.query) { setQueryReady(true); clearInterval(t); }
-    }, 400);
-    return () => clearInterval(t);
-  }, [queryReady]);
-
-  // Track the live boot phase while the engine initializes.
-  useEffect(() => {
-    if (queryReady) return;
-    setBootPhase(engine.bootPhase);
-    return onBootChange(() => setBootPhase(engine.bootPhase));
-  }, [queryReady]);
 
   const persist = useCallback((next: EditorDocState) => {
     setDocState(next);
@@ -202,10 +184,15 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, pendingS
     const myRun = ++runIdRef.current;
     setActiveResult(docId, { running: true, ran: true, error: null });
 
-    if (engine.attached) await engine.attached;
+    try {
+      await waitForEngineReady();
+    } catch (error) {
+      setActiveResult(docId, { running: false, error: error instanceof Error ? error.message : "The data engine failed to start." });
+      return;
+    }
     const q = engine.query;
     if (!q) {
-      setActiveResult(docId, { running: false, error: "DuckDB is still starting up. Try again in a moment." });
+      setActiveResult(docId, { running: false, error: "The data engine is not ready." });
       return;
     }
 

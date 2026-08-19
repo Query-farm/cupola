@@ -6,7 +6,8 @@ import "react-resizable/css/styles.css";
 import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Download, Eye, FileJson, FilePlus2, GripVertical, Loader2, Pencil, Play, Plus, Printer, Save, Send, Share2, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import type { CatalogData } from "@/lib/service";
-import { engine, ui } from "@/lib/shell-bridge";
+import { engine, getEngineLifecycleSnapshot, ui, waitForEngineReady } from "@/lib/shell-bridge";
+import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { decodeArrowBuffer, tableToRows } from "@/lib/duckdb-query";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 import { ChatMessageAssistant, type ContentBlock, type ToolCallEntry } from "@/components/chat/ChatMessageAssistant";
@@ -75,24 +76,6 @@ interface NarrativeGenerationState {
 
 function isDatasetPending(result?: DatasetResult): boolean {
   return result?.status === "queued" || result?.status === "running";
-}
-
-async function waitForReportEngine(timeoutMs = 30_000): Promise<void> {
-  if (!engine.queryPrepared) {
-    await new Promise<void>((resolve, reject) => {
-      const onReady = () => {
-        window.clearTimeout(timeout);
-        resolve();
-      };
-      const timeout = window.setTimeout(() => {
-        window.removeEventListener("duckdb-ready", onReady);
-        reject(new Error("DuckDB did not finish starting."));
-      }, timeoutMs);
-      window.addEventListener("duckdb-ready", onReady, { once: true });
-    });
-  }
-  if (engine.attached) await engine.attached;
-  if (!engine.queryPrepared) throw new Error("DuckDB is still starting up.");
 }
 
 function visibleMarkdownTitle(title?: string): string | null {
@@ -512,6 +495,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const [readerMode, setReaderMode] = useState(false);
   const [results, setResults] = useState<Record<string, DatasetResult>>({});
   const [runProgress, setRunProgress] = useState<ReportRunProgress | null>(null);
+  const [engineWaiting, setEngineWaiting] = useState(false);
   const [values, setValues] = useState<Record<string, ReportParameterValue>>({});
   const [appliedValues, setAppliedValues] = useState<Record<string, ReportParameterValue>>({});
   const [parameterIssues, setParameterIssues] = useState<ReportParameterIssue[]>([]);
@@ -538,6 +522,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const autoRefreshRunningRef = useRef(false);
   const rateLimitRetryTimerRef = useRef<number | null>(null);
   const rateLimitUntilRef = useRef(0);
+  const engineWaitersRef = useRef(0);
   const validateAndRunRef = useRef<((report: ReportDocumentV1, values: Record<string, ReportParameterValue>, changedOnly: boolean, allowAutomaticRetry?: boolean) => Promise<boolean>) | null>(null);
   const autoRefreshStateRef = useRef<{
     report: ReportDocumentV1 | null;
@@ -551,6 +536,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     else reportChartViews.current.delete(blockId);
   }, []);
   const { width, containerRef, mounted, measureWidth } = useContainerWidth({ initialWidth: 1000 });
+  const engineLifecycle = useEngineLifecycle();
   const activeReport = readerMode && published ? published : draft;
 
   const clearScheduledRateLimitRetry = useCallback(() => {
@@ -693,23 +679,9 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       setShareStatus(error);
       return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error }));
     }
-    try {
-      await waitForReportEngine();
-    } catch (cause) {
-      const error = cause instanceof Error ? cause.message : "DuckDB is still starting up.";
-      setShareStatus(error);
-      return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error }));
-    }
-    const queryPrepared = engine.queryPrepared;
-    if (!queryPrepared) {
-      const error = "DuckDB is still starting up.";
-      setShareStatus(error);
-      return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error }));
-    }
     if (datasets.length === 0) return [];
     const generation = ++runGeneration.current;
     const summaries: DatasetRunSummary[] = [];
-    setRunProgress({ generation, mode, total: datasets.length, completed: 0 });
     setResults((prev) => {
       const next: Record<string, DatasetResult> = { ...prev };
       for (const [id, result] of Object.entries(next)) {
@@ -720,6 +692,40 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       }
       return next;
     });
+    const waitingForEngine = engine.lifecycleStatus === "idle" || engine.lifecycleStatus === "starting" || engine.lifecycleStatus === "attaching";
+    if (waitingForEngine) {
+      engineWaitersRef.current += 1;
+      setEngineWaiting(true);
+    }
+    try {
+      await waitForEngineReady();
+    } catch (cause) {
+      const error = cause instanceof Error ? cause.message : "The data engine failed to start.";
+      if (generation !== runGeneration.current) return summaries;
+      setResults((prev) => {
+        const next = { ...prev };
+        for (const dataset of datasets) next[dataset.id] = { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "error", error, errorDetails: error, errorCode: "service_unavailable", retryable: true };
+        return next;
+      });
+      return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error, errorDetails: error, errorCode: "service_unavailable", retryable: true, stale: captureRows?.has(dataset.id) ?? false }));
+    } finally {
+      if (waitingForEngine) {
+        engineWaitersRef.current = Math.max(0, engineWaitersRef.current - 1);
+        setEngineWaiting(engineWaitersRef.current > 0);
+      }
+    }
+    if (generation !== runGeneration.current) return summaries;
+    const queryPrepared = engine.queryPrepared;
+    if (!queryPrepared) {
+      const error = "The data engine reported ready before prepared queries became available.";
+      setResults((prev) => {
+        const next = { ...prev };
+        for (const dataset of datasets) next[dataset.id] = { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "error", error, errorDetails: error, errorCode: "service_unavailable", retryable: true };
+        return next;
+      });
+      return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error, errorDetails: error, errorCode: "service_unavailable", retryable: true }));
+    }
+    setRunProgress({ generation, mode, total: datasets.length, completed: 0 });
     for (let datasetIndex = 0; datasetIndex < datasets.length; datasetIndex++) {
       const dataset = datasets[datasetIndex];
       if (generation !== runGeneration.current) return summaries;
@@ -847,6 +853,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     let auxiliarySummaries: DatasetRunSummary[] = [];
     if (auxiliaryIds.size) auxiliarySummaries = await runDatasets(report, candidate, auxiliaryIds, rows, "refresh");
     const auxiliaryFailures = auxiliarySummaries.filter((summary) => !summary.ok);
+    if (getEngineLifecycleSnapshot().status === "error") return false;
     if (auxiliaryFailures.some((failure) => failure.retryable)) {
       const notice = buildReportRunFailureNotice(auxiliaryFailures, auxiliaryIds.size);
       setRunFailureNotice(notice);
@@ -894,6 +901,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const mode = dataDatasets.some((dataset) => ids.has(dataset.id) && Boolean(results[dataset.id]?.table)) ? "refresh" : "load";
     const execution = await runDatasetsAndNarratives(report, candidate, ids, mode, rows);
     const failures = execution.filter((summary) => !summary.ok);
+    if (getEngineLifecycleSnapshot().status === "error") return false;
     if (failures.length) {
       const notice = buildReportRunFailureNotice(failures, ids.size);
       setRunFailureNotice(notice);
@@ -942,7 +950,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     if (!seconds) return;
     const interval = window.setInterval(() => {
       const current = autoRefreshStateRef.current;
-      if (!current.report || current.busy || autoRefreshRunningRef.current || document.visibilityState !== "visible" || Date.now() < rateLimitUntilRef.current) return;
+      if (!current.report || current.busy || autoRefreshRunningRef.current || document.visibilityState !== "visible" || engine.lifecycleStatus !== "ready" || Date.now() < rateLimitUntilRef.current) return;
       autoRefreshRunningRef.current = true;
       const execution = validateAndRunRef.current?.(current.report, structuredClone(current.values), false) ?? Promise.resolve(false);
       void execution
@@ -1036,7 +1044,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
 
   const runAgent = useCallback(async () => {
     const prompt = agentPrompt.trim();
-    if (!draft || !prompt || agentBusy) return;
+    if (!draft || !prompt || agentBusy || engine.lifecycleStatus !== "ready") return;
     if (!settings.anthropicApiKey) {
       setAgentConversation((messages) => [...messages, {
         id: crypto.randomUUID(),
@@ -1448,7 +1456,8 @@ Current report:\n${JSON.stringify(draft)}`;
   const layouts: ResponsiveLayouts<"lg" | "sm"> = { lg: desktopLayout, sm: mobileLayout };
   const activeLayout = width >= 768 ? desktopLayout : mobileLayout;
   const groupBoxes = reportGroupBoxes(report.groups ?? [], report.blocks, activeLayout, width, width >= 768 ? 12 : 1);
-  const reportRunning = Object.values(results).some(isDatasetPending) || Object.values(narrativeStates).some((state) => state.status === "running");
+  const engineReady = engineLifecycle.status === "ready";
+  const reportRunning = engineWaiting || Object.values(results).some(isDatasetPending) || Object.values(narrativeStates).some((state) => state.status === "running");
   const reportFetchedAt = reportRunning ? 0 : Math.max(0, ...report.datasets.filter((dataset) => dataset.role !== "parameter_options" && dataset.role !== "parameter_validation").map((dataset) => results[dataset.id]?.fetchedAt ?? 0));
   const progressLabel = runProgress
     ? `${runProgress.mode === "refresh" ? "Refreshing" : "Loading"} ${runProgress.completed} of ${runProgress.total} datasets`
@@ -1464,7 +1473,7 @@ Current report:\n${JSON.stringify(draft)}`;
       {revisionOptions.length > 0 && <select className="h-8 rounded-md border bg-background px-2 text-xs" defaultValue="" aria-label="Restore report revision" onChange={async (e) => { const revision = Number(e.target.value); if (!revision) return; const restored = await restoreReportRevision(draft.id, revision); openReport(restored, undefined, false); }}><option value="">History</option>{revisionOptions.slice().reverse().map((r) => <option key={r.revision} value={r.revision}>Restore revision {r.revision}</option>)}</select>}
       <Button size="sm" variant="outline" onClick={() => { setInspectorOpen((v) => !v); setSourceText(exportReportJson(draft)); }}><FileJson className="h-4 w-4" /> Source</Button>
       {reportFetchedAt > 0 && <span data-testid="report-as-of" className="shrink-0 text-[10px] text-muted-foreground">as of {new Date(reportFetchedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" })}</span>}
-      <Button size="sm" data-testid="reports-run" disabled={reportErrors.length > 0 || reportRunning} onClick={runFullReport}>{reportRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {progressLabel ?? "Run report"}</Button>
+      <Button size="sm" data-testid="reports-run" disabled={reportErrors.length > 0 || reportRunning || !engineReady} onClick={runFullReport}>{reportRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {engineWaiting ? "Preparing…" : progressLabel ?? "Run report"}</Button>
       <select
         className="h-8 rounded-md border bg-background px-2 text-xs"
         aria-label="Auto refresh"
@@ -1484,7 +1493,7 @@ Current report:\n${JSON.stringify(draft)}`;
       <Button size="sm" variant="outline" onClick={() => triggerDownload(new Blob([exportReportJson(draft)], { type: "application/json" }), `${safeFileStem(draft.title)}.cupola-report.json`)}><Download className="h-4 w-4" /> JSON</Button>
       <Button size="sm" variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(draft, { serviceUrl, values: appliedValues })); setShareStatus("Share link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}><Share2 className="h-4 w-4" /> Share</Button>
       <Button size="sm" variant="outline" disabled={!dirty || reportErrors.length > 0} onClick={acceptDraft}><Save className="h-4 w-4" /> Save draft</Button>
-      <Button size="sm" disabled={reportErrors.length > 0 || reportRunning || !isCompatible(draft)} onClick={publishDraft}><Send className="h-4 w-4" /> Publish</Button>
+      <Button size="sm" disabled={reportErrors.length > 0 || reportRunning || !engineReady || !isCompatible(draft)} onClick={publishDraft}><Send className="h-4 w-4" /> Publish</Button>
     </div> : <div className="flex items-center gap-3 border-b bg-card px-4 py-3 overflow-x-auto">
       <Button size="sm" variant="ghost" onClick={() => { runGeneration.current += 1; setRunProgress(null); setDraft(null); setSelected(null); setPublished(null); setReaderMode(false); setResults({}); }}><ArrowLeft className="h-4 w-4" /> Library</Button>
       <div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-base font-semibold">{report.title}</h1><span className="shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700">Published</span></div>{report.description && <p className="max-w-xl truncate text-xs text-muted-foreground">{report.description}</p>}</div>
@@ -1492,10 +1501,13 @@ Current report:\n${JSON.stringify(draft)}`;
       {publishedAt && <span className="shrink-0 text-[10px] text-muted-foreground">Published {new Date(publishedAt).toLocaleString()}</span>}
       {report.refreshIntervalSeconds && <span className="shrink-0 text-[10px] text-muted-foreground">Auto refresh every {report.refreshIntervalSeconds}s</span>}
       {reportFetchedAt > 0 && <span data-testid="report-as-of" className="shrink-0 text-[10px] text-muted-foreground">as of {new Date(reportFetchedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" })}</span>}
-      <Button size="sm" data-testid="reports-run" disabled={reportErrors.length > 0 || reportRunning} onClick={runFullReport}>{reportRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {progressLabel ?? "Refresh"}</Button>
+      <Button size="sm" data-testid="reports-run" disabled={reportErrors.length > 0 || reportRunning || !engineReady} onClick={runFullReport}>{reportRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {engineWaiting ? "Preparing…" : progressLabel ?? "Refresh"}</Button>
       <Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
       <Button size="sm" variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(report, { serviceUrl, values: appliedValues, mode: "reader" })); setShareStatus("Reader link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}><Share2 className="h-4 w-4" /> Share</Button>
       <Button size="sm" variant="outline" onClick={() => switchReportMode("edit")}><Pencil className="h-4 w-4" /> Edit report</Button>
+    </div>}
+    {!engineReady && <div data-testid="report-engine-waiting" role={engineLifecycle.status === "error" ? "alert" : "status"} className={engineLifecycle.status === "error" ? "border-b border-destructive/25 bg-destructive/5 px-4 py-2 text-xs text-destructive" : "border-b border-sky-300/50 bg-sky-50/50 px-4 py-2 text-xs text-sky-950 dark:border-sky-800 dark:bg-sky-950/25 dark:text-sky-100"}>
+      <div className="flex items-center gap-2">{engineLifecycle.status === "error" ? null : <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />}<span className="font-medium">{engineLifecycle.status === "error" ? "Report data is unavailable because the local data engine did not start." : "Preparing the local data engine. This report will run automatically when it is ready."}</span></div>
     </div>}
     {runProgress && <div data-testid="report-run-progress" className="border-b bg-muted/30 px-4 py-2" aria-live="polite">
       <div className="flex items-center gap-2 text-xs">
@@ -1547,7 +1559,7 @@ Current report:\n${JSON.stringify(draft)}`;
         const next = { ...current, [p.key]: value };
         setParameterIssues(validateReportParameterValues(report, next));
         return next;
-      })} />)}<Button size="sm" disabled={reportRunning} onClick={handleApply}><Play className="h-4 w-4" /> Apply</Button>{parameterIssues.some((issue) => !issue.parameterKey) && <div role="alert" className="basis-full text-xs text-destructive">{parameterIssues.filter((issue) => !issue.parameterKey).map((issue) => issue.message).join(" ")}</div>}</div>}
+      })} />)}<Button size="sm" disabled={reportRunning || !engineReady} onClick={handleApply}><Play className="h-4 w-4" /> Apply</Button>{parameterIssues.some((issue) => !issue.parameterKey) && <div role="alert" className="basis-full text-xs text-destructive">{parameterIssues.filter((issue) => !issue.parameterKey).map((issue) => issue.message).join(" ")}</div>}</div>}
     </div>}
     <div className="flex-1 min-h-0 flex">
       <div className="flex-1 min-w-0 overflow-y-auto report-canvas p-3">

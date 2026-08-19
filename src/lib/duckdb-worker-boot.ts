@@ -13,7 +13,7 @@
 
 import * as duckdb from "@haybarn/haybarn-wasm";
 
-import { engine, notifyQueryChange, setBootPhase, type QueryResult } from "./shell-bridge";
+import { engine, notifyQueryChange, setBootPhase, setEngineLifecycleError, type QueryResult } from "./shell-bridge";
 import { recordDuckDBVersion } from "./duckdb-engine";
 
 let bootPromise: Promise<void> | null = null;
@@ -45,6 +45,7 @@ export function ensureDuckDB(opts: DuckDBBootOptions): Promise<void> {
   engine.workerCreateStart = performance.now();
   bootPromise = doBoot(opts).catch((e) => {
     bootPromise = null; // allow retry
+    setEngineLifecycleError(e);
     throw e;
   });
   return bootPromise;

@@ -3,6 +3,7 @@ import { Sparkles, RotateCcw, Settings, FileText, Copy } from "lucide-react";
 import * as Sentry from "@sentry/astro";
 import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
 import { engine, ui } from "@/lib/shell-bridge";
+import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import { toolInputLabel } from "@/lib/ai/tool-labels";
@@ -51,6 +52,7 @@ interface Props {
 }
 
 export function AskAIChat({ catalogData, serviceUrl, isActive, onBusyChange }: Props) {
+  const engineLifecycle = useEngineLifecycle();
   const { settings } = useSettings();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -839,7 +841,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive, onBusyChange }: P
         onSend={handleSend}
         onStop={handleStop}
         isLoading={isLoading}
-        disabled={!hasApiKey}
+        disabled={!hasApiKey || engineLifecycle.status !== "ready"}
         focused={isActive}
       />
     </div>

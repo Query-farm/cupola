@@ -14,7 +14,8 @@ import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
 import { getAuthToken, getAuthTokenForService } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
 import { tableFromIPC, RecordBatchFileReader, Table as ArrowTable } from "@query-farm/apache-arrow";
-import { engine, terminal, ui, onBootChange } from "@/lib/shell-bridge";
+import { engine, terminal, ui, setBootPhase, setEngineLifecycleError } from "@/lib/shell-bridge";
+import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { ShellBootScreen } from "./ShellBootScreen";
 import * as Sentry from "@sentry/astro";
 import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
@@ -148,12 +149,10 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   // loading. The DuckDB worker boot (downloading WASM, spinning up pthreads,
   // loading extensions, attaching) is the slow part — especially on Safari —
   // and the bridge already signals true readiness with setBootPhase(null).
-  const [bootActive, setBootActive] = useState(() => engine.bootPhase !== null);
-  useEffect(() => {
-    const unsub = onBootChange(() => setBootActive(engine.bootPhase !== null));
-    return () => unsub();
-  }, []);
+  const engineLifecycle = useEngineLifecycle();
+  const bootActive = engineLifecycle.status === "idle" || engineLifecycle.status === "starting" || engineLifecycle.status === "attaching";
   const [error, setError] = useState<string | null>(null);
+  const displayedError = error ?? (engineLifecycle.status === "error" ? engineLifecycle.error : null);
   const cleanupRef = useRef<(() => void) | null>(null);
   // In-memory Arrow table to show in the Data Viewer tab when the user runs
   // `.preview` in the shell. Takes precedence over the selection-driven table
@@ -252,6 +251,8 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     if (!shellActivated) return;
     let cancelled = false;
 
+    if (engine.lifecycleStatus === "idle") setBootPhase("Preparing local data engine");
+
     // Service or catalog switched — make sure any consumers awaiting the
     // previous ATTACH cycle now block on the new one.
     engine.resetAttached?.();
@@ -280,7 +281,12 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         cleanupRef.current = cleanup;
         onShellReady?.(insertText);
       } catch (e: unknown) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load shell");
+        if (!cancelled) {
+          const message = e instanceof Error ? e.message : "Failed to load shell";
+          engine.markAttached?.();
+          setEngineLifecycleError(message);
+          setError(message);
+        }
       }
     })();
 
@@ -445,16 +451,16 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   return (
     <div ref={rootRef} className="flex flex-col h-full bg-terminal-bg">
       {/* Terminal container */}
-      {bootActive && !error && activeTab === "shell" && (
+      {bootActive && !displayedError && activeTab === "shell" && (
         <ShellBootScreen />
       )}
-      {error && activeTab === "shell" && (
+      {displayedError && activeTab === "shell" && (
         <div className="flex-1 flex items-center justify-center text-red-400 text-sm">
-          {error}
+          {displayedError}
         </div>
       )}
       <div
-        className={`flex-1 min-h-0 overflow-hidden relative ${bootActive && activeTab === "shell" ? "hidden" : ""}`}
+        className={`flex-1 min-h-0 overflow-hidden relative ${(bootActive || displayedError) && activeTab === "shell" ? "hidden" : ""}`}
         style={{
           padding: "8px 12px 0 12px",
           ...(activeTab !== "shell" ? { visibility: "hidden" as const, position: "absolute" as const, inset: 0, zIndex: -1 } : {}),

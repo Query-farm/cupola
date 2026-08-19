@@ -4,7 +4,7 @@ import { ScriptMenu } from "./ScriptMenu";
 
 interface Props {
   running: boolean;
-  /** engine.query is available (DuckDB booted). */
+  /** DuckDB booted, required extensions loaded, and the catalog attached. */
   queryReady: boolean;
   /** Human-readable boot phase shown while the engine initializes. */
   bootPhase?: string | null;

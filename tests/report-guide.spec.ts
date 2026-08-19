@@ -1,6 +1,29 @@
 import { expect, test } from "@playwright/test";
 import { APP_ORIGIN, BASE, T_NORMAL, T_SHELL_BOOT, waitForShellBridge } from "./helpers";
 
+test("shows global and report-level readiness while the local engine starts", async ({ page }) => {
+  test.setTimeout(90_000);
+  let releaseEngine!: () => void;
+  const engineGate = new Promise<void>((resolve) => { releaseEngine = resolve; });
+  await page.route("**/haybarn/duckdb-*.wasm", async (route) => {
+    await engineGate;
+    await route.continue();
+  });
+
+  await page.goto(`${APP_ORIGIN}${BASE}report-guide/`);
+  const ribbon = page.getByTestId("engine-status-ribbon");
+  await expect(ribbon).toBeVisible({ timeout: T_NORMAL });
+  await expect(ribbon).toContainText("Starting local data engine");
+  await expect(page.getByTestId("report-engine-waiting")).toContainText("This report will run automatically");
+  await expect(page.getByTestId("reports-run")).toBeDisabled();
+
+  releaseEngine();
+  await page.getByTestId("report-block-showcase-kpi").waitFor({ state: "visible", timeout: T_SHELL_BOOT });
+  await expect(ribbon).toHaveCount(0, { timeout: T_SHELL_BOOT });
+  await expect(page.getByTestId("report-engine-waiting")).toHaveCount(0);
+  await expect(page.getByTestId("reports-run")).toBeEnabled();
+});
+
 test("report guide is a runnable in-product gallery backed by canned local data", async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto(`${APP_ORIGIN}${BASE}report-guide/`);
