@@ -556,9 +556,13 @@ async function streamOneRequestInner(
         // caller passed. Hardcoding the index would fragment the cache
         // across surfaces that ship different tool subsets (e.g. terminal
         // vs AskAIChat with the chart tool).
-        tools: tools.map((t, i) =>
-          i === tools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t
-        ),
+        ...(tools.length
+          ? {
+              tools: tools.map((t, i) =>
+                i === tools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t
+              ),
+            }
+          : {}),
         system: [
           { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
         ],

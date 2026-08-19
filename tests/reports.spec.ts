@@ -27,12 +27,12 @@ test("renders report text blocks without waiting for a dataset", async ({ page }
     updatedAt: now,
     revision: 1,
     requiredSources: [],
-    parameters: [],
-    datasets: [],
+    parameters: [{ id: "city", key: "city", label: "City", type: "text", defaultValue: "Glen Allen" }],
+    datasets: [{ id: "weather", name: "Weather", sql: "SELECT 68 AS humidity_pct" }],
     blocks: [{
       id: "summary",
       type: "markdown",
-      title: "Summary",
+      title: "48-Hour Forecast — $city",
       markdown: "## Executive summary\n\nAll three datasets are ready.",
       layout: { x: 0, y: 0, w: 12, h: 3 },
     }, {
@@ -46,6 +46,20 @@ test("renders report text blocks without waiting for a dataset", async ({ page }
       title: "Text",
       markdown: "Legacy generic titles are treated as content-only cards.",
       layout: { x: 0, y: 6, w: 12, h: 2 },
+    }, {
+      id: "generated-summary",
+      type: "ai_narrative",
+      title: "Generated conditions",
+      datasetId: "weather",
+      instruction: "Summarize the current humidity.",
+      snapshot: {
+        markdown: "**Humidity is elevated** based on the latest observation.",
+        generatedAt: now,
+        dataFingerprint: "test-fingerprint",
+        model: "test-model",
+        rowCount: 1,
+      },
+      layout: { x: 0, y: 8, w: 12, h: 3 },
     }],
   };
   await page.locator('input[type="file"]').setInputFiles({
@@ -56,12 +70,20 @@ test("renders report text blocks without waiting for a dataset", async ({ page }
 
   await expect(page.getByText("Executive summary", { exact: true })).toBeVisible();
   await expect(page.getByText("All three datasets are ready.")).toBeVisible();
-  await expect(page.getByTestId("report-block-header-summary")).toContainText("Summary");
+  await expect(page.getByTestId("report-block-header-summary")).toContainText("48-Hour Forecast — Glen Allen");
+  await expect(page.getByTestId("report-block-header-summary")).not.toContainText("$city");
   await expect(page.getByTestId("report-block-header-content-only")).toHaveCount(0);
   await expect(page.getByTestId("report-block-header-legacy-text")).toHaveCount(0);
   await expect(page.getByText("Supporting context", { exact: true })).toBeVisible();
+  await expect(page.getByText("Humidity is elevated", { exact: true })).toBeVisible();
+  await expect(page.getByText(/AI-generated.*1 source row.*test-model/)).toBeVisible();
+  await expect(page.getByTestId("report-regenerate-narrative-generated-summary")).toBeDisabled();
   await expect(page.getByTestId("report-block-content-only").locator("img")).toHaveAttribute("src", "/favicon.svg");
   await expect(page.getByText("This report has not loaded its data yet.")).toHaveCount(0);
+
+  await page.locator(".report-parameters input").fill("Norfolk");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(page.getByTestId("report-block-header-summary")).toContainText("48-Hour Forecast — Norfolk");
 });
 
 test("visually groups related report boxes into labeled rounded containers", async ({ page }) => {
@@ -78,7 +100,7 @@ test("visually groups related report boxes into labeled rounded containers", asy
     parameters: [],
     datasets: [],
     groups: [
-      { id: "glen-allen", title: "Glen Allen", description: "Current conditions", tone: "green" },
+      { id: "glen-allen", title: "Glen Allen", description: "Current conditions", tone: "green", titleSize: "large" },
       { id: "norfolk", title: "Norfolk", description: "Coastal conditions", tone: "blue" },
     ],
     blocks: [
@@ -103,6 +125,7 @@ test("visually groups related report boxes into labeled rounded containers", asy
     };
     return {
       glen: rect("report-group-glen-allen"),
+      glenLabel: rect("report-group-label-glen-allen"),
       glenKpi: rect("report-block-glen-kpi"),
       glenTrend: rect("report-block-glen-trend"),
       norfolk: rect("report-group-norfolk"),
@@ -112,9 +135,11 @@ test("visually groups related report boxes into labeled rounded containers", asy
   expect(bounds.glen.left).toBeLessThan(bounds.glenKpi.left);
   expect(bounds.glen.right).toBeGreaterThan(bounds.glenTrend.right);
   expect(bounds.glen.top).toBeLessThan(bounds.glenKpi.top);
+  expect(bounds.glenLabel.bottom).toBeLessThan(bounds.glenKpi.top);
   expect(bounds.glen.bottom).toBeGreaterThan(bounds.glenKpi.bottom);
   expect(bounds.norfolk.top).toBeLessThan(bounds.norfolkKpi.top);
   expect(bounds.norfolk.top).toBeGreaterThan(bounds.glen.bottom);
+  await expect(page.getByTestId("report-group-label-glen-allen").locator("span").first()).toHaveCSS("font-size", "16px");
 });
 
 test("applies value-driven KPI backgrounds with visible alert labels", async ({ page }) => {
@@ -309,6 +334,11 @@ test("fits a chart to its report block without an inner scrollbar", async ({ pag
 
   const chartBlock = page.getByTestId("report-block-chart-block");
   const chartActions = page.getByTestId("report-block-actions-chart-block");
+  const chartHeader = page.getByTestId("report-block-header-chart-block");
+  await expect(chartHeader).toContainText("CSV");
+  expect(await chartActions.evaluate((element) => element.closest('[data-testid="report-chart-container"]') === null)).toBe(true);
+  const actionAndChartBounds = await Promise.all([chartActions.boundingBox(), chart.boundingBox()]);
+  expect(actionAndChartBounds[0]!.y + actionAndChartBounds[0]!.height).toBeLessThanOrEqual(actionAndChartBounds[1]!.y + 1);
   await expect.poll(() => chartActions.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
   await chartBlock.hover();
   await expect.poll(() => chartActions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");

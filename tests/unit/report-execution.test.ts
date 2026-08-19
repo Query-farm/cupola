@@ -59,3 +59,19 @@ test("validates appearance rule columns for free-form charts", () => {
   expect(validateReportResultColumns(report, [{ datasetId: "weather", ok: true, columns: ["value"] }]))
     .toEqual(["trend: missing result column alert_level."]);
 });
+
+test("reports missing columns selected for an AI narrative", () => {
+  const report = createEmptyReport("Weather summary");
+  report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT temperature FROM weather" });
+  report.blocks.push({
+    id: "summary",
+    type: "ai_narrative",
+    title: "Conditions summary",
+    datasetId: "weather",
+    instruction: "Summarize the conditions.",
+    columns: ["temperature", "humidity"],
+    layout: { x: 0, y: 0, w: 12, h: 4 },
+  });
+  expect(validateReportResultColumns(report, [{ datasetId: "weather", ok: true, columns: ["temperature"] }]))
+    .toEqual(["Conditions summary: missing result column humidity."]);
+});

@@ -64,9 +64,34 @@ describe("report document validation", () => {
     expect(validateReport(report)).toContain("report.blocks[0].title must be a string.");
   });
 
+  test("validates bounded AI narrative instructions, refresh policy, and snapshots", () => {
+    const report = createEmptyReport("Narrative");
+    report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 68 AS humidity" });
+    report.blocks.push({
+      id: "summary",
+      type: "ai_narrative",
+      datasetId: "weather",
+      instruction: "Explain the current conditions.",
+      columns: ["humidity"],
+      maxRows: 25,
+      refreshPolicy: "when_data_changes",
+      snapshot: { markdown: "Humidity is 68%.", generatedAt: Date.now(), dataFingerprint: "abc123", model: "test-model", rowCount: 1 },
+      layout: { x: 0, y: 0, w: 12, h: 4 },
+    });
+    expect(validateReport(report)).toEqual([]);
+
+    (report.blocks[0] as any).maxRows = 101;
+    (report.blocks[0] as any).refreshPolicy = "always";
+    (report.blocks[0] as any).snapshot.rowCount = -1;
+    const errors = validateReport(report).join(" ");
+    expect(errors).toContain("maxRows");
+    expect(errors).toContain("refreshPolicy");
+    expect(errors).toContain("snapshot.rowCount");
+  });
+
   test("validates block group references while accepting legacy reports without groups", () => {
     const report = createEmptyReport("Grouped weather");
-    report.groups = [{ id: "glen-allen", title: "Glen Allen", tone: "green" }];
+    report.groups = [{ id: "glen-allen", title: "Glen Allen", tone: "green", titleSize: "large" }];
     report.blocks.push({ id: "conditions", type: "markdown", groupId: "glen-allen", markdown: "Conditions", layout: { x: 0, y: 0, w: 12, h: 2 } });
     expect(validateReport(report)).toEqual([]);
 
@@ -76,6 +101,12 @@ describe("report document validation", () => {
     delete report.groups;
     delete report.blocks[0].groupId;
     expect(validateReport(report)).toEqual([]);
+  });
+
+  test("rejects unsupported group title sizes", () => {
+    const report = createEmptyReport("Grouped weather") as any;
+    report.groups = [{ id: "glen-allen", title: "Glen Allen", titleSize: "giant" }];
+    expect(validateReport(report).join(" ")).toContain("report.groups[0].titleSize is unsupported");
   });
 
   test("validates safe conditional block appearance rules", () => {

@@ -22,6 +22,7 @@ function referencedColumns(block: ReportBlock): string[] {
   else if (block.type === "bullet") columns = [block.categoryColumn, block.valueColumn, block.targetColumn, ...(block.rangeColumns ?? [])];
   else if (block.type === "slopegraph") columns = [block.categoryColumn, block.startColumn, block.endColumn, block.colorColumn].filter((column): column is string => !!column);
   else if (block.type === "range_dot") columns = [block.categoryColumn, block.lowColumn, block.highColumn, block.valueColumn].filter((column): column is string => !!column);
+  else if (block.type === "ai_narrative") columns = block.columns ?? [];
   else if (block.type === "map") columns = [
     block.geometryColumn,
     block.latitudeColumn,

@@ -95,6 +95,28 @@ const AGENT_FEEDBACK_PNG_WIDTH = 800;
  *  works for most chart types; the spec's own height usually overrides
  *  this for tall faceted plots. */
 const AGENT_FEEDBACK_PNG_HEIGHT = 500;
+const DEFAULT_LEGEND_LABEL_FONT_SIZE = 12;
+const DEFAULT_LEGEND_TITLE_FONT_SIZE = 13;
+
+/** Supply legible legend typography while retaining any deliberate
+ * per-chart overrides. Vega-Lite's defaults are too small inside report
+ * cards, particularly on high-density displays. */
+export function readableChartConfig(config: Record<string, any> | undefined, background: string): Record<string, any> {
+  const legend = config?.legend;
+  return {
+    ...(config ?? {}),
+    ...(legend === null
+      ? { legend: null }
+      : {
+          legend: {
+            labelFontSize: DEFAULT_LEGEND_LABEL_FONT_SIZE,
+            titleFontSize: DEFAULT_LEGEND_TITLE_FONT_SIZE,
+            ...(legend ?? {}),
+          },
+        }),
+    background,
+  };
+}
 
 /**
  * Render a Vega-Lite spec to a base64 PNG, headless (no DOM mount).
@@ -143,7 +165,7 @@ export async function renderChartToPng(
       ...(extraDatasets && Object.keys(extraDatasets).length
         ? { datasets: sanitizeDatasets(extraDatasets) }
         : {}),
-      config: { ...(spec.config ?? {}), background: "white" },
+      config: readableChartConfig(spec.config, "white"),
     };
 
     // Compile vl → vega. Errors here are caller's problem (compileChartSpec
@@ -277,7 +299,7 @@ export async function embedChart(
       : {}),
     // Force transparent background regardless of what the LLM put in
     // spec.config — the chat surface owns its own background.
-    config: { ...(spec.config ?? {}), background: "transparent" },
+    config: readableChartConfig(spec.config, "transparent"),
   } as TopLevelSpec;
 
   const result = await embed(el, finalSpec, {

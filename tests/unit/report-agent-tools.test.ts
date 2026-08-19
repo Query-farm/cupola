@@ -17,7 +17,11 @@ describe("report agent tools", () => {
     const properties = tool.input_schema.properties.block.properties;
     expect(properties.layout).toBeUndefined();
     expect(tool.input_schema.properties.width.enum).toEqual(["quarter", "third", "half", "full"]);
-    expect(properties.type.enum).toEqual(expect.arrayContaining(["small_multiples", "bullet", "slopegraph", "range_dot"]));
+    expect(properties.type.enum).toEqual(expect.arrayContaining(["small_multiples", "bullet", "slopegraph", "range_dot", "ai_narrative"]));
+    expect(properties.snapshot).toBeUndefined();
+    expect(properties.instruction.description).toContain("focused instructions");
+    expect(properties.maxRows.maximum).toBe(100);
+    expect(properties.refreshPolicy.enum).toEqual(["manual", "when_data_changes"]);
     expect(properties).toHaveProperty("caption");
     expect(properties).toHaveProperty("source");
     expect(properties).toHaveProperty("groupId");
@@ -50,6 +54,7 @@ describe("report agent tools", () => {
       norfolk.group.id,
     ]);
     expect(REPORT_TOOLS.find((tool) => tool.name === "upsert_report_group")?.input_schema.properties.group.properties.tone.enum).toContain("blue");
+    expect(REPORT_TOOLS.find((tool) => tool.name === "upsert_report_group")?.input_schema.properties.group.properties.titleSize.enum).toEqual(["small", "medium", "large"]);
 
     const ungrouped = upsertAgentBlock(norfolkKpi.report, {
       id: norfolkKpi.block.id,
@@ -98,6 +103,22 @@ describe("report agent tools", () => {
     report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 1 AS temperature" });
     const created = upsertAgentBlock(report, { type: "sparkline", title: "Temperature", datasetId: "weather", valueColumn: "temperature" });
     expect(created.block.layout).toEqual({ x: 0, y: 0, w: 3, h: 2 });
+  });
+
+  test("gives AI narratives a full-width reading box and keeps snapshots managed", () => {
+    const report = createEmptyReport("Weather");
+    report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 1 AS temperature" });
+    const created = upsertAgentBlock(report, {
+      type: "ai_narrative",
+      title: "What changed",
+      datasetId: "weather",
+      instruction: "Summarize material changes.",
+      maxRows: 25,
+      refreshPolicy: "manual",
+    });
+    expect(created.block.layout).toEqual({ x: 0, y: 0, w: 12, h: 4 });
+    expect(created.block).not.toHaveProperty("snapshot");
+    expect(REPORT_DOCUMENT_SCHEMA.properties.blocks.items.properties.snapshot.required).toContain("dataFingerprint");
   });
 
   test("gives compact comparison devices a half-width default", () => {

@@ -149,12 +149,13 @@ export function validateReportStructure(input: unknown): string[] {
     requireString(group, "title", path);
     if (group.description !== undefined && typeof group.description !== "string") errors.push(`${path}.description must be a string.`);
     if (group.tone !== undefined && !["neutral", "blue", "green", "amber", "violet", "rose"].includes(group.tone)) errors.push(`${path}.tone is unsupported.`);
+    if (group.titleSize !== undefined && !["small", "medium", "large"].includes(group.titleSize)) errors.push(`${path}.titleSize is unsupported.`);
   });
   input.blocks.forEach((block: unknown, index: number) => {
     const path = `report.blocks[${index}]`;
     if (!isRecord(block)) { errors.push(`${path} must be an object.`); return; }
     requireString(block, "id", path);
-    if (!["markdown", "kpi", "sparkline", "small_multiples", "bullet", "slopegraph", "range_dot", "table", "chart", "perspective", "map"].includes(block.type)) errors.push(`${path}.type is unsupported.`);
+    if (!["markdown", "kpi", "sparkline", "small_multiples", "bullet", "slopegraph", "range_dot", "table", "chart", "perspective", "map", "ai_narrative"].includes(block.type)) errors.push(`${path}.type is unsupported.`);
     if (!isRecord(block.layout)) {
       errors.push(`${path}.layout is required and must be {x, y, w, h}.`);
     } else {
@@ -227,6 +228,24 @@ export function validateReportStructure(input: unknown): string[] {
     if (block.type === "chart" && !isRecord(block.spec)) errors.push(`${path}.spec must be a Vega-Lite object.`);
     if (block.type === "table" && block.columns !== undefined && (!Array.isArray(block.columns) || block.columns.some((column: unknown) => typeof column !== "string"))) errors.push(`${path}.columns must contain column names.`);
     if (block.type === "perspective" && block.config !== undefined && !isRecord(block.config)) errors.push(`${path}.config must be an object.`);
+    if (block.type === "ai_narrative") {
+      requireString(block, "instruction", path);
+      if (block.columns !== undefined && (!Array.isArray(block.columns) || block.columns.length > 20 || block.columns.some((column: unknown) => typeof column !== "string" || !column.trim()))) errors.push(`${path}.columns must contain up to 20 column names.`);
+      if (block.maxRows !== undefined && (!Number.isInteger(block.maxRows) || block.maxRows < 1 || block.maxRows > 100)) errors.push(`${path}.maxRows must be an integer from 1 to 100.`);
+      if (block.refreshPolicy !== undefined && !["manual", "when_data_changes"].includes(block.refreshPolicy)) errors.push(`${path}.refreshPolicy is unsupported.`);
+      if (block.snapshot !== undefined) {
+        const snapshotPath = `${path}.snapshot`;
+        if (!isRecord(block.snapshot)) errors.push(`${snapshotPath} must be an object.`);
+        else {
+          requireString(block.snapshot, "markdown", snapshotPath);
+          requireString(block.snapshot, "dataFingerprint", snapshotPath);
+          requireString(block.snapshot, "model", snapshotPath);
+          if (!Number.isFinite(block.snapshot.generatedAt)) errors.push(`${snapshotPath}.generatedAt must be a finite number.`);
+          if (!Number.isInteger(block.snapshot.rowCount) || block.snapshot.rowCount < 0) errors.push(`${snapshotPath}.rowCount must be a non-negative integer.`);
+          if (block.snapshot.truncated !== undefined && typeof block.snapshot.truncated !== "boolean") errors.push(`${snapshotPath}.truncated must be a boolean.`);
+        }
+      }
+    }
     if (block.type === "map") {
       for (const key of ["geometryColumn", "latitudeColumn", "longitudeColumn", "labelColumn", "colorColumn"] as const) {
         if (block[key] !== undefined && typeof block[key] !== "string") errors.push(`${path}.${key} must be a string.`);

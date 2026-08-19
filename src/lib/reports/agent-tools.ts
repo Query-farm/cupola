@@ -93,6 +93,10 @@ const groupProperties = {
   title: stringSchema,
   description: stringSchema,
   tone: { enum: ["neutral", "blue", "green", "amber", "violet", "rose"] },
+  titleSize: {
+    enum: ["small", "medium", "large"],
+    description: "Group-heading scale. Medium is the default; use large for a prominent section and small only for dense layouts.",
+  },
 };
 
 const groupSchema = {
@@ -147,6 +151,20 @@ const mapStyleSchema = {
   },
 };
 
+const narrativeSnapshotSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    markdown: stringSchema,
+    generatedAt: { type: "number" },
+    dataFingerprint: stringSchema,
+    model: stringSchema,
+    rowCount: { type: "number", minimum: 0 },
+    truncated: { type: "boolean" },
+  },
+  required: ["markdown", "generatedAt", "dataFingerprint", "model", "rowCount"],
+};
+
 const blockProperties = {
   id: stringSchema,
   title: {
@@ -157,7 +175,7 @@ const blockProperties = {
   source: stringSchema,
   groupId: stringSchema,
   appearance: appearanceSchema,
-  type: { enum: ["markdown", "kpi", "sparkline", "small_multiples", "bullet", "slopegraph", "range_dot", "table", "chart", "perspective", "map"] },
+  type: { enum: ["markdown", "kpi", "sparkline", "small_multiples", "bullet", "slopegraph", "range_dot", "table", "chart", "perspective", "map", "ai_narrative"] },
   layout: layoutSchema,
   markdown: stringSchema,
   datasetId: stringSchema,
@@ -196,6 +214,13 @@ const blockProperties = {
   basemap: { enum: ["none", "openstreetmap"] },
   palette: { type: "array", minItems: 1, maxItems: 20, items: stringSchema },
   style: mapStyleSchema,
+  instruction: {
+    type: "string",
+    description: "For ai_narrative: focused instructions for synthesizing the dataset. May contain report parameter tokens such as $city.",
+  },
+  maxRows: { type: "number", minimum: 1, maximum: 100 },
+  refreshPolicy: { enum: ["manual", "when_data_changes"] },
+  snapshot: narrativeSnapshotSchema,
 };
 
 const blockSchema = {
@@ -231,7 +256,7 @@ const compositionalBlockSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    ...Object.fromEntries(Object.entries(blockProperties).filter(([key]) => key !== "layout")),
+    ...Object.fromEntries(Object.entries(blockProperties).filter(([key]) => key !== "layout" && key !== "snapshot")),
     groupId: {
       type: ["string", "null"],
       description: "Group returned by upsert_report_group, or null to remove this block from its current group.",
@@ -267,7 +292,7 @@ export const REPORT_TOOLS: Tool[] = [
   },
   {
     name: "upsert_report_group",
-    description: "Create or update a rounded, labeled visual group before adding its blocks. Use groups to distinguish repeated sections such as one set of KPIs and charts per city. Omit id when creating and reuse the returned groupId on each related block.",
+    description: "Create or update a rounded, labeled visual group before adding its blocks. Use groups to distinguish repeated sections such as one set of KPIs and charts per city. Group titleSize may be small, medium (default), or large. Omit id when creating and reuse the returned groupId on each related block.",
     input_schema: {
       type: "object",
       additionalProperties: false,
@@ -315,12 +340,12 @@ export const REPORT_TOOLS: Tool[] = [
   },
   {
     name: "finalize_report",
-    description: "Execute every dataset and compile/render every visualization in the current working draft. Call only after composing the datasets and blocks. If it reports errors, correct the affected item and call finalize_report again.",
+    description: "Execute every dataset, compile/render every visualization, and generate any missing or stale AI narrative snapshot in the current working draft. Call only after composing the datasets and blocks. If it reports errors, correct the affected item and call finalize_report again.",
     input_schema: { type: "object", additionalProperties: false, properties: { summary: stringSchema }, required: ["summary"] },
   },
   {
     name: "replace_report_draft",
-    description: "Strict bulk fallback: replace the complete report document, execute all datasets, and compile/render all visualizations. Prefer the compositional upsert tools for ordinary authoring. Layout must be nested on every block as layout: {x,y,w,h}; col/width at block top level are invalid.",
+    description: "Strict bulk fallback: replace the complete report document, execute all datasets, compile/render all visualizations, and generate missing or stale AI narratives. Prefer the compositional upsert tools for ordinary authoring. Layout must be nested on every block as layout: {x,y,w,h}; col/width at block top level are invalid.",
     input_schema: {
       type: "object",
       additionalProperties: false,
@@ -343,6 +368,7 @@ function overlaps(a: ReportLayout, b: ReportLayout): boolean {
 function defaultHeight(type: ReportBlock["type"]): number {
   if (type === "kpi" || type === "sparkline") return 2;
   if (type === "markdown") return 3;
+  if (type === "ai_narrative") return 4;
   if (type === "table" || type === "bullet" || type === "range_dot") return 5;
   return 6;
 }

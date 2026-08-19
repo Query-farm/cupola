@@ -31,11 +31,12 @@ import { reportDisplayRows, reportMapRows } from "@/lib/reports/display";
 import { isBlockingVegaWarning, validateReportResultColumns } from "@/lib/reports/execution";
 import { resolveReportAppearance } from "@/lib/reports/appearance";
 import { REPORT_TOOLS, upsertAgentBlock, upsertAgentDataset, upsertAgentGroup, type SemanticBlockHeight, type SemanticBlockWidth } from "@/lib/reports/agent-tools";
-import { compileReportQuery, materializeReportQuery } from "@/lib/reports/parameters";
+import { compileReportQuery, interpolateReportText, materializeReportQuery } from "@/lib/reports/parameters";
+import { generateReportNarrative, prepareNarrativeInput } from "@/lib/reports/narrative";
 import { isReportTufteBlock, tufteBlockToVegaSpec } from "@/lib/reports/tufte";
 import { buildShareReportUrl, clearSharedReport, consumeSharedReport } from "@/lib/reports/share";
 import { deleteReport, exportReportJson, getStoredReport, importReportJson, listReports, restoreReportRevision, saveReport } from "@/lib/reports/store";
-import { cloneReport, createEmptyReport, newReportId, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportGroup, type ReportParameter, type ReportParameterValue } from "@/lib/reports/types";
+import { cloneReport, createEmptyReport, newReportId, type ReportAiNarrativeBlock, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportGroup, type ReportParameter, type ReportParameterValue } from "@/lib/reports/types";
 import { parameterTokens, validateParameterValue, validateReadOnlySql, validateReport } from "@/lib/reports/validation";
 
 interface Props {
@@ -59,6 +60,11 @@ interface ReportRunProgress {
   total: number;
   completed: number;
   currentDatasetName?: string;
+}
+
+interface NarrativeGenerationState {
+  status: "idle" | "running" | "success" | "error";
+  error?: string;
 }
 
 function isDatasetPending(result?: DatasetResult): boolean {
@@ -92,6 +98,16 @@ interface ReportAgentMessage {
 
 function defaultValues(report: ReportDocumentV1): Record<string, ReportParameterValue> {
   return Object.fromEntries(report.parameters.map((p) => [p.key, structuredClone(p.defaultValue)]));
+}
+
+function withNarrativeSnapshots(base: ReportDocumentV1, generated: ReportDocumentV1): ReportDocumentV1 {
+  const snapshots = new Map(generated.blocks.filter((block): block is ReportAiNarrativeBlock => block.type === "ai_narrative").map((block) => [block.id, block.snapshot]));
+  return {
+    ...base,
+    blocks: base.blocks.map((block) => block.type === "ai_narrative" && snapshots.has(block.id)
+      ? { ...block, snapshot: snapshots.get(block.id) }
+      : block),
+  };
 }
 
 function sanitizeReportChartSpecs(report: ReportDocumentV1): { report: ReportDocumentV1; errors: string[] } {
@@ -184,7 +200,8 @@ function reportBlockLabel(type: string): string {
 const REPORT_GRID_ROW_HEIGHT = 56;
 const REPORT_GRID_MARGIN = 12;
 const REPORT_GRID_CONTAINER_PADDING = 12;
-const REPORT_GRID_TOP_PADDING = 20;
+const REPORT_GRID_TOP_PADDING = 48;
+const REPORT_GROUP_HEADER_GUTTER = 32;
 
 const REPORT_GROUP_TONES = {
   neutral: {
@@ -211,6 +228,12 @@ const REPORT_GROUP_TONES = {
     container: "border-rose-300/70 bg-rose-50/30 dark:border-rose-700/70 dark:bg-rose-950/20",
     label: "border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-700 dark:bg-rose-950 dark:text-rose-100",
   },
+} as const;
+
+const REPORT_GROUP_TITLE_SIZES = {
+  small: "text-xs",
+  medium: "text-sm",
+  large: "text-base",
 } as const;
 
 const REPORT_BLOCK_APPEARANCE = {
@@ -268,10 +291,11 @@ function reportGroupBoxes(
     const maxX = Math.max(...members.map((item) => item.x + item.w));
     const maxY = Math.max(...members.map((item) => item.y + item.h));
     const left = xPosition(minX);
-    const top = yPosition(minY);
+    const memberTop = yPosition(minY);
     const right = xPosition(maxX - 1) + columnWidth;
     const bottom = yPosition(maxY - 1) + REPORT_GRID_ROW_HEIGHT;
-    return [{ group, left: Math.max(0, left - 6), top: Math.max(8, top - 6), width: Math.min(containerWidth, right + 6) - Math.max(0, left - 6), height: bottom - top + 12 }];
+    const boxTop = Math.max(8, memberTop - REPORT_GROUP_HEADER_GUTTER);
+    return [{ group, left: Math.max(0, left - 6), top: boxTop, width: Math.min(containerWidth, right + 6) - Math.max(0, left - 6), height: bottom + 6 - boxTop }];
   });
 }
 
@@ -291,11 +315,10 @@ function applyPromotion(base: ReportDocumentV1, promotion: ReportPromotion): Rep
   return report;
 }
 
-function ReportChart({ block, rows, onCsv, onSql }: {
-  block: { id: string; title?: string; spec: Record<string, any> };
+function ReportChart({ block, rows, onViewChange }: {
+  block: { id: string; spec: Record<string, any> };
   rows: Record<string, any>[];
-  onCsv: () => void;
-  onSql: () => void;
+  onViewChange: (blockId: string, view: VegaView | null) => void;
 }) {
   const elRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<VegaView | null>(null);
@@ -321,7 +344,10 @@ function ReportChart({ block, rows, onCsv, onSql }: {
       try {
         const view = await embedChart(el, block.spec, rows, undefined, { forceHeight: Math.max(80, height) });
         if (disposed || version !== renderVersion) view.finalize();
-        else viewRef.current = view;
+        else {
+          viewRef.current = view;
+          onViewChange(block.id, view);
+        }
       } catch (e) {
         if (!disposed && version === renderVersion) setError(e instanceof Error ? e.message : String(e));
       }
@@ -332,15 +358,9 @@ function ReportChart({ block, rows, onCsv, onSql }: {
     });
     observer.observe(el);
     frame = requestAnimationFrame(() => { void render(); });
-    return () => { disposed = true; renderVersion++; cancelAnimationFrame(frame); observer.disconnect(); viewRef.current?.finalize(); viewRef.current = null; };
-  }, [block.spec, rows]);
+    return () => { disposed = true; renderVersion++; cancelAnimationFrame(frame); observer.disconnect(); onViewChange(block.id, null); viewRef.current?.finalize(); viewRef.current = null; };
+  }, [block.id, block.spec, rows, onViewChange]);
   return <div className="relative h-full min-h-0">
-    <div data-testid={`report-block-actions-${block.id}`} className="report-block-actions report-authoring-control absolute right-0 top-0 z-10 flex gap-1 rounded-bl-md bg-card/90 px-1.5 py-0.5 shadow-sm backdrop-blur-sm">
-      <button type="button" data-testid={`report-download-csv-${block.id}`} className="text-[10px] text-muted-foreground hover:text-foreground" onClick={onCsv}>CSV</button>
-      <button type="button" data-testid={`report-open-sql-${block.id}`} className="text-[10px] text-muted-foreground hover:text-foreground" onClick={onSql}>SQL</button>
-      <button className="text-[10px] text-muted-foreground hover:text-foreground" onClick={() => viewRef.current && downloadPNG(viewRef.current, block.title || "chart")}>PNG</button>
-      <button className="text-[10px] text-muted-foreground hover:text-foreground" onClick={() => viewRef.current && downloadSVG(viewRef.current, block.title || "chart")}>SVG</button>
-    </div>
     {error ? <div className="text-xs text-destructive">{error}</div> : <div ref={elRef} data-testid="report-chart-container" className="h-full min-h-0 w-full overflow-hidden" />}
   </div>;
 }
@@ -368,6 +388,26 @@ function ReportPerspective({ table, config, onConfig }: { table: ArrowTable; con
     return () => { disposed = true; if (viewer && listener) viewer.removeEventListener("perspective-config-update", listener); };
   }, [table]);
   return <div ref={containerRef} className="h-full min-h-[220px] bg-white" />;
+}
+
+function ReportAiNarrative({ block, state, onGenerate }: {
+  block: ReportAiNarrativeBlock;
+  state?: NarrativeGenerationState;
+  onGenerate: () => void;
+}) {
+  const snapshot = block.snapshot;
+  if (!snapshot && state?.status === "running") return <div className="flex h-full flex-col items-center justify-center gap-2 text-center" data-testid={`report-narrative-loading-${block.id}`}><Loader2 className="h-5 w-5 animate-spin text-primary" /><p className="text-xs text-muted-foreground">Generating narrative from report data…</p></div>;
+  if (!snapshot) return <div className="flex h-full flex-col items-center justify-center gap-3 text-center" data-testid={`report-narrative-empty-${block.id}`}>
+    <Sparkles className="h-6 w-6 text-muted-foreground/50" />
+    <div><p className="text-sm font-medium">AI narrative has not been generated</p><p className="mt-1 max-w-md text-xs text-muted-foreground">It uses this block’s dataset without tools or report-editing access.</p></div>
+    {state?.error && <p className="max-w-md text-xs text-destructive">{state.error}</p>}
+    <Button size="sm" variant="outline" onClick={onGenerate}><Sparkles className="h-3.5 w-3.5" /> Generate narrative</Button>
+  </div>;
+  return <div className="flex min-h-full flex-col" data-testid={`report-narrative-${block.id}`}>
+    <div className="flex-1"><ChatMarkdown content={snapshot.markdown} /></div>
+    {state?.error && <p className="mt-3 text-xs text-destructive">Refresh failed: {state.error}</p>}
+    <div className="mt-4 border-t pt-2 text-[10px] text-muted-foreground">AI-generated {new Date(snapshot.generatedAt).toLocaleString()} · {snapshot.rowCount} source row{snapshot.rowCount === 1 ? "" : "s"} · {snapshot.model}{snapshot.truncated ? " · input capped" : ""}</div>
+  </div>;
 }
 
 function ParameterInput({ parameter, value, options, onChange }: { parameter: ReportParameter; value: ReportParameterValue; options: Array<{ label: string; value: string | number }>; onChange: (value: ReportParameterValue) => void }) {
@@ -398,10 +438,12 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const [agentConversation, setAgentConversation] = useState<ReportAgentMessage[]>([]);
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentSummary, setAgentSummary] = useState<string | null>(null);
+  const [narrativeStates, setNarrativeStates] = useState<Record<string, NarrativeGenerationState>>({});
   const [pendingPromotion, setPendingPromotion] = useState<ReportPromotion | null>(null);
   const [shareStatus, setShareStatus] = useState<string | null>(null);
   const [revisionOptions, setRevisionOptions] = useState<ReportDocumentV1[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  const narrativeAbortRef = useRef<AbortController | null>(null);
   const agentMessagesRef = useRef<MessageParam[]>([]);
   const agentThreadRef = useRef<HTMLDivElement>(null);
   const runGeneration = useRef(0);
@@ -412,29 +454,91 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     busy: boolean;
   }>({ report: null, values: {}, busy: false });
   const resultCache = useRef(new QueryResultCache());
+  const reportChartViews = useRef(new Map<string, VegaView>());
+  const setReportChartView = useCallback((blockId: string, view: VegaView | null) => {
+    if (view) reportChartViews.current.set(blockId, view);
+    else reportChartViews.current.delete(blockId);
+  }, []);
   const { width, containerRef, mounted } = useContainerWidth({ initialWidth: 1000 });
 
   const reload = useCallback(async () => setReports(await listReports()), []);
   useEffect(() => { reload(); const listener = () => reload(); window.addEventListener("cupola:reports-changed", listener); return () => window.removeEventListener("cupola:reports-changed", listener); }, [reload]);
-  useEffect(() => { onBusyChange?.(agentBusy || Object.values(results).some(isDatasetPending)); }, [agentBusy, results, onBusyChange]);
+  useEffect(() => { onBusyChange?.(agentBusy || Object.values(results).some(isDatasetPending) || Object.values(narrativeStates).some((state) => state.status === "running")); }, [agentBusy, results, narrativeStates, onBusyChange]);
   useEffect(() => {
     const thread = agentThreadRef.current;
     if (thread) thread.scrollTop = thread.scrollHeight;
   }, [agentConversation, agentBusy]);
 
+  const generateNarratives = useCallback(async (
+    report: ReportDocumentV1,
+    runValues: Record<string, ReportParameterValue>,
+    rowsByDataset: Map<string, Record<string, any>[]>,
+    forceIds?: Set<string>,
+    throwOnError = false,
+  ): Promise<ReportDocumentV1> => {
+    const candidates = report.blocks.filter((block): block is ReportAiNarrativeBlock => {
+      if (block.type !== "ai_narrative" || !rowsByDataset.has(block.datasetId)) return false;
+      return forceIds?.has(block.id) || block.refreshPolicy === "when_data_changes";
+    });
+    if (!candidates.length) return report;
+    narrativeAbortRef.current?.abort();
+    const controller = new AbortController();
+    narrativeAbortRef.current = controller;
+    const generated = new Map<string, ReportAiNarrativeBlock["snapshot"]>();
+    const errors: string[] = [];
+    await Promise.all(candidates.map(async (block) => {
+      const rows = rowsByDataset.get(block.datasetId) ?? [];
+      const prepared = prepareNarrativeInput(block, rows, report, runValues, settings.aiModel);
+      if (!forceIds?.has(block.id) && block.snapshot?.dataFingerprint === prepared.fingerprint) return;
+      setNarrativeStates((states) => ({ ...states, [block.id]: { status: "running" } }));
+      try {
+        const snapshot = await generateReportNarrative(settings.anthropicApiKey, settings.aiModel, block, rows, report, runValues, controller.signal);
+        if (controller.signal.aborted) return;
+        generated.set(block.id, snapshot);
+        setNarrativeStates((states) => ({ ...states, [block.id]: { status: "success" } }));
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`${block.title ?? block.id}: ${message}`);
+        setNarrativeStates((states) => ({ ...states, [block.id]: { status: "error", error: message } }));
+      }
+    }));
+    if (narrativeAbortRef.current === controller) narrativeAbortRef.current = null;
+    if (throwOnError && errors.length) throw new Error(errors.join(" "));
+    if (!generated.size) return report;
+    return {
+      ...report,
+      updatedAt: Date.now(),
+      blocks: report.blocks.map((block) => block.type === "ai_narrative" && generated.has(block.id)
+        ? { ...block, snapshot: generated.get(block.id) }
+        : block),
+    };
+  }, [settings.aiModel, settings.anthropicApiKey]);
+
   const openReport = useCallback((report: ReportDocumentV1, initialValues?: Record<string, ReportParameterValue>, autoRun = true, persisted = true) => {
     abortRef.current?.abort();
     abortRef.current = null;
+    narrativeAbortRef.current?.abort();
+    narrativeAbortRef.current = null;
     const generation = ++runGeneration.current;
     agentMessagesRef.current = [];
     resultCache.current = new QueryResultCache();
+    reportChartViews.current.clear();
     const copy = cloneReport(report);
     const defaults = { ...defaultValues(copy), ...initialValues };
-    setSelected(persisted ? copy : null); setDraft(copy); setValues(defaults); setAppliedValues(defaults); setResults({}); setRunProgress(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
+    setSelected(persisted ? copy : null); setDraft(copy); setValues(defaults); setAppliedValues(defaults); setResults({}); setNarrativeStates({}); setRunProgress(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
     void getStoredReport(copy.id).then((stored) => setRevisionOptions(stored?.revisions ?? []));
-    if (autoRun) setTimeout(() => { if (runGeneration.current === generation) void runDatasets(copy, defaults); }, 0);
+    if (autoRun) setTimeout(() => {
+      if (runGeneration.current !== generation) return;
+      const rows = new Map<string, Record<string, any>[]>();
+      void runDatasets(copy, defaults, undefined, rows).then(async () => {
+        if (runGeneration.current !== generation) return;
+        const generated = await generateNarratives(copy, defaults, rows);
+        if (runGeneration.current === generation) setDraft((current) => current ? withNarrativeSnapshots(current, generated) : current);
+      });
+    }, 0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [generateNarratives]);
 
   useEffect(() => {
     consumeSharedReport().then((shared) => { if (shared) { openReport(shared.report, shared.values, false, false); clearSharedReport(); setShareStatus("Shared report opened for review. Save and run it when ready."); } });
@@ -514,13 +618,38 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     return summaries;
   }, []);
 
+  const runDatasetsAndNarratives = useCallback(async (
+    report: ReportDocumentV1,
+    runValues: Record<string, ReportParameterValue>,
+    onlyIds?: Set<string>,
+    mode: "load" | "refresh" = "load",
+    seedRows?: Map<string, Record<string, any>[]>,
+  ): Promise<DatasetRunSummary[]> => {
+    const rows = seedRows ?? new Map<string, Record<string, any>[]>();
+    const summaries = await runDatasets(report, runValues, onlyIds, rows, mode);
+    const generated = await generateNarratives(report, runValues, rows);
+    if (generated !== report) setDraft((current) => current?.id === report.id ? withNarrativeSnapshots(current, generated) : current);
+    return summaries;
+  }, [generateNarratives, runDatasets]);
+
+  const regenerateNarrative = useCallback(async (block: ReportAiNarrativeBlock) => {
+    if (!draft) return;
+    const rows = results[block.datasetId]?.rows;
+    if (!rows) {
+      setNarrativeStates((states) => ({ ...states, [block.id]: { status: "error", error: "Run the report data before generating this narrative." } }));
+      return;
+    }
+    const generated = await generateNarratives(draft, appliedValues, new Map([[block.datasetId, rows]]), new Set([block.id]));
+    if (generated !== draft) setDraft((current) => current?.id === draft.id ? withNarrativeSnapshots(current, generated) : current);
+  }, [appliedValues, draft, generateNarratives, results]);
+
   const runFullReport = useCallback(() => {
     if (!draft) return;
     const nextValues = structuredClone(values);
     setAppliedValues(nextValues);
     const mode = draft.datasets.some((dataset) => Boolean(results[dataset.id]?.table)) ? "refresh" : "load";
-    void runDatasets(draft, nextValues, undefined, undefined, mode);
-  }, [draft, values, results, runDatasets]);
+    void runDatasetsAndNarratives(draft, nextValues, undefined, mode);
+  }, [draft, values, results, runDatasetsAndNarratives]);
 
   const handleApply = useCallback(() => {
     if (!draft) return;
@@ -528,16 +657,17 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const ids = changed.size ? new Set(draft.datasets.filter((d) => parameterTokens(d.sql).some((t) => changed.has(t) || changed.has(t.replace(/_(?:start|end)$/, "")))).map((d) => d.id)) : undefined;
     setAppliedValues(structuredClone(values));
     const mode = draft.datasets.some((dataset) => (!ids || ids.has(dataset.id)) && Boolean(results[dataset.id]?.table)) ? "refresh" : "load";
-    void runDatasets(draft, values, ids, undefined, mode);
-  }, [draft, values, appliedValues, results, runDatasets]);
+    const seedRows = new Map(Object.entries(results).filter(([, result]) => Boolean(result.table)).map(([datasetId, result]) => [datasetId, result.rows]));
+    void runDatasetsAndNarratives(draft, values, ids, mode, seedRows);
+  }, [draft, values, appliedValues, results, runDatasetsAndNarratives]);
 
   useEffect(() => {
     autoRefreshStateRef.current = {
       report: draft,
       values: appliedValues,
-      busy: agentBusy || Object.values(results).some(isDatasetPending),
+      busy: agentBusy || Object.values(results).some(isDatasetPending) || Object.values(narrativeStates).some((state) => state.status === "running"),
     };
-  }, [draft, appliedValues, agentBusy, results]);
+  }, [draft, appliedValues, agentBusy, results, narrativeStates]);
 
   useEffect(() => {
     const seconds = draft?.refreshIntervalSeconds;
@@ -546,11 +676,11 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       const current = autoRefreshStateRef.current;
       if (!current.report || current.busy || autoRefreshRunningRef.current || document.visibilityState !== "visible") return;
       autoRefreshRunningRef.current = true;
-      void runDatasets(current.report, structuredClone(current.values), undefined, undefined, "refresh")
+      void runDatasetsAndNarratives(current.report, structuredClone(current.values), undefined, "refresh")
         .finally(() => { autoRefreshRunningRef.current = false; });
     }, seconds * 1_000);
     return () => window.clearInterval(interval);
-  }, [draft?.id, draft?.refreshIntervalSeconds, runDatasets]);
+  }, [draft?.id, draft?.refreshIntervalSeconds, runDatasetsAndNarratives]);
 
   const updateAutoRefresh = useCallback((seconds?: number) => {
     if (!draft) return;
@@ -680,17 +810,38 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       const failures = execution.filter((result) => !result.ok);
       const blockErrors = validateReportResultColumns(workingReport, execution);
       const charts = await preflightReportCharts(workingReport, workingRows, settings.aiChartFeedback !== false);
-      const needsCorrection = failures.length > 0 || blockErrors.length > 0 || charts.errors.length > 0;
-      setAgentSummary(needsCorrection ? `${summary} The draft needs correction.` : `${summary} Data and visualizations loaded.`);
+      const narrativeErrors: string[] = [];
+      if (!failures.length && !blockErrors.length && !charts.errors.length) {
+        const staleNarrativeIds = new Set(workingReport.blocks
+          .filter((block): block is ReportAiNarrativeBlock => block.type === "ai_narrative")
+          .filter((block) => {
+            const rows = workingRows.get(block.datasetId);
+            if (!rows) return false;
+            const prepared = prepareNarrativeInput(block, rows, workingReport, defaultValues(workingReport), settings.aiModel);
+            return block.snapshot?.dataFingerprint !== prepared.fingerprint;
+          })
+          .map((block) => block.id));
+        if (staleNarrativeIds.size) {
+          try {
+            const generated = await generateNarratives(workingReport, defaultValues(workingReport), workingRows, staleNarrativeIds, true);
+            if (generated !== workingReport) applyWorkingReport(generated);
+          } catch (error) {
+            narrativeErrors.push(error instanceof Error ? error.message : String(error));
+          }
+        }
+      }
+      const needsCorrection = failures.length > 0 || blockErrors.length > 0 || charts.errors.length > 0 || narrativeErrors.length > 0;
+      setAgentSummary(needsCorrection ? `${summary} The draft needs correction.` : `${summary} Data, visualizations, and AI narratives loaded.`);
       return toolResult({
         ok: !needsCorrection,
         message: needsCorrection
-          ? "The report ran, but has dataset, column, or visualization errors. Correct the affected item and finalize again."
-          : "Every dataset executed and every chart compiled and rendered. The populated report is ready for user review.",
+          ? "The report ran, but has dataset, column, visualization, or AI narrative errors. Correct the affected item and finalize again."
+          : "Every dataset executed, every chart rendered, and every AI narrative was snapshotted. The populated report is ready for user review.",
         datasets: execution,
         blockErrors,
         chartErrors: charts.errors,
         chartWarnings: charts.warnings,
+        narrativeErrors,
       }, charts.feedback);
     };
     const system = `You are Cupola's report-authoring agent. Build and revise a declarative, rerunnable report. Never add JavaScript.
@@ -699,13 +850,17 @@ Use a compositional workflow: (1) inspect tables, (2) call configure_report, (3)
 
 Cupola owns grid placement for compositional blocks. upsert_report_block may request only the semantic width values quarter/third/half/full and height values compact/medium/tall; never send numeric col/x/y/w/h fields. The strict bulk fallback is different: every full-document block must contain layout nested exactly as {"layout":{"x":0,"y":0,"w":12,"h":6}}; layout fields are never top-level.
 
-Use report groups when two or more blocks belong to the same subject and the grouping helps the reader scan the page—for example one rounded section for each city in a weather comparison. Create each group first, then set groupId on every related block. Give groups specific titles, optional short descriptions, and restrained tones; do not create a group around a single block unless the user asks for it.
+Use report groups when two or more blocks belong to the same subject and the grouping helps the reader scan the page—for example one rounded section for each city in a weather comparison. Create each group first, then set groupId on every related block. Give groups specific titles, optional short descriptions, and restrained tones; titleSize may be small, medium (the default), or large. Use large when the group name is a major report section and small only in dense layouts. Do not create a group around a single block unless the user asks for it.
 
 Blocks may set appearance for semantic backgrounds. Use tone neutral/info/success/warning/danger and emphasis subtle/prominent. For value-driven alerts, add up to five ordered rules with column, operator, value, tone, label, and optional value2/emphasis/rowMatch; the first matching rule wins. Put severe rules first. Always provide a concise label such as "Above preferred range" so color is not the only signal. Only use thresholds supplied by the user or clearly defined by the data/domain—never invent alert boundaries. Prefer this for KPIs and compact status boxes; use it sparingly on large charts and tables.
 
 Inspect every table before using it. SQL datasets must be one read-only SELECT/VALUES/WITH query. Parameter references use $key, date ranges use $key_start/$key_end, and multi-select values appear in IN ($key). Do not add a WHERE clause unless the user's request actually requires filtering.
 
-Supported blocks are markdown, kpi, sparkline, small_multiples, bullet, slopegraph, range_dot, table, chart, perspective, and map. Every block may include a concise caption and source note. A markdown block may have a meaningful visible title or omit title for a clean content-only card; never title one "Text" or "Markdown", and omit the block title when the markdown already begins with its own heading. Markdown supports safe HTTPS and relative image URLs with ![alt text](url), but Cupola does not upload or persist image files. Use these semantic Tufte-style blocks before writing a free-form chart when they fit:
+Supported blocks are markdown, ai_narrative, kpi, sparkline, small_multiples, bullet, slopegraph, range_dot, table, chart, perspective, and map. Every block may include a concise caption and source note. Reader-facing block and group titles may contain parameter tokens such as $city; Cupola replaces them with the currently applied value at render time. A markdown block may have a meaningful visible title or omit title for a clean content-only card; never title one "Text" or "Markdown", and omit the block title when the markdown already begins with its own heading. Markdown supports safe HTTPS and relative image URLs with ![alt text](url), but Cupola does not upload or persist image files.
+
+Use ai_narrative only when data-dependent prose adds real value, such as an executive summary, comparison, anomaly explanation, or changing forecast commentary. Provide one datasetId and a focused instruction, optionally columns, maxRows from 1 to 100, and refreshPolicy manual or when_data_changes. Prefer a compact, aggregated dataset rather than sending raw detail. Manual is the default and avoids surprise cost; choose when_data_changes only when the user wants fresh prose during report refresh. The narrative call has no tools and cannot edit the report. Cupola generates and snapshots it during authoring, so do not also write a static markdown version of the same summary.
+
+Use these semantic Tufte-style blocks before writing a free-form chart when they fit:
 - small_multiples: facetColumn, xColumn, yColumn; optionally xType, mark, colorColumn, facetColumns, sharedY, referenceValue, and referenceLabel. Prefer sharedY=true for honest comparison unless units or magnitudes genuinely differ.
 - bullet: categoryColumn, valueColumn, targetColumn; optionally up to three broad-to-narrow rangeColumns, format, and color. Use for actual versus goal, not as a decorative gauge.
 - slopegraph: categoryColumn, startColumn, endColumn; optionally startLabel, endLabel, colorColumn, and format. Use only for two endpoints.
@@ -780,17 +935,31 @@ Current report:\n${JSON.stringify(draft)}`;
           const execution = await runDatasets(workingReport, defaultValues(workingReport), new Set([block.datasetId]), workingRows);
           const blockErrors = validateReportResultColumns({ ...workingReport, blocks: [block] }, execution);
           const charts = await preflightReportCharts({ ...workingReport, blocks: [block] }, workingRows, settings.aiChartFeedback !== false, 1);
-          const needsCorrection = execution.some((result) => !result.ok) || blockErrors.length > 0 || charts.errors.length > 0;
+          const narrativeErrors: string[] = [];
+          if (block.type === "ai_narrative" && execution.every((result) => result.ok) && !blockErrors.length) {
+            try {
+              const generated = await generateNarratives(workingReport, defaultValues(workingReport), workingRows, new Set([block.id]), true);
+              if (generated !== workingReport) applyWorkingReport(generated);
+            } catch (error) {
+              narrativeErrors.push(error instanceof Error ? error.message : String(error));
+            }
+          }
+          const needsCorrection = execution.some((result) => !result.ok) || blockErrors.length > 0 || charts.errors.length > 0 || narrativeErrors.length > 0;
           setAgentSummary(needsCorrection ? `${block.title ?? block.type} needs correction.` : `${block.title ?? block.type} loaded.`);
           return toolResult({
             ok: !needsCorrection,
             blockId: block.id,
             layout: block.layout,
-            message: needsCorrection ? "Correct this block and call upsert_report_block again with the same blockId." : "Block validated against live data and rendered successfully.",
+            message: needsCorrection
+              ? "Correct this block and call upsert_report_block again with the same blockId."
+              : block.type === "ai_narrative"
+                ? "Block validated against live data, generated, and snapshotted successfully."
+                : "Block validated against live data and rendered successfully.",
             dataset: execution[0],
             blockErrors,
             chartErrors: charts.errors,
             chartWarnings: charts.warnings,
+            narrativeErrors,
           }, charts.feedback);
         }
         if (name === "finalize_report") {
@@ -884,7 +1053,7 @@ Current report:\n${JSON.stringify(draft)}`;
   const layouts: ResponsiveLayouts<"lg" | "sm"> = { lg: desktopLayout, sm: mobileLayout };
   const activeLayout = width >= 768 ? desktopLayout : mobileLayout;
   const groupBoxes = reportGroupBoxes(draft.groups ?? [], draft.blocks, activeLayout, width, width >= 768 ? 12 : 1);
-  const reportRunning = Object.values(results).some(isDatasetPending);
+  const reportRunning = Object.values(results).some(isDatasetPending) || Object.values(narrativeStates).some((state) => state.status === "running");
   const reportFetchedAt = reportRunning ? 0 : Math.max(0, ...draft.datasets.map((dataset) => results[dataset.id]?.fetchedAt ?? 0));
   const progressLabel = runProgress
     ? `${runProgress.mode === "refresh" ? "Refreshing" : "Loading"} ${runProgress.completed} of ${runProgress.total} datasets`
@@ -942,10 +1111,11 @@ Current report:\n${JSON.stringify(draft)}`;
     <div className="flex-1 min-h-0 flex">
       <div ref={containerRef} className="flex-1 min-w-0 overflow-y-auto report-canvas p-3">
         <div className="print-only hidden mb-4"><h1 className="text-2xl font-bold">{draft.title}</h1><p className="text-sm text-muted-foreground">{draft.description}</p></div>
-        {draft.blocks.length === 0 ? <div className="h-full flex items-center justify-center"><div className="text-center"><FilePlus2 className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" /><p className="font-medium">Start with a request</p><p className="text-sm text-muted-foreground mb-4">Open the agent and describe the report you need.</p><Button onClick={() => setAgentOpen(true)}><Sparkles className="h-4 w-4" /> Open report agent</Button></div></div> : mounted && <div className="report-grid-stack relative pt-5">
+        {draft.blocks.length === 0 ? <div className="h-full flex items-center justify-center"><div className="text-center"><FilePlus2 className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" /><p className="font-medium">Start with a request</p><p className="text-sm text-muted-foreground mb-4">Open the agent and describe the report you need.</p><Button onClick={() => setAgentOpen(true)}><Sparkles className="h-4 w-4" /> Open report agent</Button></div></div> : mounted && <div className="report-grid-stack relative" style={{ paddingTop: REPORT_GRID_TOP_PADDING }}>
           <div className="report-group-layer report-authoring-group-layer pointer-events-none absolute inset-0 z-0" aria-hidden="true">
             {groupBoxes.map((box) => {
               const tone = REPORT_GROUP_TONES[box.group.tone ?? "neutral"];
+              const titleSize = REPORT_GROUP_TITLE_SIZES[box.group.titleSize ?? "medium"];
               return <div key={box.group.id}>
                 <div
                   data-testid={`report-group-${box.group.id}`}
@@ -954,11 +1124,11 @@ Current report:\n${JSON.stringify(draft)}`;
                 />
                 <div
                   data-testid={`report-group-label-${box.group.id}`}
-                  className={`absolute z-20 flex max-w-[calc(100%-24px)] items-baseline gap-2 rounded-full border px-2.5 py-1 shadow-sm ${tone.label}`}
+                  className={`absolute z-20 flex max-w-[calc(100%-24px)] items-baseline gap-2 rounded-full border px-3 py-1.5 shadow-sm ${tone.label}`}
                   style={{ left: box.left + 12, top: box.top, transform: "translateY(-50%)" }}
                 >
-                  <span className="truncate text-[11px] font-semibold">{box.group.title}</span>
-                  {box.group.description && <span className="hidden truncate text-[10px] font-normal opacity-70 sm:inline">{box.group.description}</span>}
+                  <span className={`truncate font-semibold leading-tight ${titleSize}`}>{interpolateReportText(box.group.title, draft, appliedValues)}</span>
+                  {box.group.description && <span className="hidden truncate text-xs font-normal opacity-70 sm:inline">{interpolateReportText(box.group.description, draft, appliedValues)}</span>}
                 </div>
               </div>;
             })}
@@ -967,15 +1137,22 @@ Current report:\n${JSON.stringify(draft)}`;
           {draft.blocks.map((block) => {
             const result = block.type === "markdown" ? null : results[block.datasetId];
             const dataset = block.type === "markdown" ? null : draft.datasets.find((candidate) => candidate.id === block.datasetId);
-            const markdownTitle = block.type === "markdown" ? visibleMarkdownTitle(block.title) : null;
+            const displayBlockTitle = block.title ? interpolateReportText(block.title, draft, appliedValues) : undefined;
+            const markdownTitle = block.type === "markdown" ? visibleMarkdownTitle(displayBlockTitle) : null;
             const showBlockHeader = block.type !== "markdown" || markdownTitle !== null;
             const pending = isDatasetPending(result ?? undefined);
+            const narrativeState = block.type === "ai_narrative" ? narrativeStates[block.id] : undefined;
+            const narrativePending = narrativeState?.status === "running";
             const hasData = Boolean(result?.table);
-            const datasetStatusLabel = result?.status === "queued"
+            const datasetStatusLabel = narrativePending
+              ? (block.type === "ai_narrative" && block.snapshot ? "Updating narrative" : "Generating narrative")
+              : narrativeState?.status === "error"
+                ? "Narrative failed"
+                : result?.status === "queued"
               ? (hasData ? "Refresh queued" : "Queued")
               : result?.status === "running"
                 ? (hasData ? "Refreshing" : "Loading")
-                : result?.status === "error" && hasData
+                : result?.status === "error" && (hasData || (block.type === "ai_narrative" && Boolean(block.snapshot)))
                   ? "Refresh failed"
                   : null;
             const visualBlock = block.type === "chart"
@@ -992,22 +1169,22 @@ Current report:\n${JSON.stringify(draft)}`;
               "--report-grid-height": block.layout.h,
             } as CSSProperties;
             const reportGroup = block.groupId ? (draft.groups ?? []).find((group) => group.id === block.groupId) : undefined;
-            return <div key={block.id} style={gridStyle} data-testid={`report-block-${block.id}`} data-report-group={block.groupId} data-report-tone={resolvedAppearance.tone} data-report-emphasis={resolvedAppearance.emphasis} aria-busy={pending} className={`group relative rounded-lg border shadow-sm overflow-hidden flex flex-col print:shadow-none ${appearanceStyle[resolvedAppearance.emphasis]}`}>
-              {reportGroup && <div className="print-only hidden border-b px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{reportGroup.title}</div>}
+            return <div key={block.id} style={gridStyle} data-testid={`report-block-${block.id}`} data-report-group={block.groupId} data-report-tone={resolvedAppearance.tone} data-report-emphasis={resolvedAppearance.emphasis} aria-busy={pending || narrativePending} className={`group relative rounded-lg border shadow-sm overflow-hidden flex flex-col print:shadow-none ${appearanceStyle[resolvedAppearance.emphasis]}`}>
+              {reportGroup && <div className="print-only hidden border-b px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{interpolateReportText(reportGroup.title, draft, appliedValues)}</div>}
               {showBlockHeader && <div data-testid={`report-block-header-${block.id}`} className="report-drag-handle cursor-move px-3 py-2 border-b flex items-center gap-2 text-sm font-medium">
-                <span className="truncate">{block.type === "markdown" ? markdownTitle : block.title || reportBlockLabel(block.type)}</span>
+                <span className="truncate">{block.type === "markdown" ? markdownTitle : displayBlockTitle || reportBlockLabel(block.type)}</span>
                 {resolvedAppearance.label && <span data-testid={`report-block-status-${block.id}`} title={resolvedAppearance.label} className="inline-flex min-w-0 max-w-[45%] items-center gap-1.5 rounded-full border border-current/15 bg-background/55 px-2 py-0.5 text-[10px] font-medium"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${appearanceStyle.dot}`} /><span className="truncate">{resolvedAppearance.label}</span></span>}
                 <div className="flex-1" />
                 <div className="report-authoring-control flex items-center gap-2" onMouseDown={(event) => event.stopPropagation()}>
                   {datasetStatusLabel && <span
                     data-testid={`report-dataset-status-${block.id}`}
                     className={`inline-flex items-center gap-1 text-[10px] font-normal ${result?.status === "error" ? "text-destructive" : "text-muted-foreground"}`}
-                    title={result?.status === "error" ? result.error : undefined}
+                    title={narrativeState?.status === "error" ? narrativeState.error : result?.status === "error" ? result.error : undefined}
                   >
-                    {pending && <Loader2 className={`h-3 w-3 ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} />}
+                    {(pending || narrativePending) && <Loader2 className={`h-3 w-3 ${result?.status === "running" || narrativePending ? "animate-spin" : "opacity-50"}`} />}
                     {datasetStatusLabel}
                   </span>}
-                  {block.type !== "markdown" && block.type !== "chart" && !isReportTufteBlock(block) && <div data-testid={`report-block-actions-${block.id}`} className="report-block-actions flex items-center gap-2">
+                  {block.type !== "markdown" && <div data-testid={`report-block-actions-${block.id}`} className="report-block-actions flex items-center gap-2">
                     <button
                       type="button"
                       className="text-[10px] font-medium text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
@@ -1027,17 +1204,35 @@ Current report:\n${JSON.stringify(draft)}`;
                       data-testid={`report-open-sql-${block.id}`}
                       onClick={() => dataset && openDatasetInEditor(dataset)}
                     >SQL</button>
+                    {visualBlock && <>
+                      <button
+                        type="button"
+                        className="text-[10px] font-medium text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                        data-testid={`report-download-png-${block.id}`}
+                        disabled={!hasData}
+                        onClick={() => { const view = reportChartViews.current.get(block.id); if (view) void downloadPNG(view, displayBlockTitle || "chart"); }}
+                      >PNG</button>
+                      <button
+                        type="button"
+                        className="text-[10px] font-medium text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                        data-testid={`report-download-svg-${block.id}`}
+                        disabled={!hasData}
+                        onClick={() => { const view = reportChartViews.current.get(block.id); if (view) void downloadSVG(view, displayBlockTitle || "chart"); }}
+                      >SVG</button>
+                    </>}
+                    {block.type === "ai_narrative" && <button
+                      type="button"
+                      className="text-[10px] font-medium text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                      data-testid={`report-regenerate-narrative-${block.id}`}
+                      disabled={!hasData || narrativePending}
+                      onClick={() => void regenerateNarrative(block)}
+                    >{block.snapshot ? "Regenerate" : "Generate"}</button>}
                   </div>}
                 </div>
               </div>}
               {!showBlockHeader && resolvedAppearance.label && <div data-testid={`report-block-status-${block.id}`} title={resolvedAppearance.label} className="absolute right-2 top-2 z-10 inline-flex max-w-[60%] items-center gap-1.5 rounded-full border border-current/15 bg-background/75 px-2 py-0.5 text-[10px] font-medium"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${appearanceStyle.dot}`} /><span className="truncate">{resolvedAppearance.label}</span></div>}
               {!showBlockHeader && <div data-testid={`report-block-drag-${block.id}`} title="Drag text block" className="report-authoring-control report-drag-handle absolute right-1 top-1 z-10 cursor-move rounded p-1 text-muted-foreground/50 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"><GripVertical className="h-3.5 w-3.5" /></div>}
-              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={block.markdown} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className="text-xs text-destructive">{result.error}</div><Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report</Button></div> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart
-                block={visualBlock}
-                rows={result.rows}
-                onCsv={() => void exportResult(result.table!, "csv", block.title || dataset?.name || "report-data")}
-                onSql={() => dataset && openDatasetInEditor(dataset)}
-              /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} config={block.config} onConfig={(config) => setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current)} /> : null}</div>
+              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={block.markdown} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className="text-xs text-destructive">{result.error}</div><Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart block={visualBlock} rows={result.rows} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} config={block.config} onConfig={(config) => setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current)} /> : null}</div>
               {(block.caption || block.source) && <div data-testid={`report-note-${block.id}`} className="px-3 pb-2 text-[10px] leading-snug text-muted-foreground">
                 {block.caption && <span>{block.caption}</span>}{block.caption && block.source && <span> · </span>}{block.source && <span>Source: {block.source}</span>}
               </div>}

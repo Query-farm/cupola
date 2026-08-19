@@ -106,3 +106,41 @@ export function materializeReportQuery(
 ): string {
   return transformReportQuery(source, report, values, sqlLiteral);
 }
+
+function displayParameterValue(value: ReportParameterValue, part?: "start" | "end"): string {
+  if (value == null) return "";
+  if (Array.isArray(value)) return value.join(", ");
+  if (typeof value === "object") {
+    if (part) return value[part] ?? "";
+    const start = value.start ?? "";
+    const end = value.end ?? "";
+    return start && end ? `${start} – ${end}` : start || end;
+  }
+  return String(value);
+}
+
+/** Replace report parameter tokens in reader-facing text without changing the
+ * stored template. Unknown tokens are preserved so ordinary dollar-prefixed
+ * text is not silently removed. Date ranges accept both `$key` (a readable
+ * range) and the same `$key_start` / `$key_end` tokens used by SQL. */
+export function interpolateReportText(
+  source: string,
+  report: Pick<ReportDocumentV1, "parameters">,
+  values: Record<string, ReportParameterValue>,
+): string {
+  const byKey = new Map(report.parameters.map((parameter) => [parameter.key, parameter]));
+  return source.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (token, tokenName: string) => {
+    let key = tokenName;
+    let part: "start" | "end" | undefined;
+    if (tokenName.endsWith("_start") && byKey.get(tokenName.slice(0, -6))?.type === "date_range") {
+      key = tokenName.slice(0, -6);
+      part = "start";
+    } else if (tokenName.endsWith("_end") && byKey.get(tokenName.slice(0, -4))?.type === "date_range") {
+      key = tokenName.slice(0, -4);
+      part = "end";
+    }
+    const parameter = byKey.get(key);
+    if (!parameter) return token;
+    return displayParameterValue(values[key] ?? parameter.defaultValue, part);
+  });
+}

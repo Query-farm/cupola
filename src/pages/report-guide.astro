@@ -2,6 +2,190 @@
 import Layout from "../layouts/Layout.astro";
 
 const base = import.meta.env.BASE_URL;
+
+const blockReferences = [
+  {
+    type: "markdown",
+    name: "Markdown",
+    family: "Narrative",
+    question: "What does this report mean?",
+    use: "Narrative, section headings, definitions, methodology, links, and explanatory images.",
+    avoid: "Do not use it as a placeholder title or to restate a number already shown by a data block.",
+    shape: "No dataset. The block renders its markdown immediately, even before report queries finish.",
+    required: [["markdown", "Markdown content to render."]],
+    optional: [["title", "Meaningful card header; omit it for a clean content-only card."], ["caption / source", "Additional note and provenance."], ["groupId", "Attach the narrative to a report group."], ["appearance", "Static tone only; conditional rules require a dataset-backed block."]],
+    exports: "Whole-report print and JSON export",
+    notes: ["Safe HTTPS and relative image URLs work with ![alt text](url).", "Cupola does not upload or persist image files.", "If the markdown starts with its own heading, omit the block title."],
+    example: { type: "markdown", markdown: "## Current conditions\nHumidity is elevated relative to the user-defined comfort band.\n\n![Radar](https://example.com/radar.png)" },
+  },
+  {
+    type: "ai_narrative",
+    name: "AI narrative",
+    family: "Data synthesis",
+    question: "What should a reader understand from these changing rows?",
+    use: "A concise executive summary, comparison, anomaly explanation, forecast commentary, or other prose that must change with the data.",
+    avoid: "Use markdown for fixed copy, and use a chart or table when readers should inspect the evidence directly. Do not use it merely to repeat a KPI.",
+    shape: "One bounded dataset, ideally already aggregated for the exact synthesis requested. Cupola sends at most 100 rows and 20 selected columns.",
+    required: [["datasetId", "Dataset supplying evidence for the narrative."], ["instruction", "Focused generation instructions; parameter tokens such as $city are resolved."]],
+    optional: [["columns", "Up to 20 result columns to include."], ["maxRows", "Input row limit from 1 through 100; default 50."], ["refreshPolicy", "manual (default) or when_data_changes."], ["snapshot", "Managed generated result persisted by Cupola; agents cannot fabricate it."]],
+    exports: "CSV · SQL · Regenerate",
+    notes: ["Generation is a bounded text-only model call with no tools and no ability to edit the report.", "The generated markdown, model, time, source-row count, and data fingerprint are saved so the report remains readable without another model call.", "Automatic generation runs only when the selected data or instructions change; manual is the default to avoid surprise cost."],
+    example: { type: "ai_narrative", title: "What changed", datasetId: "daily_weather_summary", instruction: "Summarize the most decision-relevant weather changes for $city. State uncertainty and do not infer causes.", columns: ["date", "temperature_f", "humidity_pct", "aqi"], maxRows: 14, refreshPolicy: "manual" },
+  },
+  {
+    type: "kpi",
+    name: "KPI",
+    family: "Compact metric",
+    question: "What is the value now?",
+    use: "One headline value, optionally paired with a short label from the same result row.",
+    avoid: "Avoid when the trend, distribution, uncertainty, or comparison is the real story.",
+    shape: "At least one row. The first row supplies the value and optional label.",
+    required: [["datasetId", "Dataset to read."], ["valueColumn", "Column containing the headline value."]],
+    optional: [["labelColumn", "First-row context shown beneath the value."], ["format", "number, currency, percent, or text."], ["appearance", "Static or value-driven semantic background."]],
+    exports: "CSV · SQL",
+    notes: ["Sort and aggregate in SQL so the intended value is in the first row.", "A compact quarter-width box is the agent default."],
+    example: { type: "kpi", title: "Current humidity", datasetId: "current_conditions", valueColumn: "humidity_pct", labelColumn: "observed_at", format: "number" },
+  },
+  {
+    type: "sparkline",
+    name: "Sparkline",
+    family: "Compact metric",
+    question: "Which way is one metric moving?",
+    use: "A dense, margin-light trend paired with the latest value.",
+    avoid: "Use a chart when readers need axes, legends, multiple series, or precise point lookup.",
+    shape: "Many rows with one numeric series. Points are plotted in query-result order.",
+    required: [["datasetId", "Ordered trend dataset."], ["valueColumn", "Numeric series to plot."]],
+    optional: [["labelColumn", "Label from the final plotted row."], ["format", "number, currency, percent, or text."], ["showValue", "Show or hide the latest value."], ["color", "Safe CSS color for the line."]],
+    exports: "CSV · SQL",
+    notes: ["Always ORDER BY the time or sequence column in SQL.", "Designed for compact boxes with almost no chart margin."],
+    example: { type: "sparkline", title: "Humidity · 24 hours", datasetId: "hourly_weather", valueColumn: "humidity_pct", labelColumn: "observed_at", showValue: true, color: "#0f8b75" },
+  },
+  {
+    type: "small_multiples",
+    name: "Small multiples",
+    family: "Tufte-style visual",
+    question: "How does the same pattern differ across groups?",
+    use: "Repeated line, area, bar, or point views for rooms, cities, products, or cohorts.",
+    avoid: "Avoid when each facet measures a different concept or needs an unrelated scale.",
+    shape: "Long-form rows: one facet value, one x value, and one y value per observation.",
+    required: [["datasetId", "Long-form comparison dataset."], ["facetColumn", "Creates one panel per value."], ["xColumn / yColumn", "Shared horizontal and vertical measures."]],
+    optional: [["xType", "temporal, quantitative, ordinal, or nominal."], ["mark", "line, area, bar, or point."], ["colorColumn", "Optional series inside each facet."], ["facetColumns", "Panels per row, from 1 through 6."], ["sharedY", "Use one comparable y scale."], ["referenceValue / referenceLabel", "Add a shared benchmark line and label."]],
+    exports: "CSV · SQL · PNG · SVG",
+    notes: ["Shared scales are usually the honest comparison.", "Use a reference value only when it is defined by the user or domain."],
+    example: { type: "small_multiples", title: "Humidity by city", datasetId: "hourly_weather", facetColumn: "city", xColumn: "observed_at", yColumn: "humidity_pct", xType: "temporal", mark: "line", facetColumns: 2, sharedY: true },
+  },
+  {
+    type: "bullet",
+    name: "Bullet",
+    family: "Tufte-style visual",
+    question: "How does actual performance compare with a target and bands?",
+    use: "Actual versus target with up to three qualitative range bounds, in far less space than a gauge.",
+    avoid: "Avoid if no defensible target or range exists; a KPI or range dot may be more honest.",
+    shape: "One row per category with actual, target, and optional range upper-bound columns.",
+    required: [["datasetId", "Comparison dataset."], ["categoryColumn", "One bullet row per category."], ["valueColumn", "Actual value."], ["targetColumn", "Target marker."]],
+    optional: [["rangeColumns", "Up to three broad-to-narrow qualitative upper bounds."], ["format", "number, currency, percent, or text."], ["color", "Actual-value bar color."]],
+    exports: "CSV · SQL · PNG · SVG",
+    notes: ["Range values belong in query columns, not invented in the visualization.", "Best native substitute for a gauge."],
+    example: { type: "bullet", title: "Humidity vs comfort target", datasetId: "humidity_targets", categoryColumn: "city", valueColumn: "humidity_pct", targetColumn: "target_pct", rangeColumns: ["broad_max", "preferred_max"] },
+  },
+  {
+    type: "range_dot",
+    name: "Range dot",
+    family: "Tufte-style visual",
+    question: "Where is the current value inside its observed range?",
+    use: "Low/high intervals, uncertainty, forecasts, or variability with an optional current point.",
+    avoid: "Avoid when the path through time matters more than the endpoints.",
+    shape: "One row per category with low and high values, plus an optional current value.",
+    required: [["datasetId", "Range dataset."], ["categoryColumn", "One interval per category."], ["lowColumn / highColumn", "Interval endpoints."]],
+    optional: [["valueColumn", "Current or highlighted point inside the range."], ["format", "number, currency, percent, or text."], ["color", "Highlight color."]],
+    exports: "CSV · SQL · PNG · SVG",
+    notes: ["Useful for daily weather lows/highs and forecast bands.", "Make sure low and high use the same unit."],
+    example: { type: "range_dot", title: "Daily temperature range", datasetId: "daily_weather", categoryColumn: "date", lowColumn: "temp_low_f", highColumn: "temp_high_f", valueColumn: "temp_current_f" },
+  },
+  {
+    type: "slopegraph",
+    name: "Slopegraph",
+    family: "Tufte-style visual",
+    question: "What changed between exactly two moments?",
+    use: "Direction, magnitude, and rank change between a start and end value.",
+    avoid: "For three or more moments, use a line chart or small multiples.",
+    shape: "One row per category with one start value and one end value.",
+    required: [["datasetId", "Two-endpoint dataset."], ["categoryColumn", "One line per category."], ["startColumn / endColumn", "The two comparable values."]],
+    optional: [["startLabel / endLabel", "Human-readable endpoint names."], ["colorColumn", "Optional series grouping."], ["format", "number, currency, percent, or text."]],
+    exports: "CSV · SQL · PNG · SVG",
+    notes: ["Keep the number of categories small enough to label directly.", "Both endpoints must share a unit and meaning."],
+    example: { type: "slopegraph", title: "Morning to afternoon humidity", datasetId: "humidity_change", categoryColumn: "city", startColumn: "humidity_8am", endColumn: "humidity_4pm", startLabel: "8 AM", endLabel: "4 PM" },
+  },
+  {
+    type: "table",
+    name: "Table",
+    family: "Detail",
+    question: "What are the exact records?",
+    use: "Precise values, timestamps, lookup, audit detail, and rows readers may export.",
+    avoid: "Avoid making a wide raw table the opening argument of a report.",
+    shape: "Any tabular query result. SQL column types use Cupola's standard display formatters.",
+    required: [["datasetId", "Dataset to display."]],
+    optional: [["columns", "Ordered subset of result-column names."], ["pageSize", "Displayed rows, from 1 through 1000."]],
+    exports: "CSV · XLSX · SQL",
+    notes: ["If columns is omitted, all returned columns appear.", "CSV and XLSX retain export-oriented values rather than display-only formatting."],
+    example: { type: "table", title: "Recent observations", datasetId: "hourly_weather", columns: ["observed_at", "temperature_f", "humidity_pct", "aqi"], pageSize: 50 },
+  },
+  {
+    type: "chart",
+    name: "Chart",
+    family: "Rich visual",
+    question: "What richer visual encoding does the question require?",
+    use: "Vega-Lite axes, legends, layers, multiple series, annotations, and visual forms not covered by semantic blocks.",
+    avoid: "Prefer a semantic block when it already expresses the question; custom specs carry more authoring surface area.",
+    shape: "Any rows required by the Vega-Lite encodings. Cupola injects them as the chart data.",
+    required: [["datasetId", "Dataset injected into the chart."], ["spec", "A Vega-Lite v5 specification object."]],
+    optional: [["title / caption / source", "Visible explanation and provenance."], ["appearance", "Semantic card background, independent of chart encodings."]],
+    exports: "CSV · SQL · PNG · SVG",
+    notes: ["Do not include data, datasets, url, href, or src in the spec.", "Use { y2: { field: \"high\" } }, not a string shorthand.", "The agent compiles and renders the block against real rows before finalizing it."],
+    example: { type: "chart", title: "Temperature and humidity", datasetId: "hourly_weather", spec: { mark: "line", encoding: { x: { field: "observed_at", type: "temporal" }, y: { field: "temperature_f", type: "quantitative" }, color: { field: "city", type: "nominal" } } } },
+  },
+  {
+    type: "map",
+    name: "Map",
+    family: "Rich visual",
+    question: "Where are the observations or geographic patterns?",
+    use: "Points or geometry with labels, categories, tooltips, and an optional OpenStreetMap basemap.",
+    avoid: "Avoid maps when location adds no explanatory value; sorted comparisons are often easier to read.",
+    shape: "Rows with a WKB/GeoJSON geometry, or both latitude and longitude. Geometry takes precedence.",
+    required: [["datasetId", "Spatial dataset."], ["geometryColumn OR latitudeColumn + longitudeColumn", "One complete location representation."]],
+    optional: [["labelColumn", "Feature label."], ["colorColumn", "Categorical color grouping."], ["tooltipColumns", "Additional hover fields."], ["basemap", "none or openstreetmap."], ["palette", "One through 20 colors."], ["style", "color, fillColor, opacity, fillOpacity, weight, and radius."]],
+    exports: "CSV · SQL",
+    notes: ["Opacity values are 0–1, weight is 0–20, and point radius is 1–50.", "Use basemap: none when geographic context is unnecessary or unavailable."],
+    example: { type: "map", title: "Weather stations", datasetId: "stations", latitudeColumn: "latitude", longitudeColumn: "longitude", labelColumn: "station_name", colorColumn: "alert_level", tooltipColumns: ["temperature_f", "humidity_pct", "aqi"], basemap: "openstreetmap", style: { radius: 7, fillOpacity: 0.75 } },
+  },
+  {
+    type: "perspective",
+    name: "Perspective",
+    family: "Interactive analysis",
+    question: "What follow-up slicing and pivoting will a reader need?",
+    use: "Interactive grouping, pivoting, sorting, filtering, and alternate visual exploration.",
+    avoid: "Avoid when the report should communicate one fixed, print-friendly conclusion.",
+    shape: "Any tabular dataset suitable for interactive exploration.",
+    required: [["datasetId", "Dataset loaded into Perspective."]],
+    optional: [["config", "Persisted Perspective viewer configuration."]],
+    exports: "CSV · SQL",
+    notes: ["Reader changes to the Perspective configuration are retained in the report draft.", "It is the most exploratory block and the least deterministic for print."],
+    example: { type: "perspective", title: "Explore weather observations", datasetId: "hourly_weather", config: { group_by: ["city"], columns: ["temperature_f", "humidity_pct", "aqi"] } },
+  },
+];
+
+const commonFields = [
+  ["id", "Stable block identifier. The agent can generate it when creating a block."],
+  ["type", "One of the 12 block types below."],
+  ["title", "Optional visible header; use an informative statement, not a generic type label."],
+  ["caption", "Brief interpretive note shown beneath the block."],
+  ["source", "Human-readable provenance such as a table, service, or agency."],
+  ["groupId", "Optional group that visually contains the block."],
+  ["appearance", "Static tone or ordered conditional rules for dataset-backed blocks."],
+  ["layout", "Persisted 12-column position {x, y, w, h}; agent tools accept semantic width and height instead."],
+];
+
+const formatExample = (value: Record<string, unknown>) => JSON.stringify(value, null, 2);
 ---
 
 <Layout title="Report visualization guide — Cupola">
@@ -166,7 +350,7 @@ const base = import.meta.env.BASE_URL;
       <section class="toolkit section-width" aria-labelledby="toolkit-heading">
         <div class="section-intro">
           <div><p class="eyebrow">The rest of the toolkit</p><h2 id="toolkit-heading">Use richer blocks when the question grows</h2></div>
-          <p>All data-backed blocks keep their SQL, can use report parameters, refresh together, and expose CSV, XLSX, and SQL actions on hover.</p>
+          <p>All data-backed blocks keep their SQL, can use report parameters, and refresh together. Data, image, and SQL exports vary by block and are listed in the reference below.</p>
         </div>
         <div class="toolkit-grid">
           <div><span>Table</span><p>Exact readings, timestamps, and details worth looking up.</p></div>
@@ -177,6 +361,317 @@ const base = import.meta.env.BASE_URL;
           <div><span>Parameters</span><p>Let a reader change location, date range, threshold, category, or other typed inputs.</p></div>
           <div><span>Groups</span><p>Rounded, labeled sections keep related KPIs and charts together—for example, one section per city.</p></div>
           <div><span>Alert backgrounds</span><p>Semantic colors and visible status labels can respond to defined query thresholds without custom code.</p></div>
+        </div>
+      </section>
+
+      <section class="reference section-width" aria-labelledby="reference-heading">
+        <div class="reference-hero">
+          <div>
+            <p class="eyebrow">Complete reference</p>
+            <h2 id="reference-heading">Every report block, from query to export</h2>
+          </div>
+          <p>
+            This section describes the report schema Cupola actually runs. The examples show the
+            block payload an agent supplies; Cupola can assign the stable ID and translate semantic
+            sizing into the persisted 12-column layout.
+          </p>
+        </div>
+
+        <nav class="reference-nav" aria-label="Report guide contents">
+          <a href="#block-matrix"><span>01</span> Block matrix</a>
+          <a href="#common-fields"><span>02</span> Common fields</a>
+          <a href="#block-reference"><span>03</span> All 12 blocks</a>
+          <a href="#data-and-parameters"><span>04</span> Data & parameters</a>
+          <a href="#groups-and-appearance"><span>05</span> Groups & alerts</a>
+          <a href="#runtime-and-exports"><span>06</span> Runtime & exports</a>
+          <a href="#agent-workflow"><span>07</span> Agent workflow</a>
+          <a href="#limits"><span>08</span> Limits</a>
+        </nav>
+
+        <div id="block-matrix" class="reference-part anchor-target">
+          <div class="part-heading">
+            <p class="eyebrow">At a glance</p>
+            <h3>Choose the smallest block that answers the question</h3>
+          </div>
+          <div class="table-scroll">
+            <table class="reference-table matrix-table">
+              <thead><tr><th>Block</th><th>Best question</th><th>Expected query result</th><th>Block exports</th></tr></thead>
+              <tbody>
+                {blockReferences.map((block) => (
+                  <tr>
+                    <th scope="row"><a href={`#${block.type}`}><code>{block.type}</code><span>{block.name}</span></a></th>
+                    <td>{block.question}</td>
+                    <td>{block.shape}</td>
+                    <td>{block.exports}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="common-fields" class="reference-part anchor-target">
+          <div class="part-heading split-heading">
+            <div><p class="eyebrow">Shared anatomy</p><h3>Fields available to every block</h3></div>
+            <p>Only <code>type</code> is needed in every compositional agent call. Required type-specific fields are listed with each block. Stored reports also contain <code>id</code> and <code>layout</code>.</p>
+          </div>
+          <div class="table-scroll">
+            <table class="reference-table field-table">
+              <thead><tr><th>Field</th><th>Purpose</th></tr></thead>
+              <tbody>{commonFields.map(([field, purpose]) => <tr><th scope="row"><code>{field}</code></th><td>{purpose}</td></tr>)}</tbody>
+            </table>
+          </div>
+          <aside class="callout">
+            <strong>Layout has two forms.</strong>
+            <p>In saved report JSON, every block has <code>layout: {'{'} x, y, w, h {'}'}</code> on a 12-column grid. When an agent builds compositionally, it asks for <code>quarter</code>, <code>third</code>, <code>half</code>, or <code>full</code> width and <code>compact</code>, <code>medium</code>, or <code>tall</code> height; Cupola chooses collision-free coordinates.</p>
+          </aside>
+        </div>
+
+        <div id="block-reference" class="reference-part anchor-target">
+          <div class="part-heading">
+            <p class="eyebrow">Block by block</p>
+            <h3>The complete block reference</h3>
+            <p>Required and optional fields below are in addition to the shared fields above.</p>
+          </div>
+
+          <div class="block-reference-list">
+            {blockReferences.map((block, index) => (
+              <article id={block.type} class="block-reference anchor-target" data-block-reference={block.type}>
+                <header class="block-reference-heading">
+                  <div class="block-index">{String(index + 1).padStart(2, "0")}</div>
+                  <div>
+                    <div class="block-meta"><code>{block.type}</code><span>{block.family}</span></div>
+                    <h4>{block.name}</h4>
+                    <p>{block.question}</p>
+                  </div>
+                  <div class="export-badge"><span>Exports</span><strong>{block.exports}</strong></div>
+                </header>
+
+                <div class="block-guidance">
+                  <div><span>Use it for</span><p>{block.use}</p></div>
+                  <div><span>Choose something else when</span><p>{block.avoid}</p></div>
+                  <div><span>Query shape</span><p>{block.shape}</p></div>
+                </div>
+
+                <div class="block-detail-grid">
+                  <div class="field-groups">
+                    <div>
+                      <h5>Required fields</h5>
+                      <dl>{block.required.map(([field, purpose]) => <><dt><code>{field}</code></dt><dd>{purpose}</dd></>)}</dl>
+                    </div>
+                    <div>
+                      <h5>Optional fields</h5>
+                      <dl>{block.optional.map(([field, purpose]) => <><dt><code>{field}</code></dt><dd>{purpose}</dd></>)}</dl>
+                    </div>
+                  </div>
+                  <div class="example-panel">
+                    <div class="example-label">Agent block payload</div>
+                    <pre><code>{formatExample(block.example)}</code></pre>
+                  </div>
+                </div>
+
+                <ul class="block-notes">{block.notes.map((note) => <li>{note}</li>)}</ul>
+              </article>
+            ))}
+          </div>
+        </div>
+
+        <div id="data-and-parameters" class="reference-part anchor-target">
+          <div class="part-heading split-heading">
+            <div><p class="eyebrow">Reusable data</p><h3>Datasets and typed parameters</h3></div>
+            <p>Blocks do not own SQL. They reference named datasets, so one query result can feed several blocks while each report dataset executes once during a full run.</p>
+          </div>
+
+          <div class="schema-grid">
+            <article class="schema-card">
+              <span class="schema-number">01</span>
+              <h4>Dataset</h4>
+              <p>A dataset has <code>id</code>, <code>name</code>, and <code>sql</code>, plus an optional <code>description</code> and role of <code>data</code> or <code>parameter_options</code>.</p>
+              <ul>
+                <li>SQL is read-only and must be exactly one <code>SELECT</code>, <code>VALUES</code>, or <code>WITH … SELECT</code> statement.</li>
+                <li>Several blocks may reuse the same <code>datasetId</code>.</li>
+                <li>Result order matters for sparklines and other sequence-based views.</li>
+              </ul>
+            </article>
+            <article class="schema-card">
+              <span class="schema-number">02</span>
+              <h4>Parameter</h4>
+              <p>A parameter has <code>id</code>, SQL-safe <code>key</code>, reader-facing <code>label</code>, <code>type</code>, and <code>defaultValue</code>. It may also be required and include a description or options.</p>
+              <ul>
+                <li>Values are bound as query parameters rather than concatenated into SQL.</li>
+                <li>Select choices can be static or loaded from a <code>parameter_options</code> dataset.</li>
+                <li>SQL-driven choice datasets may depend on earlier parameters but cannot form dependency cycles.</li>
+              </ul>
+            </article>
+          </div>
+
+          <div class="table-scroll spaced-table">
+            <table class="reference-table parameter-table">
+              <thead><tr><th>Parameter type</th><th>Value shape</th><th>SQL reference</th><th>Typical use</th></tr></thead>
+              <tbody>
+                <tr><th><code>text</code></th><td>string or null</td><td><code>$location</code></td><td>Location, search text, identifier</td></tr>
+                <tr><th><code>number</code></th><td>number or null</td><td><code>$threshold</code></td><td>Threshold, quantity, radius</td></tr>
+                <tr><th><code>boolean</code></th><td>true / false</td><td><code>$include_indoor</code></td><td>Feature or row toggle</td></tr>
+                <tr><th><code>date</code></th><td>ISO date string</td><td><code>$as_of</code></td><td>Single day or cutoff</td></tr>
+                <tr><th><code>date_range</code></th><td>start/end object</td><td><code>$period_start</code> and <code>$period_end</code></td><td>Observation window</td></tr>
+                <tr><th><code>select</code></th><td>one option value</td><td><code>$city</code></td><td>One city, station, category</td></tr>
+                <tr><th><code>multi_select</code></th><td>array of values</td><td><code>city IN ($cities)</code></td><td>Several peers or categories</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="code-pair">
+            <div>
+              <div class="example-label">Parameterized SQL</div>
+              <pre><code>{`SELECT
+  observed_at,
+  city,
+  humidity_pct
+FROM weather.hourly
+WHERE city IN ($cities)
+  AND observed_at >= $period_start
+  AND observed_at < $period_end
+ORDER BY observed_at`}</code></pre>
+            </div>
+            <div>
+              <div class="example-label">Dataset-backed choices</div>
+              <pre><code>{`{
+  "key": "city",
+  "label": "Location",
+  "type": "select",
+  "defaultValue": "Glen Allen",
+  "options": {
+    "kind": "dataset",
+    "datasetId": "available_cities",
+    "valueColumn": "city",
+    "labelColumn": "display_name"
+  }
+}`}</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div id="groups-and-appearance" class="reference-part anchor-target">
+          <div class="part-heading">
+            <p class="eyebrow">Visual organization</p>
+            <h3>Groups explain belonging; appearance explains status</h3>
+          </div>
+          <div class="schema-grid">
+            <article class="schema-card tone-card">
+              <span class="schema-number">Groups</span>
+              <h4>Rounded containers for related blocks</h4>
+              <p>Define a group with <code>id</code>, <code>title</code>, optional <code>description</code>, tone, and <code>titleSize</code> of <code>small</code>, <code>medium</code>, or <code>large</code>. Medium is the default. Attach each block using <code>groupId</code>.</p>
+              <div class="token-row" aria-label="Available group tones"><span>neutral</span><span>blue</span><span>green</span><span>amber</span><span>violet</span><span>rose</span></div>
+              <p class="fine-print">Group bounds follow their member blocks. On print, group identity is repeated on contained blocks so context survives layout pagination.</p>
+            </article>
+            <article class="schema-card alert-card">
+              <span class="schema-number">Appearance</span>
+              <h4>Accessible static or conditional status</h4>
+              <p>Choose <code>neutral</code>, <code>info</code>, <code>success</code>, <code>warning</code>, or <code>danger</code>, with <code>subtle</code> or <code>prominent</code> emphasis. Always include a visible status label.</p>
+              <div class="token-row" aria-label="Available appearance operators"><span>&lt;</span><span>≤</span><span>&gt;</span><span>≥</span><span>=</span><span>≠</span><span>between</span></div>
+              <p class="fine-print">Up to five ordered rules are supported; the first match wins. A rule evaluates the first row by default, or <code>any</code> / <code>all</code> rows. Before data loads, conditional blocks remain neutral.</p>
+            </article>
+          </div>
+          <div class="code-pair">
+            <div>
+              <div class="example-label">Two-city grouping</div>
+              <pre><code>{`{
+  "id": "glen-allen",
+  "title": "Glen Allen, Virginia",
+  "description": "Current conditions and 24-hour trend",
+  "tone": "blue",
+  "titleSize": "large"
+}
+
+// On each related block:
+"groupId": "glen-allen"`}</code></pre>
+            </div>
+            <div>
+              <div class="example-label">Ordered alert rules</div>
+              <pre><code>{`{
+  "appearance": {
+    "tone": "neutral",
+    "rules": [
+      {
+        "column": "humidity_pct",
+        "operator": "greater_than",
+        "value": 70,
+        "tone": "danger",
+        "emphasis": "prominent",
+        "label": "Above defined limit"
+      },
+      {
+        "column": "humidity_pct",
+        "operator": "between",
+        "value": 60,
+        "value2": 70,
+        "tone": "warning",
+        "label": "Elevated"
+      }
+    ]
+  }
+}`}</code></pre>
+            </div>
+          </div>
+          <aside class="callout warning-callout"><strong>Thresholds are data, not decoration.</strong><p>Cupola’s agent is instructed never to invent alert boundaries. The user, source data, or an established domain rule must define them; colors supplement the visible label and never carry meaning alone.</p></aside>
+        </div>
+
+        <div id="runtime-and-exports" class="reference-part anchor-target">
+          <div class="part-heading split-heading">
+            <div><p class="eyebrow">Running the report</p><h3>One refresh, shared results, visible progress</h3></div>
+            <p>A full run resolves parameter values, executes each report dataset once, and shares each result with every dependent block. Applying changed parameters can rerun only affected datasets. Cells show queued, loading, or error state while the report is refreshing.</p>
+          </div>
+          <div class="runtime-grid">
+            <article><span>Refresh</span><strong>Manual or automatic</strong><p>Persist a cadence from 5 seconds through 24 hours. The interface offers common 30-second, 1-minute, 5-minute, and 15-minute choices.</p></article>
+            <article><span>Freshness</span><strong>One report-level time</strong><p>The report shows a single “as of” time after the coordinated run instead of repeating it on every block.</p></article>
+            <article><span>SQL action</span><strong>Continue in the editor</strong><p>SQL opens a materialized snapshot of the dataset query with current parameter values, ready for inspection or extension.</p></article>
+            <article><span>AI narrative</span><strong>Bounded and snapshotted</strong><p>Manual generation is the default. Optional data-change refresh uses a fingerprint to avoid an unchanged model call, and the latest markdown remains embedded in the report.</p></article>
+            <article><span>Persistence</span><strong>Revisions and sharing</strong><p>Reports can be saved with revision history, shared, imported, or exported as report JSON.</p></article>
+          </div>
+          <div class="table-scroll spaced-table">
+            <table class="reference-table export-table">
+              <thead><tr><th>Block family</th><th>CSV</th><th>XLSX</th><th>SQL</th><th>PNG</th><th>SVG</th></tr></thead>
+              <tbody>
+                <tr><th>Markdown</th><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+                <tr><th>AI narrative</th><td>Yes</td><td>—</td><td>Yes</td><td>—</td><td>—</td></tr>
+                <tr><th>KPI · Sparkline · Map · Perspective</th><td>Yes</td><td>—</td><td>Yes</td><td>—</td><td>—</td></tr>
+                <tr><th>Table</th><td>Yes</td><td>Yes</td><td>Yes</td><td>—</td><td>—</td></tr>
+                <tr><th>Chart · Small multiples · Bullet · Range dot · Slopegraph</th><td>Yes</td><td>—</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="table-note">Block actions appear in the header on hover, outside chart interaction surfaces so they do not mask Vega tooltips. AI narratives also offer Generate or Regenerate. Print, share, and report JSON export apply to the whole report. Printing preserves the report grid as closely as the page permits.</p>
+        </div>
+
+        <div id="agent-workflow" class="reference-part anchor-target">
+          <div class="part-heading">
+            <p class="eyebrow">Agent-authored, human-directed</p>
+            <h3>How a report is built compositionally</h3>
+          </div>
+          <ol class="workflow">
+            <li><span>01</span><div><strong>Inspect the attached source</strong><p>The agent lists and describes tables before it assumes column names or types.</p></div></li>
+            <li><span>02</span><div><strong>Define the report contract</strong><p>It sets the title, description, source requirements, parameters, groups, and optional auto-refresh cadence.</p></div></li>
+            <li><span>03</span><div><strong>Add one reusable dataset</strong><p>The agent writes a focused read-only query, runs it with current parameters, and responds to the exact database error if it fails.</p></div></li>
+            <li><span>04</span><div><strong>Add the smallest useful block</strong><p>A semantic block is preferred. Cupola lays it out, compiles visual blocks, and renders them with real rows; AI narratives are generated and snapshotted from those rows before the agent continues.</p></div></li>
+            <li><span>05</span><div><strong>Refine from evidence</strong><p>The agent changes a query, block, caption, grouping, or sizing in a small step and reruns affected data instead of replacing the whole document.</p></div></li>
+            <li><span>06</span><div><strong>Preflight the populated report</strong><p>Before finalizing, all referenced datasets run, visualizations render, and stale AI narratives regenerate with valid parameter values. The user receives a populated report rather than blank cells.</p></div></li>
+            <li><span>07</span><div><strong>Keep the conversation continuous</strong><p>User feedback and prior agent responses remain in the report-authoring thread, so later revisions build on the existing report and decisions.</p></div></li>
+          </ol>
+        </div>
+
+        <div id="limits" class="reference-part anchor-target">
+          <div class="part-heading">
+            <p class="eyebrow">Deliberate boundaries</p>
+            <h3>What report blocks do not do</h3>
+          </div>
+          <div class="limits-grid">
+            <article><strong>No arbitrary JavaScript</strong><p>Reports are declarative JSON plus read-only SQL. This keeps them inspectable, rerunnable, and safer to generate.</p></article>
+            <article><strong>No native gauge block</strong><p>Use KPI, bullet, range dot, or sparkline. A custom Vega-Lite treatment is possible when the dial metaphor truly matters.</p></article>
+            <article><strong>No remote Vega data</strong><p>Chart rows are injected by Cupola; external <code>data</code>, <code>datasets</code>, <code>url</code>, <code>href</code>, and <code>src</code> are rejected.</p></article>
+            <article><strong>No markdown file hosting</strong><p>Markdown can reference safe HTTPS or relative images, but the report does not upload or persist image binaries.</p></article>
+            <article><strong>No write queries</strong><p>A report dataset is one read-only statement. Data transformation belongs in its <code>SELECT</code> or in the attached source.</p></article>
+            <article><strong>Schema version 1</strong><p>Saved documents contain explicit datasets, parameters, groups, blocks, layouts, timestamps, and revision metadata for predictable reruns.</p></article>
+          </div>
         </div>
       </section>
 
@@ -305,6 +800,105 @@ const base = import.meta.env.BASE_URL;
   .toolkit-grid > div { min-height: 160px; padding: 26px; border-right: 1px solid hsl(var(--border)); border-bottom: 1px solid hsl(var(--border)); }
   .toolkit-grid span { font-family: "Petrona", serif; font-size: 22px; }
   .toolkit-grid p { margin-top: 12px; color: hsl(var(--muted-foreground)); font-size: 13px; line-height: 1.6; }
+  .reference { padding-block: 110px; border-top: 1px solid hsl(var(--border)); }
+  .reference-hero, .split-heading { display: grid; grid-template-columns: 1.1fr .9fr; gap: 60px; align-items: end; }
+  .reference-hero h2 { max-width: 720px; margin-top: 10px; }
+  .reference-hero > p, .split-heading > p { color: hsl(var(--muted-foreground)); line-height: 1.7; }
+  .reference-nav { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 52px; border-top: 1px solid hsl(var(--border)); border-left: 1px solid hsl(var(--border)); }
+  .reference-nav a { display: flex; gap: 12px; align-items: center; min-height: 62px; padding: 14px 16px; border-right: 1px solid hsl(var(--border)); border-bottom: 1px solid hsl(var(--border)); font-size: 12px; font-weight: 600; transition: background .2s, color .2s; }
+  .reference-nav a:hover { color: var(--guide-accent); background: var(--guide-accent-soft); }
+  .reference-nav span { color: var(--guide-accent); font: 10px "JetBrains Mono", monospace; }
+  .anchor-target { scroll-margin-top: 22px; }
+  .reference-part { padding-top: 104px; }
+  .reference-part + .reference-part { margin-top: 104px; padding-top: 104px; border-top: 1px solid hsl(var(--border)); }
+  .part-heading { margin-bottom: 38px; }
+  .part-heading h3 { max-width: 790px; margin-top: 9px; font-family: "Petrona", serif; font-size: clamp(29px, 3.3vw, 43px); font-weight: 450; letter-spacing: -.035em; line-height: 1.08; }
+  .part-heading > p:not(.eyebrow), .part-heading > div + p { max-width: 530px; margin-top: 12px; color: hsl(var(--muted-foreground)); font-size: 14px; line-height: 1.65; }
+  code { padding: .08em .3em; border-radius: 4px; color: hsl(var(--foreground)); background: hsl(var(--muted)); font-family: "JetBrains Mono", monospace; font-size: .88em; }
+  pre { max-width: 100%; overflow: auto; }
+  pre code { display: block; min-width: max-content; padding: 20px; color: hsl(var(--foreground)); background: transparent; font-size: 11px; line-height: 1.7; }
+  .table-scroll { overflow-x: auto; border: 1px solid hsl(var(--border)); border-radius: 12px; }
+  .reference-table { width: 100%; min-width: 720px; border-collapse: collapse; background: hsl(var(--card)); font-size: 12px; line-height: 1.55; }
+  .reference-table th, .reference-table td { padding: 16px 18px; border-bottom: 1px solid hsl(var(--border)); text-align: left; vertical-align: top; }
+  .reference-table tr:last-child th, .reference-table tr:last-child td { border-bottom: 0; }
+  .reference-table thead th { color: hsl(var(--muted-foreground)); background: hsl(var(--muted) / .5); font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+  .reference-table tbody th { font-weight: 550; }
+  .reference-table tbody td { color: hsl(var(--muted-foreground)); }
+  .matrix-table th:first-child { width: 170px; }
+  .matrix-table th:last-child { width: 150px; }
+  .matrix-table tbody th a { display: flex; flex-direction: column; gap: 6px; }
+  .matrix-table tbody th a:hover span { color: var(--guide-accent); }
+  .matrix-table tbody th code { width: fit-content; color: var(--guide-accent); background: var(--guide-accent-soft); }
+  .matrix-table tbody th span { font-family: "Petrona", serif; font-size: 17px; }
+  .field-table { min-width: 600px; }
+  .field-table th:first-child { width: 190px; }
+  .callout { display: grid; grid-template-columns: 220px 1fr; gap: 28px; margin-top: 20px; padding: 24px; border-left: 3px solid var(--guide-accent); background: var(--guide-accent-soft); }
+  .callout strong { font-family: "Petrona", serif; font-size: 18px; font-weight: 550; }
+  .callout p { color: hsl(var(--muted-foreground)); font-size: 13px; line-height: 1.7; }
+  .block-reference-list { display: grid; gap: 34px; }
+  .block-reference { overflow: hidden; border: 1px solid hsl(var(--border)); border-radius: 18px; background: hsl(var(--card)); }
+  .block-reference-heading { display: grid; grid-template-columns: 52px 1fr auto; gap: 22px; align-items: start; padding: 28px 30px; border-bottom: 1px solid hsl(var(--border)); }
+  .block-index { padding-top: 3px; color: var(--guide-accent); font: 11px "JetBrains Mono", monospace; }
+  .block-meta { display: flex; gap: 10px; align-items: center; color: hsl(var(--muted-foreground)); font-size: 10px; letter-spacing: .07em; text-transform: uppercase; }
+  .block-meta code { color: var(--guide-accent); background: var(--guide-accent-soft); text-transform: none; }
+  .block-reference h4 { margin-top: 8px; font-family: "Petrona", serif; font-size: 31px; font-weight: 450; letter-spacing: -.03em; }
+  .block-reference-heading p { margin-top: 5px; color: hsl(var(--muted-foreground)); font-size: 13px; }
+  .export-badge { display: flex; flex-direction: column; gap: 5px; min-width: 150px; padding-top: 2px; text-align: right; }
+  .export-badge span, .example-label { color: hsl(var(--muted-foreground)); font: 9px "JetBrains Mono", monospace; letter-spacing: .1em; text-transform: uppercase; }
+  .export-badge strong { font-size: 11px; font-weight: 600; }
+  .block-guidance { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid hsl(var(--border)); }
+  .block-guidance > div { min-height: 148px; padding: 24px 28px; border-right: 1px solid hsl(var(--border)); }
+  .block-guidance > div:last-child { border-right: 0; }
+  .block-guidance span { color: var(--guide-accent); font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+  .block-guidance p { margin-top: 10px; color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.65; }
+  .block-detail-grid { display: grid; grid-template-columns: 1.1fr .9fr; min-width: 0; border-bottom: 1px solid hsl(var(--border)); }
+  .field-groups { display: grid; grid-template-columns: repeat(2, 1fr); gap: 30px; padding: 30px; }
+  .field-groups h5 { margin-bottom: 16px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  .field-groups dl { display: grid; grid-template-columns: minmax(95px, auto) 1fr; gap: 10px 14px; }
+  .field-groups dt { font-size: 11px; }
+  .field-groups dd { color: hsl(var(--muted-foreground)); font-size: 11px; line-height: 1.5; }
+  .example-panel { min-width: 0; padding: 25px 28px; border-left: 1px solid hsl(var(--border)); background: hsl(var(--muted) / .35); }
+  .example-panel pre { margin-top: 10px; }
+  .example-panel pre code { padding: 0; }
+  .block-notes { display: flex; flex-wrap: wrap; gap: 9px 30px; padding: 18px 30px; color: hsl(var(--muted-foreground)); font-size: 10px; line-height: 1.5; }
+  .block-notes li { position: relative; padding-left: 12px; }
+  .block-notes li::before { content: ""; position: absolute; top: .6em; left: 0; width: 4px; height: 4px; border-radius: 50%; background: var(--guide-accent); }
+  .schema-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .schema-card { padding: 30px; border: 1px solid hsl(var(--border)); border-radius: 16px; background: hsl(var(--card)); }
+  .schema-number { color: var(--guide-accent); font: 10px "JetBrains Mono", monospace; letter-spacing: .08em; text-transform: uppercase; }
+  .schema-card h4 { margin-top: 18px; font-family: "Petrona", serif; font-size: 25px; font-weight: 500; letter-spacing: -.02em; }
+  .schema-card > p { margin-top: 10px; color: hsl(var(--muted-foreground)); font-size: 13px; line-height: 1.7; }
+  .schema-card ul { display: grid; gap: 9px; margin-top: 20px; padding-left: 17px; color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.6; list-style: disc; }
+  .spaced-table { margin-top: 20px; }
+  .parameter-table th:first-child { width: 160px; }
+  .code-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 20px; }
+  .code-pair > div { min-width: 0; padding: 22px; border: 1px solid hsl(var(--border)); border-radius: 12px; background: hsl(var(--muted) / .35); }
+  .code-pair pre { margin-top: 12px; }
+  .code-pair pre code { padding: 0; }
+  .token-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 20px; }
+  .token-row span { padding: 5px 8px; border: 1px solid hsl(var(--border)); border-radius: 999px; color: hsl(var(--muted-foreground)); background: hsl(var(--background)); font: 9px "JetBrains Mono", monospace; }
+  .schema-card .fine-print { margin-top: 20px; padding-top: 18px; border-top: 1px solid hsl(var(--border)); font-size: 11px; }
+  .tone-card { border-top: 3px solid hsl(209 76% 55%); }
+  .alert-card { border-top: 3px solid hsl(37 92% 52%); }
+  .warning-callout { border-left-color: hsl(37 92% 52%); background: hsl(42 90% 94%); }
+  .runtime-grid { display: grid; grid-template-columns: repeat(4, 1fr); border-block: 1px solid hsl(var(--border)); }
+  .runtime-grid article { min-height: 190px; padding: 24px; border-right: 1px solid hsl(var(--border)); }
+  .runtime-grid article:last-child { border-right: 0; }
+  .runtime-grid span { color: var(--guide-accent); font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+  .runtime-grid strong { display: block; margin-top: 20px; font-family: "Petrona", serif; font-size: 19px; font-weight: 500; }
+  .runtime-grid p { margin-top: 9px; color: hsl(var(--muted-foreground)); font-size: 11px; line-height: 1.65; }
+  .export-table { min-width: 650px; text-align: center; }
+  .export-table th:not(:first-child), .export-table td { text-align: center; }
+  .table-note { margin-top: 12px; color: hsl(var(--muted-foreground)); font-size: 11px; line-height: 1.6; }
+  .workflow { max-width: 930px; border-top: 1px solid hsl(var(--border)); }
+  .workflow li { display: grid; grid-template-columns: 58px 1fr; gap: 22px; padding: 25px 4px; border-bottom: 1px solid hsl(var(--border)); }
+  .workflow li > span { color: var(--guide-accent); font: 10px "JetBrains Mono", monospace; }
+  .workflow strong { font-family: "Petrona", serif; font-size: 20px; font-weight: 500; }
+  .workflow p { margin-top: 6px; color: hsl(var(--muted-foreground)); font-size: 13px; line-height: 1.6; }
+  .limits-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid hsl(var(--border)); border-left: 1px solid hsl(var(--border)); }
+  .limits-grid article { min-height: 190px; padding: 26px; border-right: 1px solid hsl(var(--border)); border-bottom: 1px solid hsl(var(--border)); }
+  .limits-grid strong { font-family: "Petrona", serif; font-size: 19px; font-weight: 500; }
+  .limits-grid p { margin-top: 10px; color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.65; }
   .principles { padding-block: 100px; border-top: 1px solid hsl(var(--border)); }
   .principles h2 { margin-top: 10px; }
   .principles ol { margin-top: 42px; }
@@ -315,7 +909,10 @@ const base = import.meta.env.BASE_URL;
   .guide-footer { display: flex; align-items: center; justify-content: space-between; gap: 40px; padding-block: 80px 110px; border-top: 1px solid hsl(var(--border)); }
   .guide-footer h2 { max-width: 720px; margin-top: 10px; font-size: clamp(30px, 4vw, 46px); }
   .guide-footer > a { flex: none; padding: 13px 18px; border-radius: 9px; color: white; background: var(--guide-accent); font-size: 13px; font-weight: 650; }
-  @media (prefers-color-scheme: dark) { .guide-shell { --guide-accent-soft: hsl(169 35% 17%); } }
+  @media (prefers-color-scheme: dark) {
+    .guide-shell { --guide-accent-soft: hsl(169 35% 17%); }
+    .warning-callout { background: hsl(38 35% 16%); }
+  }
   @media (max-width: 760px) {
     .section-width, .guide-nav { width: min(100% - 28px, 1160px); }
     .hero, .section-intro, .gauge-section { grid-template-columns: 1fr; }
@@ -324,12 +921,28 @@ const base = import.meta.env.BASE_URL;
     .decision-grid > div:nth-child(2) { border-right: 0; }
     .decision-grid > div:first-child { padding-left: 20px; }
     .decision-grid > div:nth-child(-n+2) { border-bottom: 1px solid hsl(var(--border)); }
-    .device-section, .toolkit, .principles { padding-block: 76px; }
+    .device-section, .toolkit, .reference, .principles { padding-block: 76px; }
     .section-intro { gap: 20px; }
     .device-grid { grid-template-columns: 1fr; }
     .wide-card { grid-column: span 1; }
     .device-card { min-height: auto; }
     .toolkit-grid { grid-template-columns: repeat(2, 1fr); }
+    .reference-hero, .split-heading { grid-template-columns: 1fr; gap: 20px; }
+    .reference-nav { grid-template-columns: repeat(2, 1fr); }
+    .reference-part { padding-top: 76px; }
+    .reference-part + .reference-part { margin-top: 76px; padding-top: 76px; }
+    .block-reference-heading { grid-template-columns: 42px 1fr; }
+    .export-badge { grid-column: 2; min-width: 0; text-align: left; }
+    .block-guidance { grid-template-columns: 1fr; }
+    .block-guidance > div { min-height: auto; border-right: 0; border-bottom: 1px solid hsl(var(--border)); }
+    .block-guidance > div:last-child { border-bottom: 0; }
+    .block-detail-grid { grid-template-columns: 1fr; }
+    .example-panel { border-top: 1px solid hsl(var(--border)); border-left: 0; }
+    .schema-grid, .code-pair { grid-template-columns: 1fr; }
+    .runtime-grid { grid-template-columns: repeat(2, 1fr); }
+    .runtime-grid article:nth-child(2) { border-right: 0; }
+    .runtime-grid article:nth-child(-n+2) { border-bottom: 1px solid hsl(var(--border)); }
+    .limits-grid { grid-template-columns: repeat(2, 1fr); }
     .gauge-compare { padding: 24px 16px; gap: 12px; }
     .gauge-demo svg { width: 105px; }
     .compact-demo { min-width: 125px; }
@@ -338,6 +951,16 @@ const base = import.meta.env.BASE_URL;
   @media (max-width: 460px) {
     .back-link { font-size: 12px; }
     .decision-grid, .toolkit-grid { grid-template-columns: 1fr; }
+    .reference-nav { grid-template-columns: 1fr; }
+    .callout { grid-template-columns: 1fr; gap: 8px; }
+    .block-reference-heading { grid-template-columns: 1fr; gap: 10px; padding: 24px 20px; }
+    .export-badge { grid-column: 1; margin-top: 8px; }
+    .block-guidance > div, .field-groups, .example-panel { padding-inline: 20px; }
+    .field-groups { grid-template-columns: 1fr; }
+    .block-notes { flex-direction: column; padding-inline: 20px; }
+    .runtime-grid, .limits-grid { grid-template-columns: 1fr; }
+    .runtime-grid article { min-height: auto; border-right: 0; border-bottom: 1px solid hsl(var(--border)); }
+    .limits-grid article { min-height: auto; }
     .decision-grid > div { border-right: 0; border-bottom: 1px solid hsl(var(--border)); }
     .range-row { grid-template-columns: 68px 1fr 42px; gap: 8px; }
     .range-scale { margin-left: 76px; margin-right: 50px; }

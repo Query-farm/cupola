@@ -43,6 +43,7 @@ export interface ReportLayout {
 }
 
 export type ReportGroupTone = "neutral" | "blue" | "green" | "amber" | "violet" | "rose";
+export type ReportGroupTitleSize = "small" | "medium" | "large";
 
 /** A visual section whose bounds follow the report blocks attached to it. */
 export interface ReportGroup {
@@ -50,6 +51,8 @@ export interface ReportGroup {
   title: string;
   description?: string;
   tone?: ReportGroupTone;
+  /** Reader-facing group heading scale. Defaults to medium. */
+  titleSize?: ReportGroupTitleSize;
 }
 
 export type ReportBlockTone = "neutral" | "info" | "success" | "warning" | "danger";
@@ -187,6 +190,30 @@ export interface ReportRangeDotBlock extends ReportBlockBase {
   color?: string;
 }
 
+export type ReportAiNarrativeRefreshPolicy = "manual" | "when_data_changes";
+
+export interface ReportAiNarrativeSnapshot {
+  markdown: string;
+  generatedAt: number;
+  dataFingerprint: string;
+  model: string;
+  rowCount: number;
+  truncated?: boolean;
+}
+
+/** Bounded AI-authored prose over one report dataset. It has no tools and
+ * cannot modify the report; the optional snapshot keeps shared reports useful
+ * when the recipient has no AI key. */
+export interface ReportAiNarrativeBlock extends ReportBlockBase {
+  type: "ai_narrative";
+  datasetId: string;
+  instruction: string;
+  columns?: string[];
+  maxRows?: number;
+  refreshPolicy?: ReportAiNarrativeRefreshPolicy;
+  snapshot?: ReportAiNarrativeSnapshot;
+}
+
 export type ReportBlock =
   | (ReportBlockBase & { type: "markdown"; markdown: string })
   | (ReportBlockBase & { type: "kpi"; datasetId: string; valueColumn: string; labelColumn?: string; format?: "number" | "currency" | "percent" | "text" })
@@ -198,6 +225,7 @@ export type ReportBlock =
   | (ReportBlockBase & { type: "table"; datasetId: string; columns?: string[]; pageSize?: number })
   | (ReportBlockBase & { type: "chart"; datasetId: string; spec: Record<string, any> })
   | (ReportBlockBase & { type: "perspective"; datasetId: string; config?: Record<string, any> })
+  | ReportAiNarrativeBlock
   | ReportMapBlock;
 
 export interface ReportSourceRequirement {
