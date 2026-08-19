@@ -28,7 +28,7 @@ import { toolInputLabel } from "@/lib/ai/tool-labels";
 import { exportResult, safeFileStem, triggerDownload } from "@/lib/editor/result-export";
 import { consumeReportPromotion, type ReportPromotion } from "@/lib/reports/events";
 import { reportDisplayRows, reportMapRows } from "@/lib/reports/display";
-import { isBlockingVegaWarning, validateReportResultColumns } from "@/lib/reports/execution";
+import { buildReportRunFailureNotice, classifyReportQueryError, isBlockingVegaWarning, validateReportResultColumns, type ReportQueryErrorCode, type ReportRunFailureNotice } from "@/lib/reports/execution";
 import { resolveReportAppearance } from "@/lib/reports/appearance";
 import { REPORT_TOOLS, upsertAgentBlock, upsertAgentDataset, upsertAgentGroup, type SemanticBlockHeight, type SemanticBlockWidth } from "@/lib/reports/agent-tools";
 import { checkpointReportAgentPlan, parseReportAgentPlan, reportAgentRepair, validateReportAgentPlan, type ReportAgentPlan } from "@/lib/reports/agent-reliability";
@@ -51,8 +51,12 @@ interface Props {
 interface DatasetResult {
   table: ArrowTable | null;
   rows: Record<string, any>[];
-  status: "idle" | "queued" | "running" | "success" | "error";
+  status: "idle" | "queued" | "running" | "success" | "error" | "blocked";
   error?: string;
+  errorDetails?: string;
+  errorCode?: ReportQueryErrorCode;
+  retryable?: boolean;
+  retryAfterSeconds?: number;
   fetchedAt?: number;
 }
 
@@ -105,6 +109,11 @@ interface DatasetRunSummary {
   columns?: string[];
   sample?: Record<string, any>[];
   error?: string;
+  errorDetails?: string;
+  errorCode?: ReportQueryErrorCode;
+  retryable?: boolean;
+  retryAfterSeconds?: number;
+  stale?: boolean;
 }
 
 interface ReportAgentMessage {
@@ -518,6 +527,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const [narrativeStates, setNarrativeStates] = useState<Record<string, NarrativeGenerationState>>({});
   const [pendingPromotion, setPendingPromotion] = useState<ReportPromotion | null>(null);
   const [shareStatus, setShareStatus] = useState<string | null>(null);
+  const [runFailureNotice, setRunFailureNotice] = useState<ReportRunFailureNotice | null>(null);
   const [revisionOptions, setRevisionOptions] = useState<ReportDocumentV1[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const narrativeAbortRef = useRef<AbortController | null>(null);
@@ -526,7 +536,9 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const runGeneration = useRef(0);
   const initialReportOpened = useRef(false);
   const autoRefreshRunningRef = useRef(false);
-  const validateAndRunRef = useRef<((report: ReportDocumentV1, values: Record<string, ReportParameterValue>, changedOnly: boolean) => Promise<boolean>) | null>(null);
+  const rateLimitRetryTimerRef = useRef<number | null>(null);
+  const rateLimitUntilRef = useRef(0);
+  const validateAndRunRef = useRef<((report: ReportDocumentV1, values: Record<string, ReportParameterValue>, changedOnly: boolean, allowAutomaticRetry?: boolean) => Promise<boolean>) | null>(null);
   const autoRefreshStateRef = useRef<{
     report: ReportDocumentV1 | null;
     values: Record<string, ReportParameterValue>;
@@ -540,6 +552,14 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   }, []);
   const { width, containerRef, mounted, measureWidth } = useContainerWidth({ initialWidth: 1000 });
   const activeReport = readerMode && published ? published : draft;
+
+  const clearScheduledRateLimitRetry = useCallback(() => {
+    if (rateLimitRetryTimerRef.current !== null) window.clearTimeout(rateLimitRetryTimerRef.current);
+    rateLimitRetryTimerRef.current = null;
+    rateLimitUntilRef.current = 0;
+  }, []);
+
+  useEffect(() => () => clearScheduledRateLimitRetry(), [clearScheduledRateLimitRetry]);
 
   // The workspace first renders its library, so the hook's mount-time observer
   // has no report canvas to attach to. Start measuring when a report opens and
@@ -618,6 +638,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     abortRef.current = null;
     narrativeAbortRef.current?.abort();
     narrativeAbortRef.current = null;
+    clearScheduledRateLimitRetry();
     const generation = ++runGeneration.current;
     agentMessagesRef.current = [];
     resultCache.current = new QueryResultCache();
@@ -626,7 +647,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const publishedCopy = publishedSnapshot ? cloneReport(publishedSnapshot) : null;
     const viewed = mode === "reader" && publishedCopy ? publishedCopy : copy;
     const defaults = { ...defaultValues(viewed), ...initialValues };
-    setSelected(persisted ? copy : null); setDraft(copy); setPublished(publishedCopy); setPublishedAt(publicationTime ?? null); setReaderMode(mode === "reader" && Boolean(publishedCopy)); setValues(defaults); setAppliedValues(defaults); setParameterIssues([]); setParametersExpanded(false); setResults({}); setNarrativeStates({}); setRunProgress(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
+    setSelected(persisted ? copy : null); setDraft(copy); setPublished(publishedCopy); setPublishedAt(publicationTime ?? null); setReaderMode(mode === "reader" && Boolean(publishedCopy)); setValues(defaults); setAppliedValues(defaults); setParameterIssues([]); setParametersExpanded(false); setResults({}); setNarrativeStates({}); setRunProgress(null); setRunFailureNotice(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
     void getStoredReport(copy.id).then((stored) => {
       setRevisionOptions(stored?.revisions ?? []);
       if (!publishedSnapshot && stored?.publishedDocument) {
@@ -639,7 +660,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       void validateAndRunRef.current?.(viewed, defaults, false);
     }, 0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [clearScheduledRateLimitRetry]);
 
   useEffect(() => {
     if (!initialReport || initialReportOpened.current) return;
@@ -695,15 +716,16 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         if (isDatasetPending(result)) next[id] = { ...result, status: result.table ? "success" : "idle" };
       }
       for (const dataset of datasets) {
-        next[dataset.id] = { ...(next[dataset.id] ?? { table: null, rows: [] }), status: "queued", error: undefined };
+        next[dataset.id] = { ...(next[dataset.id] ?? { table: null, rows: [] }), status: "queued", error: undefined, errorDetails: undefined, errorCode: undefined, retryable: undefined, retryAfterSeconds: undefined };
       }
       return next;
     });
-    for (const dataset of datasets) {
+    for (let datasetIndex = 0; datasetIndex < datasets.length; datasetIndex++) {
+      const dataset = datasets[datasetIndex];
       if (generation !== runGeneration.current) return summaries;
       setResults((prev) => ({
         ...prev,
-        [dataset.id]: { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "running", error: undefined },
+        [dataset.id]: { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "running", error: undefined, errorDetails: undefined, errorCode: undefined, retryable: undefined, retryAfterSeconds: undefined },
       }));
       setRunProgress((progress) => progress?.generation === generation
         ? { ...progress, currentDatasetName: dataset.name }
@@ -722,9 +744,47 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         summaries.push({ datasetId: dataset.id, name: dataset.name, ok: true, rowCount: table.numRows, columns: table.schema.fields.map((field) => field.name), sample: rows.slice(0, 3) });
       } catch (e) {
         if (generation !== runGeneration.current) return summaries;
-        const message = e instanceof Error ? e.message : String(e);
-        setResults((prev) => ({ ...prev, [dataset.id]: { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "error", error: message } }));
-        summaries.push({ datasetId: dataset.id, name: dataset.name, ok: false, error: message });
+        const classified = classifyReportQueryError(e);
+        const stale = captureRows?.has(dataset.id) ?? false;
+        setResults((prev) => ({
+          ...prev,
+          [dataset.id]: {
+            ...(prev[dataset.id] ?? { table: null, rows: [] }),
+            status: "error",
+            error: classified.message,
+            errorDetails: classified.technicalDetails,
+            errorCode: classified.code,
+            retryable: classified.retryable,
+            retryAfterSeconds: classified.retryAfterSeconds,
+          },
+        }));
+        summaries.push({ datasetId: dataset.id, name: dataset.name, ok: false, error: classified.message, errorDetails: classified.technicalDetails, errorCode: classified.code, retryable: classified.retryable, retryAfterSeconds: classified.retryAfterSeconds, stale });
+        if (classified.stopRun) {
+          const remaining = datasets.slice(datasetIndex + 1);
+          const blockedMessage = `Not refreshed because ${dataset.name} hit a data-service rate limit.`;
+          setResults((prev) => {
+            const next = { ...prev };
+            for (const blocked of remaining) {
+              next[blocked.id] = {
+                ...(prev[blocked.id] ?? { table: null, rows: [] }),
+                status: "blocked",
+                error: blockedMessage,
+                errorDetails: `The refresh stopped before ${blocked.name} was requested, preventing more calls to the rate-limited service.`,
+                errorCode: "blocked",
+                retryable: true,
+                retryAfterSeconds: classified.retryAfterSeconds,
+              };
+            }
+            return next;
+          });
+          for (const blocked of remaining) {
+            summaries.push({ datasetId: blocked.id, name: blocked.name, ok: false, error: blockedMessage, errorDetails: `Not attempted after ${dataset.name} returned a rate limit.`, errorCode: "blocked", retryable: true, retryAfterSeconds: classified.retryAfterSeconds, stale: captureRows?.has(blocked.id) ?? false });
+          }
+          setRunProgress((progress) => progress?.generation === generation
+            ? { ...progress, completed: datasets.length, currentDatasetName: undefined }
+            : progress);
+          break;
+        }
       }
       setRunProgress((progress) => progress?.generation === generation
         ? { ...progress, completed: progress.completed + 1, currentDatasetName: undefined }
@@ -743,7 +803,12 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   ): Promise<DatasetRunSummary[]> => {
     const rows = seedRows ?? new Map<string, Record<string, any>[]>();
     const summaries = await runDatasets(report, runValues, onlyIds, rows, mode);
-    const generated = await generateNarratives(report, runValues, rows);
+    // A failed refresh may leave stale rows in the display cache. Keep those
+    // rows visible, but never generate a new narrative from data we know did
+    // not refresh successfully in this run.
+    const narrativeRows = new Map(rows);
+    for (const summary of summaries) if (!summary.ok) narrativeRows.delete(summary.datasetId);
+    const generated = await generateNarratives(report, runValues, narrativeRows);
     if (generated !== report) {
       if (readerMode && published?.id === report.id) setPublished((current) => current?.id === report.id ? withNarrativeSnapshots(current, generated) : current);
       else setDraft((current) => current?.id === report.id ? withNarrativeSnapshots(current, generated) : current);
@@ -762,8 +827,9 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     if (generated !== draft) setDraft((current) => current?.id === draft.id ? withNarrativeSnapshots(current, generated) : current);
   }, [appliedValues, draft, generateNarratives, results]);
 
-  const validateAndRun = useCallback(async (report: ReportDocumentV1, candidateValues: Record<string, ReportParameterValue>, changedOnly: boolean) => {
+  const validateAndRun = useCallback(async (report: ReportDocumentV1, candidateValues: Record<string, ReportParameterValue>, changedOnly: boolean, allowAutomaticRetry = true) => {
     const candidate = structuredClone(candidateValues);
+    setRunFailureNotice(null);
     let issues = validateReportParameterValues(report, candidate);
     if (issues.length) {
       setParameterIssues(issues);
@@ -780,6 +846,25 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     }
     let auxiliarySummaries: DatasetRunSummary[] = [];
     if (auxiliaryIds.size) auxiliarySummaries = await runDatasets(report, candidate, auxiliaryIds, rows, "refresh");
+    const auxiliaryFailures = auxiliarySummaries.filter((summary) => !summary.ok);
+    if (auxiliaryFailures.some((failure) => failure.retryable)) {
+      const notice = buildReportRunFailureNotice(auxiliaryFailures, auxiliaryIds.size);
+      setRunFailureNotice(notice);
+      const rateLimit = auxiliaryFailures.find((failure) => failure.errorCode === "rate_limited");
+      if (rateLimit && allowAutomaticRetry && rateLimitRetryTimerRef.current === null) {
+        const delayMs = (rateLimit.retryAfterSeconds ?? 60) * 1_000 + Math.round(1_000 + Math.random() * 4_000);
+        rateLimitUntilRef.current = Date.now() + delayMs;
+        setRunFailureNotice({ ...notice, message: `${notice.message} Cupola will retry once automatically.` });
+        rateLimitRetryTimerRef.current = window.setTimeout(() => {
+          rateLimitRetryTimerRef.current = null;
+          rateLimitUntilRef.current = 0;
+          const current = autoRefreshStateRef.current;
+          if (!current.report || current.report.id !== report.id || current.busy || document.visibilityState !== "visible") return;
+          void validateAndRunRef.current?.(current.report, structuredClone(current.values), false, false);
+        }, delayMs);
+      }
+      return false;
+    }
 
     for (const parameter of report.parameters) {
       if (parameter.options?.kind !== "dataset") continue;
@@ -810,21 +895,39 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const execution = await runDatasetsAndNarratives(report, candidate, ids, mode, rows);
     const failures = execution.filter((summary) => !summary.ok);
     if (failures.length) {
-      setShareStatus(`Report validation failed: ${failures.map((failure) => `${failure.name}: ${failure.error ?? "query failed"}`).join(" ")}`);
+      const notice = buildReportRunFailureNotice(failures, ids.size);
+      setRunFailureNotice(notice);
+      const rateLimit = failures.find((failure) => failure.errorCode === "rate_limited");
+      if (rateLimit && allowAutomaticRetry && rateLimitRetryTimerRef.current === null) {
+        const delayMs = (rateLimit.retryAfterSeconds ?? 60) * 1_000 + Math.round(1_000 + Math.random() * 4_000);
+        rateLimitUntilRef.current = Date.now() + delayMs;
+        setRunFailureNotice({ ...notice, message: `${notice.message} Cupola will retry once automatically.` });
+        rateLimitRetryTimerRef.current = window.setTimeout(() => {
+          rateLimitRetryTimerRef.current = null;
+          rateLimitUntilRef.current = 0;
+          const current = autoRefreshStateRef.current;
+          if (!current.report || current.report.id !== report.id || current.busy || document.visibilityState !== "visible") return;
+          void validateAndRunRef.current?.(current.report, structuredClone(current.values), false, false);
+        }, delayMs);
+      }
       return false;
     }
+    clearScheduledRateLimitRetry();
+    setRunFailureNotice(null);
     if (!ids.size) setShareStatus("Parameters applied.");
     return true;
-  }, [appliedValues, results, runDatasets, runDatasetsAndNarratives]);
+  }, [appliedValues, clearScheduledRateLimitRetry, results, runDatasets, runDatasetsAndNarratives]);
   validateAndRunRef.current = validateAndRun;
 
   const runFullReport = useCallback(() => {
+    clearScheduledRateLimitRetry();
     if (activeReport) void validateAndRun(activeReport, values, false);
-  }, [activeReport, validateAndRun, values]);
+  }, [activeReport, clearScheduledRateLimitRetry, validateAndRun, values]);
 
   const handleApply = useCallback(() => {
+    clearScheduledRateLimitRetry();
     if (activeReport) void validateAndRun(activeReport, values, true);
-  }, [activeReport, validateAndRun, values]);
+  }, [activeReport, clearScheduledRateLimitRetry, validateAndRun, values]);
 
   useEffect(() => {
     autoRefreshStateRef.current = {
@@ -839,7 +942,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     if (!seconds) return;
     const interval = window.setInterval(() => {
       const current = autoRefreshStateRef.current;
-      if (!current.report || current.busy || autoRefreshRunningRef.current || document.visibilityState !== "visible") return;
+      if (!current.report || current.busy || autoRefreshRunningRef.current || document.visibilityState !== "visible" || Date.now() < rateLimitUntilRef.current) return;
       autoRefreshRunningRef.current = true;
       const execution = validateAndRunRef.current?.(current.report, structuredClone(current.values), false) ?? Promise.resolve(false);
       void execution
@@ -900,6 +1003,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const switchReportMode = useCallback((mode: "edit" | "reader") => {
     const next = mode === "reader" ? published : draft;
     if (!next) return;
+    clearScheduledRateLimitRetry();
     const defaults = defaultValues(next);
     runGeneration.current += 1;
     setReaderMode(mode === "reader");
@@ -912,8 +1016,9 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     setResults({});
     setNarrativeStates({});
     setRunProgress(null);
+    setRunFailureNotice(null);
     setTimeout(() => void validateAndRunRef.current?.(next, defaults, false), 0);
-  }, [draft, published]);
+  }, [clearScheduledRateLimitRetry, draft, published]);
 
   const updateLayout = useCallback((layout: Layout) => {
     setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => { const item = layout.find((l) => l.i === b.id); return item ? { ...b, layout: { x: item.x, y: item.y, w: item.w, h: item.h } } : b; }) } : current);
@@ -1021,6 +1126,19 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       const workingValues = defaultValues(workingReport);
       const execution = await runDatasets(workingReport, workingValues, undefined, workingRows);
       const failures = execution.filter((result) => !result.ok);
+      const transientFailure = failures.find((result) => result.retryable);
+      if (transientFailure) {
+        setAgentSummary(`${summary} Live-data validation is temporarily delayed; the draft was kept unchanged.`);
+        return toolResult({
+          ok: false,
+          code: "report_data_temporarily_unavailable",
+          transient: true,
+          retryAfterSeconds: transientFailure.retryAfterSeconds,
+          message: "The report structure is intact, but its data source is temporarily unavailable. Do not rewrite SQL or visualizations in response to this error. Keep the draft and tell the user to retry validation shortly.",
+          datasets: execution,
+          checkpoint,
+        });
+      }
       const optionsByKey = Object.fromEntries(workingReport.parameters.map((parameter) => [parameter.key, parameterOptionsFromRows(parameter, workingRows)]));
       const parameterErrors = [
         ...validateReportParameterValues(workingReport, workingValues, optionsByKey).map((issue) => issue.message),
@@ -1073,6 +1191,8 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const system = `You are Cupola's report-authoring agent. Build and revise a declarative, rerunnable report. Never add JavaScript.
 
 Use a compositional workflow: (1) inspect tables, (2) call plan_report with the concrete work and acceptance criteria for this turn, (3) call configure_report, (4) create any meaningful visual sections with upsert_report_group, (5) call upsert_report_dataset for one dataset and fix its SQL before continuing, (6) call upsert_report_block for one block and fix any compile/render error before continuing, and (7) call finalize_report. Do not mutate the report before plan_report succeeds. Tool results include a checkpoint showing planned versus completed work. Do not finish until finalize_report returns ok=true. Prefer these tools over replace_report_draft.
+
+Treat rate limits and temporary service failures as infrastructure conditions, not evidence that SQL or a visualization is wrong. If a tool returns transient=true or reports HTTP 429/rate limiting, do not rewrite the affected dataset or block and do not repeatedly call the service. Keep the composed draft, continue work that does not require another live request, and tell the user that live-data validation is delayed.
 
 Cupola owns grid placement for compositional blocks. upsert_report_block may request only the semantic width values quarter/third/half/full and height values compact/medium/tall; never send numeric col/x/y/w/h fields. The strict bulk fallback is different: every full-document block must contain layout nested exactly as {"layout":{"x":0,"y":0,"w":12,"h":6}}; layout fields are never top-level.
 
@@ -1154,11 +1274,20 @@ Current report:\n${JSON.stringify(draft)}`;
           applyWorkingReport(updated.report);
           const execution = await runDatasets(workingReport, defaultValues(workingReport), new Set([updated.dataset.id]), workingRows);
           const result = execution[0];
-          setAgentSummary(result?.ok ? `${updated.dataset.name} loaded.` : `${updated.dataset.name} needs correction.`);
+          const transient = Boolean(result?.retryable);
+          setAgentSummary(result?.ok ? `${updated.dataset.name} loaded.` : transient ? `${updated.dataset.name} validation was delayed by its data source.` : `${updated.dataset.name} needs correction.`);
           return toolResult({
-            ...(result?.ok ? { ok: true } : reportAgentRepair("dataset", `dataset ${updated.dataset.id}`, [result?.error ?? "Dataset execution failed."], "upsert_report_dataset")),
+            ...(result?.ok
+              ? { ok: true }
+              : transient
+                ? { ok: false, code: "report_data_temporarily_unavailable", transient: true, retryAfterSeconds: result?.retryAfterSeconds }
+                : reportAgentRepair("dataset", `dataset ${updated.dataset.id}`, [result?.error ?? "Dataset execution failed."], "upsert_report_dataset")),
             datasetId: updated.dataset.id,
-            message: result?.ok ? "Dataset executed. Reuse datasetId when adding blocks or revising this query." : "Fix this dataset and call upsert_report_dataset again with the same datasetId.",
+            message: result?.ok
+              ? "Dataset executed. Reuse datasetId when adding blocks or revising this query."
+              : transient
+                ? "The data source is temporarily unavailable. Keep this dataset unchanged; do not rewrite its SQL because of this transient error. Continue composing the report and retry validation later."
+                : "Fix this dataset and call upsert_report_dataset again with the same datasetId.",
             result,
             checkpoint: checkpointReportAgentPlan(agentPlan!, workingReport),
           });
@@ -1175,6 +1304,21 @@ Current report:\n${JSON.stringify(draft)}`;
             return toolResult({ ok: true, blockId: block.id, layout: block.layout, message: "Text block rendered without requiring a dataset.", checkpoint: checkpointReportAgentPlan(agentPlan!, workingReport) });
           }
           const execution = await runDatasets(workingReport, defaultValues(workingReport), new Set([block.datasetId]), workingRows);
+          const transientFailure = execution.find((result) => result.retryable);
+          if (transientFailure) {
+            setAgentSummary(`${block.title ?? block.type} was added; live-data validation is temporarily delayed.`);
+            return toolResult({
+              ok: false,
+              code: "report_data_temporarily_unavailable",
+              transient: true,
+              retryAfterSeconds: transientFailure.retryAfterSeconds,
+              blockId: block.id,
+              layout: block.layout,
+              dataset: transientFailure,
+              message: "The block is saved, but its data source is temporarily unavailable. Do not rewrite the block or dataset in response; continue composing and retry validation later.",
+              checkpoint: checkpointReportAgentPlan(agentPlan!, workingReport),
+            });
+          }
           const blockErrors = validateReportResultColumns({ ...workingReport, blocks: [block] }, execution);
           const charts = await preflightReportCharts({ ...workingReport, blocks: [block] }, workingRows, settings.aiChartFeedback !== false, 1);
           const narrativeErrors: string[] = [];
@@ -1371,6 +1515,11 @@ Current report:\n${JSON.stringify(draft)}`;
       </div>
     </div>}
     {(!isCompatible(report) || reportErrors.length > 0 || shareStatus || (!readerMode && agentSummary)) && <div className="px-4 py-2 border-b text-xs space-y-1">{!isCompatible(report) && <div className="text-amber-700">Missing required catalogs: {report.requiredSources.filter((s) => !compatibleCatalogs.has(s.catalog)).map((s) => s.catalog).join(", ")}</div>}{reportErrors.length > 0 && <div className="text-destructive">{reportErrors.join(" ")}</div>}{shareStatus && <div>{shareStatus}</div>}{!readerMode && agentSummary && <div className="text-primary"><Check className="inline h-3 w-3 mr-1" />Agent draft: {agentSummary}</div>}</div>}
+    {runFailureNotice && <div data-testid="report-run-failure" role="alert" className="border-b border-amber-300/70 bg-amber-50/80 px-4 py-3 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+      <div className="font-semibold">{runFailureNotice.title}</div>
+      <div className="mt-0.5">{runFailureNotice.message}</div>
+      {runFailureNotice.details.length > 0 && <details className="mt-1.5"><summary className="cursor-pointer font-medium">Technical details</summary><ul className="mt-1 list-disc space-y-0.5 pl-5 font-mono text-[10px] opacity-80">{runFailureNotice.details.map((detail, index) => <li key={`${index}-${detail}`}>{detail}</li>)}</ul></details>}
+    </div>}
     {report.parameters.length > 0 && <div className="report-parameters border-b bg-muted/20" aria-label="Report parameters">
       <button
         type="button"
@@ -1446,7 +1595,9 @@ Current report:\n${JSON.stringify(draft)}`;
               : result?.status === "running"
                 ? (hasData ? "Refreshing" : "Loading")
                 : result?.status === "error" && (hasData || (block.type === "ai_narrative" && Boolean(block.snapshot)))
-                  ? "Refresh failed"
+                  ? (result.errorCode === "rate_limited" ? "Refresh delayed · showing earlier data" : "Refresh failed · showing earlier data")
+                  : result?.status === "blocked"
+                    ? (hasData ? "Refresh blocked · showing earlier data" : "Refresh blocked")
                   : null;
             const visualBlock = block.type === "chart"
               ? block
@@ -1471,8 +1622,8 @@ Current report:\n${JSON.stringify(draft)}`;
                 <div className="report-authoring-control flex items-center gap-2" onMouseDown={(event) => event.stopPropagation()}>
                   {datasetStatusLabel && <span
                     data-testid={`report-dataset-status-${block.id}`}
-                    className={`inline-flex items-center gap-1 text-[10px] font-normal ${result?.status === "error" ? "text-destructive" : "text-muted-foreground"}`}
-                    title={narrativeState?.status === "error" ? narrativeState.error : result?.status === "error" ? result.error : undefined}
+                    className={`inline-flex items-center gap-1 text-[10px] font-normal ${result?.status === "error" ? "text-destructive" : result?.status === "blocked" ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"}`}
+                    title={narrativeState?.status === "error" ? narrativeState.error : result?.error}
                   >
                     {(pending || narrativePending) && <Loader2 className={`h-3 w-3 ${result?.status === "running" || narrativePending ? "animate-spin" : "opacity-50"}`} />}
                     {datasetStatusLabel}
@@ -1525,7 +1676,7 @@ Current report:\n${JSON.stringify(draft)}`;
               </div>}
               {!showBlockHeader && resolvedAppearance.label && <div data-testid={`report-block-status-${block.id}`} title={resolvedAppearance.label} className="absolute right-2 top-2 z-10 inline-flex max-w-[60%] items-center gap-1.5 rounded-full border border-current/15 bg-background/75 px-2 py-0.5 text-[10px] font-medium"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${appearanceStyle.dot}`} /><span className="truncate">{resolvedAppearance.label}</span></div>}
               {!readerMode && !showBlockHeader && <div data-testid={`report-block-drag-${block.id}`} title="Drag text block" className="report-authoring-control report-drag-handle absolute right-1 top-1 z-10 cursor-move rounded p-1 text-muted-foreground/50 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"><GripVertical className="h-3.5 w-3.5" /></div>}
-              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={interpolateReportText(block.markdown, report, appliedValues)} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className="text-xs text-destructive">{result.error}</div><Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart block={visualBlock} rows={result.rows} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} config={block.config} onConfig={(config) => { if (!readerMode) setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current); }} /> : null}</div>
+              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={interpolateReportText(block.markdown, report, appliedValues)} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className={result.status === "blocked" ? "text-xs text-amber-700 dark:text-amber-300" : "text-xs text-destructive"}>{result.error}</div>{result.errorDetails && <details className="max-w-full text-left text-[10px] text-muted-foreground"><summary className="cursor-pointer text-center">Technical details</summary><div className="mt-1 max-h-20 overflow-auto font-mono">{result.errorDetails}</div></details>}<Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart block={visualBlock} rows={result.rows} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} config={block.config} onConfig={(config) => { if (!readerMode) setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current); }} /> : null}</div>
               {(block.caption || block.source) && <div data-testid={`report-note-${block.id}`} className="px-3 pb-2 text-[10px] leading-snug text-muted-foreground">
                 {block.caption && <span>{block.caption}</span>}{block.caption && block.source && <span> · </span>}{block.source && <span>Source: {block.source}</span>}
               </div>}

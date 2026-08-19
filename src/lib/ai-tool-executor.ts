@@ -63,6 +63,7 @@ export interface RunSqlCallbacks {
  *  look like the VGI server itself is unreachable are fatal — retrying
  *  would just keep failing. */
 function isFatalSqlError(errMsg: string): boolean {
+  if (/\bHTTP\s*429\b|\brate[ -]?limit(?:ed| exceeded)?\b|too many requests/i.test(errMsg)) return false;
   return errMsg.includes("HTTP Error") || errMsg.includes("HTTP 5");
 }
 
@@ -415,4 +416,3 @@ function walkForForbiddenKeys(node: unknown, path: string, errors: string[]): vo
     walkForForbiddenKeys(value, `${path}.${key}`, errors);
   }
 }
-

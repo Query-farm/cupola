@@ -180,4 +180,16 @@ describe("executeRunSql — onEnd lifecycle", () => {
     ).rejects.toMatchObject({ fatal: true });
     expect(outcomes).toEqual(["error"]);
   });
+
+  test("keeps upstream rate limits non-fatal so agents do not abandon their draft", async () => {
+    let error: any;
+    try {
+      await executeRunSql("SELECT 1", { query: async () => ({ ok: false, error: "Open-Meteo HTTP 429: rate limit exceeded" }) });
+    } catch (cause) {
+      error = cause;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("Open-Meteo HTTP 429: rate limit exceeded");
+    expect(error).not.toHaveProperty("fatal");
+  });
 });
