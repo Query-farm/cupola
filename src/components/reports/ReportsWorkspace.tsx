@@ -3,7 +3,7 @@ import { ResponsiveGridLayout, useContainerWidth, type Layout, type ResponsiveLa
 import { noCompactor } from "react-grid-layout/core";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-import { ArrowLeft, BarChart3, BookOpen, Bot, Check, Download, FileJson, FilePlus2, GripVertical, Loader2, Play, Plus, Printer, Save, Share2, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Download, FileJson, FilePlus2, GripVertical, Loader2, Play, Plus, Printer, Save, Share2, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import type { CatalogData } from "@/lib/service";
 import { engine, ui } from "@/lib/shell-bridge";
@@ -36,8 +36,8 @@ import { generateReportNarrative, prepareNarrativeInput } from "@/lib/reports/na
 import { isReportTufteBlock, tufteBlockToVegaSpec } from "@/lib/reports/tufte";
 import { buildShareReportUrl, clearSharedReport, consumeSharedReport } from "@/lib/reports/share";
 import { deleteReport, exportReportJson, getStoredReport, importReportJson, listReports, restoreReportRevision, saveReport } from "@/lib/reports/store";
-import { cloneReport, createEmptyReport, newReportId, type ReportAiNarrativeBlock, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportGroup, type ReportParameter, type ReportParameterValue } from "@/lib/reports/types";
-import { parameterTokens, validateParameterValue, validateReadOnlySql, validateReport } from "@/lib/reports/validation";
+import { cloneReport, createEmptyReport, newReportId, type ReportAiNarrativeBlock, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportGroup, type ReportOption, type ReportParameter, type ReportParameterValue } from "@/lib/reports/types";
+import { parameterTokens, validateReadOnlySql, validateReport, validateReportParameterValues, type ReportParameterIssue } from "@/lib/reports/validation";
 
 interface Props {
   catalogData: CatalogData;
@@ -98,6 +98,49 @@ interface ReportAgentMessage {
 
 function defaultValues(report: ReportDocumentV1): Record<string, ReportParameterValue> {
   return Object.fromEntries(report.parameters.map((p) => [p.key, structuredClone(p.defaultValue)]));
+}
+
+function parameterOptionsFromRows(parameter: ReportParameter, rowsByDataset: Map<string, Record<string, any>[]>): ReportOption[] | undefined {
+  const options = parameter.options;
+  if (!options) return undefined;
+  if (options.kind === "static") return options.values;
+  const rows = rowsByDataset.get(options.datasetId);
+  if (!rows) return undefined;
+  return rows.map((row) => ({
+    value: row[options.valueColumn] as string | number,
+    label: String(row[options.labelColumn || options.valueColumn] ?? ""),
+  }));
+}
+
+function validationDatasetIssues(
+  report: ReportDocumentV1,
+  rowsByDataset: Map<string, Record<string, any>[]>,
+  summaries: DatasetRunSummary[],
+): ReportParameterIssue[] {
+  const summaryById = new Map(summaries.map((summary) => [summary.datasetId, summary]));
+  return report.parameters.flatMap((parameter): ReportParameterIssue[] => {
+    const validator = parameter.validationDataset;
+    if (!validator) return [];
+    const summary = summaryById.get(validator.datasetId);
+    if (summary && !summary.ok) return [{ parameterKey: parameter.key, code: "validation_unavailable", message: `${parameter.label} could not be validated: ${summary.error ?? "validation query failed"}` }];
+    const row = rowsByDataset.get(validator.datasetId)?.[0];
+    if (!row) return [{ parameterKey: parameter.key, code: "validation_unavailable", message: `${parameter.label} could not be validated because its validation query returned no rows.` }];
+    const valid = row[validator.validColumn];
+    if (valid === true || valid === 1 || String(valid).toLowerCase() === "true") return [];
+    const detail = validator.messageColumn ? row[validator.messageColumn] : undefined;
+    return [{ parameterKey: parameter.key, code: "business_rule", message: detail == null || detail === "" ? `${parameter.label} is not valid for the attached data.` : String(detail) }];
+  });
+}
+
+function parameterRibbonValue(parameter: ReportParameter, value: ReportParameterValue, options: ReportOption[]): string {
+  if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) return "Not set";
+  if (parameter.type === "date_range" && typeof value === "object" && !Array.isArray(value)) {
+    return [value.start, value.end].filter(Boolean).join(" – ") || "Not set";
+  }
+  if (parameter.type === "boolean") return value ? "Yes" : "No";
+  const labels = new Map(options.map((option) => [String(option.value), option.label]));
+  if (Array.isArray(value)) return value.map((item) => labels.get(String(item)) ?? String(item)).join(", ");
+  return labels.get(String(value)) ?? String(value);
 }
 
 function withNarrativeSnapshots(base: ReportDocumentV1, generated: ReportDocumentV1): ReportDocumentV1 {
@@ -410,15 +453,22 @@ function ReportAiNarrative({ block, state, onGenerate }: {
   </div>;
 }
 
-function ParameterInput({ parameter, value, options, onChange }: { parameter: ReportParameter; value: ReportParameterValue; options: Array<{ label: string; value: string | number }>; onChange: (value: ReportParameterValue) => void }) {
-  if (parameter.type === "boolean") return <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />{parameter.label}</label>;
-  if (parameter.type === "select") return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><Select value={value == null ? "" : String(value)} onValueChange={onChange}><SelectTrigger className="h-8 min-w-40"><SelectValue placeholder="Select…" /></SelectTrigger><SelectContent>{options.map((o) => <SelectItem key={String(o.value)} value={String(o.value)}>{o.label}</SelectItem>)}</SelectContent></Select></div>;
-  if (parameter.type === "multi_select") return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><div className="flex flex-wrap gap-2 border rounded-md px-2 py-1.5 min-h-8">{options.map((o) => <label key={String(o.value)} className="text-xs flex gap-1"><input type="checkbox" checked={Array.isArray(value) && value.map(String).includes(String(o.value))} onChange={(e) => { const current = Array.isArray(value) ? value.map(String) : []; onChange(e.target.checked ? [...current, String(o.value)] : current.filter((v) => v !== String(o.value))); }} />{o.label}</label>)}</div></div>;
+function ParameterInput({ parameter, value, options, errors, onChange }: { parameter: ReportParameter; value: ReportParameterValue; options: ReportOption[]; errors: string[]; onChange: (value: ReportParameterValue) => void }) {
+  const errorId = `report-parameter-${parameter.id}-error`;
+  const invalid = errors.length > 0;
+  const feedback = invalid ? <div id={errorId} role="alert" className="max-w-64 text-[11px] text-destructive">{errors.join(" ")}</div> : parameter.description ? <div className="max-w-64 text-[11px] text-muted-foreground">{parameter.description}</div> : null;
+  const accessibility = { "aria-invalid": invalid || undefined, "aria-describedby": invalid ? errorId : undefined };
+  if (parameter.type === "boolean") return <div className="space-y-1"><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={Boolean(value)} required={parameter.required} {...accessibility} onChange={(e) => onChange(e.target.checked)} />{parameter.label}</label>{feedback}</div>;
+  if (parameter.type === "select") return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><Select value={value == null ? "" : String(value)} onValueChange={(selected) => onChange(options.find((option) => String(option.value) === selected)?.value ?? selected)}><SelectTrigger className="h-8 min-w-40" {...accessibility}><SelectValue placeholder="Select…" /></SelectTrigger><SelectContent>{options.map((o) => <SelectItem key={String(o.value)} value={String(o.value)}>{o.label}</SelectItem>)}</SelectContent></Select>{feedback}</div>;
+  if (parameter.type === "multi_select") return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><div className={`flex flex-wrap gap-2 border rounded-md px-2 py-1.5 min-h-8 ${invalid ? "border-destructive" : ""}`} {...accessibility}>{options.map((o) => <label key={String(o.value)} className="text-xs flex gap-1"><input type="checkbox" checked={Array.isArray(value) && value.map(String).includes(String(o.value))} onChange={(e) => { const current = Array.isArray(value) ? value.map(String) : []; onChange(e.target.checked ? [...current, String(o.value)] : current.filter((v) => v !== String(o.value))); }} />{o.label}</label>)}</div>{feedback}</div>;
   if (parameter.type === "date_range") {
     const range = value && typeof value === "object" && !Array.isArray(value) ? value as { start: string | null; end: string | null } : { start: null, end: null };
-    return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><div className="flex gap-1"><Input className="h-8" type="date" value={range.start ?? ""} onChange={(e) => onChange({ ...range, start: e.target.value || null })} /><Input className="h-8" type="date" value={range.end ?? ""} onChange={(e) => onChange({ ...range, end: e.target.value || null })} /></div></div>;
+    const min = typeof parameter.validation?.min === "string" ? parameter.validation.min : undefined;
+    const max = typeof parameter.validation?.max === "string" ? parameter.validation.max : undefined;
+    return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><div className="flex gap-1"><Input className="h-8" type="date" value={range.start ?? ""} min={min} max={max} required={parameter.required || parameter.validation?.requireBoth} {...accessibility} onChange={(e) => onChange({ ...range, start: e.target.value || null })} /><Input className="h-8" type="date" value={range.end ?? ""} min={min} max={max} required={parameter.required || parameter.validation?.requireBoth} {...accessibility} onChange={(e) => onChange({ ...range, end: e.target.value || null })} /></div>{feedback}</div>;
   }
-  return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><Input className="h-8 min-w-36" type={parameter.type === "number" ? "number" : parameter.type === "date" ? "date" : "text"} value={value == null ? "" : String(value)} onChange={(e) => onChange(parameter.type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value)} /></div>;
+  const validation = parameter.validation;
+  return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><Input className="h-8 min-w-36" type={parameter.type === "number" ? "number" : parameter.type === "date" ? "date" : "text"} value={value == null ? "" : String(value)} required={parameter.required} min={validation?.min} max={validation?.max} step={parameter.type === "number" ? (validation?.step ?? (validation?.integer ? 1 : "any")) : undefined} minLength={validation?.minLength} maxLength={validation?.maxLength} pattern={validation?.pattern} {...accessibility} onChange={(e) => onChange(parameter.type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value)} />{feedback}</div>;
 }
 
 export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames = [], onBusyChange }: Props) {
@@ -430,6 +480,8 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const [runProgress, setRunProgress] = useState<ReportRunProgress | null>(null);
   const [values, setValues] = useState<Record<string, ReportParameterValue>>({});
   const [appliedValues, setAppliedValues] = useState<Record<string, ReportParameterValue>>({});
+  const [parameterIssues, setParameterIssues] = useState<ReportParameterIssue[]>([]);
+  const [parametersExpanded, setParametersExpanded] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sourceText, setSourceText] = useState("");
   const [sourceError, setSourceError] = useState<string | null>(null);
@@ -448,6 +500,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const agentThreadRef = useRef<HTMLDivElement>(null);
   const runGeneration = useRef(0);
   const autoRefreshRunningRef = useRef(false);
+  const validateAndRunRef = useRef<((report: ReportDocumentV1, values: Record<string, ReportParameterValue>, changedOnly: boolean) => Promise<boolean>) | null>(null);
   const autoRefreshStateRef = useRef<{
     report: ReportDocumentV1 | null;
     values: Record<string, ReportParameterValue>;
@@ -526,19 +579,14 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     reportChartViews.current.clear();
     const copy = cloneReport(report);
     const defaults = { ...defaultValues(copy), ...initialValues };
-    setSelected(persisted ? copy : null); setDraft(copy); setValues(defaults); setAppliedValues(defaults); setResults({}); setNarrativeStates({}); setRunProgress(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
+    setSelected(persisted ? copy : null); setDraft(copy); setValues(defaults); setAppliedValues(defaults); setParameterIssues([]); setParametersExpanded(false); setResults({}); setNarrativeStates({}); setRunProgress(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
     void getStoredReport(copy.id).then((stored) => setRevisionOptions(stored?.revisions ?? []));
     if (autoRun) setTimeout(() => {
       if (runGeneration.current !== generation) return;
-      const rows = new Map<string, Record<string, any>[]>();
-      void runDatasets(copy, defaults, undefined, rows).then(async () => {
-        if (runGeneration.current !== generation) return;
-        const generated = await generateNarratives(copy, defaults, rows);
-        if (runGeneration.current === generation) setDraft((current) => current ? withNarrativeSnapshots(current, generated) : current);
-      });
+      void validateAndRunRef.current?.(copy, defaults, false);
     }, 0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [generateNarratives]);
+  }, []);
 
   useEffect(() => {
     consumeSharedReport().then((shared) => { if (shared) { openReport(shared.report, shared.values, false, false); clearSharedReport(); setShareStatus("Shared report opened for review. Save and run it when ready."); } });
@@ -557,7 +605,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     mode: "load" | "refresh" = "load",
   ): Promise<DatasetRunSummary[]> => {
     const datasets = report.datasets.filter((d) => !onlyIds || onlyIds.has(d.id));
-    const valueErrors = report.parameters.map((p) => validateParameterValue(p, runValues[p.key] ?? p.defaultValue)).filter(Boolean);
+    const valueErrors = validateReportParameterValues(report, runValues).map((issue) => issue.message);
     if (valueErrors.length) {
       const error = valueErrors.join(" ");
       setShareStatus(error);
@@ -643,23 +691,64 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     if (generated !== draft) setDraft((current) => current?.id === draft.id ? withNarrativeSnapshots(current, generated) : current);
   }, [appliedValues, draft, generateNarratives, results]);
 
+  const validateAndRun = useCallback(async (report: ReportDocumentV1, candidateValues: Record<string, ReportParameterValue>, changedOnly: boolean) => {
+    const candidate = structuredClone(candidateValues);
+    let issues = validateReportParameterValues(report, candidate);
+    if (issues.length) {
+      setParameterIssues(issues);
+      setParametersExpanded(true);
+      setShareStatus("Correct the highlighted parameters before running the report.");
+      return false;
+    }
+
+    const rows = new Map(Object.entries(results).filter(([, result]) => Boolean(result.table)).map(([datasetId, result]) => [datasetId, result.rows]));
+    const auxiliaryIds = new Set<string>();
+    for (const parameter of report.parameters) {
+      if (parameter.options?.kind === "dataset") auxiliaryIds.add(parameter.options.datasetId);
+      if (parameter.validationDataset) auxiliaryIds.add(parameter.validationDataset.datasetId);
+    }
+    let auxiliarySummaries: DatasetRunSummary[] = [];
+    if (auxiliaryIds.size) auxiliarySummaries = await runDatasets(report, candidate, auxiliaryIds, rows, "refresh");
+
+    for (const parameter of report.parameters) {
+      if (parameter.options?.kind !== "dataset") continue;
+      const optionsDatasetId = parameter.options.datasetId;
+      const failed = auxiliarySummaries.find((summary) => summary.datasetId === optionsDatasetId && !summary.ok);
+      if (failed) issues.push({ parameterKey: parameter.key, code: "options_unavailable", message: `${parameter.label} choices could not be loaded: ${failed.error ?? "options query failed"}` });
+    }
+    const optionsByKey = Object.fromEntries(report.parameters.map((parameter) => [parameter.key, parameterOptionsFromRows(parameter, rows)]));
+    issues.push(...validateReportParameterValues(report, candidate, optionsByKey));
+    issues.push(...validationDatasetIssues(report, rows, auxiliarySummaries));
+    issues = issues.filter((issue, index, all) => all.findIndex((candidateIssue) => candidateIssue.parameterKey === issue.parameterKey && candidateIssue.code === issue.code && candidateIssue.message === issue.message) === index);
+    if (issues.length) {
+      setParameterIssues(issues);
+      setParametersExpanded(true);
+      setShareStatus("The previous report remains active. Correct the highlighted parameters and apply again.");
+      return false;
+    }
+
+    setParameterIssues([]);
+    setAppliedValues(candidate);
+    if (changedOnly) setParametersExpanded(false);
+    const dataDatasets = report.datasets.filter((dataset) => dataset.role !== "parameter_options" && dataset.role !== "parameter_validation");
+    const changed = new Set(Object.keys(candidate).filter((key) => JSON.stringify(candidate[key]) !== JSON.stringify(appliedValues[key])));
+    const ids = changedOnly && changed.size
+      ? new Set(dataDatasets.filter((dataset) => parameterTokens(dataset.sql).some((token) => changed.has(token) || changed.has(token.replace(/_(?:start|end)$/, "")))).map((dataset) => dataset.id))
+      : new Set(dataDatasets.map((dataset) => dataset.id));
+    const mode = dataDatasets.some((dataset) => ids.has(dataset.id) && Boolean(results[dataset.id]?.table)) ? "refresh" : "load";
+    await runDatasetsAndNarratives(report, candidate, ids, mode, rows);
+    if (!ids.size) setShareStatus("Parameters applied.");
+    return true;
+  }, [appliedValues, results, runDatasets, runDatasetsAndNarratives]);
+  validateAndRunRef.current = validateAndRun;
+
   const runFullReport = useCallback(() => {
-    if (!draft) return;
-    const nextValues = structuredClone(values);
-    setAppliedValues(nextValues);
-    const mode = draft.datasets.some((dataset) => Boolean(results[dataset.id]?.table)) ? "refresh" : "load";
-    void runDatasetsAndNarratives(draft, nextValues, undefined, mode);
-  }, [draft, values, results, runDatasetsAndNarratives]);
+    if (draft) void validateAndRun(draft, values, false);
+  }, [draft, validateAndRun, values]);
 
   const handleApply = useCallback(() => {
-    if (!draft) return;
-    const changed = new Set(Object.keys(values).filter((k) => JSON.stringify(values[k]) !== JSON.stringify(appliedValues[k])));
-    const ids = changed.size ? new Set(draft.datasets.filter((d) => parameterTokens(d.sql).some((t) => changed.has(t) || changed.has(t.replace(/_(?:start|end)$/, "")))).map((d) => d.id)) : undefined;
-    setAppliedValues(structuredClone(values));
-    const mode = draft.datasets.some((dataset) => (!ids || ids.has(dataset.id)) && Boolean(results[dataset.id]?.table)) ? "refresh" : "load";
-    const seedRows = new Map(Object.entries(results).filter(([, result]) => Boolean(result.table)).map(([datasetId, result]) => [datasetId, result.rows]));
-    void runDatasetsAndNarratives(draft, values, ids, mode, seedRows);
-  }, [draft, values, appliedValues, results, runDatasetsAndNarratives]);
+    if (draft) void validateAndRun(draft, values, true);
+  }, [draft, validateAndRun, values]);
 
   useEffect(() => {
     autoRefreshStateRef.current = {
@@ -676,11 +765,12 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       const current = autoRefreshStateRef.current;
       if (!current.report || current.busy || autoRefreshRunningRef.current || document.visibilityState !== "visible") return;
       autoRefreshRunningRef.current = true;
-      void runDatasetsAndNarratives(current.report, structuredClone(current.values), undefined, "refresh")
+      const execution = validateAndRunRef.current?.(current.report, structuredClone(current.values), false) ?? Promise.resolve(false);
+      void execution
         .finally(() => { autoRefreshRunningRef.current = false; });
     }, seconds * 1_000);
     return () => window.clearInterval(interval);
-  }, [draft?.id, draft?.refreshIntervalSeconds, runDatasetsAndNarratives]);
+  }, [draft?.id, draft?.refreshIntervalSeconds]);
 
   const updateAutoRefresh = useCallback((seconds?: number) => {
     if (!draft) return;
@@ -806,8 +896,14 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       if (sanitized.errors.length) return toolResult({ ok: false, errors: sanitized.errors, message: "Correct the chart specifications before finalizing." });
       applyWorkingReport(sanitized.report, clearResults);
       workingRows.clear();
-      const execution = await runDatasets(workingReport, defaultValues(workingReport), undefined, workingRows);
+      const workingValues = defaultValues(workingReport);
+      const execution = await runDatasets(workingReport, workingValues, undefined, workingRows);
       const failures = execution.filter((result) => !result.ok);
+      const optionsByKey = Object.fromEntries(workingReport.parameters.map((parameter) => [parameter.key, parameterOptionsFromRows(parameter, workingRows)]));
+      const parameterErrors = [
+        ...validateReportParameterValues(workingReport, workingValues, optionsByKey).map((issue) => issue.message),
+        ...validationDatasetIssues(workingReport, workingRows, execution).map((issue) => issue.message),
+      ];
       const blockErrors = validateReportResultColumns(workingReport, execution);
       const charts = await preflightReportCharts(workingReport, workingRows, settings.aiChartFeedback !== false);
       const narrativeErrors: string[] = [];
@@ -830,7 +926,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
           }
         }
       }
-      const needsCorrection = failures.length > 0 || blockErrors.length > 0 || charts.errors.length > 0 || narrativeErrors.length > 0;
+      const needsCorrection = failures.length > 0 || parameterErrors.length > 0 || blockErrors.length > 0 || charts.errors.length > 0 || narrativeErrors.length > 0;
       setAgentSummary(needsCorrection ? `${summary} The draft needs correction.` : `${summary} Data, visualizations, and AI narratives loaded.`);
       return toolResult({
         ok: !needsCorrection,
@@ -838,6 +934,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
           ? "The report ran, but has dataset, column, visualization, or AI narrative errors. Correct the affected item and finalize again."
           : "Every dataset executed, every chart rendered, and every AI narrative was snapshotted. The populated report is ready for user review.",
         datasets: execution,
+        parameterErrors,
         blockErrors,
         chartErrors: charts.errors,
         chartWarnings: charts.warnings,
@@ -856,7 +953,7 @@ Blocks may set appearance for semantic backgrounds. Use tone neutral/info/succes
 
 Inspect every table before using it. SQL datasets must be one read-only SELECT/VALUES/WITH query. Parameter references use $key, date ranges use $key_start/$key_end, and multi-select values appear in IN ($key). Do not add a WHERE clause unless the user's request actually requires filtering.
 
-Supported blocks are markdown, ai_narrative, kpi, sparkline, small_multiples, bullet, slopegraph, range_dot, table, chart, perspective, and map. Every block may include a concise caption and source note. Reader-facing block and group titles may contain parameter tokens such as $city; Cupola replaces them with the currently applied value at render time. A markdown block may have a meaningful visible title or omit title for a clean content-only card; never title one "Text" or "Markdown", and omit the block title when the markdown already begins with its own heading. Markdown supports safe HTTPS and relative image URLs with ![alt text](url), but Cupola does not upload or persist image files.
+Supported blocks are markdown, ai_narrative, kpi, sparkline, small_multiples, bullet, slopegraph, range_dot, table, chart, perspective, and map. Every block may include a concise caption and source note. Markdown content and reader-facing block and group titles may contain parameter tokens such as $city; Cupola replaces them with the currently applied value at render time. A markdown block may have a meaningful visible title or omit title for a clean content-only card; never title one "Text" or "Markdown", and omit the block title when the markdown already begins with its own heading. Markdown supports safe HTTPS and relative image URLs with ![alt text](url), but Cupola does not upload or persist image files.
 
 Use ai_narrative only when data-dependent prose adds real value, such as an executive summary, comparison, anomaly explanation, or changing forecast commentary. Provide one datasetId and a focused instruction, optionally columns, maxRows from 1 to 100, and refreshPolicy manual or when_data_changes. Prefer a compact, aggregated dataset rather than sending raw detail. Manual is the default and avoids surprise cost; choose when_data_changes only when the user wants fresh prose during report refresh. The narrative call has no tools and cannot edit the report. Cupola generates and snapshots it during authoring, so do not also write a static markdown version of the same summary.
 
@@ -871,6 +968,8 @@ Use sparkline for a compact single-metric trend box: provide datasetId and value
 Maps are declarative Leaflet blocks: set type="map", datasetId, and either geometryColumn for WKB/GeoJSON or both latitudeColumn and longitudeColumn. Maps may also set labelColumn, colorColumn, tooltipColumns, basemap ("openstreetmap" or "none"), palette, and style.
 
 Reports may set refreshIntervalSeconds from 5 through 86400 when the user wants live automatic refresh; omit it (or configure it as null) otherwise.
+
+Parameters are a validated public interface, not merely SQL substitutions. Set required when empty input is invalid. Use validation for type-appropriate declarative constraints: number min/max/exclusiveMin/exclusiveMax/step/integer; text minLength/maxLength/pattern; date min/max; date_range min/max/requireBoth/maxSpanDays; multi_select minSelections/maxSelections. Static and dataset-backed select values are checked for membership when Apply is pressed. Use parameterRules for relationships between values, including date_range paths such as period.start and period.end. A rule has leftKey, operator, exactly one of rightKey or value, and a reader-friendly message. For data-dependent business rules, create a role="parameter_validation" dataset that returns one row with a boolean column and optional message column, then reference it from validationDataset on the parameter. Keep validation SQL read-only and parameterized. Reader text supports $key, $key_label, $key_value, and date-range $key_start/$key_end; use $$ for a literal dollar sign. Do not invent arbitrary JavaScript validation or interpolate raw SQL fragments.
 
 Current report:\n${JSON.stringify(draft)}`;
     try {
@@ -892,6 +991,7 @@ Current report:\n${JSON.stringify(draft)}`;
           }
           if (Array.isArray(input.requiredSources)) next.requiredSources = structuredClone(input.requiredSources);
           if (Array.isArray(input.parameters)) next.parameters = structuredClone(input.parameters);
+          if (Array.isArray(input.parameterRules)) next.parameterRules = structuredClone(input.parameterRules);
           next.updatedAt = Date.now();
           const errors = validateReport(next);
           if (errors.length) return toolResult({ ok: false, errors });
@@ -1030,14 +1130,10 @@ Current report:\n${JSON.stringify(draft)}`;
   const reportErrors = validateReport(draft);
   const dirty = !selected || JSON.stringify(draft) !== JSON.stringify(selected);
   const optionValues = (p: ReportParameter) => {
-    const options = p.options;
-    if (!options) return [];
-    if (options.kind === "static") return options.values;
-    return (results[options.datasetId]?.rows ?? []).map((row) => ({
-      value: row[options.valueColumn] as string | number,
-      label: String(row[options.labelColumn || options.valueColumn] ?? ""),
-    }));
+    const rows = new Map(Object.entries(results).map(([datasetId, result]) => [datasetId, result.rows]));
+    return parameterOptionsFromRows(p, rows) ?? [];
   };
+  const parametersDirty = draft.parameters.some((parameter) => JSON.stringify(values[parameter.key] ?? parameter.defaultValue) !== JSON.stringify(appliedValues[parameter.key] ?? parameter.defaultValue));
   const desktopLayout = draft.blocks.map((block) => ({ i: block.id, ...block.layout }));
   let mobileY = 0;
   let previousMobileGroup: string | undefined;
@@ -1054,7 +1150,7 @@ Current report:\n${JSON.stringify(draft)}`;
   const activeLayout = width >= 768 ? desktopLayout : mobileLayout;
   const groupBoxes = reportGroupBoxes(draft.groups ?? [], draft.blocks, activeLayout, width, width >= 768 ? 12 : 1);
   const reportRunning = Object.values(results).some(isDatasetPending) || Object.values(narrativeStates).some((state) => state.status === "running");
-  const reportFetchedAt = reportRunning ? 0 : Math.max(0, ...draft.datasets.map((dataset) => results[dataset.id]?.fetchedAt ?? 0));
+  const reportFetchedAt = reportRunning ? 0 : Math.max(0, ...draft.datasets.filter((dataset) => dataset.role !== "parameter_options" && dataset.role !== "parameter_validation").map((dataset) => results[dataset.id]?.fetchedAt ?? 0));
   const progressLabel = runProgress
     ? `${runProgress.mode === "refresh" ? "Refreshing" : "Loading"} ${runProgress.completed} of ${runProgress.total} datasets`
     : null;
@@ -1107,7 +1203,35 @@ Current report:\n${JSON.stringify(draft)}`;
       </div>
     </div>}
     {(!isCompatible(draft) || reportErrors.length > 0 || shareStatus || agentSummary) && <div className="px-4 py-2 border-b text-xs space-y-1">{!isCompatible(draft) && <div className="text-amber-700">Missing required catalogs: {draft.requiredSources.filter((s) => !compatibleCatalogs.has(s.catalog)).map((s) => s.catalog).join(", ")}</div>}{reportErrors.length > 0 && <div className="text-destructive">{reportErrors.join(" ")}</div>}{shareStatus && <div>{shareStatus}</div>}{agentSummary && <div className="text-primary"><Check className="inline h-3 w-3 mr-1" />Agent draft: {agentSummary}</div>}</div>}
-    {draft.parameters.length > 0 && <div className="report-parameters report-authoring-control flex flex-wrap items-end gap-3 px-4 py-3 border-b bg-muted/20">{draft.parameters.map((p) => <ParameterInput key={p.id} parameter={p} value={values[p.key] ?? p.defaultValue} options={optionValues(p)} onChange={(value) => setValues((v) => ({ ...v, [p.key]: value }))} />)}<Button size="sm" onClick={handleApply}><Play className="h-4 w-4" /> Apply</Button></div>}
+    {draft.parameters.length > 0 && <div className="report-parameters report-authoring-control border-b bg-muted/20" aria-label="Report parameters">
+      <button
+        type="button"
+        data-testid="report-parameters-toggle"
+        aria-expanded={parametersExpanded}
+        aria-controls="report-parameter-controls"
+        className="flex h-10 w-full min-w-0 items-center gap-2 px-4 text-left hover:bg-muted/40"
+        onClick={() => setParametersExpanded((expanded) => !expanded)}
+      >
+        <SlidersHorizontal className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="shrink-0 text-xs font-medium">Parameters</span>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto" aria-label="Applied parameter values">
+          {draft.parameters.map((parameter) => {
+            const summary = parameterRibbonValue(parameter, appliedValues[parameter.key] ?? parameter.defaultValue, optionValues(parameter));
+            return <span key={parameter.id} title={`${parameter.label}: ${summary}`} className="inline-flex min-w-0 max-w-56 shrink-0 items-center gap-1 rounded-full border bg-background/80 px-2 py-0.5 text-[11px]">
+              <span className="shrink-0 text-muted-foreground">{parameter.label}:</span>
+              <span className="truncate font-medium">{summary}</span>
+            </span>;
+          })}
+        </div>
+        {parametersDirty && <span className="shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700">Unapplied changes</span>}
+        {parametersExpanded ? <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />}
+      </button>
+      {parametersExpanded && <div id="report-parameter-controls" className="flex flex-wrap items-end gap-3 border-t px-4 py-3">{draft.parameters.map((p) => <ParameterInput key={p.id} parameter={p} value={values[p.key] ?? p.defaultValue} options={optionValues(p)} errors={parameterIssues.filter((issue) => issue.parameterKey === p.key).map((issue) => issue.message)} onChange={(value) => setValues((current) => {
+        const next = { ...current, [p.key]: value };
+        setParameterIssues(validateReportParameterValues(draft, next));
+        return next;
+      })} />)}<Button size="sm" disabled={reportRunning} onClick={handleApply}><Play className="h-4 w-4" /> Apply</Button>{parameterIssues.some((issue) => !issue.parameterKey) && <div role="alert" className="basis-full text-xs text-destructive">{parameterIssues.filter((issue) => !issue.parameterKey).map((issue) => issue.message).join(" ")}</div>}</div>}
+    </div>}
     <div className="flex-1 min-h-0 flex">
       <div ref={containerRef} className="flex-1 min-w-0 overflow-y-auto report-canvas p-3">
         <div className="print-only hidden mb-4"><h1 className="text-2xl font-bold">{draft.title}</h1><p className="text-sm text-muted-foreground">{draft.description}</p></div>
@@ -1232,7 +1356,7 @@ Current report:\n${JSON.stringify(draft)}`;
               </div>}
               {!showBlockHeader && resolvedAppearance.label && <div data-testid={`report-block-status-${block.id}`} title={resolvedAppearance.label} className="absolute right-2 top-2 z-10 inline-flex max-w-[60%] items-center gap-1.5 rounded-full border border-current/15 bg-background/75 px-2 py-0.5 text-[10px] font-medium"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${appearanceStyle.dot}`} /><span className="truncate">{resolvedAppearance.label}</span></div>}
               {!showBlockHeader && <div data-testid={`report-block-drag-${block.id}`} title="Drag text block" className="report-authoring-control report-drag-handle absolute right-1 top-1 z-10 cursor-move rounded p-1 text-muted-foreground/50 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"><GripVertical className="h-3.5 w-3.5" /></div>}
-              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={block.markdown} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className="text-xs text-destructive">{result.error}</div><Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart block={visualBlock} rows={result.rows} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} config={block.config} onConfig={(config) => setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current)} /> : null}</div>
+              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={interpolateReportText(block.markdown, draft, appliedValues)} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className="text-xs text-destructive">{result.error}</div><Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart block={visualBlock} rows={result.rows} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} config={block.config} onConfig={(config) => setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current)} /> : null}</div>
               {(block.caption || block.source) && <div data-testid={`report-note-${block.id}`} className="px-3 pb-2 text-[10px] leading-snug text-muted-foreground">
                 {block.caption && <span>{block.caption}</span>}{block.caption && block.source && <span> · </span>}{block.source && <span>Source: {block.source}</span>}
               </div>}

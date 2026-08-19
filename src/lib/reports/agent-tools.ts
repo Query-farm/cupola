@@ -46,6 +46,48 @@ const parameterOptionsSchema = {
   ],
 };
 
+const parameterValidationSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    min: { type: ["number", "string"] },
+    max: { type: ["number", "string"] },
+    exclusiveMin: { type: "number" },
+    exclusiveMax: { type: "number" },
+    step: { type: "number", exclusiveMinimum: 0 },
+    integer: { type: "boolean" },
+    minLength: { type: "number", minimum: 0 },
+    maxLength: { type: "number", minimum: 0 },
+    pattern: { type: "string", maxLength: 256 },
+    requireBoth: { type: "boolean" },
+    maxSpanDays: { type: "number", minimum: 0 },
+    minSelections: { type: "number", minimum: 0 },
+    maxSelections: { type: "number", minimum: 0 },
+  },
+};
+
+const parameterValidationDatasetSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: { datasetId: stringSchema, validColumn: stringSchema, messageColumn: stringSchema },
+  required: ["datasetId", "validColumn"],
+};
+
+const parameterRuleSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    id: stringSchema,
+    leftKey: stringSchema,
+    operator: { enum: ["less_than", "less_than_or_equal", "greater_than", "greater_than_or_equal", "equal", "not_equal", "before", "before_or_equal"] },
+    rightKey: stringSchema,
+    value: nullableScalarSchema,
+    message: stringSchema,
+  },
+  required: ["id", "leftKey", "operator", "message"],
+  oneOf: [{ required: ["rightKey"] }, { required: ["value"] }],
+};
+
 const parameterSchema = {
   type: "object",
   additionalProperties: false,
@@ -69,6 +111,8 @@ const parameterSchema = {
       ],
     },
     options: parameterOptionsSchema,
+    validation: parameterValidationSchema,
+    validationDataset: parameterValidationDatasetSchema,
   },
   required: ["id", "key", "label", "type", "defaultValue"],
 };
@@ -78,7 +122,7 @@ const datasetProperties = {
   name: stringSchema,
   sql: stringSchema,
   description: stringSchema,
-  role: { enum: ["data", "parameter_options"] },
+  role: { enum: ["data", "parameter_options", "parameter_validation"] },
 };
 
 const datasetSchema = {
@@ -245,6 +289,7 @@ export const REPORT_DOCUMENT_SCHEMA: Record<string, any> = {
     revision: { type: "number", minimum: 1 },
     requiredSources: { type: "array", items: sourceSchema },
     parameters: { type: "array", items: parameterSchema },
+    parameterRules: { type: "array", items: parameterRuleSchema },
     datasets: { type: "array", items: datasetSchema },
     groups: { type: "array", items: groupSchema },
     blocks: { type: "array", items: blockSchema },
@@ -286,6 +331,7 @@ export const REPORT_TOOLS: Tool[] = [
         },
         requiredSources: { type: "array", items: sourceSchema },
         parameters: { type: "array", items: parameterSchema },
+        parameterRules: { type: "array", items: parameterRuleSchema },
       },
       required: ["title"],
     },

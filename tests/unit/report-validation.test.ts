@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createEmptyReport } from "../../src/lib/reports/types";
-import { validateReadOnlySql, validateReport } from "../../src/lib/reports/validation";
+import { validateParameterValue, validateReadOnlySql, validateReport, validateReportParameterValues } from "../../src/lib/reports/validation";
 
 describe("report SQL validation", () => {
   test("accepts read-only queries and trailing semicolons", () => {
@@ -22,6 +22,41 @@ describe("report SQL validation", () => {
 });
 
 describe("report document validation", () => {
+  test("validates type constraints, option membership, and cross-parameter rules", () => {
+    const report = createEmptyReport("Validated filters");
+    report.parameters.push(
+      { id: "minimum", key: "minimum", label: "Minimum", type: "number", defaultValue: 10, required: true, validation: { min: 0, max: 100, step: 5 } },
+      { id: "maximum", key: "maximum", label: "Maximum", type: "number", defaultValue: 50, validation: { min: 0, max: 100 } },
+      { id: "city", key: "city", label: "City", type: "select", defaultValue: "RIC", options: { kind: "static", values: [{ label: "Richmond", value: "RIC" }] } },
+    );
+    report.parameterRules = [{ id: "ordered", leftKey: "minimum", operator: "less_than_or_equal", rightKey: "maximum", message: "Minimum must not exceed maximum." }];
+    expect(validateReport(report)).toEqual([]);
+    expect(validateReportParameterValues(report, { minimum: 15, maximum: 10, city: "ORF" }, { city: report.parameters[2].options!.kind === "static" ? report.parameters[2].options!.values : [] }).map((issue) => issue.message)).toEqual([
+      "City contains a value that is not currently available.",
+      "Minimum must not exceed maximum.",
+    ]);
+    expect(validateParameterValue(report.parameters[0], 12)).toContain("increments of 5");
+  });
+
+  test("validates date ranges and dynamic parameter references", () => {
+    const report = createEmptyReport("Forecast");
+    report.parameters.push({ id: "period", key: "period", label: "Period", type: "date_range", defaultValue: { start: "2026-08-01", end: "2026-08-07" }, validation: { requireBoth: true, maxSpanDays: 31 } });
+    report.blocks.push({ id: "intro", type: "markdown", title: "$period_start to $period_end", markdown: "Budget: $$100", layout: { x: 0, y: 0, w: 12, h: 2 } });
+    expect(validateReport(report)).toEqual([]);
+    expect(validateParameterValue(report.parameters[0], { start: "2026-08-10", end: "2026-08-01" })).toContain("must not be after");
+    report.blocks[0].title = "$unknown";
+    expect(validateReport(report).join(" ")).toContain("unknown parameter $unknown");
+  });
+
+  test("requires validation datasets to use the dedicated role", () => {
+    const report = createEmptyReport("Inventory");
+    report.parameters.push({ id: "sku", key: "sku", label: "SKU", type: "text", defaultValue: "A1", validationDataset: { datasetId: "validate_sku", validColumn: "valid", messageColumn: "message" } });
+    report.datasets.push({ id: "validate_sku", name: "Validate SKU", role: "data", sql: "SELECT true AS valid" });
+    expect(validateReport(report).join(" ")).toContain("role parameter_validation");
+    report.datasets[0].role = "parameter_validation";
+    expect(validateReport(report)).toEqual([]);
+  });
+
   test("validates the persisted automatic refresh cadence", () => {
     const report = createEmptyReport("Live report");
     report.refreshIntervalSeconds = 30;

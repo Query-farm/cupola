@@ -33,6 +33,9 @@ test("report guide explains the visualization toolkit with a humidity example", 
 
   await expect(page.getByRole("heading", { name: "Datasets and typed parameters" })).toBeVisible();
   await expect(page.getByText("multi_select", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Declarative validation" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Rules and data checks" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Display values without turning text into code" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Groups explain belonging; appearance explains status" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "How a report is built compositionally" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "What report blocks do not do" })).toBeVisible();

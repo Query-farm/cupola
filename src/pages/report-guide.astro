@@ -486,7 +486,7 @@ const formatExample = (value: Record<string, unknown>) => JSON.stringify(value, 
             <article class="schema-card">
               <span class="schema-number">01</span>
               <h4>Dataset</h4>
-              <p>A dataset has <code>id</code>, <code>name</code>, and <code>sql</code>, plus an optional <code>description</code> and role of <code>data</code> or <code>parameter_options</code>.</p>
+              <p>A dataset has <code>id</code>, <code>name</code>, and <code>sql</code>, plus an optional <code>description</code> and role of <code>data</code>, <code>parameter_options</code>, or <code>parameter_validation</code>.</p>
               <ul>
                 <li>SQL is read-only and must be exactly one <code>SELECT</code>, <code>VALUES</code>, or <code>WITH … SELECT</code> statement.</li>
                 <li>Several blocks may reuse the same <code>datasetId</code>.</li>
@@ -548,6 +548,64 @@ ORDER BY observed_at`}</code></pre>
   }
 }`}</code></pre>
             </div>
+          </div>
+
+          <div class="schema-grid">
+            <article class="schema-card">
+              <span class="schema-number">03</span>
+              <h4>Declarative validation</h4>
+              <p>Validation runs before report data queries. Invalid pending values stay in the controls for correction while the last valid applied report remains visible.</p>
+              <ul>
+                <li><code>number</code>: <code>min</code>, <code>max</code>, <code>exclusiveMin</code>, <code>exclusiveMax</code>, <code>step</code>, and <code>integer</code>.</li>
+                <li><code>text</code>: <code>minLength</code>, <code>maxLength</code>, and a bounded regular-expression <code>pattern</code>.</li>
+                <li><code>date</code>: ISO-date <code>min</code> and <code>max</code>. <code>date_range</code> also supports <code>requireBoth</code> and <code>maxSpanDays</code>.</li>
+                <li><code>multi_select</code>: <code>minSelections</code> and <code>maxSelections</code>. Select and multi-select values must belong to their current option set.</li>
+              </ul>
+            </article>
+            <article class="schema-card">
+              <span class="schema-number">04</span>
+              <h4>Rules and data checks</h4>
+              <p><code>parameterRules</code> compare two parameter paths or one path with a constant. Operators cover equality, ordering, and date-before relationships. Date ranges expose <code>period.start</code> and <code>period.end</code>.</p>
+              <ul>
+                <li>Every rule carries a stable <code>id</code> and a reader-friendly <code>message</code>.</li>
+                <li>A parameter may reference a <code>parameter_validation</code> dataset with <code>validColumn</code> and optional <code>messageColumn</code>.</li>
+                <li>Validation queries return one row and remain read-only and safely parameterized.</li>
+              </ul>
+            </article>
+          </div>
+
+          <div class="code-pair">
+            <div>
+              <div class="example-label">Constrained date range</div>
+              <pre><code>{`{
+  "key": "period",
+  "label": "Observation period",
+  "type": "date_range",
+  "required": true,
+  "defaultValue": { "start": "2026-08-01", "end": "2026-08-07" },
+  "validation": {
+    "min": "2020-01-01",
+    "requireBoth": true,
+    "maxSpanDays": 31
+  }
+}`}</code></pre>
+            </div>
+            <div>
+              <div class="example-label">Cross-parameter rule</div>
+              <pre><code>{`{
+  "id": "minimum_below_maximum",
+  "leftKey": "minimum",
+  "operator": "less_than_or_equal",
+  "rightKey": "maximum",
+  "message": "Minimum must not exceed maximum."
+}`}</code></pre>
+            </div>
+          </div>
+
+          <div class="schema-card">
+            <span class="schema-number">Dynamic text</span>
+            <h4>Display values without turning text into code</h4>
+            <p>Markdown content, titles, group text, and AI narrative instructions may use <code>$city</code>. Use <code>$city_label</code> for a static option’s reader-facing label, <code>$city_value</code> for its stored value, and <code>$period_start</code>/<code>$period_end</code> for a date range. Write <code>$$</code> when the report should display a literal dollar sign. Unknown references fail report validation instead of leaking unresolved tokens to readers.</p>
           </div>
         </div>
 

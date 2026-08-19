@@ -14,6 +14,49 @@ export interface ReportOption {
   value: string | number;
 }
 
+/** Declarative, agent-safe constraints for a report parameter. Only fields
+ * meaningful to the parameter's type are accepted by report validation. */
+export interface ReportParameterValidation {
+  min?: number | string;
+  max?: number | string;
+  exclusiveMin?: number;
+  exclusiveMax?: number;
+  step?: number;
+  integer?: boolean;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  requireBoth?: boolean;
+  maxSpanDays?: number;
+  minSelections?: number;
+  maxSelections?: number;
+}
+
+export interface ReportParameterValidationDataset {
+  datasetId: string;
+  validColumn: string;
+  messageColumn?: string;
+}
+
+export type ReportParameterRuleOperator =
+  | "less_than"
+  | "less_than_or_equal"
+  | "greater_than"
+  | "greater_than_or_equal"
+  | "equal"
+  | "not_equal"
+  | "before"
+  | "before_or_equal";
+
+export interface ReportParameterRule {
+  id: string;
+  leftKey: string;
+  operator: ReportParameterRuleOperator;
+  rightKey?: string;
+  value?: string | number | boolean | null;
+  message: string;
+}
+
 export interface ReportParameter {
   id: string;
   key: string;
@@ -22,6 +65,8 @@ export interface ReportParameter {
   description?: string;
   required?: boolean;
   defaultValue: ReportParameterValue;
+  validation?: ReportParameterValidation;
+  validationDataset?: ReportParameterValidationDataset;
   options?:
     | { kind: "static"; values: ReportOption[] }
     | { kind: "dataset"; datasetId: string; valueColumn: string; labelColumn?: string };
@@ -32,7 +77,7 @@ export interface ReportDataset {
   name: string;
   sql: string;
   description?: string;
-  role?: "data" | "parameter_options";
+  role?: "data" | "parameter_options" | "parameter_validation";
 }
 
 export interface ReportLayout {
@@ -245,6 +290,8 @@ export interface ReportDocumentV1 {
   revision: number;
   requiredSources: ReportSourceRequirement[];
   parameters: ReportParameter[];
+  /** Optional declarative relationships between parameter values. */
+  parameterRules?: ReportParameterRule[];
   datasets: ReportDataset[];
   /** Optional for backwards compatibility with reports saved before groups. */
   groups?: ReportGroup[];

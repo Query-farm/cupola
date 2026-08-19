@@ -68,4 +68,13 @@ describe("interpolateReportText", () => {
   test("uses defaults and preserves unknown tokens", () => {
     expect(interpolateReportText("$region · $unknown", { parameters }, {})).toBe("East · $unknown");
   });
+
+  test("supports option labels, exact values, and escaped dollar signs", () => {
+    const withCity: ReportParameter[] = [...parameters, {
+      id: "p4", key: "city", label: "City", type: "select", defaultValue: "RIC",
+      options: { kind: "static", values: [{ label: "Richmond, Virginia", value: "RIC" }] },
+    }];
+    expect(interpolateReportText("$city_label [$city_value] costs $$5", { parameters: withCity }, { city: "RIC" }))
+      .toBe("Richmond, Virginia [RIC] costs $5");
+  });
 });

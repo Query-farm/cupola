@@ -1,6 +1,6 @@
 import { splitStatements } from "@/lib/editor/sql-statements";
 import { validateChartSpec } from "@/lib/ai-tool-executor";
-import type { ReportBlock, ReportDocumentV1, ReportParameter, ReportParameterValue } from "./types";
+import type { ReportBlock, ReportDocumentV1, ReportOption, ReportParameter, ReportParameterRule, ReportParameterValue } from "./types";
 
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const FORBIDDEN_SQL = /\b(?:INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE|COPY|ATTACH|DETACH|CALL|PRAGMA|INSTALL|LOAD|EXPORT|IMPORT|VACUUM|CHECKPOINT)\b/i;
@@ -70,17 +70,129 @@ export function parameterTokens(sql: string): string[] {
   return [...clean.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]);
 }
 
-export function validateParameterValue(parameter: ReportParameter, value: ReportParameterValue): string | null {
-  if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) {
+/** Parameter references in reader-facing templates. A doubled dollar sign
+ * escapes a literal token (for example, $$city renders as $city). */
+export function parameterTextTokens(source: string): string[] {
+  return [...source.matchAll(/(^|[^$])\$([A-Za-z_][A-Za-z0-9_]*)/g)].map((match) => match[2]);
+}
+
+function isIsoDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function isEmptyParameterValue(value: ReportParameterValue): boolean {
+  if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) return true;
+  if (typeof value === "object" && !Array.isArray(value)) return !value.start && !value.end;
+  return false;
+}
+
+export function validateParameterValue(parameter: ReportParameter, value: ReportParameterValue, options?: ReportOption[]): string | null {
+  if (isEmptyParameterValue(value)) {
     return parameter.required ? `${parameter.label} is required.` : null;
   }
-  if (parameter.type === "number" && typeof value !== "number") return `${parameter.label} must be a number.`;
+  if (parameter.type === "number" && (typeof value !== "number" || !Number.isFinite(value))) return `${parameter.label} must be a finite number.`;
   if (parameter.type === "boolean" && typeof value !== "boolean") return `${parameter.label} must be true or false.`;
-  if (parameter.type === "multi_select" && !Array.isArray(value)) return `${parameter.label} must be a list.`;
-  if (parameter.type === "date_range" && (typeof value !== "object" || Array.isArray(value) || !("start" in value) || !("end" in value))) {
-    return `${parameter.label} must contain a start and end date.`;
+  if ((parameter.type === "text" || parameter.type === "date") && typeof value !== "string") return `${parameter.label} must be text.`;
+  if (parameter.type === "select" && typeof value !== "string" && typeof value !== "number") return `${parameter.label} must be one option.`;
+  if (parameter.type === "multi_select" && (!Array.isArray(value) || value.some((item) => typeof item !== "string"))) return `${parameter.label} must be a list.`;
+  if (parameter.type === "date" && !isIsoDate(value)) return `${parameter.label} must be a valid date.`;
+  if (parameter.type === "date_range") {
+    if (value === null || typeof value !== "object" || Array.isArray(value) || !("start" in value) || !("end" in value)) return `${parameter.label} must contain a start and end date.`;
+    if (value.start && !isIsoDate(value.start)) return `${parameter.label} has an invalid start date.`;
+    if (value.end && !isIsoDate(value.end)) return `${parameter.label} has an invalid end date.`;
+    if ((parameter.validation?.requireBoth || parameter.required) && (!value.start || !value.end)) return `${parameter.label} requires both a start and end date.`;
+    if (value.start && value.end && value.start > value.end) return `${parameter.label} start date must not be after its end date.`;
+  }
+  const validation = parameter.validation;
+  if (parameter.type === "number" && typeof value === "number" && validation) {
+    if (typeof validation.min === "number" && value < validation.min) return `${parameter.label} must be at least ${validation.min}.`;
+    if (typeof validation.max === "number" && value > validation.max) return `${parameter.label} must be at most ${validation.max}.`;
+    if (validation.exclusiveMin !== undefined && value <= validation.exclusiveMin) return `${parameter.label} must be greater than ${validation.exclusiveMin}.`;
+    if (validation.exclusiveMax !== undefined && value >= validation.exclusiveMax) return `${parameter.label} must be less than ${validation.exclusiveMax}.`;
+    if (validation.integer && !Number.isInteger(value)) return `${parameter.label} must be an integer.`;
+    if (validation.step !== undefined) {
+      const origin = typeof validation.min === "number" ? validation.min : 0;
+      const quotient = (value - origin) / validation.step;
+      if (Math.abs(quotient - Math.round(quotient)) > 1e-9) return `${parameter.label} must use increments of ${validation.step}.`;
+    }
+  }
+  if (parameter.type === "text" && typeof value === "string" && validation) {
+    if (validation.minLength !== undefined && value.length < validation.minLength) return `${parameter.label} must contain at least ${validation.minLength} characters.`;
+    if (validation.maxLength !== undefined && value.length > validation.maxLength) return `${parameter.label} must contain at most ${validation.maxLength} characters.`;
+    if (validation.pattern !== undefined) {
+      try {
+        if (!new RegExp(validation.pattern).test(value)) return `${parameter.label} has an invalid format.`;
+      } catch {
+        return `${parameter.label} has an invalid validation pattern.`;
+      }
+    }
+  }
+  if ((parameter.type === "date" || parameter.type === "date_range") && validation) {
+    const dates = parameter.type === "date" ? [value as string] : [(value as { start: string | null; end: string | null }).start, (value as { start: string | null; end: string | null }).end].filter(Boolean) as string[];
+    if (typeof validation.min === "string" && dates.some((date) => date < validation.min!)) return `${parameter.label} must not be before ${validation.min}.`;
+    if (typeof validation.max === "string" && dates.some((date) => date > validation.max!)) return `${parameter.label} must not be after ${validation.max}.`;
+    if (parameter.type === "date_range" && validation.maxSpanDays !== undefined) {
+      const range = value as { start: string | null; end: string | null };
+      if (range.start && range.end) {
+        const span = (Date.parse(`${range.end}T00:00:00Z`) - Date.parse(`${range.start}T00:00:00Z`)) / 86_400_000;
+        if (span > validation.maxSpanDays) return `${parameter.label} must span no more than ${validation.maxSpanDays} days.`;
+      }
+    }
+  }
+  if (parameter.type === "multi_select" && Array.isArray(value) && validation) {
+    if (validation.minSelections !== undefined && value.length < validation.minSelections) return `${parameter.label} requires at least ${validation.minSelections} selections.`;
+    if (validation.maxSelections !== undefined && value.length > validation.maxSelections) return `${parameter.label} allows at most ${validation.maxSelections} selections.`;
+  }
+  if ((parameter.type === "select" || parameter.type === "multi_select") && options) {
+    const allowed = new Set(options.map((option) => String(option.value)));
+    const selected = Array.isArray(value) ? value : [value];
+    if (selected.some((item) => !allowed.has(String(item)))) return `${parameter.label} contains a value that is not currently available.`;
   }
   return null;
+}
+
+export interface ReportParameterIssue {
+  parameterKey?: string;
+  code: string;
+  message: string;
+}
+
+function ruleValue(values: Record<string, ReportParameterValue>, key: string): unknown {
+  const [base, part] = key.split(".", 2);
+  const value = values[base];
+  return part && value && typeof value === "object" && !Array.isArray(value) ? value[part as "start" | "end"] : value;
+}
+
+function ruleMatches(rule: ReportParameterRule, values: Record<string, ReportParameterValue>): boolean {
+  const left = ruleValue(values, rule.leftKey);
+  const right = rule.rightKey ? ruleValue(values, rule.rightKey) : rule.value;
+  if (left == null || left === "" || right == null || right === "") return true;
+  const comparableLeft = left as any;
+  const comparableRight = right as any;
+  if (rule.operator === "equal") return left === right;
+  if (rule.operator === "not_equal") return left !== right;
+  if (rule.operator === "less_than" || rule.operator === "before") return comparableLeft < comparableRight;
+  if (rule.operator === "less_than_or_equal" || rule.operator === "before_or_equal") return comparableLeft <= comparableRight;
+  if (rule.operator === "greater_than") return comparableLeft > comparableRight;
+  return comparableLeft >= comparableRight;
+}
+
+export function validateReportParameterValues(
+  report: Pick<ReportDocumentV1, "parameters" | "parameterRules">,
+  values: Record<string, ReportParameterValue>,
+  optionsByKey: Record<string, ReportOption[] | undefined> = {},
+): ReportParameterIssue[] {
+  const issues: ReportParameterIssue[] = [];
+  for (const parameter of report.parameters) {
+    const message = validateParameterValue(parameter, values[parameter.key] ?? parameter.defaultValue, optionsByKey[parameter.key]);
+    if (message) issues.push({ parameterKey: parameter.key, code: "invalid_value", message });
+  }
+  for (const rule of report.parameterRules ?? []) {
+    if (!ruleMatches(rule, values)) issues.push({ parameterKey: rule.leftKey.split(".")[0], code: "cross_parameter", message: rule.message });
+  }
+  return issues;
 }
 
 function blockDatasetId(block: ReportBlock): string | null {
@@ -119,6 +231,7 @@ export function validateReportStructure(input: unknown): string[] {
   }
   for (const key of ["requiredSources", "parameters", "datasets", "blocks"] as const) requireArray(key);
   if (input.groups !== undefined && !Array.isArray(input.groups)) errors.push("report.groups must be an array.");
+  if (input.parameterRules !== undefined && !Array.isArray(input.parameterRules)) errors.push("report.parameterRules must be an array.");
   if (errors.length) return errors;
 
   input.requiredSources.forEach((source: unknown, index: number) => {
@@ -134,6 +247,42 @@ export function validateReportStructure(input: unknown): string[] {
     requireString(parameter, "label", path);
     if (!["text", "number", "boolean", "date", "date_range", "select", "multi_select"].includes(parameter.type)) errors.push(`${path}.type is unsupported.`);
     if (!("defaultValue" in parameter)) errors.push(`${path}.defaultValue is required.`);
+    if (parameter.required !== undefined && typeof parameter.required !== "boolean") errors.push(`${path}.required must be a boolean.`);
+    if (parameter.description !== undefined && typeof parameter.description !== "string") errors.push(`${path}.description must be a string.`);
+    if (parameter.options !== undefined) {
+      const optionPath = `${path}.options`;
+      if (!isRecord(parameter.options)) errors.push(`${optionPath} must be an object.`);
+      else if (parameter.options.kind === "static") {
+        if (!Array.isArray(parameter.options.values)) errors.push(`${optionPath}.values must be an array.`);
+        else parameter.options.values.forEach((option: unknown, optionIndex: number) => {
+          if (!isRecord(option) || typeof option.label !== "string" || !["string", "number"].includes(typeof option.value)) errors.push(`${optionPath}.values[${optionIndex}] must contain a string label and string or number value.`);
+        });
+      } else if (parameter.options.kind === "dataset") {
+        requireString(parameter.options, "datasetId", optionPath);
+        requireString(parameter.options, "valueColumn", optionPath);
+        if (parameter.options.labelColumn !== undefined && typeof parameter.options.labelColumn !== "string") errors.push(`${optionPath}.labelColumn must be a string.`);
+      } else errors.push(`${optionPath}.kind is unsupported.`);
+    }
+    if (parameter.validation !== undefined && !isRecord(parameter.validation)) errors.push(`${path}.validation must be an object.`);
+    if (parameter.validationDataset !== undefined) {
+      if (!isRecord(parameter.validationDataset)) errors.push(`${path}.validationDataset must be an object.`);
+      else {
+        requireString(parameter.validationDataset, "datasetId", `${path}.validationDataset`);
+        requireString(parameter.validationDataset, "validColumn", `${path}.validationDataset`);
+        if (parameter.validationDataset.messageColumn !== undefined && typeof parameter.validationDataset.messageColumn !== "string") errors.push(`${path}.validationDataset.messageColumn must be a string.`);
+      }
+    }
+  });
+  (input.parameterRules ?? []).forEach((rule: unknown, index: number) => {
+    const path = `report.parameterRules[${index}]`;
+    if (!isRecord(rule)) { errors.push(`${path} must be an object.`); return; }
+    requireString(rule, "id", path);
+    requireString(rule, "leftKey", path);
+    requireString(rule, "message", path);
+    if (!["less_than", "less_than_or_equal", "greater_than", "greater_than_or_equal", "equal", "not_equal", "before", "before_or_equal"].includes(rule.operator)) errors.push(`${path}.operator is unsupported.`);
+    if ((rule.rightKey === undefined) === (!("value" in rule))) errors.push(`${path} must provide exactly one of rightKey or value.`);
+    if (rule.rightKey !== undefined && (typeof rule.rightKey !== "string" || !rule.rightKey.trim())) errors.push(`${path}.rightKey must be a non-empty string.`);
+    if ("value" in rule && rule.value !== null && !["string", "number", "boolean"].includes(typeof rule.value)) errors.push(`${path}.value must be a scalar or null.`);
   });
   input.datasets.forEach((dataset: unknown, index: number) => {
     const path = `report.datasets[${index}]`;
@@ -141,6 +290,7 @@ export function validateReportStructure(input: unknown): string[] {
     requireString(dataset, "id", path);
     requireString(dataset, "name", path);
     requireString(dataset, "sql", path);
+    if (dataset.role !== undefined && !["data", "parameter_options", "parameter_validation"].includes(dataset.role)) errors.push(`${path}.role is unsupported.`);
   });
   (input.groups ?? []).forEach((group: unknown, index: number) => {
     const path = `report.groups[${index}]`;
@@ -279,6 +429,41 @@ export function validateReport(input: unknown): string[] {
     keys.add(p.key);
     const valueError = validateParameterValue({ ...p, required: false }, p.defaultValue);
     if (valueError) errors.push(valueError);
+    const validation = p.validation;
+    if (validation) {
+      const allowed = p.type === "number" ? new Set(["min", "max", "exclusiveMin", "exclusiveMax", "step", "integer"])
+        : p.type === "text" ? new Set(["minLength", "maxLength", "pattern"])
+          : p.type === "date" ? new Set(["min", "max"])
+            : p.type === "date_range" ? new Set(["min", "max", "requireBoth", "maxSpanDays"])
+              : p.type === "multi_select" ? new Set(["minSelections", "maxSelections"])
+                : new Set<string>();
+      for (const key of Object.keys(validation)) if (!allowed.has(key)) errors.push(`${p.label}: validation.${key} is not supported for ${p.type}.`);
+      for (const key of ["min", "max", "exclusiveMin", "exclusiveMax", "step"] as const) {
+        if (validation[key] !== undefined && p.type === "number" && !Number.isFinite(validation[key])) errors.push(`${p.label}: validation.${key} must be a finite number.`);
+      }
+      if (p.type === "number" && typeof validation.min === "number" && typeof validation.max === "number" && validation.min > validation.max) errors.push(`${p.label}: validation.min must not exceed validation.max.`);
+      if (validation.step !== undefined && (!Number.isFinite(validation.step) || validation.step <= 0)) errors.push(`${p.label}: validation.step must be greater than zero.`);
+      if (validation.integer !== undefined && typeof validation.integer !== "boolean") errors.push(`${p.label}: validation.integer must be a boolean.`);
+      if (validation.requireBoth !== undefined && typeof validation.requireBoth !== "boolean") errors.push(`${p.label}: validation.requireBoth must be a boolean.`);
+      for (const key of ["minLength", "maxLength", "maxSpanDays", "minSelections", "maxSelections"] as const) {
+        if (validation[key] !== undefined && (!Number.isInteger(validation[key]) || validation[key]! < 0)) errors.push(`${p.label}: validation.${key} must be a non-negative integer.`);
+      }
+      if (validation.minLength !== undefined && validation.maxLength !== undefined && validation.minLength > validation.maxLength) errors.push(`${p.label}: validation.minLength must not exceed validation.maxLength.`);
+      if (validation.minSelections !== undefined && validation.maxSelections !== undefined && validation.minSelections > validation.maxSelections) errors.push(`${p.label}: validation.minSelections must not exceed validation.maxSelections.`);
+      if (validation.pattern !== undefined) {
+        if (typeof validation.pattern !== "string" || validation.pattern.length > 256) errors.push(`${p.label}: validation.pattern must be a string of at most 256 characters.`);
+        else try { new RegExp(validation.pattern); } catch { errors.push(`${p.label}: validation.pattern is not a valid regular expression.`); }
+      }
+      if (p.type === "date" || p.type === "date_range") {
+        if (validation.min !== undefined && !isIsoDate(validation.min)) errors.push(`${p.label}: validation.min must be an ISO date.`);
+        if (validation.max !== undefined && !isIsoDate(validation.max)) errors.push(`${p.label}: validation.max must be an ISO date.`);
+        if (typeof validation.min === "string" && typeof validation.max === "string" && validation.min > validation.max) errors.push(`${p.label}: validation.min must not exceed validation.max.`);
+      }
+    }
+    if (p.options?.kind === "static") {
+      const membershipError = validateParameterValue({ ...p, required: false }, p.defaultValue, p.options.values);
+      if (membershipError && membershipError !== valueError) errors.push(membershipError);
+    }
   }
   const datasetIds = new Set<string>();
   for (const d of report.datasets) {
@@ -288,6 +473,8 @@ export function validateReport(input: unknown): string[] {
       const rangeBase = token.replace(/_(?:start|end)$/, "");
       if (!keys.has(token) && !keys.has(rangeBase)) errors.push(`${d.name}: unknown parameter $${token}.`);
       const parameter = report.parameters.find((p) => p.key === token);
+      const rangeParameter = report.parameters.find((p) => p.key === rangeBase && p.type === "date_range");
+      if (rangeParameter && token === rangeParameter.key) errors.push(`${d.name}: date range $${token} must be referenced as $${token}_start or $${token}_end.`);
       if (parameter?.type === "multi_select") {
         const clean = stripSqlCommentsAndLiterals(d.sql);
         const occurrences = [...clean.matchAll(new RegExp(`\\$${token}\\b`, "g"))];
@@ -298,11 +485,43 @@ export function validateReport(input: unknown): string[] {
   }
   for (const p of report.parameters) {
     if (p.options?.kind === "dataset" && !datasetIds.has(p.options.datasetId)) errors.push(`${p.label}: options dataset is missing.`);
+    if (p.validationDataset && !datasetIds.has(p.validationDataset.datasetId)) errors.push(`${p.label}: validation dataset is missing.`);
+    if (p.validationDataset) {
+      const source = report.datasets.find((dataset) => dataset.id === p.validationDataset!.datasetId);
+      if (source && source.role !== "parameter_validation") errors.push(`${p.label}: validation dataset must have role parameter_validation.`);
+    }
+  }
+  const parameterPath = (path: string): ReportParameter | undefined => report.parameters.find((parameter) => parameter.key === path.split(".")[0]);
+  for (const rule of report.parameterRules ?? []) {
+    takeId(rule.id, "Parameter rule");
+    const left = parameterPath(rule.leftKey);
+    if (!left) errors.push(`Parameter rule ${rule.id}: unknown left parameter ${rule.leftKey}.`);
+    const leftPart = rule.leftKey.split(".")[1];
+    if (leftPart && (left?.type !== "date_range" || !["start", "end"].includes(leftPart))) errors.push(`Parameter rule ${rule.id}: ${rule.leftKey} is not a valid parameter path.`);
+    if (rule.rightKey) {
+      const right = parameterPath(rule.rightKey);
+      if (!right) errors.push(`Parameter rule ${rule.id}: unknown right parameter ${rule.rightKey}.`);
+      const rightPart = rule.rightKey.split(".")[1];
+      if (rightPart && (right?.type !== "date_range" || !["start", "end"].includes(rightPart))) errors.push(`Parameter rule ${rule.id}: ${rule.rightKey} is not a valid parameter path.`);
+    }
   }
   const groupIds = new Set<string>();
+  const validateTemplate = (source: string | undefined, label: string) => {
+    if (!source) return;
+    for (const token of parameterTextTokens(source)) {
+      if (keys.has(token)) continue;
+      const suffix = /_(label|value|start|end)$/.exec(token)?.[1];
+      const base = suffix ? token.slice(0, -(suffix.length + 1)) : token;
+      const parameter = report.parameters.find((candidate) => candidate.key === base);
+      const validSuffix = parameter && (suffix === "label" || suffix === "value" || ((suffix === "start" || suffix === "end") && parameter.type === "date_range"));
+      if (!validSuffix) errors.push(`${label}: unknown parameter $${token}.`);
+    }
+  };
   for (const group of report.groups ?? []) {
     takeId(group.id, "Group");
     groupIds.add(group.id);
+    validateTemplate(group.title, group.title);
+    validateTemplate(group.description, group.title);
   }
   const dependencies = new Map<string, Set<string>>();
   for (const p of report.parameters) {
@@ -324,6 +543,9 @@ export function validateReport(input: unknown): string[] {
   for (const b of report.blocks) {
     takeId(b.id, "Block");
     if (b.groupId && !groupIds.has(b.groupId)) errors.push(`${b.title ?? b.id}: group is missing.`);
+    validateTemplate(b.title, b.title ?? b.id);
+    if (b.type === "markdown") validateTemplate(b.markdown, b.title ?? b.id);
+    if (b.type === "ai_narrative") validateTemplate(b.instruction, b.title ?? b.id);
     if (b.type === "markdown" && b.appearance?.rules?.length) errors.push(`${b.title ?? b.id}: conditional appearance requires a dataset-backed block.`);
     const datasetId = blockDatasetId(b);
     if (datasetId && !datasetIds.has(datasetId)) errors.push(`${b.title ?? b.id}: dataset is missing.`);

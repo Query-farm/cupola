@@ -81,6 +81,10 @@ describe("report agent tools", () => {
   test("lets the agent configure or disable automatic refresh", () => {
     const tool = REPORT_TOOLS.find((candidate) => candidate.name === "configure_report")!;
     expect(tool.input_schema.properties.refreshIntervalSeconds.type).toEqual(["number", "null"]);
+    expect(tool.input_schema.properties.parameters.items.properties.validation.properties).toHaveProperty("maxSpanDays");
+    expect(tool.input_schema.properties.parameters.items.properties.validationDataset.required).toEqual(["datasetId", "validColumn"]);
+    expect(tool.input_schema.properties.parameterRules.items.properties.operator.enum).toContain("before_or_equal");
+    expect(REPORT_DOCUMENT_SCHEMA.properties.datasets.items.properties.role.enum).toContain("parameter_validation");
   });
 
   test("places semantic half-width blocks side by side and preserves layout on revision", () => {

@@ -129,18 +129,31 @@ export function interpolateReportText(
   values: Record<string, ReportParameterValue>,
 ): string {
   const byKey = new Map(report.parameters.map((parameter) => [parameter.key, parameter]));
-  return source.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (token, tokenName: string) => {
+  const escapedDollar = "\u0000cupola-dollar\u0000";
+  return source.replaceAll("$$", escapedDollar).replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (token, tokenName: string) => {
     let key = tokenName;
-    let part: "start" | "end" | undefined;
-    if (tokenName.endsWith("_start") && byKey.get(tokenName.slice(0, -6))?.type === "date_range") {
+    let part: "start" | "end" | "label" | "value" | undefined;
+    if (!byKey.has(tokenName) && tokenName.endsWith("_start") && byKey.get(tokenName.slice(0, -6))?.type === "date_range") {
       key = tokenName.slice(0, -6);
       part = "start";
-    } else if (tokenName.endsWith("_end") && byKey.get(tokenName.slice(0, -4))?.type === "date_range") {
+    } else if (!byKey.has(tokenName) && tokenName.endsWith("_end") && byKey.get(tokenName.slice(0, -4))?.type === "date_range") {
       key = tokenName.slice(0, -4);
       part = "end";
+    } else if (!byKey.has(tokenName) && tokenName.endsWith("_label") && byKey.has(tokenName.slice(0, -6))) {
+      key = tokenName.slice(0, -6);
+      part = "label";
+    } else if (!byKey.has(tokenName) && tokenName.endsWith("_value") && byKey.has(tokenName.slice(0, -6))) {
+      key = tokenName.slice(0, -6);
+      part = "value";
     }
     const parameter = byKey.get(key);
     if (!parameter) return token;
-    return displayParameterValue(values[key] ?? parameter.defaultValue, part);
-  });
+    const value = values[key] ?? parameter.defaultValue;
+    const staticOptions = parameter.options?.kind === "static" ? parameter.options.values : undefined;
+    if (part === "label" && staticOptions) {
+      const selected = Array.isArray(value) ? value : [value];
+      return selected.map((item) => staticOptions.find((option) => String(option.value) === String(item))?.label ?? String(item ?? "")).join(", ");
+    }
+    return displayParameterValue(value, part === "start" || part === "end" ? part : undefined);
+  }).replaceAll(escapedDollar, "$");
 }

@@ -33,7 +33,7 @@ test("renders report text blocks without waiting for a dataset", async ({ page }
       id: "summary",
       type: "markdown",
       title: "48-Hour Forecast — $city",
-      markdown: "## Executive summary\n\nAll three datasets are ready.",
+      markdown: "## Executive summary\n\nAll three datasets are ready.\n\nLocation: **$city**.",
       layout: { x: 0, y: 0, w: 12, h: 3 },
     }, {
       id: "content-only",
@@ -70,6 +70,7 @@ test("renders report text blocks without waiting for a dataset", async ({ page }
 
   await expect(page.getByText("Executive summary", { exact: true })).toBeVisible();
   await expect(page.getByText("All three datasets are ready.")).toBeVisible();
+  await expect(page.getByText("Location:").locator("..")).toContainText("Glen Allen");
   await expect(page.getByTestId("report-block-header-summary")).toContainText("48-Hour Forecast — Glen Allen");
   await expect(page.getByTestId("report-block-header-summary")).not.toContainText("$city");
   await expect(page.getByTestId("report-block-header-content-only")).toHaveCount(0);
@@ -81,9 +82,65 @@ test("renders report text blocks without waiting for a dataset", async ({ page }
   await expect(page.getByTestId("report-block-content-only").locator("img")).toHaveAttribute("src", "/favicon.svg");
   await expect(page.getByText("This report has not loaded its data yet.")).toHaveCount(0);
 
+  await expect(page.getByTestId("report-parameters-toggle")).toContainText("Glen Allen");
+  await expect(page.getByTestId("report-parameters-toggle")).toHaveAttribute("aria-expanded", "false");
+  await page.getByTestId("report-parameters-toggle").click();
   await page.locator(".report-parameters input").fill("Norfolk");
+  await expect(page.getByTestId("report-parameters-toggle")).toContainText("Unapplied changes");
   await page.getByRole("button", { name: "Apply" }).click();
+  await expect(page.getByTestId("report-parameters-toggle")).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("report-parameters-toggle")).toContainText("Norfolk");
   await expect(page.getByTestId("report-block-header-summary")).toContainText("48-Hour Forecast — Norfolk");
+  await expect(page.getByText("Location:").locator("..")).toContainText("Norfolk");
+});
+
+test("keeps the last valid report active when a parameter fails validation", async ({ page }) => {
+  await page.getByTestId("tab-reports").click();
+  await page.evaluate(() => {
+    const bridge = (window as any).__bridge;
+    const queryPrepared = bridge.queryPrepared;
+    if (!queryPrepared) throw new Error("Prepared query bridge is not ready");
+    (window as any).__validatedReportCalls = 0;
+    bridge.queryPrepared = async (sql: string, params: unknown[]) => {
+      (window as any).__validatedReportCalls += 1;
+      return queryPrepared(sql, params);
+    };
+  });
+  const now = Date.now();
+  const report = {
+    schemaVersion: 1,
+    id: "validated-parameters-example",
+    title: "Validated parameters",
+    createdAt: now,
+    updatedAt: now,
+    revision: 1,
+    requiredSources: [],
+    parameters: [{ id: "humidity", key: "humidity", label: "Humidity", type: "number", defaultValue: 50, required: true, validation: { min: 0, max: 100 } }],
+    datasets: [{ id: "reading", name: "Reading", sql: "SELECT $humidity AS humidity" }],
+    blocks: [{ id: "humidity-kpi", type: "kpi", datasetId: "reading", title: "Humidity", valueColumn: "humidity", layout: { x: 0, y: 0, w: 4, h: 2 } }],
+  };
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "validated.cupola-report.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(report)),
+  });
+  await page.getByTestId("reports-run").click();
+  await expect(page.getByTestId("report-block-humidity-kpi")).toContainText("50", { timeout: T_NORMAL });
+  expect(await page.evaluate(() => (window as any).__validatedReportCalls)).toBe(1);
+
+  await page.getByTestId("report-parameters-toggle").click();
+  await page.locator('.report-parameters input[type="number"]').fill("101");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(page.getByRole("alert")).toContainText("at most 100");
+  await expect(page.getByTestId("report-parameters-toggle")).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("report-parameters-toggle")).toContainText("50");
+  await expect(page.getByTestId("report-block-humidity-kpi")).toContainText("50");
+  expect(await page.evaluate(() => (window as any).__validatedReportCalls)).toBe(1);
+
+  await page.locator('.report-parameters input[type="number"]').fill("75");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(page.getByTestId("report-block-humidity-kpi")).toContainText("75", { timeout: T_NORMAL });
+  expect(await page.evaluate(() => (window as any).__validatedReportCalls)).toBe(2);
 });
 
 test("visually groups related report boxes into labeled rounded containers", async ({ page }) => {
