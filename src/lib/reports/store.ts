@@ -31,9 +31,13 @@ async function transaction<T>(mode: IDBTransactionMode, fn: (store: IDBObjectSto
 }
 
 export async function listReports(): Promise<ReportDocumentV1[]> {
+  return (await listStoredReports()).map((record) => record.document);
+}
+
+export async function listStoredReports(): Promise<StoredReport[]> {
   if (typeof indexedDB === "undefined") return [];
   const records = await transaction<StoredReport[]>("readonly", (store) => store.getAll());
-  return records.map((r) => r.document).sort((a, b) => b.updatedAt - a.updatedAt);
+  return records.sort((a, b) => b.document.updatedAt - a.document.updatedAt);
 }
 
 export async function getStoredReport(id: string): Promise<StoredReport | null> {
@@ -51,9 +55,30 @@ export async function saveReport(input: ReportDocumentV1): Promise<ReportDocumen
   const revisions = existing
     ? [...existing.revisions, cloneReport(existing.document)].slice(-MAX_REVISIONS)
     : [];
-  await transaction<IDBValidKey>("readwrite", (store) => store.put({ document, revisions } satisfies StoredReport));
+  await transaction<IDBValidKey>("readwrite", (store) => store.put({
+    document,
+    revisions,
+    publishedDocument: existing?.publishedDocument,
+    publishedAt: existing?.publishedAt,
+  } satisfies StoredReport));
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("cupola:reports-changed"));
   return document;
+}
+
+/** Save the current draft and copy that exact revision into the reader channel. */
+export async function publishReport(input: ReportDocumentV1): Promise<StoredReport> {
+  const document = await saveReport(input);
+  const existing = await getStoredReport(document.id);
+  if (!existing) throw new Error("The report could not be loaded after saving.");
+  const publishedAt = Date.now();
+  const stored: StoredReport = {
+    ...existing,
+    publishedDocument: cloneReport(document),
+    publishedAt,
+  };
+  await transaction<IDBValidKey>("readwrite", (store) => store.put(stored));
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("cupola:reports-changed"));
+  return stored;
 }
 
 export async function deleteReport(id: string): Promise<void> {

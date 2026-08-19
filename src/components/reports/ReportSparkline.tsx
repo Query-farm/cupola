@@ -1,5 +1,6 @@
+import { useId } from "react";
 import type { ReportSparklineBlock } from "@/lib/reports/types";
-import { buildSparklineSeries } from "@/lib/reports/sparkline";
+import { buildSparklineSeries, findSparklineSplit } from "@/lib/reports/sparkline";
 
 interface Props {
   block: ReportSparklineBlock;
@@ -8,9 +9,12 @@ interface Props {
 }
 
 export function ReportSparkline({ block, rows, formatValue }: Props) {
+  const id = useId().replace(/:/g, "");
   const series = buildSparklineSeries(rows, block.valueColumn);
   if (!series.latest) return <div className="h-full flex items-center justify-center text-xs text-muted-foreground">No numeric values</div>;
   const color = block.color || "var(--primary)";
+  const split = block.splitColumn ? findSparklineSplit(series, block.splitColumn) : null;
+  const splitColor = split && block.splitColor ? block.splitColor : null;
   const label = block.labelColumn ? series.latest.row[block.labelColumn] : null;
   const [latestX, latestY] = series.points.split(" ").at(-1)!.split(",");
   return <div data-testid="report-sparkline" className="h-full min-h-0 flex items-end gap-3 overflow-hidden">
@@ -25,9 +29,29 @@ export function ReportSparkline({ block, rows, formatValue }: Props) {
       preserveAspectRatio="none"
       role="img"
     >
-      <polygon points={series.areaPoints} fill={color} opacity="0.12" />
-      <polyline points={series.points} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-      <line x1={latestX} x2={latestX} y1={latestY} y2={latestY} stroke={color} strokeWidth="4" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+      {splitColor && <defs>
+        <clipPath id={`${id}-before`} clipPathUnits="userSpaceOnUse"><rect x="0" y="0" width={split!.x} height="32" /></clipPath>
+        <clipPath id={`${id}-after`} clipPathUnits="userSpaceOnUse"><rect x={split!.x} y="0" width={100 - split!.x} height="32" /></clipPath>
+      </defs>}
+      <polygon points={series.areaPoints} fill={color} opacity="0.12" clipPath={splitColor ? `url(#${id}-before)` : undefined} />
+      <polyline points={series.points} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" clipPath={splitColor ? `url(#${id}-before)` : undefined} />
+      {splitColor && <>
+        <polygon points={series.areaPoints} fill={splitColor} opacity="0.12" clipPath={`url(#${id}-after)`} />
+        <polyline points={series.points} fill="none" stroke={splitColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" clipPath={`url(#${id}-after)`} />
+      </>}
+      {split && <g><title>{block.splitLabel || "Series split"}</title><line
+        data-testid="report-sparkline-split"
+        aria-label={block.splitLabel || "Series split"}
+        x1={split.x}
+        x2={split.x}
+        y1="1"
+        y2="31"
+        stroke="var(--muted-foreground)"
+        strokeWidth="1.25"
+        strokeDasharray="2 2"
+        vectorEffect="non-scaling-stroke"
+      /></g>}
+      <line x1={latestX} x2={latestX} y1={latestY} y2={latestY} stroke={splitColor || color} strokeWidth="4" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
     </svg>
   </div>;
 }

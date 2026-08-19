@@ -347,6 +347,10 @@ export function validateReportStructure(input: unknown): string[] {
     if (block.type === "sparkline") {
       if (block.showValue !== undefined && typeof block.showValue !== "boolean") errors.push(`${path}.showValue must be a boolean.`);
       if (block.color !== undefined && typeof block.color !== "string") errors.push(`${path}.color must be a string.`);
+      if (block.splitColumn !== undefined) requireString(block, "splitColumn", path);
+      if (block.splitLabel !== undefined && typeof block.splitLabel !== "string") errors.push(`${path}.splitLabel must be a string.`);
+      if (block.splitColor !== undefined && typeof block.splitColor !== "string") errors.push(`${path}.splitColor must be a string.`);
+      if ((block.splitLabel !== undefined || block.splitColor !== undefined) && block.splitColumn === undefined) errors.push(`${path}.splitColumn is required when splitLabel or splitColor is set.`);
     }
     if (block.caption !== undefined && typeof block.caption !== "string") errors.push(`${path}.caption must be a string.`);
     if (block.source !== undefined && typeof block.source !== "string") errors.push(`${path}.source must be a string.`);

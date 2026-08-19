@@ -99,6 +99,25 @@ describe("report document validation", () => {
     expect(validateReport(report)).toContain("report.blocks[0].title must be a string.");
   });
 
+  test("validates optional sparkline split configuration", () => {
+    const report = createEmptyReport("Forecast trend") as any;
+    report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 1 AS humidity, false AS is_forecast" });
+    report.blocks.push({
+      id: "humidity",
+      type: "sparkline",
+      datasetId: "weather",
+      valueColumn: "humidity",
+      splitColumn: "is_forecast",
+      splitLabel: "Now",
+      splitColor: "#7c3aed",
+      layout: { x: 0, y: 0, w: 3, h: 2 },
+    });
+    expect(validateReport(report)).toEqual([]);
+
+    delete report.blocks[0].splitColumn;
+    expect(validateReport(report).join(" ")).toContain("splitColumn is required");
+  });
+
   test("validates bounded AI narrative instructions, refresh policy, and snapshots", () => {
     const report = createEmptyReport("Narrative");
     report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 68 AS humidity" });

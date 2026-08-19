@@ -228,6 +228,18 @@ const blockProperties = {
   format: { enum: ["number", "currency", "percent", "text"] },
   showValue: { type: "boolean" },
   color: stringSchema,
+  splitColumn: {
+    type: "string",
+    description: "For sparkline: a boolean or phase column whose first truthy/forecast row marks a vertical boundary; order rows in SQL.",
+  },
+  splitLabel: {
+    type: "string",
+    description: "For sparkline: accessible hover label for the vertical boundary, such as Now or Forecast begins.",
+  },
+  splitColor: {
+    type: "string",
+    description: "For sparkline: optional CSS color for the series at and after the boundary; color controls the portion before it.",
+  },
   categoryColumn: stringSchema,
   facetColumn: stringSchema,
   xColumn: stringSchema,
@@ -311,6 +323,52 @@ const compositionalBlockSchema = {
 };
 
 export const REPORT_TOOLS: Tool[] = [
+  {
+    name: "plan_report",
+    description: "Declare the concrete datasets, parameters, blocks, and acceptance criteria for this authoring turn before changing the report. Call it again to revise the plan when feedback changes the scope.",
+    input_schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        objective: stringSchema,
+        approach: { type: "array", minItems: 1, items: stringSchema },
+        datasets: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: { name: stringSchema, purpose: stringSchema },
+            required: ["name", "purpose"],
+          },
+        },
+        blocks: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              type: { enum: ["markdown", "kpi", "sparkline", "small_multiples", "bullet", "slopegraph", "range_dot", "table", "chart", "perspective", "map", "ai_narrative"] },
+              title: stringSchema,
+              purpose: stringSchema,
+              datasetName: stringSchema,
+            },
+            required: ["type", "purpose"],
+          },
+        },
+        parameters: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: { key: stringSchema, type: stringSchema, purpose: stringSchema },
+            required: ["key", "type", "purpose"],
+          },
+        },
+        acceptanceCriteria: { type: "array", minItems: 1, items: stringSchema },
+      },
+      required: ["objective", "approach", "datasets", "blocks", "parameters", "acceptanceCriteria"],
+    },
+  },
   { name: "list_tables", description: "List the connected catalog's schemas, tables, and views.", input_schema: { type: "object", additionalProperties: false, properties: {} } },
   { name: "describe_table", description: "Describe a table before writing SQL for it.", input_schema: { type: "object", additionalProperties: false, properties: { catalog: stringSchema, schema: stringSchema, table: stringSchema }, required: ["schema", "table"] } },
   { name: "preview_sql", description: "Run one read-only SQL query to verify columns and sample results.", input_schema: { type: "object", additionalProperties: false, properties: { sql: stringSchema }, required: ["sql"] } },

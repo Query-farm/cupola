@@ -3,7 +3,7 @@ import { ResponsiveGridLayout, useContainerWidth, type Layout, type ResponsiveLa
 import { noCompactor } from "react-grid-layout/core";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Download, FileJson, FilePlus2, GripVertical, Loader2, Play, Plus, Printer, Save, Share2, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Download, Eye, FileJson, FilePlus2, GripVertical, Loader2, Pencil, Play, Plus, Printer, Save, Send, Share2, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import type { CatalogData } from "@/lib/service";
 import { engine, ui } from "@/lib/shell-bridge";
@@ -31,11 +31,12 @@ import { reportDisplayRows, reportMapRows } from "@/lib/reports/display";
 import { isBlockingVegaWarning, validateReportResultColumns } from "@/lib/reports/execution";
 import { resolveReportAppearance } from "@/lib/reports/appearance";
 import { REPORT_TOOLS, upsertAgentBlock, upsertAgentDataset, upsertAgentGroup, type SemanticBlockHeight, type SemanticBlockWidth } from "@/lib/reports/agent-tools";
+import { checkpointReportAgentPlan, parseReportAgentPlan, reportAgentRepair, validateReportAgentPlan, type ReportAgentPlan } from "@/lib/reports/agent-reliability";
 import { compileReportQuery, interpolateReportText, materializeReportQuery } from "@/lib/reports/parameters";
 import { generateReportNarrative, prepareNarrativeInput } from "@/lib/reports/narrative";
 import { isReportTufteBlock, tufteBlockToVegaSpec } from "@/lib/reports/tufte";
 import { buildShareReportUrl, clearSharedReport, consumeSharedReport } from "@/lib/reports/share";
-import { deleteReport, exportReportJson, getStoredReport, importReportJson, listReports, restoreReportRevision, saveReport } from "@/lib/reports/store";
+import { deleteReport, exportReportJson, getStoredReport, importReportJson, listStoredReports, publishReport, restoreReportRevision, saveReport } from "@/lib/reports/store";
 import { cloneReport, createEmptyReport, newReportId, type ReportAiNarrativeBlock, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportGroup, type ReportOption, type ReportParameter, type ReportParameterValue } from "@/lib/reports/types";
 import { parameterTokens, validateReadOnlySql, validateReport, validateReportParameterValues, type ReportParameterIssue } from "@/lib/reports/validation";
 
@@ -44,6 +45,7 @@ interface Props {
   serviceUrl: string;
   attachedCatalogNames?: string[];
   onBusyChange?: (busy: boolean) => void;
+  initialReport?: ReportDocumentV1;
 }
 
 interface DatasetResult {
@@ -69,6 +71,24 @@ interface NarrativeGenerationState {
 
 function isDatasetPending(result?: DatasetResult): boolean {
   return result?.status === "queued" || result?.status === "running";
+}
+
+async function waitForReportEngine(timeoutMs = 30_000): Promise<void> {
+  if (!engine.queryPrepared) {
+    await new Promise<void>((resolve, reject) => {
+      const onReady = () => {
+        window.clearTimeout(timeout);
+        resolve();
+      };
+      const timeout = window.setTimeout(() => {
+        window.removeEventListener("duckdb-ready", onReady);
+        reject(new Error("DuckDB did not finish starting."));
+      }, timeoutMs);
+      window.addEventListener("duckdb-ready", onReady, { once: true });
+    });
+  }
+  if (engine.attached) await engine.attached;
+  if (!engine.queryPrepared) throw new Error("DuckDB is still starting up.");
 }
 
 function visibleMarkdownTitle(title?: string): string | null {
@@ -471,11 +491,16 @@ function ParameterInput({ parameter, value, options, errors, onChange }: { param
   return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><Input className="h-8 min-w-36" type={parameter.type === "number" ? "number" : parameter.type === "date" ? "date" : "text"} value={value == null ? "" : String(value)} required={parameter.required} min={validation?.min} max={validation?.max} step={parameter.type === "number" ? (validation?.step ?? (validation?.integer ? 1 : "any")) : undefined} minLength={validation?.minLength} maxLength={validation?.maxLength} pattern={validation?.pattern} {...accessibility} onChange={(e) => onChange(parameter.type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value)} />{feedback}</div>;
 }
 
-export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames = [], onBusyChange }: Props) {
+export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames = [], onBusyChange, initialReport }: Props) {
   const { settings } = useSettings();
   const [reports, setReports] = useState<ReportDocumentV1[]>([]);
+  const [publishedReports, setPublishedReports] = useState<Record<string, ReportDocumentV1>>({});
+  const [publishedTimes, setPublishedTimes] = useState<Record<string, number>>({});
   const [selected, setSelected] = useState<ReportDocumentV1 | null>(null);
   const [draft, setDraft] = useState<ReportDocumentV1 | null>(null);
+  const [published, setPublished] = useState<ReportDocumentV1 | null>(null);
+  const [publishedAt, setPublishedAt] = useState<number | null>(null);
+  const [readerMode, setReaderMode] = useState(false);
   const [results, setResults] = useState<Record<string, DatasetResult>>({});
   const [runProgress, setRunProgress] = useState<ReportRunProgress | null>(null);
   const [values, setValues] = useState<Record<string, ReportParameterValue>>({});
@@ -499,6 +524,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const agentMessagesRef = useRef<MessageParam[]>([]);
   const agentThreadRef = useRef<HTMLDivElement>(null);
   const runGeneration = useRef(0);
+  const initialReportOpened = useRef(false);
   const autoRefreshRunningRef = useRef(false);
   const validateAndRunRef = useRef<((report: ReportDocumentV1, values: Record<string, ReportParameterValue>, changedOnly: boolean) => Promise<boolean>) | null>(null);
   const autoRefreshStateRef = useRef<{
@@ -512,9 +538,28 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     if (view) reportChartViews.current.set(blockId, view);
     else reportChartViews.current.delete(blockId);
   }, []);
-  const { width, containerRef, mounted } = useContainerWidth({ initialWidth: 1000 });
+  const { width, containerRef, mounted, measureWidth } = useContainerWidth({ initialWidth: 1000 });
+  const activeReport = readerMode && published ? published : draft;
 
-  const reload = useCallback(async () => setReports(await listReports()), []);
+  // The workspace first renders its library, so the hook's mount-time observer
+  // has no report canvas to attach to. Start measuring when a report opens and
+  // keep observing while the agent/source panel changes the available width.
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!draft || !node) return;
+    measureWidth();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => measureWidth());
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [draft?.id, containerRef, measureWidth]);
+
+  const reload = useCallback(async () => {
+    const records = await listStoredReports();
+    setReports(records.map((record) => record.document));
+    setPublishedReports(Object.fromEntries(records.flatMap((record) => record.publishedDocument ? [[record.document.id, record.publishedDocument]] : [])));
+    setPublishedTimes(Object.fromEntries(records.flatMap((record) => record.publishedAt ? [[record.document.id, record.publishedAt]] : [])));
+  }, []);
   useEffect(() => { reload(); const listener = () => reload(); window.addEventListener("cupola:reports-changed", listener); return () => window.removeEventListener("cupola:reports-changed", listener); }, [reload]);
   useEffect(() => { onBusyChange?.(agentBusy || Object.values(results).some(isDatasetPending) || Object.values(narrativeStates).some((state) => state.status === "running")); }, [agentBusy, results, narrativeStates, onBusyChange]);
   useEffect(() => {
@@ -568,7 +613,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     };
   }, [settings.aiModel, settings.anthropicApiKey]);
 
-  const openReport = useCallback((report: ReportDocumentV1, initialValues?: Record<string, ReportParameterValue>, autoRun = true, persisted = true) => {
+  const openReport = useCallback((report: ReportDocumentV1, initialValues?: Record<string, ReportParameterValue>, autoRun = true, persisted = true, mode: "edit" | "reader" = "edit", publishedSnapshot?: ReportDocumentV1, publicationTime?: number) => {
     abortRef.current?.abort();
     abortRef.current = null;
     narrativeAbortRef.current?.abort();
@@ -578,19 +623,35 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     resultCache.current = new QueryResultCache();
     reportChartViews.current.clear();
     const copy = cloneReport(report);
-    const defaults = { ...defaultValues(copy), ...initialValues };
-    setSelected(persisted ? copy : null); setDraft(copy); setValues(defaults); setAppliedValues(defaults); setParameterIssues([]); setParametersExpanded(false); setResults({}); setNarrativeStates({}); setRunProgress(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
-    void getStoredReport(copy.id).then((stored) => setRevisionOptions(stored?.revisions ?? []));
+    const publishedCopy = publishedSnapshot ? cloneReport(publishedSnapshot) : null;
+    const viewed = mode === "reader" && publishedCopy ? publishedCopy : copy;
+    const defaults = { ...defaultValues(viewed), ...initialValues };
+    setSelected(persisted ? copy : null); setDraft(copy); setPublished(publishedCopy); setPublishedAt(publicationTime ?? null); setReaderMode(mode === "reader" && Boolean(publishedCopy)); setValues(defaults); setAppliedValues(defaults); setParameterIssues([]); setParametersExpanded(false); setResults({}); setNarrativeStates({}); setRunProgress(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false);
+    void getStoredReport(copy.id).then((stored) => {
+      setRevisionOptions(stored?.revisions ?? []);
+      if (!publishedSnapshot && stored?.publishedDocument) {
+        setPublished(cloneReport(stored.publishedDocument));
+        setPublishedAt(stored.publishedAt ?? null);
+      }
+    });
     if (autoRun) setTimeout(() => {
       if (runGeneration.current !== generation) return;
-      void validateAndRunRef.current?.(copy, defaults, false);
+      void validateAndRunRef.current?.(viewed, defaults, false);
     }, 0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    consumeSharedReport().then((shared) => { if (shared) { openReport(shared.report, shared.values, false, false); clearSharedReport(); setShareStatus("Shared report opened for review. Save and run it when ready."); } });
-  }, [openReport]);
+    if (!initialReport || initialReportOpened.current) return;
+    initialReportOpened.current = true;
+    openReport(initialReport, undefined, true, false);
+    setShareStatus("Interactive examples use canned data queried locally in your browser; no VGI catalog is attached.");
+  }, [initialReport, openReport]);
+
+  useEffect(() => {
+    if (initialReport) return;
+    consumeSharedReport().then((shared) => { if (shared) { const reader = shared.mode === "reader"; openReport(shared.report, shared.values, reader, false, reader ? "reader" : "edit", reader ? shared.report : undefined); clearSharedReport(); setShareStatus(reader ? "Published report opened in reader mode." : "Shared report opened for review. Save and run it when ready."); } });
+  }, [initialReport, openReport]);
 
   useEffect(() => {
     const consume = () => { const promotion = consumeReportPromotion(); if (promotion) setPendingPromotion(promotion); };
@@ -611,8 +672,15 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       setShareStatus(error);
       return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error }));
     }
-    if (engine.attached) await engine.attached;
-    if (!engine.queryPrepared) {
+    try {
+      await waitForReportEngine();
+    } catch (cause) {
+      const error = cause instanceof Error ? cause.message : "DuckDB is still starting up.";
+      setShareStatus(error);
+      return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error }));
+    }
+    const queryPrepared = engine.queryPrepared;
+    if (!queryPrepared) {
       const error = "DuckDB is still starting up.";
       setShareStatus(error);
       return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error }));
@@ -644,7 +712,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         const readErrors = validateReadOnlySql(dataset.sql);
         if (readErrors.length) throw new Error(readErrors.join(" "));
         const compiled = compileReportQuery(dataset.sql, report, runValues);
-        const response = await engine.queryPrepared(compiled.sql, compiled.params);
+        const response = await queryPrepared(compiled.sql, compiled.params);
         if (generation !== runGeneration.current) return summaries;
         if (!response.ok || !response.arrowBuffers?.[0]) throw new Error(response.error || "Query returned no result.");
         const table = decodeArrowBuffer(response.arrowBuffers[0]);
@@ -676,9 +744,12 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const rows = seedRows ?? new Map<string, Record<string, any>[]>();
     const summaries = await runDatasets(report, runValues, onlyIds, rows, mode);
     const generated = await generateNarratives(report, runValues, rows);
-    if (generated !== report) setDraft((current) => current?.id === report.id ? withNarrativeSnapshots(current, generated) : current);
+    if (generated !== report) {
+      if (readerMode && published?.id === report.id) setPublished((current) => current?.id === report.id ? withNarrativeSnapshots(current, generated) : current);
+      else setDraft((current) => current?.id === report.id ? withNarrativeSnapshots(current, generated) : current);
+    }
     return summaries;
-  }, [generateNarratives, runDatasets]);
+  }, [generateNarratives, published?.id, readerMode, runDatasets]);
 
   const regenerateNarrative = useCallback(async (block: ReportAiNarrativeBlock) => {
     if (!draft) return;
@@ -736,30 +807,35 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       ? new Set(dataDatasets.filter((dataset) => parameterTokens(dataset.sql).some((token) => changed.has(token) || changed.has(token.replace(/_(?:start|end)$/, "")))).map((dataset) => dataset.id))
       : new Set(dataDatasets.map((dataset) => dataset.id));
     const mode = dataDatasets.some((dataset) => ids.has(dataset.id) && Boolean(results[dataset.id]?.table)) ? "refresh" : "load";
-    await runDatasetsAndNarratives(report, candidate, ids, mode, rows);
+    const execution = await runDatasetsAndNarratives(report, candidate, ids, mode, rows);
+    const failures = execution.filter((summary) => !summary.ok);
+    if (failures.length) {
+      setShareStatus(`Report validation failed: ${failures.map((failure) => `${failure.name}: ${failure.error ?? "query failed"}`).join(" ")}`);
+      return false;
+    }
     if (!ids.size) setShareStatus("Parameters applied.");
     return true;
   }, [appliedValues, results, runDatasets, runDatasetsAndNarratives]);
   validateAndRunRef.current = validateAndRun;
 
   const runFullReport = useCallback(() => {
-    if (draft) void validateAndRun(draft, values, false);
-  }, [draft, validateAndRun, values]);
+    if (activeReport) void validateAndRun(activeReport, values, false);
+  }, [activeReport, validateAndRun, values]);
 
   const handleApply = useCallback(() => {
-    if (draft) void validateAndRun(draft, values, true);
-  }, [draft, validateAndRun, values]);
+    if (activeReport) void validateAndRun(activeReport, values, true);
+  }, [activeReport, validateAndRun, values]);
 
   useEffect(() => {
     autoRefreshStateRef.current = {
-      report: draft,
+      report: activeReport,
       values: appliedValues,
       busy: agentBusy || Object.values(results).some(isDatasetPending) || Object.values(narrativeStates).some((state) => state.status === "running"),
     };
-  }, [draft, appliedValues, agentBusy, results, narrativeStates]);
+  }, [activeReport, appliedValues, agentBusy, results, narrativeStates]);
 
   useEffect(() => {
-    const seconds = draft?.refreshIntervalSeconds;
+    const seconds = activeReport?.refreshIntervalSeconds;
     if (!seconds) return;
     const interval = window.setInterval(() => {
       const current = autoRefreshStateRef.current;
@@ -770,7 +846,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         .finally(() => { autoRefreshRunningRef.current = false; });
     }, seconds * 1_000);
     return () => window.clearInterval(interval);
-  }, [draft?.id, draft?.refreshIntervalSeconds]);
+  }, [activeReport?.id, activeReport?.refreshIntervalSeconds]);
 
   const updateAutoRefresh = useCallback((seconds?: number) => {
     if (!draft) return;
@@ -783,14 +859,14 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   }, [draft]);
 
   const openDatasetInEditor = useCallback((dataset: ReportDataset) => {
-    if (!draft) return;
+    if (!activeReport) return;
     if (!ui.openInEditor) { setShareStatus("The SQL editor is not ready yet."); return; }
     try {
-      ui.openInEditor(materializeReportQuery(dataset.sql, draft, appliedValues), { autoRun: false });
+      ui.openInEditor(materializeReportQuery(dataset.sql, activeReport, appliedValues), { autoRun: false });
     } catch (error) {
       setShareStatus(error instanceof Error ? error.message : String(error));
     }
-  }, [draft, appliedValues]);
+  }, [activeReport, appliedValues]);
 
   const createNew = useCallback(() => openReport(createEmptyReport("New report", catalogData.catalogName, serviceUrl), undefined, false, false), [catalogData.catalogName, serviceUrl, openReport]);
 
@@ -799,6 +875,45 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const saved = await saveReport(draft);
     setSelected(saved); setDraft(cloneReport(saved)); setSourceText(exportReportJson(saved)); setAgentSummary(null); await reload();
   }, [draft, reload]);
+
+  const publishDraft = useCallback(async () => {
+    if (!draft) return;
+    setShareStatus("Validating the draft before publishing…");
+    const valid = await validateAndRun(draft, defaultValues(draft), false);
+    if (!valid) return;
+    const stored = await publishReport(draft);
+    const saved = cloneReport(stored.document);
+    const snapshot = cloneReport(stored.publishedDocument!);
+    setSelected(saved);
+    setDraft(saved);
+    setPublished(snapshot);
+    setPublishedAt(stored.publishedAt ?? null);
+    setReaderMode(true);
+    setAgentOpen(false);
+    setInspectorOpen(false);
+    setSourceText(exportReportJson(saved));
+    setAgentSummary(null);
+    setShareStatus(`Published revision ${snapshot.revision}.`);
+    await reload();
+  }, [draft, reload, validateAndRun]);
+
+  const switchReportMode = useCallback((mode: "edit" | "reader") => {
+    const next = mode === "reader" ? published : draft;
+    if (!next) return;
+    const defaults = defaultValues(next);
+    runGeneration.current += 1;
+    setReaderMode(mode === "reader");
+    setAgentOpen(false);
+    setInspectorOpen(false);
+    setValues(defaults);
+    setAppliedValues(defaults);
+    setParameterIssues([]);
+    setParametersExpanded(false);
+    setResults({});
+    setNarrativeStates({});
+    setRunProgress(null);
+    setTimeout(() => void validateAndRunRef.current?.(next, defaults, false), 0);
+  }, [draft, published]);
 
   const updateLayout = useCallback((layout: Layout) => {
     setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => { const item = layout.find((l) => l.i === b.id); return item ? { ...b, layout: { x: item.x, y: item.y, w: item.w, h: item.h } } : b; }) } : current);
@@ -879,6 +994,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         : block));
     };
     let workingReport = cloneReport(draft);
+    let agentPlan: ReportAgentPlan | null = null;
     const workingRows = new Map<string, Record<string, any>[]>();
     const applyWorkingReport = (report: ReportDocumentV1, clearResults = false) => {
       workingReport = cloneReport(report);
@@ -890,10 +1006,16 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       if (clearResults) setResults({});
     };
     const finalizeWorkingReport = async (candidate: ReportDocumentV1, summary: string, clearResults = false): Promise<ToolResult> => {
+      if (!agentPlan) return toolResult(reportAgentRepair("plan", "this authoring turn", ["Call plan_report before finalizing."], "plan_report"));
+      const checkpoint = checkpointReportAgentPlan(agentPlan, candidate);
+      if (!checkpoint.complete) return toolResult({
+        ...reportAgentRepair("finalize", "planned report", [checkpoint.nextAction], "finalize_report"),
+        checkpoint,
+      });
       const structureErrors = validateReport(candidate);
-      if (structureErrors.length) return toolResult({ ok: false, errors: structureErrors, message: "Correct the report structure before finalizing." });
+      if (structureErrors.length) return toolResult(reportAgentRepair("finalize", "report structure", structureErrors, "finalize_report"));
       const sanitized = sanitizeReportChartSpecs(candidate);
-      if (sanitized.errors.length) return toolResult({ ok: false, errors: sanitized.errors, message: "Correct the chart specifications before finalizing." });
+      if (sanitized.errors.length) return toolResult(reportAgentRepair("finalize", "chart specifications", sanitized.errors, "finalize_report"));
       applyWorkingReport(sanitized.report, clearResults);
       workingRows.clear();
       const workingValues = defaultValues(workingReport);
@@ -929,10 +1051,17 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       const needsCorrection = failures.length > 0 || parameterErrors.length > 0 || blockErrors.length > 0 || charts.errors.length > 0 || narrativeErrors.length > 0;
       setAgentSummary(needsCorrection ? `${summary} The draft needs correction.` : `${summary} Data, visualizations, and AI narratives loaded.`);
       return toolResult({
-        ok: !needsCorrection,
+        ...(needsCorrection ? reportAgentRepair("finalize", "report validation", [
+          ...failures.map((failure) => `${failure.name}: ${failure.error ?? "query failed"}`),
+          ...parameterErrors,
+          ...blockErrors,
+          ...charts.errors,
+          ...narrativeErrors,
+        ], "finalize_report") : { ok: true }),
         message: needsCorrection
           ? "The report ran, but has dataset, column, visualization, or AI narrative errors. Correct the affected item and finalize again."
           : "Every dataset executed, every chart rendered, and every AI narrative was snapshotted. The populated report is ready for user review.",
+        checkpoint,
         datasets: execution,
         parameterErrors,
         blockErrors,
@@ -943,7 +1072,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     };
     const system = `You are Cupola's report-authoring agent. Build and revise a declarative, rerunnable report. Never add JavaScript.
 
-Use a compositional workflow: (1) inspect tables, (2) call configure_report, (3) create any meaningful visual sections with upsert_report_group, (4) call upsert_report_dataset for one dataset and fix its SQL before continuing, (5) call upsert_report_block for one block and fix any compile/render error before continuing, and (6) call finalize_report. Do not finish until finalize_report returns ok=true. Prefer these tools over replace_report_draft.
+Use a compositional workflow: (1) inspect tables, (2) call plan_report with the concrete work and acceptance criteria for this turn, (3) call configure_report, (4) create any meaningful visual sections with upsert_report_group, (5) call upsert_report_dataset for one dataset and fix its SQL before continuing, (6) call upsert_report_block for one block and fix any compile/render error before continuing, and (7) call finalize_report. Do not mutate the report before plan_report succeeds. Tool results include a checkpoint showing planned versus completed work. Do not finish until finalize_report returns ok=true. Prefer these tools over replace_report_draft.
 
 Cupola owns grid placement for compositional blocks. upsert_report_block may request only the semantic width values quarter/third/half/full and height values compact/medium/tall; never send numeric col/x/y/w/h fields. The strict bulk fallback is different: every full-document block must contain layout nested exactly as {"layout":{"x":0,"y":0,"w":12,"h":6}}; layout fields are never top-level.
 
@@ -963,7 +1092,7 @@ Use these semantic Tufte-style blocks before writing a free-form chart when they
 - slopegraph: categoryColumn, startColumn, endColumn; optionally startLabel, endLabel, colorColumn, and format. Use only for two endpoints.
 - range_dot: categoryColumn, lowColumn, highColumn; optionally valueColumn, format, and color. Use for intervals, uncertainty, min/max, or benchmarks.
 
-Use sparkline for a compact single-metric trend box: provide datasetId and valueColumn, optionally labelColumn, format, showValue, and color. Sparkline points follow query result order, so order the dataset in SQL. It needs no Vega spec and defaults to a compact quarter-width box with almost no chart margin. Use a full chart when axes, legends, multiple series, or richer encodings matter. Charts are minimal Vega-Lite v5 specs without data, datasets, url, href, or src. Vega-Lite y2 is valid only as an encoding definition such as {"y2":{"field":"high"}}; use layers only when the visual itself needs layers, not as a generic error workaround. The block tool compiles and renders all visualization blocks with real rows and may return an image. Treat its exact compiler/render error as authoritative; do not guess at causes.
+Use sparkline for a compact single-metric trend box: provide datasetId and valueColumn, optionally labelColumn, format, showValue, and color. Sparkline points follow query result order, so order the dataset in SQL. For a history/forecast or other data-driven boundary, return a boolean or phase column and set splitColumn; the first truthy, forecast, future, yes, after, or 1 value draws a vertical divider. Optionally set splitLabel (for example Now) and splitColor for the portion at and after the divider; color controls the portion before it. It needs no Vega spec and defaults to a compact quarter-width box with almost no chart margin. Use a full chart when axes, legends, multiple series, or richer encodings matter. Charts are minimal Vega-Lite v5 specs without data, datasets, url, href, or src. Vega-Lite y2 is valid only as an encoding definition such as {"y2":{"field":"high"}}; use layers only when the visual itself needs layers, not as a generic error workaround. The block tool compiles and renders all visualization blocks with real rows and may return an image. Treat its exact compiler/render error as authoritative; do not guess at causes.
 
 Maps are declarative Leaflet blocks: set type="map", datasetId, and either geometryColumn for WKB/GeoJSON or both latitudeColumn and longitudeColumn. Maps may also set labelColumn, colorColumn, tooltipColumns, basemap ("openstreetmap" or "none"), palette, and style.
 
@@ -981,6 +1110,18 @@ Current report:\n${JSON.stringify(draft)}`;
           if (!engine.query) throw new Error("DuckDB is not ready.");
           return executeRunSql(input.sql, { query: engine.query, resultCache: resultCache.current });
         }
+        if (name === "plan_report") {
+          const plan = parseReportAgentPlan(input);
+          const errors = validateReportAgentPlan(plan);
+          if (errors.length) return toolResult(reportAgentRepair("plan", "authoring plan", errors, "plan_report"));
+          agentPlan = plan;
+          const checkpoint = checkpointReportAgentPlan(plan, workingReport);
+          setAgentSummary(`Plan: ${plan.objective}`);
+          return toolResult({ ok: true, plan, checkpoint, message: "Plan accepted. Follow the checkpoint and revise the plan if the requested scope changes." });
+        }
+        if (["configure_report", "upsert_report_group", "upsert_report_dataset", "upsert_report_block", "finalize_report", "replace_report_draft"].includes(name) && !agentPlan) {
+          return toolResult(reportAgentRepair("plan", "this authoring turn", ["Call plan_report before changing the report."], "plan_report"));
+        }
         if (name === "configure_report") {
           const next = cloneReport(workingReport);
           next.title = String(input.title ?? "").trim();
@@ -994,43 +1135,44 @@ Current report:\n${JSON.stringify(draft)}`;
           if (Array.isArray(input.parameterRules)) next.parameterRules = structuredClone(input.parameterRules);
           next.updatedAt = Date.now();
           const errors = validateReport(next);
-          if (errors.length) return toolResult({ ok: false, errors });
+          if (errors.length) return toolResult(reportAgentRepair("configure", "report configuration", errors, "configure_report"));
           applyWorkingReport(next);
-          return toolResult({ ok: true, reportId: next.id, title: next.title, refreshIntervalSeconds: next.refreshIntervalSeconds ?? null, parameterKeys: next.parameters.map((parameter) => parameter.key) });
+          return toolResult({ ok: true, reportId: next.id, title: next.title, refreshIntervalSeconds: next.refreshIntervalSeconds ?? null, parameterKeys: next.parameters.map((parameter) => parameter.key), checkpoint: checkpointReportAgentPlan(agentPlan!, next) });
         }
         if (name === "upsert_report_group") {
           const updated = upsertAgentGroup(workingReport, input.group ?? {});
           const errors = validateReport(updated.report);
-          if (errors.length) return toolResult({ ok: false, groupId: updated.group.id, errors });
+          if (errors.length) return toolResult({ ...reportAgentRepair("block", `group ${updated.group.id}`, errors, "upsert_report_group"), groupId: updated.group.id });
           applyWorkingReport(updated.report);
           setAgentSummary(`${updated.group.title} group added.`);
-          return toolResult({ ok: true, groupId: updated.group.id, message: "Group created. Set this groupId on every related report block." });
+          return toolResult({ ok: true, groupId: updated.group.id, message: "Group created. Set this groupId on every related report block.", checkpoint: checkpointReportAgentPlan(agentPlan!, updated.report) });
         }
         if (name === "upsert_report_dataset") {
           const updated = upsertAgentDataset(workingReport, input.dataset ?? {});
           const errors = validateReport(updated.report);
-          if (errors.length) return toolResult({ ok: false, datasetId: updated.dataset.id, errors });
+          if (errors.length) return toolResult({ ...reportAgentRepair("dataset", `dataset ${updated.dataset.id}`, errors, "upsert_report_dataset"), datasetId: updated.dataset.id });
           applyWorkingReport(updated.report);
           const execution = await runDatasets(workingReport, defaultValues(workingReport), new Set([updated.dataset.id]), workingRows);
           const result = execution[0];
           setAgentSummary(result?.ok ? `${updated.dataset.name} loaded.` : `${updated.dataset.name} needs correction.`);
           return toolResult({
-            ok: Boolean(result?.ok),
+            ...(result?.ok ? { ok: true } : reportAgentRepair("dataset", `dataset ${updated.dataset.id}`, [result?.error ?? "Dataset execution failed."], "upsert_report_dataset")),
             datasetId: updated.dataset.id,
             message: result?.ok ? "Dataset executed. Reuse datasetId when adding blocks or revising this query." : "Fix this dataset and call upsert_report_dataset again with the same datasetId.",
             result,
+            checkpoint: checkpointReportAgentPlan(agentPlan!, workingReport),
           });
         }
         if (name === "upsert_report_block") {
           const updated = upsertAgentBlock(workingReport, input.block ?? {}, input.width as SemanticBlockWidth | undefined, input.height as SemanticBlockHeight | undefined);
           const sanitized = sanitizeReportChartSpecs(updated.report);
           const errors = [...sanitized.errors, ...validateReport(sanitized.report)];
-          if (errors.length) return toolResult({ ok: false, blockId: updated.block.id, errors, message: "Correct the block and call upsert_report_block again with this blockId." });
+          if (errors.length) return toolResult({ ...reportAgentRepair("block", `block ${updated.block.id}`, errors, "upsert_report_block"), blockId: updated.block.id });
           const block = sanitized.report.blocks.find((candidate) => candidate.id === updated.block.id)!;
           applyWorkingReport(sanitized.report);
           if (block.type === "markdown") {
             setAgentSummary(`${visibleMarkdownTitle(block.title) ?? "Text block"} added.`);
-            return toolResult({ ok: true, blockId: block.id, layout: block.layout, message: "Text block rendered without requiring a dataset." });
+            return toolResult({ ok: true, blockId: block.id, layout: block.layout, message: "Text block rendered without requiring a dataset.", checkpoint: checkpointReportAgentPlan(agentPlan!, workingReport) });
           }
           const execution = await runDatasets(workingReport, defaultValues(workingReport), new Set([block.datasetId]), workingRows);
           const blockErrors = validateReportResultColumns({ ...workingReport, blocks: [block] }, execution);
@@ -1047,7 +1189,12 @@ Current report:\n${JSON.stringify(draft)}`;
           const needsCorrection = execution.some((result) => !result.ok) || blockErrors.length > 0 || charts.errors.length > 0 || narrativeErrors.length > 0;
           setAgentSummary(needsCorrection ? `${block.title ?? block.type} needs correction.` : `${block.title ?? block.type} loaded.`);
           return toolResult({
-            ok: !needsCorrection,
+            ...(needsCorrection ? reportAgentRepair("block", `block ${block.id}`, [
+              ...execution.filter((result) => !result.ok).map((result) => result.error ?? "Dataset execution failed."),
+              ...blockErrors,
+              ...charts.errors,
+              ...narrativeErrors,
+            ], "upsert_report_block") : { ok: true }),
             blockId: block.id,
             layout: block.layout,
             message: needsCorrection
@@ -1060,6 +1207,7 @@ Current report:\n${JSON.stringify(draft)}`;
             chartErrors: charts.errors,
             chartWarnings: charts.warnings,
             narrativeErrors,
+            checkpoint: checkpointReportAgentPlan(agentPlan!, workingReport),
           }, charts.feedback);
         }
         if (name === "finalize_report") {
@@ -1115,6 +1263,9 @@ Current report:\n${JSON.stringify(draft)}`;
 
   const compatibleCatalogs = useMemo(() => new Set([catalogData.catalogName, ...attachedCatalogNames, "memory"]), [catalogData.catalogName, attachedCatalogNames]);
   const isCompatible = (r: ReportDocumentV1) => r.requiredSources.every((s) => compatibleCatalogs.has(s.catalog));
+  const libraryReports = initialReport && !reports.some((report) => report.id === initialReport.id)
+    ? [initialReport, ...reports]
+    : reports;
 
   const promotionDialog = pendingPromotion ? <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 report-authoring-control"><div className="bg-card border rounded-lg shadow-xl p-5 w-full max-w-md"><h2 className="font-semibold">Add query to a report</h2><p className="text-sm text-muted-foreground mt-1 mb-4">Create a new report or append this dataset to an existing report draft.</p><div className="flex flex-col gap-2 max-h-[60vh] overflow-y-auto"><Button onClick={() => { const report = applyPromotion(createEmptyReport(pendingPromotion.title || "Report from query", catalogData.catalogName, serviceUrl), pendingPromotion); setPendingPromotion(null); openReport(report, undefined, false, false); }}>Create new report</Button>{draft && <Button variant="outline" onClick={() => { const report = applyPromotion(draft, pendingPromotion); setPendingPromotion(null); setDraft(report); setSourceText(exportReportJson(report)); }}>Add to open report: {draft.title}</Button>}{reports.filter((r) => r.id !== draft?.id).map((report) => <Button key={report.id} variant="outline" onClick={() => { const updated = applyPromotion(report, pendingPromotion); setPendingPromotion(null); openReport(updated, undefined, false, false); }}>Add to {report.title}</Button>)}<Button variant="ghost" onClick={() => setPendingPromotion(null)}>Cancel</Button></div></div></div> : null;
 
@@ -1122,22 +1273,26 @@ Current report:\n${JSON.stringify(draft)}`;
     <div className="max-w-6xl mx-auto">
       <div className="flex items-center justify-between gap-4 mb-5"><div><h1 className="text-xl font-semibold">Reports</h1><p className="text-sm text-muted-foreground">Reusable, agent-authored analysis against your attached data.</p></div><div className="flex flex-wrap justify-end gap-2"><a href={`${import.meta.env.BASE_URL}report-guide/`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm hover:bg-muted"><BookOpen className="h-4 w-4" /> Visualization guide</a><label className="inline-flex"><input type="file" accept="application/json,.json" className="sr-only" onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; try { openReport(importReportJson(await file.text()), undefined, false, false); setShareStatus("Imported report opened for review."); } catch (err) { setShareStatus(err instanceof Error ? err.message : String(err)); } }} /><span className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm cursor-pointer hover:bg-muted"><FileJson className="h-4 w-4" /> Import</span></label><Button onClick={createNew}><Plus className="h-4 w-4" /> New report</Button></div></div>
       {shareStatus && <div className="mb-4 rounded-md border bg-muted/40 p-3 text-sm">{shareStatus}</div>}
-      {reports.length === 0 ? <div className="border border-dashed rounded-xl p-12 text-center"><BarChart3 className="h-10 w-10 mx-auto text-muted-foreground/40 mb-3" /><p className="font-medium">No saved reports yet</p><p className="text-sm text-muted-foreground mb-4">Ask the report agent to build one, or add a query from the editor.</p><Button onClick={createNew}><Sparkles className="h-4 w-4" /> Create with AI</Button></div> : <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">{reports.map((report) => <div key={report.id} className="relative border rounded-lg bg-card hover:border-primary/50 transition-colors"><button onClick={() => openReport(report, undefined, isCompatible(report))} className="w-full text-left p-4 pr-10"><div className="flex justify-between gap-2"><span className="font-medium truncate">{report.title}</span><span className={`text-[10px] rounded-full px-2 py-0.5 ${isCompatible(report) ? "bg-emerald-500/10 text-emerald-700" : "bg-amber-500/10 text-amber-700"}`}>{isCompatible(report) ? "Ready" : "Missing source"}</span></div><p className="text-xs text-muted-foreground mt-2 line-clamp-2">{report.description || `${report.blocks.length} blocks · ${report.datasets.length} datasets`}</p><p className="text-[10px] text-muted-foreground mt-3">Revision {report.revision}</p></button><button className="absolute right-2 bottom-2 p-1 text-muted-foreground hover:text-destructive" aria-label={`Delete ${report.title}`} onClick={async () => { if (confirm(`Delete “${report.title}”?`)) await deleteReport(report.id); }}><Trash2 className="h-3.5 w-3.5" /></button></div>)}</div>}
+      {libraryReports.length === 0 ? <div className="border border-dashed rounded-xl p-12 text-center"><BarChart3 className="h-10 w-10 mx-auto text-muted-foreground/40 mb-3" /><p className="font-medium">No saved reports yet</p><p className="text-sm text-muted-foreground mb-4">Ask the report agent to build one, or add a query from the editor.</p><Button onClick={createNew}><Sparkles className="h-4 w-4" /> Create with AI</Button></div> : <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">{libraryReports.map((report) => {
+        const publication = publishedReports[report.id];
+        return <div key={report.id} className="relative border rounded-lg bg-card hover:border-primary/50 transition-colors"><button onClick={() => openReport(report, undefined, isCompatible(publication ?? report), report.id !== initialReport?.id, publication ? "reader" : "edit", publication, publishedTimes[report.id])} className="w-full text-left p-4 pr-10"><div className="flex justify-between gap-2"><span className="font-medium truncate">{report.title}</span><span className={`text-[10px] rounded-full px-2 py-0.5 ${publication ? "bg-sky-500/10 text-sky-700" : isCompatible(report) ? "bg-muted text-muted-foreground" : "bg-amber-500/10 text-amber-700"}`}>{publication ? "Published" : isCompatible(report) ? "Draft" : "Missing source"}</span></div><p className="text-xs text-muted-foreground mt-2 line-clamp-2">{report.description || `${report.blocks.length} blocks · ${report.datasets.length} datasets`}</p><p className="text-[10px] text-muted-foreground mt-3">{report.id === initialReport?.id ? "Built-in example" : publication ? `Published revision ${publication.revision} · Draft revision ${report.revision}` : `Draft revision ${report.revision}`}</p></button>{report.id !== initialReport?.id && <button className="absolute right-2 bottom-2 p-1 text-muted-foreground hover:text-destructive" aria-label={`Delete ${report.title}`} onClick={async () => { if (confirm(`Delete “${report.title}”?`)) await deleteReport(report.id); }}><Trash2 className="h-3.5 w-3.5" /></button>}</div>;
+      })}</div>}
     </div>
     {promotionDialog}
   </div>;
 
-  const reportErrors = validateReport(draft);
+  const report = activeReport ?? draft;
+  const reportErrors = validateReport(report);
   const dirty = !selected || JSON.stringify(draft) !== JSON.stringify(selected);
   const optionValues = (p: ReportParameter) => {
     const rows = new Map(Object.entries(results).map(([datasetId, result]) => [datasetId, result.rows]));
     return parameterOptionsFromRows(p, rows) ?? [];
   };
-  const parametersDirty = draft.parameters.some((parameter) => JSON.stringify(values[parameter.key] ?? parameter.defaultValue) !== JSON.stringify(appliedValues[parameter.key] ?? parameter.defaultValue));
-  const desktopLayout = draft.blocks.map((block) => ({ i: block.id, ...block.layout }));
+  const parametersDirty = report.parameters.some((parameter) => JSON.stringify(values[parameter.key] ?? parameter.defaultValue) !== JSON.stringify(appliedValues[parameter.key] ?? parameter.defaultValue));
+  const desktopLayout = report.blocks.map((block) => ({ i: block.id, ...block.layout }));
   let mobileY = 0;
   let previousMobileGroup: string | undefined;
-  const mobileLayout = [...draft.blocks]
+  const mobileLayout = [...report.blocks]
     .sort((a, b) => a.layout.y - b.layout.y || a.layout.x - b.layout.x)
     .map((block) => {
       if (mobileY > 0 && block.groupId && block.groupId !== previousMobileGroup) mobileY += 1;
@@ -1148,18 +1303,19 @@ Current report:\n${JSON.stringify(draft)}`;
     });
   const layouts: ResponsiveLayouts<"lg" | "sm"> = { lg: desktopLayout, sm: mobileLayout };
   const activeLayout = width >= 768 ? desktopLayout : mobileLayout;
-  const groupBoxes = reportGroupBoxes(draft.groups ?? [], draft.blocks, activeLayout, width, width >= 768 ? 12 : 1);
+  const groupBoxes = reportGroupBoxes(report.groups ?? [], report.blocks, activeLayout, width, width >= 768 ? 12 : 1);
   const reportRunning = Object.values(results).some(isDatasetPending) || Object.values(narrativeStates).some((state) => state.status === "running");
-  const reportFetchedAt = reportRunning ? 0 : Math.max(0, ...draft.datasets.filter((dataset) => dataset.role !== "parameter_options" && dataset.role !== "parameter_validation").map((dataset) => results[dataset.id]?.fetchedAt ?? 0));
+  const reportFetchedAt = reportRunning ? 0 : Math.max(0, ...report.datasets.filter((dataset) => dataset.role !== "parameter_options" && dataset.role !== "parameter_validation").map((dataset) => results[dataset.id]?.fetchedAt ?? 0));
   const progressLabel = runProgress
     ? `${runProgress.mode === "refresh" ? "Refreshing" : "Loading"} ${runProgress.completed} of ${runProgress.total} datasets`
     : null;
 
-  return <div className="h-full flex flex-col bg-background" data-testid="reports-workspace" aria-busy={reportRunning}>
-    <div className="report-authoring-control flex items-center gap-2 px-3 py-2 border-b bg-card overflow-x-auto">
+  return <div className="h-full flex flex-col bg-background" data-testid="reports-workspace" data-report-mode={readerMode ? "reader" : "edit"} aria-busy={reportRunning}>
+    {!readerMode ? <div className="report-authoring-control flex items-center gap-2 px-3 py-2 border-b bg-card overflow-x-auto">
       <Button size="sm" variant="ghost" onClick={() => { runGeneration.current += 1; setRunProgress(null); setDraft(null); setSelected(null); setResults({}); }}><ArrowLeft className="h-4 w-4" /> Library</Button>
       <Input className="h-8 min-w-48 max-w-sm font-medium" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
       <div className="flex-1" />
+      {published && <Button size="sm" variant="outline" onClick={() => switchReportMode("reader")}><Eye className="h-4 w-4" /> View published</Button>}
       <Button size="sm" variant="outline" onClick={() => setAgentOpen((v) => !v)}><Bot className="h-4 w-4" /> Agent</Button>
       {revisionOptions.length > 0 && <select className="h-8 rounded-md border bg-background px-2 text-xs" defaultValue="" aria-label="Restore report revision" onChange={async (e) => { const revision = Number(e.target.value); if (!revision) return; const restored = await restoreReportRevision(draft.id, revision); openReport(restored, undefined, false); }}><option value="">History</option>{revisionOptions.slice().reverse().map((r) => <option key={r.revision} value={r.revision}>Restore revision {r.revision}</option>)}</select>}
       <Button size="sm" variant="outline" onClick={() => { setInspectorOpen((v) => !v); setSourceText(exportReportJson(draft)); }}><FileJson className="h-4 w-4" /> Source</Button>
@@ -1183,9 +1339,21 @@ Current report:\n${JSON.stringify(draft)}`;
       <Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
       <Button size="sm" variant="outline" onClick={() => triggerDownload(new Blob([exportReportJson(draft)], { type: "application/json" }), `${safeFileStem(draft.title)}.cupola-report.json`)}><Download className="h-4 w-4" /> JSON</Button>
       <Button size="sm" variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(draft, { serviceUrl, values: appliedValues })); setShareStatus("Share link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}><Share2 className="h-4 w-4" /> Share</Button>
-      <Button size="sm" disabled={!dirty || reportErrors.length > 0} onClick={acceptDraft}><Save className="h-4 w-4" /> Accept & save</Button>
-    </div>
-    {runProgress && <div data-testid="report-run-progress" className="report-authoring-control border-b bg-muted/30 px-4 py-2" aria-live="polite">
+      <Button size="sm" variant="outline" disabled={!dirty || reportErrors.length > 0} onClick={acceptDraft}><Save className="h-4 w-4" /> Save draft</Button>
+      <Button size="sm" disabled={reportErrors.length > 0 || reportRunning || !isCompatible(draft)} onClick={publishDraft}><Send className="h-4 w-4" /> Publish</Button>
+    </div> : <div className="flex items-center gap-3 border-b bg-card px-4 py-3 overflow-x-auto">
+      <Button size="sm" variant="ghost" onClick={() => { runGeneration.current += 1; setRunProgress(null); setDraft(null); setSelected(null); setPublished(null); setReaderMode(false); setResults({}); }}><ArrowLeft className="h-4 w-4" /> Library</Button>
+      <div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-base font-semibold">{report.title}</h1><span className="shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700">Published</span></div>{report.description && <p className="max-w-xl truncate text-xs text-muted-foreground">{report.description}</p>}</div>
+      <div className="flex-1" />
+      {publishedAt && <span className="shrink-0 text-[10px] text-muted-foreground">Published {new Date(publishedAt).toLocaleString()}</span>}
+      {report.refreshIntervalSeconds && <span className="shrink-0 text-[10px] text-muted-foreground">Auto refresh every {report.refreshIntervalSeconds}s</span>}
+      {reportFetchedAt > 0 && <span data-testid="report-as-of" className="shrink-0 text-[10px] text-muted-foreground">as of {new Date(reportFetchedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" })}</span>}
+      <Button size="sm" data-testid="reports-run" disabled={reportErrors.length > 0 || reportRunning} onClick={runFullReport}>{reportRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {progressLabel ?? "Refresh"}</Button>
+      <Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print</Button>
+      <Button size="sm" variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(report, { serviceUrl, values: appliedValues, mode: "reader" })); setShareStatus("Reader link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}><Share2 className="h-4 w-4" /> Share</Button>
+      <Button size="sm" variant="outline" onClick={() => switchReportMode("edit")}><Pencil className="h-4 w-4" /> Edit report</Button>
+    </div>}
+    {runProgress && <div data-testid="report-run-progress" className="border-b bg-muted/30 px-4 py-2" aria-live="polite">
       <div className="flex items-center gap-2 text-xs">
         <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
         <span className="font-medium">{progressLabel}</span>
@@ -1202,8 +1370,8 @@ Current report:\n${JSON.stringify(draft)}`;
         <div className="h-full bg-primary transition-[width] duration-200" style={{ width: `${(runProgress.completed / runProgress.total) * 100}%` }} />
       </div>
     </div>}
-    {(!isCompatible(draft) || reportErrors.length > 0 || shareStatus || agentSummary) && <div className="px-4 py-2 border-b text-xs space-y-1">{!isCompatible(draft) && <div className="text-amber-700">Missing required catalogs: {draft.requiredSources.filter((s) => !compatibleCatalogs.has(s.catalog)).map((s) => s.catalog).join(", ")}</div>}{reportErrors.length > 0 && <div className="text-destructive">{reportErrors.join(" ")}</div>}{shareStatus && <div>{shareStatus}</div>}{agentSummary && <div className="text-primary"><Check className="inline h-3 w-3 mr-1" />Agent draft: {agentSummary}</div>}</div>}
-    {draft.parameters.length > 0 && <div className="report-parameters report-authoring-control border-b bg-muted/20" aria-label="Report parameters">
+    {(!isCompatible(report) || reportErrors.length > 0 || shareStatus || (!readerMode && agentSummary)) && <div className="px-4 py-2 border-b text-xs space-y-1">{!isCompatible(report) && <div className="text-amber-700">Missing required catalogs: {report.requiredSources.filter((s) => !compatibleCatalogs.has(s.catalog)).map((s) => s.catalog).join(", ")}</div>}{reportErrors.length > 0 && <div className="text-destructive">{reportErrors.join(" ")}</div>}{shareStatus && <div>{shareStatus}</div>}{!readerMode && agentSummary && <div className="text-primary"><Check className="inline h-3 w-3 mr-1" />Agent draft: {agentSummary}</div>}</div>}
+    {report.parameters.length > 0 && <div className="report-parameters border-b bg-muted/20" aria-label="Report parameters">
       <button
         type="button"
         data-testid="report-parameters-toggle"
@@ -1215,7 +1383,7 @@ Current report:\n${JSON.stringify(draft)}`;
         <SlidersHorizontal className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="shrink-0 text-xs font-medium">Parameters</span>
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto" aria-label="Applied parameter values">
-          {draft.parameters.map((parameter) => {
+          {report.parameters.map((parameter) => {
             const summary = parameterRibbonValue(parameter, appliedValues[parameter.key] ?? parameter.defaultValue, optionValues(parameter));
             return <span key={parameter.id} title={`${parameter.label}: ${summary}`} className="inline-flex min-w-0 max-w-56 shrink-0 items-center gap-1 rounded-full border bg-background/80 px-2 py-0.5 text-[11px]">
               <span className="shrink-0 text-muted-foreground">{parameter.label}:</span>
@@ -1226,16 +1394,16 @@ Current report:\n${JSON.stringify(draft)}`;
         {parametersDirty && <span className="shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700">Unapplied changes</span>}
         {parametersExpanded ? <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />}
       </button>
-      {parametersExpanded && <div id="report-parameter-controls" className="flex flex-wrap items-end gap-3 border-t px-4 py-3">{draft.parameters.map((p) => <ParameterInput key={p.id} parameter={p} value={values[p.key] ?? p.defaultValue} options={optionValues(p)} errors={parameterIssues.filter((issue) => issue.parameterKey === p.key).map((issue) => issue.message)} onChange={(value) => setValues((current) => {
+      {parametersExpanded && <div id="report-parameter-controls" className="flex flex-wrap items-end gap-3 border-t px-4 py-3">{report.parameters.map((p) => <ParameterInput key={p.id} parameter={p} value={values[p.key] ?? p.defaultValue} options={optionValues(p)} errors={parameterIssues.filter((issue) => issue.parameterKey === p.key).map((issue) => issue.message)} onChange={(value) => setValues((current) => {
         const next = { ...current, [p.key]: value };
-        setParameterIssues(validateReportParameterValues(draft, next));
+        setParameterIssues(validateReportParameterValues(report, next));
         return next;
       })} />)}<Button size="sm" disabled={reportRunning} onClick={handleApply}><Play className="h-4 w-4" /> Apply</Button>{parameterIssues.some((issue) => !issue.parameterKey) && <div role="alert" className="basis-full text-xs text-destructive">{parameterIssues.filter((issue) => !issue.parameterKey).map((issue) => issue.message).join(" ")}</div>}</div>}
     </div>}
     <div className="flex-1 min-h-0 flex">
       <div ref={containerRef} className="flex-1 min-w-0 overflow-y-auto report-canvas p-3">
-        <div className="print-only hidden mb-4"><h1 className="text-2xl font-bold">{draft.title}</h1><p className="text-sm text-muted-foreground">{draft.description}</p></div>
-        {draft.blocks.length === 0 ? <div className="h-full flex items-center justify-center"><div className="text-center"><FilePlus2 className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" /><p className="font-medium">Start with a request</p><p className="text-sm text-muted-foreground mb-4">Open the agent and describe the report you need.</p><Button onClick={() => setAgentOpen(true)}><Sparkles className="h-4 w-4" /> Open report agent</Button></div></div> : mounted && <div className="report-grid-stack relative" style={{ paddingTop: REPORT_GRID_TOP_PADDING }}>
+        <div className="print-only hidden mb-4"><h1 className="text-2xl font-bold">{report.title}</h1><p className="text-sm text-muted-foreground">{report.description}</p></div>
+        {report.blocks.length === 0 ? <div className="h-full flex items-center justify-center"><div className="text-center"><FilePlus2 className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" /><p className="font-medium">Start with a request</p><p className="text-sm text-muted-foreground mb-4">Open the agent and describe the report you need.</p>{!readerMode && <Button onClick={() => setAgentOpen(true)}><Sparkles className="h-4 w-4" /> Open report agent</Button>}</div></div> : mounted && <div className="report-grid-stack relative" style={{ paddingTop: REPORT_GRID_TOP_PADDING }}>
           <div className="report-group-layer report-authoring-group-layer pointer-events-none absolute inset-0 z-0" aria-hidden="true">
             {groupBoxes.map((box) => {
               const tone = REPORT_GROUP_TONES[box.group.tone ?? "neutral"];
@@ -1251,17 +1419,17 @@ Current report:\n${JSON.stringify(draft)}`;
                   className={`absolute z-20 flex max-w-[calc(100%-24px)] items-baseline gap-2 rounded-full border px-3 py-1.5 shadow-sm ${tone.label}`}
                   style={{ left: box.left + 12, top: box.top, transform: "translateY(-50%)" }}
                 >
-                  <span className={`truncate font-semibold leading-tight ${titleSize}`}>{interpolateReportText(box.group.title, draft, appliedValues)}</span>
-                  {box.group.description && <span className="hidden truncate text-xs font-normal opacity-70 sm:inline">{interpolateReportText(box.group.description, draft, appliedValues)}</span>}
+                  <span className={`truncate font-semibold leading-tight ${titleSize}`}>{interpolateReportText(box.group.title, report, appliedValues)}</span>
+                  {box.group.description && <span className="hidden truncate text-xs font-normal opacity-70 sm:inline">{interpolateReportText(box.group.description, report, appliedValues)}</span>}
                 </div>
               </div>;
             })}
           </div>
-          <ResponsiveGridLayout className="relative z-10" width={width} breakpoints={{ lg: 768, sm: 0 }} cols={{ lg: 12, sm: 1 }} layouts={layouts} rowHeight={REPORT_GRID_ROW_HEIGHT} margin={[REPORT_GRID_MARGIN, REPORT_GRID_MARGIN]} compactor={(draft.groups?.length ?? 0) > 0 ? noCompactor : undefined} dragConfig={{ handle: ".report-drag-handle" }} resizeConfig={{ enabled: true }} onLayoutChange={(layout) => { if (width >= 768) updateLayout(layout); }}>
-          {draft.blocks.map((block) => {
+          <ResponsiveGridLayout className="relative z-10" width={width} breakpoints={{ lg: 768, sm: 0 }} cols={{ lg: 12, sm: 1 }} layouts={layouts} rowHeight={REPORT_GRID_ROW_HEIGHT} margin={[REPORT_GRID_MARGIN, REPORT_GRID_MARGIN]} compactor={(report.groups?.length ?? 0) > 0 ? noCompactor : undefined} dragConfig={{ enabled: !readerMode, handle: ".report-drag-handle" }} resizeConfig={{ enabled: !readerMode }} onLayoutChange={(layout) => { if (!readerMode && width >= 768) updateLayout(layout); }}>
+          {report.blocks.map((block) => {
             const result = block.type === "markdown" ? null : results[block.datasetId];
-            const dataset = block.type === "markdown" ? null : draft.datasets.find((candidate) => candidate.id === block.datasetId);
-            const displayBlockTitle = block.title ? interpolateReportText(block.title, draft, appliedValues) : undefined;
+            const dataset = block.type === "markdown" ? null : report.datasets.find((candidate) => candidate.id === block.datasetId);
+            const displayBlockTitle = block.title ? interpolateReportText(block.title, report, appliedValues) : undefined;
             const markdownTitle = block.type === "markdown" ? visibleMarkdownTitle(displayBlockTitle) : null;
             const showBlockHeader = block.type !== "markdown" || markdownTitle !== null;
             const pending = isDatasetPending(result ?? undefined);
@@ -1292,10 +1460,10 @@ Current report:\n${JSON.stringify(draft)}`;
               "--report-grid-width": block.layout.w,
               "--report-grid-height": block.layout.h,
             } as CSSProperties;
-            const reportGroup = block.groupId ? (draft.groups ?? []).find((group) => group.id === block.groupId) : undefined;
+            const reportGroup = block.groupId ? (report.groups ?? []).find((group) => group.id === block.groupId) : undefined;
             return <div key={block.id} style={gridStyle} data-testid={`report-block-${block.id}`} data-report-group={block.groupId} data-report-tone={resolvedAppearance.tone} data-report-emphasis={resolvedAppearance.emphasis} aria-busy={pending || narrativePending} className={`group relative rounded-lg border shadow-sm overflow-hidden flex flex-col print:shadow-none ${appearanceStyle[resolvedAppearance.emphasis]}`}>
-              {reportGroup && <div className="print-only hidden border-b px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{interpolateReportText(reportGroup.title, draft, appliedValues)}</div>}
-              {showBlockHeader && <div data-testid={`report-block-header-${block.id}`} className="report-drag-handle cursor-move px-3 py-2 border-b flex items-center gap-2 text-sm font-medium">
+              {reportGroup && <div className="print-only hidden border-b px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{interpolateReportText(reportGroup.title, report, appliedValues)}</div>}
+              {showBlockHeader && <div data-testid={`report-block-header-${block.id}`} className={`report-drag-handle px-3 py-2 border-b flex items-center gap-2 text-sm font-medium ${readerMode ? "cursor-default" : "cursor-move"}`}>
                 <span className="truncate">{block.type === "markdown" ? markdownTitle : displayBlockTitle || reportBlockLabel(block.type)}</span>
                 {resolvedAppearance.label && <span data-testid={`report-block-status-${block.id}`} title={resolvedAppearance.label} className="inline-flex min-w-0 max-w-[45%] items-center gap-1.5 rounded-full border border-current/15 bg-background/55 px-2 py-0.5 text-[10px] font-medium"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${appearanceStyle.dot}`} /><span className="truncate">{resolvedAppearance.label}</span></span>}
                 <div className="flex-1" />
@@ -1355,8 +1523,8 @@ Current report:\n${JSON.stringify(draft)}`;
                 </div>
               </div>}
               {!showBlockHeader && resolvedAppearance.label && <div data-testid={`report-block-status-${block.id}`} title={resolvedAppearance.label} className="absolute right-2 top-2 z-10 inline-flex max-w-[60%] items-center gap-1.5 rounded-full border border-current/15 bg-background/75 px-2 py-0.5 text-[10px] font-medium"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${appearanceStyle.dot}`} /><span className="truncate">{resolvedAppearance.label}</span></div>}
-              {!showBlockHeader && <div data-testid={`report-block-drag-${block.id}`} title="Drag text block" className="report-authoring-control report-drag-handle absolute right-1 top-1 z-10 cursor-move rounded p-1 text-muted-foreground/50 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"><GripVertical className="h-3.5 w-3.5" /></div>}
-              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={interpolateReportText(block.markdown, draft, appliedValues)} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className="text-xs text-destructive">{result.error}</div><Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart block={visualBlock} rows={result.rows} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} config={block.config} onConfig={(config) => setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current)} /> : null}</div>
+              {!readerMode && !showBlockHeader && <div data-testid={`report-block-drag-${block.id}`} title="Drag text block" className="report-authoring-control report-drag-handle absolute right-1 top-1 z-10 cursor-move rounded p-1 text-muted-foreground/50 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"><GripVertical className="h-3.5 w-3.5" /></div>}
+              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={interpolateReportText(block.markdown, report, appliedValues)} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className="text-xs text-destructive">{result.error}</div><Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <div className="h-full flex flex-col justify-center items-center"><div className="text-3xl font-semibold">{formatKpi(result.rows[0]?.[block.valueColumn], block.format)}</div><div className="text-xs text-muted-foreground">{block.labelColumn ? String(result.rows[0]?.[block.labelColumn] ?? "") : block.title}</div></div> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart block={visualBlock} rows={result.rows} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} config={block.config} onConfig={(config) => { if (!readerMode) setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current); }} /> : null}</div>
               {(block.caption || block.source) && <div data-testid={`report-note-${block.id}`} className="px-3 pb-2 text-[10px] leading-snug text-muted-foreground">
                 {block.caption && <span>{block.caption}</span>}{block.caption && block.source && <span> · </span>}{block.source && <span>Source: {block.source}</span>}
               </div>}
@@ -1365,7 +1533,7 @@ Current report:\n${JSON.stringify(draft)}`;
           </ResponsiveGridLayout>
         </div>}
       </div>
-      {(agentOpen || inspectorOpen) && <aside className="report-authoring-control w-[min(42vw,520px)] min-w-[340px] border-l bg-card flex flex-col min-h-0">
+      {!readerMode && (agentOpen || inspectorOpen) && <aside className="report-authoring-control w-[min(42vw,520px)] min-w-[340px] border-l bg-card flex flex-col min-h-0">
         <div className="flex items-center border-b"><button className={`px-4 py-2 text-sm ${agentOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setAgentOpen(true); setInspectorOpen(false); }}>Agent</button><button className={`px-4 py-2 text-sm ${inspectorOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setInspectorOpen(true); setAgentOpen(false); setSourceText(exportReportJson(draft)); }}>Source</button><div className="flex-1" />{agentOpen && agentConversation.length > 0 && <Button size="sm" variant="ghost" disabled={agentBusy} onClick={resetAgentConversation}>New conversation</Button>}<button className="p-2" onClick={() => { setAgentOpen(false); setInspectorOpen(false); }}><X className="h-4 w-4" /></button></div>
         {agentOpen ? <><div ref={agentThreadRef} data-testid="report-agent-thread" className="flex-1 overflow-y-auto p-4 text-sm"><p className="text-muted-foreground mb-4">Describe the report or revision. The agent edits a draft; nothing is saved until you accept it.</p><div className="space-y-5">{agentConversation.map((message) => <div key={message.id} data-role={message.role}>{message.role === "user" ? <ChatMessageUser content={message.content ?? ""} /> : <ChatMessageAssistant blocks={message.blocks ?? []} isStreaming={message.isStreaming} usage={message.usage} model={settings.aiModel} onCancel={message.isStreaming ? () => abortRef.current?.abort() : undefined} />}</div>)}</div></div><div className="p-3 border-t"><textarea className="w-full min-h-24 rounded-md border bg-background p-2 text-sm" value={agentPrompt} onChange={(e) => setAgentPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void runAgent(); } }} placeholder="Build a monthly sales report with a date range and region filter…" /><div className="flex justify-end mt-2">{agentBusy ? <Button variant="destructive" size="sm" onClick={() => abortRef.current?.abort()}>Stop</Button> : <Button size="sm" disabled={!agentPrompt.trim()} onClick={runAgent}><Sparkles className="h-4 w-4" /> Send</Button>}</div></div></> : <><textarea className="flex-1 min-h-0 resize-none bg-background p-3 font-mono text-xs" spellCheck={false} value={sourceText} onChange={(e) => setSourceText(e.target.value)} />{sourceError && <div className="px-3 py-2 text-xs text-destructive border-t">{sourceError}</div>}<div className="p-3 border-t flex justify-end"><Button size="sm" onClick={() => { try { const parsed = importReportJson(sourceText); setDraft(parsed); setSourceError(null); } catch (e) { setSourceError(e instanceof Error ? e.message : String(e)); } }}>Preview source</Button></div></>}
       </aside>}

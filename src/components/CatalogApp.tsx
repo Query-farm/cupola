@@ -52,6 +52,7 @@ import {
   getAttachOptionsFor,
   type RecentService,
 } from "@/lib/recent-services";
+import { createReportShowcase } from "@/lib/reports/showcase";
 
 /** A recoverable auth error: one the SPA login redirect (below) handles by
  *  bouncing the user back through the IdP. These happen routinely (expired
@@ -122,10 +123,24 @@ function beginLoginFlow(serviceUrl: string, path: string): boolean {
   return true;
 }
 
-export function CatalogApp() {
-  const [data, setData] = useState<CatalogData | null>(null);
+interface CatalogAppProps {
+  showcase?: "report-guide";
+}
+
+const REPORT_SHOWCASE_CATALOG: CatalogData = {
+  catalogName: "Report examples",
+  catalogComment: "Local canned data used by the report block gallery.",
+  catalogTags: {},
+  defaultSchema: null,
+  schemas: [],
+};
+
+export function CatalogApp({ showcase }: CatalogAppProps = {}) {
+  const showcaseMode = showcase === "report-guide";
+  const showcaseReport = useMemo(() => showcaseMode ? createReportShowcase() : undefined, [showcaseMode]);
+  const [data, setData] = useState<CatalogData | null>(() => showcaseMode ? REPORT_SHOWCASE_CATALOG : null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!showcaseMode);
   const [refreshing, setRefreshing] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const shellInsertRef = useRef<((text: string) => void) | null>(null);
@@ -133,6 +148,7 @@ export function CatalogApp() {
   // the old appView toggle + shell-drawer mode. Persisted (migrating the old
   // vgi-app-view key) so a reload returns to the same tab.
   const [activeTab, setActiveTab] = useState<TabId>(() => {
+    if (showcaseMode) return "reports";
     try {
       const stored = localStorage.getItem("vgi-active-tab") as TabId | null;
       // Perspective is backed by transient query/table data that does not
@@ -146,6 +162,7 @@ export function CatalogApp() {
   });
   // Collapsible catalog sidebar (persisted).
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    if (showcaseMode) return true;
     try { return localStorage.getItem("vgi-sidebar-collapsed") === "1"; } catch { return false; }
   });
   const isNarrow = useMediaQuery("(max-width: 767px)");
@@ -391,13 +408,15 @@ export function CatalogApp() {
   }, []);
   // Persist the active tab.
   useEffect(() => {
+    if (showcaseMode) return;
     try { localStorage.setItem("vgi-active-tab", activeTab); } catch {}
-  }, [activeTab]);
+  }, [activeTab, showcaseMode]);
 
   // Persist sidebar collapse.
   useEffect(() => {
+    if (showcaseMode) return;
     try { localStorage.setItem("vgi-sidebar-collapsed", sidebarCollapsed ? "1" : "0"); } catch {}
-  }, [sidebarCollapsed]);
+  }, [sidebarCollapsed, showcaseMode]);
 
   // ui.openInEditor: switch to the editor tab and queue the SQL.
   // Invoked by ExampleQueries' Run button and the shell's history tab.
@@ -450,11 +469,12 @@ export function CatalogApp() {
     });
   }, [activeTab]);
 
-  const serviceUrl = useMemo(() => getServiceUrl(), []);
+  const serviceUrl = useMemo(() => showcaseMode ? "" : getServiceUrl(), [showcaseMode]);
   // `?attach_options=` URL param wins over the localStorage value and is
   // persisted so a future visit without the param keeps the same options.
   // An explicit empty value clears them.
   const attachOptions = useMemo(() => {
+    if (showcaseMode) return undefined;
     const fromUrl = getAttachOptionsFromUrl();
     let base: string | undefined;
     if (fromUrl !== undefined && hasExplicitService()) {
@@ -472,7 +492,7 @@ export function CatalogApp() {
       return base ? `${base}, ${opt}` : opt;
     }
     return base;
-  }, [serviceUrl]);
+  }, [serviceUrl, showcaseMode]);
 
   // Tag every Sentry event with the service URL and (when known) the catalog
   // name. Lets us slice errors by tenant without putting URLs in messages.
@@ -571,6 +591,13 @@ export function CatalogApp() {
 
   const loadCatalog = useCallback(
     async (isRefresh = false) => {
+      if (showcaseMode) {
+        setData(REPORT_SHOWCASE_CATALOG);
+        setError(null);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
       // No ?service= — don't try to fetchCatalog against cupola's own origin
       // (which would 404 on /__describe__). The render path below detects
       // "no data + no error + not loading + !hasExplicitService" and shows
@@ -650,7 +677,7 @@ export function CatalogApp() {
         setRefreshing(false);
       }
     },
-    [serviceUrl, syncAttachedCatalogs]
+    [serviceUrl, showcaseMode, syncAttachedCatalogs]
   );
 
   // Process any pending SPA OAuth callback before the first catalog fetch.
@@ -737,7 +764,7 @@ export function CatalogApp() {
   // SSR. On the client, ?service=... makes it true. Without the gate the
   // SSR output (WelcomePage) and the first client render (loading spinner)
   // disagree. After mount we're allowed to diverge from the SSR snapshot.
-  if (mounted && !hasExplicitService()) {
+  if (mounted && !showcaseMode && !hasExplicitService()) {
     return <WelcomePage logoUrl={logoUrl} />;
   }
 
@@ -751,7 +778,7 @@ export function CatalogApp() {
   // getServiceUrl()) before the effect flipped `mounted` and the welcome page
   // above took over. With no service there is nothing to connect to, so there
   // is nothing to report progress on.
-  if (loading && (!mounted || hasExplicitService())) {
+  if (loading && (!mounted || showcaseMode || hasExplicitService())) {
     // Pre-mount (SSR + first client paint) we can't read window.location, so
     // we don't yet know whether a service was named. Say something true and
     // neutral; the heading firms up to "Connecting to <service>" one commit
@@ -788,6 +815,7 @@ export function CatalogApp() {
       <Header
         catalogName={data.catalogName}
         serviceUrl={serviceUrl}
+        showServiceSwitcher={!showcaseMode}
       />
       <AppTabBar
         activeTab={activeTab}
@@ -888,6 +916,7 @@ export function CatalogApp() {
                     catalogData={data}
                     serviceUrl={serviceUrl}
                     attachedCatalogNames={attachedCatalogs.map((c) => c.catalogName)}
+                    initialReport={showcaseReport}
                   />
                 </Suspense>
               </ErrorBoundary>

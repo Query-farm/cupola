@@ -1,0 +1,347 @@
+import type { ReportDocumentV1 } from "./types";
+
+/** A catalog-free report used by the in-product block guide. Every dataset is
+ * self-contained SQL so the gallery exercises the real report runtime without
+ * requiring a VGI service or network data source. */
+export function createReportShowcase(): ReportDocumentV1 {
+  const timestamp = Date.UTC(2026, 7, 20, 12, 0, 0);
+  return {
+    schemaVersion: 1,
+    id: "cupola-report-block-showcase",
+    title: "Cupola report block gallery",
+    description: "A runnable, catalog-free example of every report block. Change the parameters, inspect tooltips, and use each block's hover actions.",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    revision: 1,
+    requiredSources: [],
+    parameters: [
+      {
+        id: "showcase-city",
+        key: "city",
+        label: "City",
+        type: "select",
+        defaultValue: "Glen Allen",
+        options: {
+          kind: "static",
+          values: [
+            { label: "Glen Allen, Virginia", value: "Glen Allen" },
+            { label: "Richmond, Virginia", value: "Richmond" },
+            { label: "Norfolk, Virginia", value: "Norfolk" },
+          ],
+        },
+      },
+      {
+        id: "showcase-comfort-max",
+        key: "comfort_max",
+        label: "Humidity alert",
+        description: "Highlight the KPI when humidity exceeds this percentage.",
+        type: "number",
+        defaultValue: 65,
+        validation: { min: 40, max: 90, step: 1, integer: true },
+      },
+    ],
+    datasets: [
+      {
+        id: "showcase-current",
+        name: "Current conditions",
+        description: "One canned current reading for the selected city.",
+        sql: `WITH readings(city, observed_at, temperature_f, humidity_pct, aqi) AS (VALUES
+          ('Glen Allen', TIMESTAMP '2026-08-20 12:00:00', 82, 68, 42),
+          ('Richmond', TIMESTAMP '2026-08-20 12:00:00', 84, 64, 48),
+          ('Norfolk', TIMESTAMP '2026-08-20 12:00:00', 79, 73, 35)
+        )
+        SELECT *, CASE WHEN humidity_pct > $comfort_max THEN 'alert' ELSE 'ok' END AS comfort_state,
+          CASE WHEN humidity_pct > $comfort_max THEN 'Above selected comfort band' ELSE 'Inside selected comfort band' END AS status
+        FROM readings WHERE city = $city`,
+      },
+      {
+        id: "showcase-hourly",
+        name: "Hourly humidity",
+        description: "Ordered canned observations for the compact trend and detail table.",
+        sql: `WITH readings(city, observed_at, temperature_f, humidity_pct, aqi) AS (VALUES
+          ('Glen Allen', TIMESTAMP '2026-08-20 07:00:00', 70, 77, 31), ('Glen Allen', TIMESTAMP '2026-08-20 08:00:00', 72, 75, 33),
+          ('Glen Allen', TIMESTAMP '2026-08-20 09:00:00', 75, 73, 35), ('Glen Allen', TIMESTAMP '2026-08-20 10:00:00', 78, 71, 38),
+          ('Glen Allen', TIMESTAMP '2026-08-20 11:00:00', 80, 69, 40), ('Glen Allen', TIMESTAMP '2026-08-20 12:00:00', 82, 68, 42),
+          ('Glen Allen', TIMESTAMP '2026-08-20 13:00:00', 84, 66, 43), ('Glen Allen', TIMESTAMP '2026-08-20 14:00:00', 85, 65, 44),
+          ('Richmond', TIMESTAMP '2026-08-20 07:00:00', 71, 74, 38), ('Richmond', TIMESTAMP '2026-08-20 08:00:00', 74, 72, 40),
+          ('Richmond', TIMESTAMP '2026-08-20 09:00:00', 77, 70, 42), ('Richmond', TIMESTAMP '2026-08-20 10:00:00', 80, 68, 44),
+          ('Richmond', TIMESTAMP '2026-08-20 11:00:00', 82, 66, 46), ('Richmond', TIMESTAMP '2026-08-20 12:00:00', 84, 64, 48),
+          ('Richmond', TIMESTAMP '2026-08-20 13:00:00', 86, 63, 49), ('Richmond', TIMESTAMP '2026-08-20 14:00:00', 87, 62, 50),
+          ('Norfolk', TIMESTAMP '2026-08-20 07:00:00', 72, 82, 28), ('Norfolk', TIMESTAMP '2026-08-20 08:00:00', 73, 80, 29),
+          ('Norfolk', TIMESTAMP '2026-08-20 09:00:00', 75, 78, 31), ('Norfolk', TIMESTAMP '2026-08-20 10:00:00', 77, 76, 32),
+          ('Norfolk', TIMESTAMP '2026-08-20 11:00:00', 78, 74, 34), ('Norfolk', TIMESTAMP '2026-08-20 12:00:00', 79, 73, 35),
+          ('Norfolk', TIMESTAMP '2026-08-20 13:00:00', 80, 72, 36), ('Norfolk', TIMESTAMP '2026-08-20 14:00:00', 80, 71, 37)
+        ) SELECT *, observed_at > TIMESTAMP '2026-08-20 12:00:00' AS is_forecast FROM readings WHERE city = $city ORDER BY observed_at`,
+      },
+      {
+        id: "showcase-all-hourly",
+        name: "All-city hourly comparison",
+        sql: `SELECT * FROM (VALUES
+          ('Glen Allen', TIMESTAMP '2026-08-20 09:00:00', 73), ('Glen Allen', TIMESTAMP '2026-08-20 10:00:00', 71), ('Glen Allen', TIMESTAMP '2026-08-20 11:00:00', 69), ('Glen Allen', TIMESTAMP '2026-08-20 12:00:00', 68),
+          ('Richmond', TIMESTAMP '2026-08-20 09:00:00', 70), ('Richmond', TIMESTAMP '2026-08-20 10:00:00', 68), ('Richmond', TIMESTAMP '2026-08-20 11:00:00', 66), ('Richmond', TIMESTAMP '2026-08-20 12:00:00', 64),
+          ('Norfolk', TIMESTAMP '2026-08-20 09:00:00', 78), ('Norfolk', TIMESTAMP '2026-08-20 10:00:00', 76), ('Norfolk', TIMESTAMP '2026-08-20 11:00:00', 74), ('Norfolk', TIMESTAMP '2026-08-20 12:00:00', 73)
+        ) AS t(city, observed_at, humidity_pct) ORDER BY city, observed_at`,
+      },
+      {
+        id: "showcase-bullets",
+        name: "Actual versus target",
+        sql: `SELECT * FROM (VALUES
+          ('Humidity (%)', 68, 60, 85, 70),
+          ('Air quality index', 42, 50, 100, 75),
+          ('Temperature (°F)', 82, 78, 95, 86)
+        ) AS t(metric, actual, target, broad_max, preferred_max)`,
+      },
+      {
+        id: "showcase-ranges",
+        name: "Daily temperature ranges",
+        sql: `SELECT * FROM (VALUES
+          ('Thu', 67, 88, 82), ('Fri', 65, 85, 79), ('Sat', 63, 81, 76), ('Sun', 66, 84, 78)
+        ) AS t(day, low_f, high_f, current_f)`,
+      },
+      {
+        id: "showcase-slopes",
+        name: "Humidity change",
+        sql: `SELECT * FROM (VALUES
+          ('Glen Allen', 77, 68, 'Piedmont'), ('Richmond', 74, 64, 'Piedmont'), ('Norfolk', 82, 73, 'Coastal')
+        ) AS t(city, morning_pct, noon_pct, region)`,
+      },
+      {
+        id: "showcase-air",
+        name: "Air quality composition",
+        sql: `WITH readings(city, pollutant, reading, guideline) AS (VALUES
+          ('Glen Allen', 'PM2.5', 8.4, 15.0), ('Glen Allen', 'Ozone', 41.0, 54.0), ('Glen Allen', 'NO₂', 12.0, 53.0),
+          ('Richmond', 'PM2.5', 10.2, 15.0), ('Richmond', 'Ozone', 45.0, 54.0), ('Richmond', 'NO₂', 18.0, 53.0),
+          ('Norfolk', 'PM2.5', 6.8, 15.0), ('Norfolk', 'Ozone', 35.0, 54.0), ('Norfolk', 'NO₂', 9.0, 53.0)
+        ) SELECT * FROM readings WHERE city = $city`,
+      },
+      {
+        id: "showcase-sensors",
+        name: "Sensor locations",
+        sql: `SELECT * FROM (VALUES
+          ('Glen Allen', 'GA-01', 37.6659, -77.5064, 'Good'), ('Richmond', 'RIC-02', 37.5407, -77.4360, 'Moderate'),
+          ('Norfolk', 'ORF-03', 36.8508, -76.2859, 'Good'), ('Charlottesville', 'CHO-04', 38.0293, -78.4767, 'Moderate')
+        ) AS t(city, station, latitude, longitude, air_quality)`,
+      },
+      {
+        id: "showcase-operations",
+        name: "Operations detail",
+        sql: `SELECT * FROM (VALUES
+          ('GA-01', 'Online', 99.8, 1842, TIMESTAMP '2026-08-20 12:02:00'),
+          ('RIC-02', 'Online', 99.4, 1765, TIMESTAMP '2026-08-20 12:01:00'),
+          ('ORF-03', 'Maintenance', 96.1, 1520, TIMESTAMP '2026-08-20 11:48:00'),
+          ('CHO-04', 'Online', 98.9, 1698, TIMESTAMP '2026-08-20 12:00:00')
+        ) AS t(station, status, uptime_pct, observations, last_seen)`,
+      },
+    ],
+    groups: [
+      { id: "showcase-intro", title: "How reports communicate", description: "Fixed context, key values, compact trends, and generated interpretation", tone: "blue", titleSize: "large" },
+      { id: "showcase-tufte", title: "Tufte-style comparison devices", description: "Small multiples, targets, intervals, and two-point change", tone: "green", titleSize: "large" },
+      { id: "showcase-rich", title: "Rich exploration", description: "A custom Vega-Lite chart and a geographic Leaflet view", tone: "violet", titleSize: "large" },
+      { id: "showcase-detail", title: "Exact data and open-ended analysis", description: "A formatted table and an interactive Perspective workspace", tone: "neutral", titleSize: "large" },
+    ],
+    blocks: [
+      {
+        id: "showcase-markdown",
+        type: "markdown",
+        groupId: "showcase-intro",
+        markdown: "## This page is a real report\n\nEvery box below is rendered by Cupola's production report components over local canned SQL. Change **City** or **Humidity alert** in the parameter ribbon and press **Apply**. Hover a data block for CSV, XLSX, SQL, PNG, or SVG actions when supported.\n\nThe selected city is **$city_label**; no VGI catalog is attached.",
+        layout: { x: 0, y: 0, w: 12, h: 3 },
+      },
+      {
+        id: "showcase-kpi",
+        type: "kpi",
+        groupId: "showcase-intro",
+        title: "KPI · Humidity (%)",
+        caption: "A first-row headline value with a parameter-driven semantic alert.",
+        source: "Canned current conditions",
+        datasetId: "showcase-current",
+        valueColumn: "humidity_pct",
+        labelColumn: "status",
+        appearance: {
+          tone: "success",
+          label: "Inside selected comfort band",
+          rules: [{ column: "comfort_state", operator: "equal", value: "alert", tone: "warning", emphasis: "prominent", label: "Above selected comfort band" }],
+        },
+        layout: { x: 0, y: 3, w: 3, h: 3 },
+      },
+      {
+        id: "showcase-sparkline",
+        type: "sparkline",
+        groupId: "showcase-intro",
+        title: "Sparkline · History and forecast",
+        caption: "A data-driven Now divider separates observed values from the purple forecast segment.",
+        source: "Canned hourly observations",
+        datasetId: "showcase-hourly",
+        valueColumn: "humidity_pct",
+        labelColumn: "city",
+        showValue: true,
+        color: "#0f8b75",
+        splitColumn: "is_forecast",
+        splitLabel: "Now · forecast begins",
+        splitColor: "#7c3aed",
+        layout: { x: 3, y: 3, w: 3, h: 3 },
+      },
+      {
+        id: "showcase-ai",
+        type: "ai_narrative",
+        groupId: "showcase-intro",
+        title: "AI narrative · Decision summary",
+        caption: "A persisted, bounded prose snapshot produced from report rows; this gallery does not make an AI request.",
+        source: "Canned current conditions",
+        datasetId: "showcase-current",
+        instruction: "Summarize the selected city's conditions for an operations reader.",
+        columns: ["temperature_f", "humidity_pct", "aqi", "status"],
+        maxRows: 5,
+        refreshPolicy: "manual",
+        snapshot: {
+          markdown: "**The selected location is warm with elevated humidity, while air quality remains in the good range.** The humidity threshold is the item most likely to merit attention; the report keeps that conclusion beside the underlying KPI rather than hiding it in a tooltip.",
+          generatedAt: timestamp,
+          dataFingerprint: "showcase-canned-snapshot",
+          model: "example snapshot",
+          rowCount: 1,
+        },
+        layout: { x: 6, y: 3, w: 6, h: 3 },
+      },
+      {
+        id: "showcase-small-multiples",
+        type: "small_multiples",
+        groupId: "showcase-tufte",
+        title: "Small multiples · Same measure, comparable panels",
+        caption: "Aligned facets make city-to-city shape and level differences visible without a crowded legend.",
+        source: "Canned hourly observations",
+        datasetId: "showcase-all-hourly",
+        facetColumn: "city",
+        xColumn: "observed_at",
+        yColumn: "humidity_pct",
+        xType: "temporal",
+        mark: "line",
+        facetColumns: 3,
+        sharedY: true,
+        referenceValue: 65,
+        referenceLabel: "65% reference",
+        layout: { x: 0, y: 7, w: 7, h: 5 },
+      },
+      {
+        id: "showcase-bullet",
+        type: "bullet",
+        groupId: "showcase-tufte",
+        title: "Bullet · Actual, target, and qualitative bands",
+        caption: "A compact, information-dense alternative to a gauge.",
+        source: "Illustrative operating thresholds",
+        datasetId: "showcase-bullets",
+        categoryColumn: "metric",
+        valueColumn: "actual",
+        targetColumn: "target",
+        rangeColumns: ["broad_max", "preferred_max"],
+        color: "#2563eb",
+        layout: { x: 7, y: 7, w: 5, h: 5 },
+      },
+      {
+        id: "showcase-range-dot",
+        type: "range_dot",
+        groupId: "showcase-tufte",
+        title: "Range dot · Low, high, and current",
+        caption: "Intervals carry more information than a single average while remaining easy to scan.",
+        source: "Illustrative four-day forecast",
+        datasetId: "showcase-ranges",
+        categoryColumn: "day",
+        lowColumn: "low_f",
+        highColumn: "high_f",
+        valueColumn: "current_f",
+        color: "#e11d48",
+        layout: { x: 0, y: 12, w: 6, h: 5 },
+      },
+      {
+        id: "showcase-slopegraph",
+        type: "slopegraph",
+        groupId: "showcase-tufte",
+        title: "Slopegraph · Change between two moments",
+        caption: "Directly labeled endpoints reveal direction, magnitude, and rank change.",
+        source: "Canned morning and noon readings",
+        datasetId: "showcase-slopes",
+        categoryColumn: "city",
+        startColumn: "morning_pct",
+        endColumn: "noon_pct",
+        startLabel: "7 AM",
+        endLabel: "Noon",
+        colorColumn: "region",
+        layout: { x: 6, y: 12, w: 6, h: 5 },
+      },
+      {
+        id: "showcase-chart",
+        type: "chart",
+        groupId: "showcase-rich",
+        title: "Vega-Lite chart · Reading versus guideline",
+        caption: "Use a free-form chart when axes, legends, layers, or richer encodings are necessary.",
+        source: "Illustrative pollutant readings",
+        datasetId: "showcase-air",
+        spec: {
+          layer: [
+            {
+              mark: { type: "bar", cornerRadiusEnd: 3 },
+              encoding: {
+                x: { field: "pollutant", type: "nominal", axis: { title: null, labelAngle: 0 } },
+                y: { field: "reading", type: "quantitative", axis: { title: "Illustrative concentration" } },
+                color: { field: "pollutant", type: "nominal", legend: { orient: "bottom", title: null } },
+                tooltip: [
+                  { field: "pollutant", type: "nominal" },
+                  { field: "reading", type: "quantitative" },
+                  { field: "guideline", type: "quantitative", title: "Example guideline" },
+                ],
+              },
+            },
+            {
+              mark: { type: "tick", color: "#0f172a", thickness: 2, size: 28 },
+              encoding: {
+                x: { field: "pollutant", type: "nominal" },
+                y: { field: "guideline", type: "quantitative" },
+              },
+            },
+          ],
+          config: { view: { stroke: null } },
+        },
+        layout: { x: 0, y: 18, w: 7, h: 6 },
+      },
+      {
+        id: "showcase-map",
+        type: "map",
+        groupId: "showcase-rich",
+        title: "Leaflet map · Sensor geography",
+        caption: "Points, categories, labels, and tooltips use the same reusable report dataset model.",
+        source: "Illustrative Virginia monitoring sites",
+        datasetId: "showcase-sensors",
+        latitudeColumn: "latitude",
+        longitudeColumn: "longitude",
+        labelColumn: "station",
+        colorColumn: "air_quality",
+        tooltipColumns: ["city", "station", "air_quality"],
+        basemap: "none",
+        palette: ["#059669", "#d97706"],
+        style: { radius: 8, fillOpacity: 0.75, weight: 2 },
+        layout: { x: 7, y: 18, w: 5, h: 6 },
+      },
+      {
+        id: "showcase-table",
+        type: "table",
+        groupId: "showcase-detail",
+        title: "Table · Exact rows and standard formatting",
+        caption: "Tables preserve precise values and use Cupola's shared timestamp and data-type formatters.",
+        source: "Canned hourly observations",
+        datasetId: "showcase-hourly",
+        columns: ["observed_at", "temperature_f", "humidity_pct", "aqi"],
+        pageSize: 6,
+        layout: { x: 0, y: 25, w: 6, h: 6 },
+      },
+      {
+        id: "showcase-perspective",
+        type: "perspective",
+        groupId: "showcase-detail",
+        title: "Perspective · Open-ended pivot and exploration",
+        caption: "Perspective adds interactive grouping, pivots, sorting, and visualization configuration for exploratory readers.",
+        source: "Illustrative station operations",
+        datasetId: "showcase-operations",
+        layout: { x: 6, y: 25, w: 6, h: 6 },
+      },
+    ],
+  };
+}

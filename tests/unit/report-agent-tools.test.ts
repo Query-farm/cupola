@@ -3,6 +3,14 @@ import { REPORT_DOCUMENT_SCHEMA, REPORT_TOOLS, upsertAgentBlock, upsertAgentData
 import { createEmptyReport } from "../../src/lib/reports/types";
 
 describe("report agent tools", () => {
+  test("requires a structured plan before compositional authoring", () => {
+    const plan = REPORT_TOOLS.find((candidate) => candidate.name === "plan_report")!;
+    expect(REPORT_TOOLS[0].name).toBe("plan_report");
+    expect(plan.input_schema.required).toEqual(["objective", "approach", "datasets", "blocks", "parameters", "acceptanceCriteria"]);
+    expect(plan.input_schema.properties.blocks.items.properties.type.enum).toContain("ai_narrative");
+    expect(plan.input_schema.properties.acceptanceCriteria.minItems).toBe(1);
+  });
+
   test("bulk schema documents layout as nested x/y/w/h", () => {
     const block = REPORT_DOCUMENT_SCHEMA.properties.blocks.items;
     expect(block.required).toContain("layout");
@@ -107,6 +115,8 @@ describe("report agent tools", () => {
     report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 1 AS temperature" });
     const created = upsertAgentBlock(report, { type: "sparkline", title: "Temperature", datasetId: "weather", valueColumn: "temperature" });
     expect(created.block.layout).toEqual({ x: 0, y: 0, w: 3, h: 2 });
+    expect(REPORT_DOCUMENT_SCHEMA.properties.blocks.items.properties).toHaveProperty("splitColumn");
+    expect(REPORT_DOCUMENT_SCHEMA.properties.blocks.items.properties).toHaveProperty("splitColor");
   });
 
   test("gives AI narratives a full-width reading box and keeps snapshots managed", () => {

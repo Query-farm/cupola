@@ -30,7 +30,7 @@ test("requires correction for silently dropped Vega encodings", () => {
   expect(isBlockingVegaWarning("Log scale domain includes zero: [0, 10]")).toBe(false);
 });
 
-test("reports missing sparkline value and label columns", () => {
+test("reports missing sparkline value, label, and split columns", () => {
   const report = createEmptyReport("Weather");
   report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 1" });
   report.blocks.push({
@@ -39,10 +39,11 @@ test("reports missing sparkline value and label columns", () => {
     datasetId: "weather",
     valueColumn: "temperature",
     labelColumn: "observed_at",
+    splitColumn: "is_forecast",
     layout: { x: 0, y: 0, w: 3, h: 2 },
   });
   expect(validateReportResultColumns(report, [{ datasetId: "weather", ok: true, columns: ["other"] }]))
-    .toEqual(["temperature: missing result columns temperature, observed_at."]);
+    .toEqual(["temperature: missing result columns temperature, observed_at, is_forecast."]);
 });
 
 test("validates appearance rule columns for free-form charts", () => {

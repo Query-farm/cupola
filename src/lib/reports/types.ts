@@ -182,6 +182,12 @@ export interface ReportSparklineBlock extends ReportBlockBase {
   labelColumn?: string;
   format?: "number" | "currency" | "percent" | "text";
   showValue?: boolean;
+  /** First truthy row marks the boundary between the two portions of the series. */
+  splitColumn?: string;
+  /** Accessible hover label for the vertical split marker, such as "Now". */
+  splitLabel?: string;
+  /** Optional color for the portion at and after the split; `color` remains the before color. */
+  splitColor?: string;
   color?: string;
 }
 
@@ -301,6 +307,9 @@ export interface ReportDocumentV1 {
 export interface StoredReport {
   document: ReportDocumentV1;
   revisions: ReportDocumentV1[];
+  /** Immutable reader-facing snapshot. Later draft saves do not change it. */
+  publishedDocument?: ReportDocumentV1;
+  publishedAt?: number;
 }
 
 export function newReportId(prefix = "report"): string {

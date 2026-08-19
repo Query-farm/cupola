@@ -2,7 +2,7 @@
   "name": "@query-farm/cupola",
   "private": true,
   "type": "module",
-  "version": "0.4.125",
+  "version": "0.4.126",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.12.0"
@@ -19,6 +19,7 @@
     "check:bundle": "node scripts/check-bundle-size.mjs",
     "audit": "bun audit --production",
     "test": "bun test ./tests/unit",
+    "test:report-agent-evals": "bun test ./tests/unit/report-agent-evals.test.ts ./tests/unit/report-agent-reliability.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:smoke": "playwright test tests/sidebar.spec.ts tests/settings.spec.ts tests/app-tabs.spec.ts tests/responsive.spec.ts tests/accessibility.spec.ts",
     "build:landing-client": "bun build ./src/landing/vgi-client-entry.ts --outfile public/vgi-client.js --target browser --format esm --minify"

@@ -10,6 +10,29 @@ export interface SparklineSeries {
   latest: SparklineDatum | null;
 }
 
+export interface SparklineSplit {
+  /** Index of the first row in the after/forecast portion. */
+  index: number;
+  /** Normalized x coordinate halfway between the before and after points. */
+  x: number;
+}
+
+function marksSparklineSplit(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (typeof value !== "string") return false;
+  return ["true", "1", "yes", "forecast", "future", "after"].includes(value.trim().toLowerCase());
+}
+
+/** Locate a data-driven boundary. SQL boolean columns are preferred, while
+ * common textual phase values make canned and imported datasets ergonomic. */
+export function findSparklineSplit(series: SparklineSeries, splitColumn: string): SparklineSplit | null {
+  const index = series.data.findIndex((datum) => marksSparklineSplit(datum.row[splitColumn]));
+  if (index < 0) return null;
+  if (series.data.length === 1) return { index, x: 50 };
+  const x = index === 0 ? 0 : ((index - 0.5) / (series.data.length - 1)) * 100;
+  return { index, x };
+}
+
 /** Build a normalized 100×32 sparkline from rows in query-result order. */
 export function buildSparklineSeries(rows: Record<string, any>[], valueColumn: string): SparklineSeries {
   const data = rows.flatMap((row) => {
