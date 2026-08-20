@@ -110,12 +110,38 @@ describe("report document validation", () => {
       splitColumn: "is_forecast",
       splitLabel: "Now",
       splitColor: "#7c3aed",
+      headlineValueColumn: "humidity",
+      headlineRow: "last_observed",
       layout: { x: 0, y: 0, w: 3, h: 2 },
     });
     expect(validateReport(report)).toEqual([]);
 
     delete report.blocks[0].splitColumn;
     expect(validateReport(report).join(" ")).toContain("splitColumn is required");
+  });
+
+  test("validates ranged KPI and direct comparison labels", () => {
+    const report = createEmptyReport("Ranges") as any;
+    report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 68 AS humidity, 40 AS low, 60 AS high" });
+    report.blocks.push({
+      id: "humidity",
+      type: "kpi",
+      datasetId: "weather",
+      valueColumn: "humidity",
+      lowColumn: "low",
+      highColumn: "high",
+      rangeLabel: "Preferred range",
+      layout: { x: 0, y: 0, w: 3, h: 2 },
+    });
+    expect(validateReport(report)).toEqual([]);
+
+    delete report.blocks[0].highColumn;
+    expect(validateReport(report).join(" ")).toContain("lowColumn and highColumn must be set together");
+    report.blocks[0].highColumn = "high";
+    report.blocks[0].showValues = "sometimes";
+    report.blocks[0].type = "range_dot";
+    report.blocks[0].categoryColumn = "category";
+    expect(validateReport(report).join(" ")).toContain("showValues is unsupported");
   });
 
   test("validates bounded AI narrative instructions, refresh policy, and snapshots", () => {

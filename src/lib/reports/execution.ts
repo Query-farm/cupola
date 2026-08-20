@@ -119,8 +119,8 @@ export function isBlockingVegaWarning(warning: string): boolean {
 function referencedColumns(block: ReportBlock): string[] {
   let columns: string[] = [];
   if (block.type === "table") columns = block.columns ?? [];
-  else if (block.type === "kpi") columns = [block.valueColumn, block.labelColumn].filter((column): column is string => !!column);
-  else if (block.type === "sparkline") columns = [block.valueColumn, block.labelColumn, block.splitColumn].filter((column): column is string => !!column);
+  else if (block.type === "kpi") columns = [block.valueColumn, block.labelColumn, block.lowColumn, block.highColumn, block.targetColumn].filter((column): column is string => !!column);
+  else if (block.type === "sparkline") columns = [block.valueColumn, block.labelColumn, block.splitColumn, block.headlineValueColumn].filter((column): column is string => !!column);
   else if (block.type === "small_multiples") columns = [block.facetColumn, block.xColumn, block.yColumn, block.colorColumn].filter((column): column is string => !!column);
   else if (block.type === "bullet") columns = [block.categoryColumn, block.valueColumn, block.targetColumn, ...(block.rangeColumns ?? [])];
   else if (block.type === "slopegraph") columns = [block.categoryColumn, block.startColumn, block.endColumn, block.colorColumn].filter((column): column is string => !!column);

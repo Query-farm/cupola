@@ -50,6 +50,18 @@ describe("Tufte report blocks", () => {
     expect(spec.spec.layer[1].encoding.y.scale).toEqual({ zero: false });
   });
 
+  test("directly labels compact bullet and range values in auto mode", () => {
+    const bullet = blocks()[1];
+    const range = blocks()[3];
+    if (bullet.type !== "bullet" || range.type !== "range_dot") return;
+    const bulletSpec = tufteBlockToVegaSpec({ ...bullet, showValues: "auto" });
+    const rangeSpec = tufteBlockToVegaSpec({ ...range, showValues: "auto" });
+
+    expect(bulletSpec.layer.at(-1).encoding.text.field).toBe("sales");
+    expect(bulletSpec.layer.at(-1).transform).toContainEqual({ filter: "datum.__report_row_count <= 6" });
+    expect(rangeSpec.layer.slice(-3).map((layer: any) => layer.encoding.text.field)).toEqual(["low", "high", "sales"]);
+  });
+
   test("validates semantic fields, captions, sources, and live result columns", () => {
     const report = createEmptyReport("Comparisons");
     report.datasets.push({ id: "data", name: "Data", sql: "SELECT 1" });

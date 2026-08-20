@@ -1,6 +1,6 @@
 import { useId } from "react";
 import type { ReportSparklineBlock } from "@/lib/reports/types";
-import { buildSparklineSeries, findSparklineSplit } from "@/lib/reports/sparkline";
+import { buildSparklineSeries, findSparklineSplit, selectSparklineHeadline } from "@/lib/reports/sparkline";
 
 interface Props {
   block: ReportSparklineBlock;
@@ -14,12 +14,14 @@ export function ReportSparkline({ block, rows, formatValue }: Props) {
   if (!series.latest) return <div className="h-full flex items-center justify-center text-xs text-muted-foreground">No numeric values</div>;
   const color = block.color || "var(--primary)";
   const split = block.splitColumn ? findSparklineSplit(series, block.splitColumn) : null;
+  const headline = selectSparklineHeadline(series, split, block.headlineRow, block.headlineValueColumn)!;
   const splitColor = split && block.splitColor ? block.splitColor : null;
-  const label = block.labelColumn ? series.latest.row[block.labelColumn] : null;
-  const [latestX, latestY] = series.points.split(" ").at(-1)!.split(",");
+  const label = block.labelColumn ? headline.datum.row[block.labelColumn] : null;
+  const [headlineX, headlineY] = series.points.split(" ")[headline.index].split(",");
+  const headlineColor = splitColor && split && headline.index >= split.index ? splitColor : color;
   return <div data-testid="report-sparkline" className="h-full min-h-0 flex items-end gap-3 overflow-hidden">
     {block.showValue !== false && <div className="shrink-0 min-w-0 pb-0.5">
-      <div className="text-2xl leading-none font-semibold tabular-nums">{formatValue(series.latest.value, block.format)}</div>
+      <div data-testid="report-sparkline-value" className="text-2xl leading-none font-semibold tabular-nums">{formatValue(headline.value, block.format)}</div>
       {label != null && <div className="mt-1 max-w-28 truncate text-[10px] leading-none text-muted-foreground">{String(label)}</div>}
     </div>}
     <svg
@@ -51,7 +53,7 @@ export function ReportSparkline({ block, rows, formatValue }: Props) {
         strokeDasharray="2 2"
         vectorEffect="non-scaling-stroke"
       /></g>}
-      <line x1={latestX} x2={latestX} y1={latestY} y2={latestY} stroke={splitColor || color} strokeWidth="4" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+      <line data-testid="report-sparkline-headline-point" x1={headlineX} x2={headlineX} y1={headlineY} y2={headlineY} stroke={headlineColor} strokeWidth="4" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
     </svg>
   </div>;
 }

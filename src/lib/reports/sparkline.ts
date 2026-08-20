@@ -17,6 +17,12 @@ export interface SparklineSplit {
   x: number;
 }
 
+export interface SparklineHeadline {
+  datum: SparklineDatum;
+  index: number;
+  value: unknown;
+}
+
 function marksSparklineSplit(value: unknown): boolean {
   if (value === true || value === 1) return true;
   if (typeof value !== "string") return false;
@@ -31,6 +37,29 @@ export function findSparklineSplit(series: SparklineSeries, splitColumn: string)
   if (series.data.length === 1) return { index, x: 50 };
   const x = index === 0 ? 0 : ((index - 0.5) / (series.data.length - 1)) * 100;
   return { index, x };
+}
+
+/** Select the value a compact trend should headline. A forecast endpoint is
+ * rarely the current value, so split series default to the final point before
+ * the boundary. Authors can select another semantic row and/or a separate
+ * value column without persisting a stale literal in the report definition. */
+export function selectSparklineHeadline(
+  series: SparklineSeries,
+  split: SparklineSplit | null,
+  rowMode?: "last" | "last_observed" | "first_forecast",
+  headlineValueColumn?: string,
+): SparklineHeadline | null {
+  if (series.data.length === 0) return null;
+  const mode = rowMode ?? (split ? "last_observed" : "last");
+  let index = series.data.length - 1;
+  if (mode === "last_observed" && split && split.index > 0) index = split.index - 1;
+  else if (mode === "first_forecast" && split) index = split.index;
+  const datum = series.data[index];
+  return {
+    datum,
+    index,
+    value: headlineValueColumn ? datum.row[headlineValueColumn] : datum.value,
+  };
 }
 
 /** Build a normalized 100×32 sparkline from rows in query-result order. */

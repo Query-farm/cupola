@@ -33,6 +33,9 @@ describe("report agent tools", () => {
     expect(properties).toHaveProperty("caption");
     expect(properties).toHaveProperty("source");
     expect(properties).toHaveProperty("groupId");
+    expect(properties.headlineRow.enum).toEqual(["last", "last_observed", "first_forecast"]);
+    expect(properties.showValues.enum).toEqual(["auto", "all", "none"]);
+    expect(properties).toHaveProperty("rangeLabel");
     expect(properties.appearance.properties.rules.items.required).toEqual(["column", "operator", "value", "tone", "label"]);
     expect(properties.appearance.properties.tone.enum).toEqual(["neutral", "info", "success", "warning", "danger"]);
   });

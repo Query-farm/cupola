@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildSparklineSeries, findSparklineSplit } from "../../src/lib/reports/sparkline";
+import { buildSparklineSeries, findSparklineSplit, selectSparklineHeadline } from "../../src/lib/reports/sparkline";
 
 describe("report sparkline series", () => {
   test("normalizes numeric values in query result order and keeps the latest row", () => {
@@ -26,5 +26,19 @@ describe("report sparkline series", () => {
     expect(findSparklineSplit(series, "phase")).toEqual({ index: 2, x: 50 });
     expect(findSparklineSplit(buildSparklineSeries([{ value: 1, phase: "forecast" }], "value"), "phase")).toEqual({ index: 0, x: 50 });
     expect(findSparklineSplit(series, "missing")).toBeNull();
+  });
+
+  test("headlines the latest observation by default for a split series", () => {
+    const series = buildSparklineSeries([
+      { value: 10, current: 100, phase: false },
+      { value: 12, current: 120, phase: false },
+      { value: 14, current: 140, phase: true },
+      { value: 16, current: 160, phase: true },
+    ], "value");
+    const split = findSparklineSplit(series, "phase");
+
+    expect(selectSparklineHeadline(series, split)).toMatchObject({ index: 1, value: 12 });
+    expect(selectSparklineHeadline(series, split, "first_forecast")).toMatchObject({ index: 2, value: 14 });
+    expect(selectSparklineHeadline(series, split, "last", "current")).toMatchObject({ index: 3, value: 160 });
   });
 });

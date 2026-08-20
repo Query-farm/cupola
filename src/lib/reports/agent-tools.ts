@@ -225,6 +225,14 @@ const blockProperties = {
   datasetId: stringSchema,
   valueColumn: stringSchema,
   labelColumn: stringSchema,
+  headlineValueColumn: {
+    type: "string",
+    description: "For sparkline: optional dataset column to show as the headline instead of valueColumn. It is read from headlineRow.",
+  },
+  headlineRow: {
+    enum: ["last", "last_observed", "first_forecast"],
+    description: "For sparkline: row used for the headline and label. With splitColumn, the default is last_observed; otherwise last.",
+  },
   format: { enum: ["number", "currency", "percent", "text"] },
   showValue: { type: "boolean" },
   color: stringSchema,
@@ -251,7 +259,15 @@ const blockProperties = {
   referenceValue: { type: "number" },
   referenceLabel: stringSchema,
   targetColumn: stringSchema,
+  rangeLabel: {
+    type: "string",
+    description: "For KPI: reader-facing label beneath the compact low/high range strip, such as Preferred range.",
+  },
   rangeColumns: { type: "array", maxItems: 3, items: stringSchema },
+  showValues: {
+    enum: ["auto", "all", "none"],
+    description: "For bullet and range_dot: direct value labels. Auto shows labels when the dataset has six or fewer rows.",
+  },
   startColumn: stringSchema,
   endColumn: stringSchema,
   startLabel: stringSchema,

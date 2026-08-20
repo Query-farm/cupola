@@ -178,8 +178,12 @@ export interface ReportSparklineBlock extends ReportBlockBase {
   datasetId: string;
   /** Numeric series, plotted in query result order. */
   valueColumn: string;
-  /** Optional label from the final plotted row, such as a date or status. */
+  /** Optional label from the selected headline row, such as a date or status. */
   labelColumn?: string;
+  /** Optional value to headline instead of the plotted value. Read from the selected headline row. */
+  headlineValueColumn?: string;
+  /** Row used for the headline value and label. Split sparklines default to last_observed; others default to last. */
+  headlineRow?: "last" | "last_observed" | "first_forecast";
   format?: "number" | "currency" | "percent" | "text";
   showValue?: boolean;
   /** First truthy row marks the boundary between the two portions of the series. */
@@ -190,6 +194,22 @@ export interface ReportSparklineBlock extends ReportBlockBase {
   splitColor?: string;
   color?: string;
 }
+
+export interface ReportKpiBlock extends ReportBlockBase {
+  type: "kpi";
+  datasetId: string;
+  valueColumn: string;
+  labelColumn?: string;
+  format?: "number" | "currency" | "percent" | "text";
+  /** Optional lower and upper bounds for a compact contextual range strip. */
+  lowColumn?: string;
+  highColumn?: string;
+  /** Optional comparison target drawn as a tick on the range strip. */
+  targetColumn?: string;
+  rangeLabel?: string;
+}
+
+export type ReportValueLabelMode = "auto" | "all" | "none";
 
 export interface ReportSmallMultiplesBlock extends ReportBlockBase {
   type: "small_multiples";
@@ -216,6 +236,8 @@ export interface ReportBulletBlock extends ReportBlockBase {
   rangeColumns?: string[];
   format?: "number" | "currency" | "percent" | "text";
   color?: string;
+  /** Direct value labels. Auto shows them for six or fewer rows. */
+  showValues?: ReportValueLabelMode;
 }
 
 export interface ReportSlopegraphBlock extends ReportBlockBase {
@@ -239,6 +261,8 @@ export interface ReportRangeDotBlock extends ReportBlockBase {
   valueColumn?: string;
   format?: "number" | "currency" | "percent" | "text";
   color?: string;
+  /** Direct low/current/high labels. Auto shows them for six or fewer rows. */
+  showValues?: ReportValueLabelMode;
 }
 
 export type ReportAiNarrativeRefreshPolicy = "manual" | "when_data_changes";
@@ -267,7 +291,7 @@ export interface ReportAiNarrativeBlock extends ReportBlockBase {
 
 export type ReportBlock =
   | (ReportBlockBase & { type: "markdown"; markdown: string })
-  | (ReportBlockBase & { type: "kpi"; datasetId: string; valueColumn: string; labelColumn?: string; format?: "number" | "currency" | "percent" | "text" })
+  | ReportKpiBlock
   | ReportSparklineBlock
   | ReportSmallMultiplesBlock
   | ReportBulletBlock

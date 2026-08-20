@@ -39,5 +39,7 @@ describe("report sparkline split", () => {
     expect(divider.getAttribute("aria-label")).toBe("Now");
     expect(container.querySelectorAll("clipPath")).toHaveLength(2);
     expect(container.innerHTML).toContain("#7c3aed");
+    expect(getByTestId("report-sparkline-value").textContent).toBe("68");
+    expect(getByTestId("report-sparkline-headline-point").getAttribute("x1")).toBe("33.33");
   });
 });

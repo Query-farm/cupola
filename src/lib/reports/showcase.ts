@@ -50,7 +50,8 @@ export function createReportShowcase(): ReportDocumentV1 {
           ('Richmond', TIMESTAMP '2026-08-20 12:00:00', 84, 64, 48),
           ('Norfolk', TIMESTAMP '2026-08-20 12:00:00', 79, 73, 35)
         )
-        SELECT *, CASE WHEN humidity_pct > $comfort_max THEN 'alert' ELSE 'ok' END AS comfort_state,
+        SELECT *, 40 AS preferred_low, $comfort_max AS preferred_high, 55 AS humidity_target,
+          CASE WHEN humidity_pct > $comfort_max THEN 'alert' ELSE 'ok' END AS comfort_state,
           CASE WHEN humidity_pct > $comfort_max THEN 'Above selected comfort band' ELSE 'Inside selected comfort band' END AS status
         FROM readings WHERE city = $city`,
       },
@@ -157,6 +158,10 @@ export function createReportShowcase(): ReportDocumentV1 {
         datasetId: "showcase-current",
         valueColumn: "humidity_pct",
         labelColumn: "status",
+        lowColumn: "preferred_low",
+        highColumn: "preferred_high",
+        targetColumn: "humidity_target",
+        rangeLabel: "Selected comfort range",
         appearance: {
           tone: "success",
           label: "Inside selected comfort band",
@@ -169,7 +174,7 @@ export function createReportShowcase(): ReportDocumentV1 {
         type: "sparkline",
         groupId: "showcase-intro",
         title: "Sparkline · History and forecast",
-        caption: "A data-driven Now divider separates observed values from the purple forecast segment.",
+        caption: "A data-driven Now divider separates observed values from the purple forecast segment; the headline remains the latest observation.",
         source: "Canned hourly observations",
         datasetId: "showcase-hourly",
         valueColumn: "humidity_pct",
@@ -233,6 +238,7 @@ export function createReportShowcase(): ReportDocumentV1 {
         valueColumn: "actual",
         targetColumn: "target",
         rangeColumns: ["broad_max", "preferred_max"],
+        showValues: "auto",
         color: "#2563eb",
         layout: { x: 7, y: 7, w: 5, h: 5 },
       },
@@ -248,6 +254,7 @@ export function createReportShowcase(): ReportDocumentV1 {
         lowColumn: "low_f",
         highColumn: "high_f",
         valueColumn: "current_f",
+        showValues: "auto",
         color: "#e11d48",
         layout: { x: 0, y: 12, w: 6, h: 5 },
       },

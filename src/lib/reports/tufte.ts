@@ -40,6 +40,18 @@ function tooltip(field: string, type: "nominal" | "quantitative" | "temporal" | 
   return { field, type, ...(format ? { format } : {}) };
 }
 
+function directLabelTransform(mode: "auto" | "all" | "none" | undefined): Record<string, unknown>[] {
+  if ((mode ?? "auto") !== "auto") return [];
+  return [
+    { joinaggregate: [{ op: "count", as: "__report_row_count" }] },
+    { filter: "datum.__report_row_count <= 6" },
+  ];
+}
+
+function quantitativeText(field: string, format?: string): Record<string, unknown> {
+  return { field, type: "quantitative", ...(format ? { format } : {}) };
+}
+
 function smallMultiplesSpec(block: ReportSmallMultiplesBlock): Record<string, any> {
   const mainMark = block.mark ?? "line";
   const mainLayer = {
@@ -94,31 +106,42 @@ function bulletSpec(block: ReportBulletBlock): Record<string, any> {
   const format = quantitativeFormat(block.format);
   const ranges = (block.rangeColumns ?? []).slice(0, 3);
   const rangeColors = ["#e2e8f0", "#cbd5e1", "#94a3b8"];
+  const layers: Record<string, any>[] = [
+    ...ranges.map((field, index) => ({
+      mark: { type: "bar", size: 28, color: rangeColors[index] },
+      encoding: {
+        y: { field: block.categoryColumn, type: "nominal", sort: null, axis: { title: null, grid: false } },
+        x: { field, type: "quantitative", axis: { title: null }, ...(format ? { axis: { title: null, format } } : {}) },
+      },
+    })),
+    {
+      mark: { type: "bar", size: 11, color: block.color ?? BLUE },
+      encoding: {
+        y: { field: block.categoryColumn, type: "nominal", sort: null, axis: { title: null, grid: false } },
+        x: { field: block.valueColumn, type: "quantitative", axis: { title: null, ...(format ? { format } : {}) } },
+        tooltip: [tooltip(block.categoryColumn, "nominal"), tooltip(block.valueColumn, "quantitative", format), tooltip(block.targetColumn, "quantitative", format)],
+      },
+    },
+    {
+      mark: { type: "tick", orient: "vertical", size: 24, thickness: 2, color: "#0f172a" },
+      encoding: {
+        y: { field: block.categoryColumn, type: "nominal", sort: null },
+        x: { field: block.targetColumn, type: "quantitative" },
+      },
+    },
+  ];
+  if ((block.showValues ?? "auto") !== "none") layers.push({
+    ...(directLabelTransform(block.showValues).length ? { transform: directLabelTransform(block.showValues) } : {}),
+    mark: { type: "text", align: "left", baseline: "middle", dx: 5, dy: -8, color: INK, fontSize: 10, fontWeight: "bold" },
+    encoding: {
+      y: { field: block.categoryColumn, type: "nominal", sort: null },
+      x: { field: block.valueColumn, type: "quantitative" },
+      text: quantitativeText(block.valueColumn, format),
+    },
+  });
   return {
-    layer: [
-      ...ranges.map((field, index) => ({
-        mark: { type: "bar", size: 28, color: rangeColors[index] },
-        encoding: {
-          y: { field: block.categoryColumn, type: "nominal", sort: null, axis: { title: null, grid: false } },
-          x: { field, type: "quantitative", axis: { title: null }, ...(format ? { axis: { title: null, format } } : {}) },
-        },
-      })),
-      {
-        mark: { type: "bar", size: 11, color: block.color ?? BLUE },
-        encoding: {
-          y: { field: block.categoryColumn, type: "nominal", sort: null, axis: { title: null, grid: false } },
-          x: { field: block.valueColumn, type: "quantitative", axis: { title: null, ...(format ? { format } : {}) } },
-          tooltip: [tooltip(block.categoryColumn, "nominal"), tooltip(block.valueColumn, "quantitative", format), tooltip(block.targetColumn, "quantitative", format)],
-        },
-      },
-      {
-        mark: { type: "tick", orient: "vertical", size: 24, thickness: 2, color: "#0f172a" },
-        encoding: {
-          y: { field: block.categoryColumn, type: "nominal", sort: null },
-          x: { field: block.targetColumn, type: "quantitative" },
-        },
-      },
-    ],
+    layer: layers,
+    ...((block.showValues ?? "auto") !== "none" ? { padding: { left: 5, right: 36, top: 12, bottom: 5 } } : {}),
     config: cleanConfig,
   };
 }
@@ -186,7 +209,29 @@ function rangeDotSpec(block: ReportRangeDotBlock): Record<string, any> {
       },
     });
   }
-  return { layer: layers, config: cleanConfig };
+  if ((block.showValues ?? "auto") !== "none") {
+    const transform = directLabelTransform(block.showValues);
+    const transformProperty = transform.length ? { transform } : {};
+    layers.push({
+      ...transformProperty,
+      mark: { type: "text", align: "right", baseline: "middle", dx: -6, color: INK, fontSize: 9 },
+      encoding: { y, x: { field: block.lowColumn, type: "quantitative" }, text: quantitativeText(block.lowColumn, format) },
+    }, {
+      ...transformProperty,
+      mark: { type: "text", align: "left", baseline: "middle", dx: 6, color: INK, fontSize: 9 },
+      encoding: { y, x: { field: block.highColumn, type: "quantitative" }, text: quantitativeText(block.highColumn, format) },
+    });
+    if (block.valueColumn) layers.push({
+      ...transformProperty,
+      mark: { type: "text", align: "center", baseline: "bottom", dy: -7, color: block.color ?? BLUE, fontSize: 10, fontWeight: "bold" },
+      encoding: { y, x: { field: block.valueColumn, type: "quantitative" }, text: quantitativeText(block.valueColumn, format) },
+    });
+  }
+  return {
+    layer: layers,
+    ...((block.showValues ?? "auto") !== "none" ? { padding: { left: 28, right: 28, top: 12, bottom: 5 } } : {}),
+    config: cleanConfig,
+  };
 }
 
 export function isReportTufteBlock(block: ReportBlock): block is ReportTufteBlock {

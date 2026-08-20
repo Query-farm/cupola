@@ -344,13 +344,20 @@ export function validateReportStructure(input: unknown): string[] {
       }
     }
     if (block.type === "kpi" || block.type === "sparkline") requireString(block, "valueColumn", path);
+    if (block.type === "kpi") {
+      for (const key of ["lowColumn", "highColumn", "targetColumn", "rangeLabel"] as const) if (block[key] !== undefined && typeof block[key] !== "string") errors.push(`${path}.${key} must be a string.`);
+      if ((block.lowColumn !== undefined) !== (block.highColumn !== undefined)) errors.push(`${path}.lowColumn and highColumn must be set together.`);
+      if ((block.targetColumn !== undefined || block.rangeLabel !== undefined) && (block.lowColumn === undefined || block.highColumn === undefined)) errors.push(`${path}.lowColumn and highColumn are required when targetColumn or rangeLabel is set.`);
+    }
     if (block.type === "sparkline") {
       if (block.showValue !== undefined && typeof block.showValue !== "boolean") errors.push(`${path}.showValue must be a boolean.`);
       if (block.color !== undefined && typeof block.color !== "string") errors.push(`${path}.color must be a string.`);
       if (block.splitColumn !== undefined) requireString(block, "splitColumn", path);
+      if (block.headlineValueColumn !== undefined) requireString(block, "headlineValueColumn", path);
+      if (block.headlineRow !== undefined && !["last", "last_observed", "first_forecast"].includes(block.headlineRow)) errors.push(`${path}.headlineRow is unsupported.`);
       if (block.splitLabel !== undefined && typeof block.splitLabel !== "string") errors.push(`${path}.splitLabel must be a string.`);
       if (block.splitColor !== undefined && typeof block.splitColor !== "string") errors.push(`${path}.splitColor must be a string.`);
-      if ((block.splitLabel !== undefined || block.splitColor !== undefined) && block.splitColumn === undefined) errors.push(`${path}.splitColumn is required when splitLabel or splitColor is set.`);
+      if ((block.splitLabel !== undefined || block.splitColor !== undefined || (block.headlineRow !== undefined && block.headlineRow !== "last")) && block.splitColumn === undefined) errors.push(`${path}.splitColumn is required when splitLabel, splitColor, or a split-relative headlineRow is set.`);
     }
     if (block.caption !== undefined && typeof block.caption !== "string") errors.push(`${path}.caption must be a string.`);
     if (block.source !== undefined && typeof block.source !== "string") errors.push(`${path}.source must be a string.`);
@@ -369,6 +376,7 @@ export function validateReportStructure(input: unknown): string[] {
       for (const key of ["categoryColumn", "valueColumn", "targetColumn"] as const) requireString(block, key, path);
       if (block.rangeColumns !== undefined && (!Array.isArray(block.rangeColumns) || block.rangeColumns.length > 3 || block.rangeColumns.some((column: unknown) => typeof column !== "string" || !column.trim()))) errors.push(`${path}.rangeColumns must contain up to three column names.`);
       if (block.color !== undefined && typeof block.color !== "string") errors.push(`${path}.color must be a string.`);
+      if (block.showValues !== undefined && !["auto", "all", "none"].includes(block.showValues)) errors.push(`${path}.showValues is unsupported.`);
     }
     if (block.type === "slopegraph") {
       for (const key of ["categoryColumn", "startColumn", "endColumn"] as const) requireString(block, key, path);
@@ -378,6 +386,7 @@ export function validateReportStructure(input: unknown): string[] {
       for (const key of ["categoryColumn", "lowColumn", "highColumn"] as const) requireString(block, key, path);
       if (block.valueColumn !== undefined && typeof block.valueColumn !== "string") errors.push(`${path}.valueColumn must be a string.`);
       if (block.color !== undefined && typeof block.color !== "string") errors.push(`${path}.color must be a string.`);
+      if (block.showValues !== undefined && !["auto", "all", "none"].includes(block.showValues)) errors.push(`${path}.showValues is unsupported.`);
     }
     if (block.type === "chart" && !isRecord(block.spec)) errors.push(`${path}.spec must be a Vega-Lite object.`);
     if (block.type === "table" && block.columns !== undefined && (!Array.isArray(block.columns) || block.columns.some((column: unknown) => typeof column !== "string"))) errors.push(`${path}.columns must contain column names.`);

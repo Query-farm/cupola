@@ -63,6 +63,9 @@ test("report guide is a runnable in-product gallery backed by canned local data"
   }
 
   await expect(page.getByTestId("report-block-showcase-kpi")).toContainText("68", { timeout: T_SHELL_BOOT });
+  await expect(page.getByTestId("report-block-showcase-kpi").getByTestId("report-kpi-range")).toContainText("Selected comfort range");
+  await expect(page.getByTestId("report-block-showcase-kpi").getByTestId("report-kpi-range-value")).toHaveAttribute("data-outside", "high");
+  await expect(page.getByTestId("report-block-showcase-sparkline").getByTestId("report-sparkline-value")).toHaveText("68");
   await expect(page.getByTestId("report-block-showcase-table")).toContainText("2026-08-20 07:00:00", { timeout: T_SHELL_BOOT });
   await expect(page.getByTestId("reports-run")).toHaveText(/Run report/, { timeout: T_SHELL_BOOT });
   await expect(page.getByTestId("report-block-showcase-chart").locator("svg")).toBeAttached();
@@ -70,6 +73,10 @@ test("report guide is a runnable in-product gallery backed by canned local data"
   const smallMultipleLabels = await page.getByTestId("report-block-showcase-small-multiples").locator("svg text").allTextContents();
   expect(smallMultipleLabels).not.toContain("0");
   expect(smallMultipleLabels).toContain("65% reference");
+  const bulletLabels = await page.getByTestId("report-block-showcase-bullet").locator("svg text").allTextContents();
+  expect(bulletLabels).toContain("68");
+  const rangeLabels = await page.getByTestId("report-block-showcase-range-dot").locator("svg text").allTextContents();
+  expect(rangeLabels).toEqual(expect.arrayContaining(["67", "88", "82"]));
   await expect(page.getByTestId("report-block-showcase-sparkline").getByTestId("report-sparkline-split")).toHaveAttribute("aria-label", "Now · forecast begins");
   await expect(page.getByTestId("report-block-showcase-map").locator(".leaflet-container")).toBeAttached();
   await expect(page.getByTestId("report-block-showcase-map").locator("img.leaflet-tile").first()).toBeVisible({ timeout: T_SHELL_BOOT });

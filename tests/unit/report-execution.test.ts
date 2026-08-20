@@ -38,12 +38,30 @@ test("reports missing sparkline value, label, and split columns", () => {
     type: "sparkline",
     datasetId: "weather",
     valueColumn: "temperature",
+    headlineValueColumn: "current_temperature",
     labelColumn: "observed_at",
     splitColumn: "is_forecast",
     layout: { x: 0, y: 0, w: 3, h: 2 },
   });
   expect(validateReportResultColumns(report, [{ datasetId: "weather", ok: true, columns: ["other"] }]))
-    .toEqual(["temperature: missing result columns temperature, observed_at, is_forecast."]);
+    .toEqual(["temperature: missing result columns temperature, observed_at, is_forecast, current_temperature."]);
+});
+
+test("reports missing ranged KPI context columns", () => {
+  const report = createEmptyReport("Humidity");
+  report.datasets.push({ id: "weather", name: "Weather", sql: "SELECT 1" });
+  report.blocks.push({
+    id: "humidity",
+    type: "kpi",
+    datasetId: "weather",
+    valueColumn: "humidity",
+    lowColumn: "preferred_low",
+    highColumn: "preferred_high",
+    targetColumn: "target",
+    layout: { x: 0, y: 0, w: 3, h: 2 },
+  });
+  expect(validateReportResultColumns(report, [{ datasetId: "weather", ok: true, columns: ["humidity"] }]))
+    .toEqual(["humidity: missing result columns preferred_low, preferred_high, target."]);
 });
 
 test("validates appearance rule columns for free-form charts", () => {
