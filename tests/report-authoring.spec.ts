@@ -102,6 +102,32 @@ test("direct block resizing reflows grouped neighbors instead of overlapping the
   }).toBe(true);
 });
 
+test("the report toolbar can explicitly reflow a draft without creating overlaps", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openGuide(page);
+  const reflow = page.getByRole("button", { name: "Reflow report layout" });
+  await expect(reflow).toBeVisible();
+  await expect(reflow).toHaveAttribute("title", /Tighten vertical gaps/);
+  await reflow.click();
+  await expect(page.getByText(/Report blocks reflowed|already compact/)).toBeVisible();
+
+  const overlaps = await page.locator('.react-grid-item[data-testid^="report-block-"]').evaluateAll((blocks) => {
+    const rectangles = blocks.map((block) => block.getBoundingClientRect());
+    const collisions: string[] = [];
+    for (let first = 0; first < rectangles.length; first += 1) {
+      for (let second = first + 1; second < rectangles.length; second += 1) {
+        const a = rectangles[first];
+        const b = rectangles[second];
+        if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) {
+          collisions.push(`${first}:${second}`);
+        }
+      }
+    }
+    return collisions;
+  });
+  expect(overlaps).toEqual([]);
+});
+
 test("dataset deletion is guarded and editable SQL has a clear surface", async ({ page }) => {
   test.setTimeout(60_000);
   await openGuide(page);

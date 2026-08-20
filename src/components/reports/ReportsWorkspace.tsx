@@ -4,7 +4,7 @@ import { ResponsiveGridLayout, useContainerWidth, type Layout, type ResponsiveLa
 import { noCompactor } from "react-grid-layout/core";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Clock3, Database, Download, FileCode2, FileJson, FilePlus2, GripVertical, History, Link2, Loader2, MoreHorizontal, Pencil, Play, Plus, Printer, RefreshCw, Save, Send, Share2, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Clock3, Database, Download, FileCode2, FileJson, FilePlus2, GripVertical, History, LayoutGrid, Link2, Loader2, MoreHorizontal, Pencil, Play, Plus, Printer, RefreshCw, Save, Send, Share2, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import type { CatalogData } from "@/lib/service";
 import { engine, getEngineLifecycleSnapshot, ui, waitForEngineReady } from "@/lib/shell-bridge";
@@ -41,7 +41,7 @@ import { REPORT_TOOLS, upsertAgentBlock, upsertAgentDataset, upsertAgentGroup, t
 import { checkpointReportAgentPlan, parseReportAgentPlan, reportAgentRepair, validateReportAgentPlan, type ReportAgentPlan } from "@/lib/reports/agent-reliability";
 import { compileReportQuery, interpolateReportText, materializeReportQuery } from "@/lib/reports/parameters";
 import { generateReportNarrative, prepareNarrativeInput } from "@/lib/reports/narrative";
-import { normalizeReportLayout } from "@/lib/reports/layout";
+import { normalizeReportLayout, reflowReportLayout } from "@/lib/reports/layout";
 import { isReportTufteBlock, tufteBlockToVegaSpec } from "@/lib/reports/tufte";
 import { buildShareReportUrl, clearSharedReport, consumeSharedReport } from "@/lib/reports/share";
 import { deleteReport, exportReportJson, getStoredReport, importReportJson, listStoredReports, publishReport, restoreReportRevision, saveReport } from "@/lib/reports/store";
@@ -1373,6 +1373,19 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     return true;
   }, [blockEditor]);
 
+  const reflowLayout = useCallback(() => {
+    if (!draft || agentBusy || inspectorOpen || !discardBlockEditor() || !discardDatasetEditor()) return;
+    const reflowed = reflowReportLayout(draft);
+    if (reflowed === draft) {
+      setShareStatus("The report layout is already compact.");
+      return;
+    }
+    const next = { ...reflowed, updatedAt: Date.now() };
+    setDraft(next);
+    setSourceText(exportReportJson(next));
+    setShareStatus("Report blocks reflowed. Save the draft to keep this layout.");
+  }, [agentBusy, discardBlockEditor, discardDatasetEditor, draft, inspectorOpen]);
+
   const openBlockEditor = useCallback((block: ReportBlock, isNew = false) => {
     if (blockApplyBusyRef.current) return;
     if (blockEditor && blockEditor.block.id !== block.id && !discardBlockEditor()) return;
@@ -2039,7 +2052,10 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
       <button type="button" role="tab" id="report-datasets-tab" aria-selected={workspaceView === "datasets"} aria-controls="report-datasets-panel" data-testid="report-datasets-tab" onClick={() => { if (!discardBlockEditor()) return; setWorkspaceView("datasets"); }} className={`inline-flex h-10 items-center gap-1.5 border-b-2 px-3 text-sm ${workspaceView === "datasets" ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}><Database className="h-3.5 w-3.5" /> Datasets <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none">{report.datasets.length}</span></button>
       </div>
       <div className="flex-1" />
-      {!readerMode && workspaceView === "report" && <Popover><PopoverTrigger className={buttonVariants({ variant: "ghost", size: "sm", className: "mb-1" })} data-testid="report-add-block"><Plus className="h-4 w-4" /> Add block</PopoverTrigger><PopoverContent className="w-64 p-2" align="end"><div className="text-xs font-semibold">Add report block</div><div className="mt-2 space-y-2">{["Text", "Metrics", "Visualizations", "Data"].map((group) => <div key={group}><div className="px-1 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div><div className="grid grid-cols-2 gap-1">{REPORT_BLOCK_TYPES.filter((item) => item.group === group).map((item) => <BaseUIPopover.Close key={item.type} data-testid={`report-add-${item.type}`} className="rounded px-2 py-1.5 text-left text-xs hover:bg-muted" onClick={() => addBlock(item.type)}>{item.label}</BaseUIPopover.Close>)}</div></div>)}</div></PopoverContent></Popover>}
+      {!readerMode && workspaceView === "report" && <div className="mb-1 flex items-center gap-1">
+        <Button type="button" variant="ghost" size="sm" data-testid="report-reflow-layout" aria-label="Reflow report layout" disabled={report.blocks.length === 0 || blockEditorDirty || datasetEditorDirty || agentBusy || inspectorOpen} title={inspectorOpen ? "Close the report JSON editor before reflowing" : agentBusy ? "Wait for the report agent to finish" : "Tighten vertical gaps while preserving block sizes and columns"} onClick={reflowLayout}><LayoutGrid className="h-4 w-4" /><span className="hidden sm:inline">Reflow</span></Button>
+        <Popover><PopoverTrigger className={buttonVariants({ variant: "ghost", size: "sm" })} data-testid="report-add-block"><Plus className="h-4 w-4" /> Add block</PopoverTrigger><PopoverContent className="w-64 p-2" align="end"><div className="text-xs font-semibold">Add report block</div><div className="mt-2 space-y-2">{["Text", "Metrics", "Visualizations", "Data"].map((group) => <div key={group}><div className="px-1 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div><div className="grid grid-cols-2 gap-1">{REPORT_BLOCK_TYPES.filter((item) => item.group === group).map((item) => <BaseUIPopover.Close key={item.type} data-testid={`report-add-${item.type}`} className="rounded px-2 py-1.5 text-left text-xs hover:bg-muted" onClick={() => addBlock(item.type)}>{item.label}</BaseUIPopover.Close>)}</div></div>)}</div></PopoverContent></Popover>
+      </div>}
     </div>
     {!engineReady && <div data-testid="report-engine-waiting" role={engineLifecycle.status === "error" ? "alert" : "status"} className={engineLifecycle.status === "error" ? "border-b border-destructive/25 bg-destructive/5 px-4 py-2 text-xs text-destructive" : "border-b border-sky-300/50 bg-sky-50/50 px-4 py-2 text-xs text-sky-950 dark:border-sky-800 dark:bg-sky-950/25 dark:text-sky-100"}>
       <div className="flex items-center gap-2">{engineLifecycle.status === "error" ? null : <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />}<span className="font-medium">{engineLifecycle.status === "error" ? "Report data is unavailable because the local data engine did not start." : "Preparing the local data engine. This report will run automatically when it is ready."}</span></div>
