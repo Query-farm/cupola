@@ -349,7 +349,7 @@ export function SettingsModal() {
                 <SettingLabel
                   htmlFor="ai-telemetry"
                   title="Share AI conversation analytics"
-                  description="Send AI prompts, responses, and tool calls to Sentry to help monitor and improve the agent."
+                  description="Allow prompts, responses, and tool inputs to be sent to Sentry. Token, cache, timing, model, and tool-name metrics may still be recorded without report or query content."
                 />
                 <Switch
                   id="ai-telemetry"

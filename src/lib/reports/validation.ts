@@ -479,9 +479,10 @@ export function validateReport(input: unknown): string[] {
     }
   }
   const datasetIds = new Set<string>();
+  const datasetRoles = new Map<string, ReportDocumentV1["datasets"][number]["role"]>();
   const datasetRelationIds = new Map<string, string>();
   for (const d of report.datasets) {
-    takeId(d.id, "Dataset"); datasetIds.add(d.id);
+    takeId(d.id, "Dataset"); datasetIds.add(d.id); datasetRoles.set(d.id, d.role);
     const relationKey = d.id.toLocaleLowerCase("en-US");
     const conflictingId = datasetRelationIds.get(relationKey);
     if (conflictingId && conflictingId !== d.id) errors.push(`Dataset IDs ${conflictingId} and ${d.id} conflict as SQL relation names.`);
@@ -562,11 +563,14 @@ export function validateReport(input: unknown): string[] {
     takeId(b.id, "Block");
     if (b.groupId && !groupIds.has(b.groupId)) errors.push(`${b.title ?? b.id}: group is missing.`);
     validateTemplate(b.title, b.title ?? b.id);
+    validateTemplate(b.caption, b.title ?? b.id);
+    validateTemplate(b.source, b.title ?? b.id);
     if (b.type === "markdown") validateTemplate(b.markdown, b.title ?? b.id);
     if (b.type === "ai_narrative") validateTemplate(b.instruction, b.title ?? b.id);
     if (b.type === "markdown" && b.appearance?.rules?.length) errors.push(`${b.title ?? b.id}: conditional appearance requires a dataset-backed block.`);
     const datasetId = blockDatasetId(b);
     if (datasetId && !datasetIds.has(datasetId)) errors.push(`${b.title ?? b.id}: dataset is missing.`);
+    if (datasetId && datasetIds.has(datasetId) && datasetRoles.get(datasetId) && datasetRoles.get(datasetId) !== "data") errors.push(`${b.title ?? b.id}: dataset must have role data.`);
     const { x, y, w, h } = b.layout;
     if (![x, y, w, h].every(Number.isFinite) || x < 0 || y < 0 || w < 1 || h < 1 || x + w > 12) errors.push(`${b.title ?? b.id}: invalid layout.`);
     if (b.type === "chart") errors.push(...validateChartSpec(b.spec).errors.map((e) => `${b.title ?? b.id}: ${e}`));

@@ -12,6 +12,7 @@ import { executeRunSql, describeTableWithFallback } from "@/lib/ai-tool-executor
 import { isAiTelemetryEnabled } from "@/lib/ai-telemetry";
 import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 import { estimateCost, formatCost } from "@/lib/pricing";
+import { cacheHitRate, totalInputTokens, type AgentUsage } from "@/lib/ai-usage";
 import { terminal, ui, recordQuery } from "@/lib/shell-bridge";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
@@ -243,13 +244,16 @@ function createAgentCallbacks(
         term.println("");
         spinner.start("Thinking...");
       },
-      onDone: (usage: any) => {
+      onDone: (usage?: AgentUsage) => {
         spinner.stop();
         flushText();
         term.println("");
         if (usage) {
-          const cost = estimateCost(model, usage.inputTokens, usage.outputTokens);
-          term.println(`\x1b[2m  tokens: ${usage.inputTokens.toLocaleString()} in, ${usage.outputTokens.toLocaleString()} out (${formatCost(cost)})\x1b[0m`);
+          const cost = estimateCost(model, usage);
+          const cache = usage.cacheReadTokens || usage.cacheWriteTokens
+            ? `, ${(cacheHitRate(usage) * 100).toFixed(0)}% cache hit (${usage.cacheReadTokens.toLocaleString()} read, ${usage.cacheWriteTokens.toLocaleString()} written, ${usage.inputTokens.toLocaleString()} uncached)`
+            : "";
+          term.println(`\x1b[2m  tokens: ${totalInputTokens(usage).toLocaleString()} input, ${usage.outputTokens.toLocaleString()} output, ${usage.rounds} ${usage.rounds === 1 ? "round" : "rounds"}${cache} (${formatCost(cost)})\x1b[0m`);
         }
         term.println("");
         term.println("");

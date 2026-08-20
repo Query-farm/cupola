@@ -6,6 +6,7 @@ import { AskUserBlock } from "./AskUserBlock";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { toolActivityLabel } from "@/lib/ai/tool-labels";
 import { estimateCost, formatCost } from "@/lib/pricing";
+import { cacheHitRate, totalInputTokens, type AgentUsage } from "@/lib/ai-usage";
 import { promoteToReport } from "@/lib/reports/events";
 
 // Lazy: pulls vega-embed (and transitively vega + vega-lite runtime) only
@@ -100,7 +101,7 @@ interface Props {
   onCancel?: () => void;
   /** Patch a block in place by id — used by VegaChartBlock for refresh state. */
   onUpdateBlock?: (blockId: string, patch: Partial<VegaChartContent>) => void;
-  usage?: { inputTokens: number; outputTokens: number };
+  usage?: AgentUsage;
   model?: string;
   /** Override how a `run_sql` tool call renders (the editor panel uses this to
    *  add "apply to editor" actions). Defaults to the plain SqlToolCallBlock. */
@@ -288,9 +289,17 @@ export function ChatMessageAssistant({
 
         {/* Usage stats */}
         {usage && !isStreaming && (
-          <div className="text-[10px] text-muted-foreground/40 font-mono pt-1">
-            {usage.inputTokens.toLocaleString()} in, {usage.outputTokens.toLocaleString()} out
-            {model && ` · ${formatCost(estimateCost(model, usage.inputTokens, usage.outputTokens))}`}
+          <div className="text-[10px] leading-relaxed text-muted-foreground/50 font-mono pt-1" data-testid="ai-usage">
+            <div>
+              {totalInputTokens(usage).toLocaleString()} input · {usage.outputTokens.toLocaleString()} output
+              {` · ${usage.rounds.toLocaleString()} ${usage.rounds === 1 ? "round" : "rounds"}`}
+              {model && ` · ${formatCost(estimateCost(model, usage))}`}
+            </div>
+            {(usage.cacheReadTokens > 0 || usage.cacheWriteTokens > 0) && (
+              <div title="Prompt-cache reads are discounted input; writes create a reusable five-minute cache entry.">
+                {(cacheHitRate(usage) * 100).toFixed(0)}% cache hit · {usage.cacheReadTokens.toLocaleString()} read · {usage.cacheWriteTokens.toLocaleString()} written · {usage.inputTokens.toLocaleString()} uncached
+              </div>
+            )}
           </div>
         )}
       </div>

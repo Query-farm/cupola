@@ -34,7 +34,7 @@ test("report guide is a runnable in-product gallery backed by canned local data"
   await expect(page.getByText(/canned data queried locally/i)).toBeVisible();
   await expect(page.getByTestId("report-parameters-toggle")).toContainText("Glen Allen, Virginia");
   await expect(page.getByRole("button", { name: "Edit with AI" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save report draft" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Publish", exact: true })).toBeVisible();
   const reportActionHeights = await Promise.all([
     page.getByTestId("reports-run"),
@@ -121,10 +121,67 @@ test("report guide is a runnable in-product gallery backed by canned local data"
 
   await page.getByRole("button", { name: "Edit report" }).click();
   await page.locator('input[value="Cupola report block gallery"]').fill("Unpublished gallery draft");
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByRole("button", { name: "Save report draft" }).click();
   await page.getByRole("button", { name: "Published", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Cupola report block gallery" })).toBeVisible();
   await expect(page.getByText("Unpublished gallery draft")).toHaveCount(0);
+});
+
+test("authors can edit, add, duplicate, and delete report blocks directly", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto(`${APP_ORIGIN}${BASE}report-guide/`);
+  const kpi = page.getByTestId("report-block-showcase-kpi");
+  await expect(kpi).toContainText("KPI · Humidity (%)", { timeout: T_SHELL_BOOT });
+
+  await kpi.click();
+  await page.getByRole("button", { name: "Edit KPI · Humidity (%)" }).click();
+  const editor = page.getByTestId("report-block-editor");
+  await expect(editor).toBeVisible();
+  await editor.getByLabel("Title").fill("Humidity now");
+  await expect(kpi).toContainText("Humidity now");
+  page.once("dialog", (dialog) => dialog.accept());
+  await editor.getByRole("button", { name: "Cancel" }).click();
+  await expect(kpi).toContainText("KPI · Humidity (%)");
+
+  await page.getByRole("button", { name: "Edit KPI · Humidity (%)" }).click();
+  await editor.getByLabel("Title").fill("Humidity now");
+  await editor.getByTestId("report-block-apply").click();
+  await expect(kpi).toContainText("Humidity now");
+
+  await kpi.click();
+  await page.getByRole("button", { name: "Duplicate Humidity now" }).click();
+  const copied = page.getByText("Copy of Humidity now", { exact: true });
+  await expect(copied).toBeVisible();
+  await page.locator('[data-testid^="report-block-"]').filter({ hasText: "Copy of Humidity now" }).first().click();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Delete Copy of Humidity now" }).click();
+  await expect(copied).toHaveCount(0);
+
+  await page.getByTestId("report-add-block").click();
+  await page.getByTestId("report-add-markdown").click();
+  await page.getByTestId("report-markdown-editor").fill("## Directly authored\n\nSelected city: **$city_label**");
+  await page.getByTestId("report-block-apply").click();
+  await expect(page.getByText("Directly authored", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Selected city: Glen Allen, Virginia/)).toBeVisible();
+});
+
+test("authors can validate and apply report dataset SQL edits", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto(`${APP_ORIGIN}${BASE}report-guide/`);
+  await page.getByTestId("report-block-showcase-kpi").waitFor({ state: "visible", timeout: T_SHELL_BOOT });
+  await expect(page.getByTestId("reports-run")).toHaveText(/Run report/, { timeout: T_SHELL_BOOT });
+  await page.getByTestId("report-datasets-tab").click();
+  await page.getByTestId("report-dataset-item-showcase-current").click();
+  await page.getByTestId("report-edit-dataset").click();
+  const sql = page.getByTestId("report-dataset-sql-editor");
+  await expect(sql).toBeVisible();
+  await sql.fill(`${await sql.inputValue()}\n-- directly edited`);
+  const testQuery = page.getByRole("button", { name: "Test query" });
+  await expect(testQuery).toBeEnabled({ timeout: T_SHELL_BOOT });
+  await testQuery.click();
+  await expect(page.getByRole("status")).toContainText("successfully", { timeout: T_SHELL_BOOT });
+  await page.getByTestId("report-apply-dataset").click();
+  await expect(page.getByTestId("report-dataset-sql")).toContainText("-- directly edited", { timeout: T_SHELL_BOOT });
 });
 
 test("infers dataset dependencies and reuses a refresh-scoped materialization", async ({ page }) => {

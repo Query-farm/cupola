@@ -40,6 +40,7 @@ import {
 import { EditorSqlToolCallBlock, SqlApplyBar, type SqlApplyActions } from "./EditorSqlToolCallBlock";
 import { extractSql } from "@/lib/ai/extract-sql";
 import type { ResultState } from "./EditorResultsPane";
+import type { AgentUsage } from "@/lib/ai-usage";
 
 const uid = () => crypto.randomUUID();
 
@@ -49,7 +50,7 @@ interface ChatMessage {
   content?: string;
   blocks?: ContentBlock[];
   isStreaming?: boolean;
-  usage?: { inputTokens: number; outputTokens: number };
+  usage?: AgentUsage;
 }
 
 interface ConversationState {

@@ -485,7 +485,7 @@ function overlaps(a: ReportLayout, b: ReportLayout): boolean {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
-function defaultHeight(type: ReportBlock["type"]): number {
+export function defaultReportBlockHeight(type: ReportBlock["type"]): number {
   if (type === "kpi" || type === "sparkline") return 2;
   if (type === "markdown") return 3;
   if (type === "ai_narrative") return 4;
@@ -493,9 +493,9 @@ function defaultHeight(type: ReportBlock["type"]): number {
   return 6;
 }
 
-function requestedLayout(blocks: ReportBlock[], type: ReportBlock["type"], width?: SemanticBlockWidth, height?: SemanticBlockHeight, groupId?: string): ReportLayout {
+export function requestedReportBlockLayout(blocks: ReportBlock[], type: ReportBlock["type"], width?: SemanticBlockWidth, height?: SemanticBlockHeight, groupId?: string): ReportLayout {
   const w = width === "quarter" ? 3 : width === "third" ? 4 : width === "half" ? 6 : width === "full" ? 12 : type === "kpi" || type === "sparkline" ? 3 : type === "bullet" || type === "range_dot" ? 6 : 12;
-  const h = height === "compact" ? 2 : height === "medium" ? 5 : height === "tall" ? 8 : defaultHeight(type);
+  const h = height === "compact" ? 2 : height === "medium" ? 5 : height === "tall" ? 8 : defaultReportBlockHeight(type);
   const maxY = blocks.reduce((max, block) => Math.max(max, block.layout.y + block.layout.h), 0);
   const groupBlocks = groupId ? blocks.filter((block) => block.groupId === groupId) : [];
   // A group's first block starts after all existing content. Later members fill
@@ -568,7 +568,7 @@ export function upsertAgentBlock(
   const changingGroup = groupWasProvided && existing?.groupId !== requestedGroupId;
   const layout = existing && width === undefined && height === undefined && !changingGroup
     ? existing.layout
-    : requestedLayout(otherBlocks, input.type, width, height, requestedGroupId);
+    : requestedReportBlockLayout(otherBlocks, input.type, width, height, requestedGroupId);
   const normalizedInput = { ...input } as Record<string, unknown>;
   if (normalizedInput.groupId == null) delete normalizedInput.groupId;
   const block = { ...existing, ...normalizedInput, id: existing?.id ?? input.id ?? newReportId("block"), layout } as ReportBlock;

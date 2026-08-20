@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
-import { AlertCircle, CheckCircle2, Clock3, Database, ExternalLink, Loader2, Play, RefreshCw } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock3, Database, ExternalLink, Loader2, Pencil, Play, RefreshCw, Save, X } from "lucide-react";
 import { QueryResultTable } from "@/components/chat/QueryResultTable";
 import { ColumnTypeBadge } from "@/components/content/ColumnTypeBadge";
 import { Button } from "@/components/ui/button";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 import { reportDisplayRows } from "@/lib/reports/display";
 import { compileReportQuery } from "@/lib/reports/parameters";
-import type { ReportDocumentV1, ReportParameterValue } from "@/lib/reports/types";
+import type { ReportDataset, ReportDocumentV1, ReportParameterValue } from "@/lib/reports/types";
+import { validateReadOnlySql } from "@/lib/reports/validation";
 
 interface DatasetResult {
   table: ArrowTable | null;
@@ -29,6 +30,12 @@ interface Props {
   engineReady: boolean;
   onRunDataset: (datasetId: string) => void;
   onOpenSql: (datasetId: string) => void;
+  canEdit?: boolean;
+  editRequestId?: string | null;
+  onEditRequestHandled?: () => void;
+  onTestDataset?: (dataset: ReportDataset) => Promise<{ ok: boolean; transient?: boolean; message: string; warnings?: string[] }>;
+  onApplyDataset?: (dataset: ReportDataset) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const PREVIEW_ROWS = 100;
@@ -60,15 +67,39 @@ function rowLabel(count: number): string {
   return `${count.toLocaleString()} ${count === 1 ? "row" : "rows"}`;
 }
 
-export function ReportDatasetsView({ report, results, appliedValues, running, engineReady, onRunDataset, onOpenSql }: Props) {
+export function ReportDatasetsView({ report, results, appliedValues, running, engineReady, onRunDataset, onOpenSql, canEdit = false, editRequestId, onEditRequestHandled, onTestDataset, onApplyDataset, onDirtyChange }: Props) {
   const [selectedId, setSelectedId] = useState(report.datasets[0]?.id ?? "");
+  const [editing, setEditing] = useState(false);
+  const [datasetDraft, setDatasetDraft] = useState<ReportDataset | null>(null);
+  const [testResult, setTestResult] = useState<{ json: string; ok: boolean; transient?: boolean; message: string; warnings?: string[] } | null>(null);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     if (!report.datasets.some((dataset) => dataset.id === selectedId)) setSelectedId(report.datasets[0]?.id ?? "");
   }, [report.datasets, selectedId]);
 
+  useEffect(() => {
+    if (!editRequestId) return;
+    const requested = report.datasets.find((dataset) => dataset.id === editRequestId);
+    if (requested) {
+      setSelectedId(requested.id);
+      setDatasetDraft(structuredClone(requested));
+      setTestResult(null);
+      setEditing(true);
+    }
+    onEditRequestHandled?.();
+  }, [editRequestId, onEditRequestHandled, report.datasets]);
+
   const dataset = report.datasets.find((candidate) => candidate.id === selectedId) ?? report.datasets[0];
   const result = dataset ? results[dataset.id] : undefined;
+  const editErrors = datasetDraft ? validateReadOnlySql(datasetDraft.sql) : [];
+  const editJson = datasetDraft ? JSON.stringify(datasetDraft) : "";
+  const testedCurrentDraft = Boolean(testResult?.ok && testResult.json === editJson);
+  const datasetDirty = Boolean(editing && datasetDraft && dataset && JSON.stringify(datasetDraft) !== JSON.stringify(dataset));
+  useEffect(() => {
+    onDirtyChange?.(datasetDirty);
+    return () => onDirtyChange?.(false);
+  }, [datasetDirty, onDirtyChange]);
   const consumers = useMemo(() => dataset ? report.blocks.filter((block) => "datasetId" in block && block.datasetId === dataset.id) : [], [dataset, report.blocks]);
   const dependencies = useMemo(() => (result?.dependencies ?? []).map((id) => report.datasets.find((candidate) => candidate.id === id)).filter((candidate) => candidate !== undefined), [report.datasets, result?.dependencies]);
   const dependents = useMemo(() => dataset ? report.datasets.filter((candidate) => results[candidate.id]?.dependencies?.includes(dataset.id)) : [], [dataset, report.datasets, results]);
@@ -96,7 +127,7 @@ export function ReportDatasetsView({ report, results, appliedValues, running, en
         {report.datasets.map((candidate) => {
           const candidateResult = results[candidate.id];
           const selected = candidate.id === dataset.id;
-          return <button key={candidate.id} type="button" data-testid={`report-dataset-item-${candidate.id}`} aria-current={selected ? "true" : undefined} onClick={() => setSelectedId(candidate.id)} className={`w-full rounded-md border px-3 py-2 text-left transition-colors ${selected ? "border-primary/40 bg-background shadow-sm" : "border-transparent hover:border-border hover:bg-background/60"}`}>
+          return <button key={candidate.id} type="button" data-testid={`report-dataset-item-${candidate.id}`} aria-current={selected ? "true" : undefined} onClick={() => { if (editing && datasetDraft && JSON.stringify(datasetDraft) !== JSON.stringify(dataset) && !window.confirm("Discard unapplied dataset changes?")) return; setEditing(false); setDatasetDraft(null); setTestResult(null); setSelectedId(candidate.id); }} className={`w-full rounded-md border px-3 py-2 text-left transition-colors ${selected ? "border-primary/40 bg-background shadow-sm" : "border-transparent hover:border-border hover:bg-background/60"}`}>
             <div className="flex items-center gap-2"><Database className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1 truncate text-sm font-medium">{candidate.name}</span>{candidateResult?.status === "running" || candidateResult?.status === "queued" ? <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> : candidateResult?.status === "success" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : candidateResult?.status === "error" || candidateResult?.status === "blocked" ? <AlertCircle className="h-3.5 w-3.5 text-amber-600" /> : null}</div>
             <div className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground"><span>{roleLabel(candidate.role)}</span><span>·</span><span>{candidateResult?.table ? rowLabel(candidateResult.table.numRows) : statusLabel(candidateResult)}</span></div>
           </button>;
@@ -107,8 +138,18 @@ export function ReportDatasetsView({ report, results, appliedValues, running, en
     <section aria-label={`${dataset.name} dataset details`} className="min-h-0 overflow-y-auto p-4 sm:p-5">
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">{dataset.name}</h2><span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusClasses(result)}`}>{statusLabel(result)}</span><span className="rounded-full border bg-muted/30 px-2 py-0.5 text-[10px] text-muted-foreground">{roleLabel(dataset.role)}</span>{result?.materialized && <span className="rounded-full border border-violet-300 bg-violet-50 px-2 py-0.5 text-[10px] text-violet-800 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-200">Shared this refresh</span>}</div>{dataset.description && <p className="mt-1 text-sm text-muted-foreground">{dataset.description}</p>}<div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>ID: <code>{dataset.id}</code></span>{result?.table && <span>{rowLabel(result.table.numRows)} · {columns.length.toLocaleString()} columns</span>}{result?.durationMs !== undefined && <span>{result.durationMs.toLocaleString()} ms</span>}{result?.fetchedAt && <span className="inline-flex items-center gap-1"><Clock3 className="h-3 w-3" />{new Date(result.fetchedAt).toLocaleString()}</span>}</div></div>
-        <div className="flex items-center gap-2"><Button size="sm" variant="outline" onClick={() => onOpenSql(dataset.id)}><ExternalLink className="h-3.5 w-3.5" /> Open SQL</Button><Button size="sm" disabled={running || !engineReady} onClick={() => onRunDataset(dataset.id)}>{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : result?.table ? <RefreshCw className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}{result?.table ? "Refresh dataset" : "Run dataset"}</Button></div>
+        <div className="flex items-center gap-2">{canEdit && !editing && <Button size="sm" variant="outline" data-testid="report-edit-dataset" onClick={() => { setDatasetDraft(structuredClone(dataset)); setTestResult(null); setEditing(true); }}><Pencil className="h-3.5 w-3.5" /> Edit dataset</Button>}<Button size="sm" variant="outline" onClick={() => onOpenSql(dataset.id)}><ExternalLink className="h-3.5 w-3.5" /> Open SQL</Button><Button size="sm" disabled={running || !engineReady || editing} onClick={() => onRunDataset(dataset.id)}>{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : result?.table ? <RefreshCw className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}{result?.table ? "Refresh dataset" : "Run dataset"}</Button></div>
       </div>
+
+      {editing && datasetDraft && <div data-testid="report-dataset-editor" className="mt-4 rounded-lg border bg-muted/10 p-4">
+        <div className="flex items-center gap-2"><h3 className="text-sm font-semibold">Edit report dataset</h3><div className="flex-1" /><Button size="icon-sm" variant="ghost" aria-label="Cancel dataset editing" onClick={() => { if (JSON.stringify(datasetDraft) === JSON.stringify(dataset) || window.confirm("Discard unapplied dataset changes?")) { setEditing(false); setDatasetDraft(null); setTestResult(null); } }}><X className="h-4 w-4" /></Button></div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs"><span className="font-medium">Name</span><input className="h-8 w-full rounded-md border bg-background px-2" value={datasetDraft.name} onChange={(event) => { setDatasetDraft({ ...datasetDraft, name: event.target.value }); setTestResult(null); }} /></label><label className="space-y-1 text-xs"><span className="font-medium">Role</span><select className="h-8 w-full rounded-md border bg-background px-2" value={datasetDraft.role ?? "data"} onChange={(event) => { setDatasetDraft({ ...datasetDraft, role: event.target.value as ReportDataset["role"] }); setTestResult(null); }}><option value="data">Report data</option><option value="parameter_options">Parameter options</option><option value="parameter_validation">Parameter validation</option></select></label></div>
+        <label className="mt-3 block space-y-1 text-xs"><span className="font-medium">Description</span><input className="h-8 w-full rounded-md border bg-background px-2" value={datasetDraft.description ?? ""} onChange={(event) => { setDatasetDraft({ ...datasetDraft, description: event.target.value || undefined }); setTestResult(null); }} /></label>
+        <label className="mt-3 block space-y-1 text-xs"><span className="font-medium">Query template</span><textarea data-testid="report-dataset-sql-editor" spellCheck={false} className="min-h-48 w-full rounded-md border bg-background p-3 font-mono text-xs leading-relaxed" value={datasetDraft.sql} onChange={(event) => { setDatasetDraft({ ...datasetDraft, sql: event.target.value }); setTestResult(null); }} /></label>
+        {editErrors.length > 0 && <div role="alert" className="mt-2 text-xs text-destructive">{editErrors.join(" ")}</div>}
+        {testResult && testResult.json === editJson && <div role="status" className={`mt-3 rounded-md border p-3 text-xs ${testResult.ok ? "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-100" : "border-destructive/30 bg-destructive/5 text-destructive"}`}><div className="font-medium">{testResult.message}</div>{testResult.warnings?.length ? <ul className="mt-2 list-disc pl-5">{testResult.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}{testResult.transient && <div className="mt-1">You may apply this structurally valid edit without live validation.</div>}</div>}
+        <div className="mt-3 flex justify-end gap-2"><Button size="sm" variant="outline" disabled={testing || running || !engineReady || editErrors.length > 0 || !onTestDataset} onClick={async () => { if (!onTestDataset) return; setTesting(true); const testedJson = JSON.stringify(datasetDraft); try { const outcome = await onTestDataset(datasetDraft); setTestResult({ ...outcome, json: testedJson }); } finally { setTesting(false); } }}>{testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Test query</Button><Button size="sm" data-testid="report-apply-dataset" disabled={!testedCurrentDraft || !onApplyDataset || testing || running} onClick={async () => { if (!onApplyDataset) return; await onApplyDataset(datasetDraft); setEditing(false); setDatasetDraft(null); setTestResult(null); }}><Save className="h-3.5 w-3.5" /> Apply and refresh</Button></div>
+      </div>}
 
       {(result?.error || compiled?.error) && <div role="alert" className="mt-4 rounded-md border border-destructive/25 bg-destructive/5 p-3 text-xs text-destructive"><div className="font-medium">{result?.error ?? compiled?.error}</div>{result?.errorDetails && result.errorDetails !== result.error && <details className="mt-2 text-muted-foreground"><summary className="cursor-pointer">Technical details</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap font-mono text-[10px]">{result.errorDetails}</pre></details>}</div>}
 

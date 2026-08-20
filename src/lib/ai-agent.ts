@@ -84,6 +84,24 @@ interface Tool {
   input_schema: Record<string, any>;
 }
 
+export interface SystemPromptBlock {
+  text: string;
+  /** Write an explicit cache entry at the end of this stable prefix. */
+  cacheControl?: boolean;
+}
+
+export type SystemPrompt = string | SystemPromptBlock[];
+export type AgentTelemetryMode = boolean | "usage";
+
+export interface AgentCacheDiagnostics {
+  messageId?: string;
+  uncachedInputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  /** Anthropic's beta diagnostic payload; null means no divergence. */
+  diagnostics?: unknown;
+}
+
 export interface AgentCallbacks {
   onText: (chunk: string) => void;
   /** The model has started streaming a tool_use block's input JSON. Fires at
@@ -96,8 +114,11 @@ export interface AgentCallbacks {
   onToolInputStart?: (name: string) => void;
   onToolCall: (name: string, input: any) => void;
   onToolResult: (name: string, summary: string) => void;
-  onDone: (usage?: { inputTokens: number; outputTokens: number }) => void;
+  onDone: (usage?: AgentUsage) => void;
   onError: (error: string) => void;
+  /** Development-only cache diagnostics, enabled with
+   *  window.__cupolaAiCacheDiagnostics = true before starting a turn. */
+  onCacheDiagnostics?: (diagnostics: AgentCacheDiagnostics) => void;
   /** Called during retry countdowns with the status message, or null when countdown ends. */
   onRetry?: (message: string | null) => void;
 }
@@ -110,6 +131,7 @@ import { pruneCarriedToolImages } from "./query-results";
 import { recordToolCall, repeatedCallMessage } from "./ai-loop-guard";
 import { parseStreamedToolInput } from "./tool-input";
 import { clampMaxTokens, DEFAULT_AI_MAX_TOKENS } from "./ai/model-limits";
+import type { AgentUsage } from "./ai-usage";
 
 // ---------------------------------------------------------------------------
 // Dev-side tool-call tracing
@@ -477,6 +499,32 @@ interface StreamResult {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  messageId?: string;
+  diagnostics?: unknown;
+}
+
+type ResolvedTelemetryMode = "off" | "usage" | "full";
+const cacheDiagnosticMessageIds = new WeakMap<MessageParam[], string>();
+
+function cacheDiagnosticsEnabled(): boolean {
+  return typeof window !== "undefined" && (window as any).__cupolaAiCacheDiagnostics === true;
+}
+
+function systemPromptText(systemPrompt: SystemPrompt): string {
+  return typeof systemPrompt === "string"
+    ? systemPrompt
+    : systemPrompt.map((block) => block.text).join("\n\n");
+}
+
+function systemPromptBlocks(systemPrompt: SystemPrompt): Array<Record<string, unknown>> {
+  if (typeof systemPrompt === "string") {
+    return [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }];
+  }
+  return systemPrompt.map((block) => ({
+    type: "text",
+    text: block.text,
+    ...(block.cacheControl ? { cache_control: { type: "ephemeral" } } : {}),
+  }));
 }
 
 /** One streamed Messages-API request, wrapped in a gen_ai.chat span when
@@ -486,15 +534,16 @@ async function streamOneRequest(
   apiKey: string,
   model: string,
   messages: MessageParam[],
-  systemPrompt: string,
+  systemPrompt: SystemPrompt,
   callbacks: AgentCallbacks,
   tools: Tool[],
   maxTokens: number,
   signal: AbortSignal | undefined,
-  telemetry: boolean
+  telemetryMode: ResolvedTelemetryMode,
+  diagnosticPreviousMessageId?: string | null,
 ): Promise<StreamResult> {
-  if (!telemetry) {
-    return streamOneRequestInner(apiKey, model, messages, systemPrompt, callbacks, tools, maxTokens, signal);
+  if (telemetryMode === "off") {
+    return streamOneRequestInner(apiKey, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, diagnosticPreviousMessageId);
   }
   return Sentry.startSpan(
     {
@@ -504,20 +553,24 @@ async function streamOneRequest(
         [ATTR.OPERATION_NAME]: "chat",
         [ATTR.REQUEST_MODEL]: model,
         [ATTR.SYSTEM]: "anthropic",
-        [ATTR.INPUT_MESSAGES]: serializeInputMessages(messages),
-        [ATTR.SYSTEM_INSTRUCTIONS]: systemPrompt,
-        [ATTR.AVAILABLE_TOOLS]: serializeToolDefinitions(tools),
+        ...(telemetryMode === "full" ? {
+          [ATTR.INPUT_MESSAGES]: serializeInputMessages(messages),
+          [ATTR.SYSTEM_INSTRUCTIONS]: systemPromptText(systemPrompt),
+          [ATTR.AVAILABLE_TOOLS]: serializeToolDefinitions(tools),
+        } : {}),
       },
     },
     async (span) => {
       try {
         const result = await streamOneRequestInner(
-          apiKey, model, messages, systemPrompt, callbacks, tools, maxTokens, signal
+          apiKey, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, diagnosticPreviousMessageId
         );
         span.setAttributes({
           ...mapUsageAttributes(result),
           [ATTR.FINISH_REASONS]: [result.stopReason],
-          [ATTR.OUTPUT_MESSAGES]: serializeOutputMessages(result.content, result.stopReason),
+          ...(telemetryMode === "full" ? {
+            [ATTR.OUTPUT_MESSAGES]: serializeOutputMessages(result.content, result.stopReason),
+          } : {}),
         });
         return result;
       } catch (err) {
@@ -532,11 +585,12 @@ async function streamOneRequestInner(
   apiKey: string,
   model: string,
   messages: MessageParam[],
-  systemPrompt: string,
+  systemPrompt: SystemPrompt,
   callbacks: AgentCallbacks,
   tools: Tool[],
   maxTokens: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  diagnosticPreviousMessageId?: string | null,
 ): Promise<StreamResult> {
   const response = await fetchWithRetry(
     "https://api.anthropic.com/v1/messages",
@@ -545,13 +599,23 @@ async function streamOneRequestInner(
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "prompt-caching-2024-07-31",
+        "anthropic-beta": diagnosticPreviousMessageId !== undefined
+          ? "prompt-caching-2024-07-31,cache-diagnosis-2026-04-07"
+          : "prompt-caching-2024-07-31",
         "anthropic-dangerous-direct-browser-access": "true",
         "content-type": "application/json",
       },
       body: JSON.stringify({
         model,
         messages,
+        // Advance a cache breakpoint with the growing conversation so prior
+        // assistant/tool turns are cache reads instead of uncached input.
+        // Explicit tool/system markers below retain independently reusable
+        // prefixes when later context changes.
+        cache_control: { type: "ephemeral" },
+        ...(diagnosticPreviousMessageId !== undefined
+          ? { diagnostics: { previous_message_id: diagnosticPreviousMessageId } }
+          : {}),
         // Place cache_control on the LAST tool of whatever active set the
         // caller passed. Hardcoding the index would fragment the cache
         // across surfaces that ship different tool subsets (e.g. terminal
@@ -563,9 +627,7 @@ async function streamOneRequestInner(
               ),
             }
           : {}),
-        system: [
-          { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
-        ],
+        system: systemPromptBlocks(systemPrompt),
         // Clamped per model: over the model's ceiling is a 400. Streaming is
         // on, so the usual non-streaming timeout argument for a small cap
         // doesn't apply — the old hardcoded 4096 truncated long tool_use
@@ -587,11 +649,15 @@ async function streamOneRequestInner(
   let outputTokens = 0;
   let cacheReadTokens = 0;
   let cacheWriteTokens = 0;
+  let messageId: string | undefined;
+  let diagnostics: unknown;
 
   for await (const event of parseSSEStream(reader, signal)) {
     if (event.type === "message_start" && event.message?.usage) {
       // input_tokens is the UNCACHED remainder; the cache counts are disjoint.
       const usage = event.message.usage;
+      messageId = event.message.id;
+      diagnostics = event.message.diagnostics;
       inputTokens = usage.input_tokens || 0;
       cacheReadTokens = usage.cache_read_input_tokens || 0;
       cacheWriteTokens = usage.cache_creation_input_tokens || 0;
@@ -633,7 +699,7 @@ async function streamOneRequestInner(
     }
   }
 
-  return { content, stopReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens };
+  return { content, stopReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, messageId, diagnostics };
 }
 
 // History self-heal lives in ./ai-history (pure, no service/VGI imports) so it
@@ -650,18 +716,23 @@ export async function runAgentTurn(
   apiKey: string,
   model: string,
   messages: MessageParam[],
-  systemPrompt: string,
+  systemPrompt: SystemPrompt,
   executeTool: (name: string, input: any, signal?: AbortSignal) => Promise<ToolResult>,
   callbacks: AgentCallbacks,
   signal?: AbortSignal,
   maxToolRounds = 20,
   tools: Tool[] = TOOLS,
   maxTokens: number = DEFAULT_AI_MAX_TOKENS,
-  telemetry = true,
+  telemetry: AgentTelemetryMode = true,
 ): Promise<void> {
-  if (!telemetry || !isAiTelemetryEnabled()) {
+  const telemetryMode: ResolvedTelemetryMode = telemetry === "usage"
+    ? "usage"
+    : telemetry && isAiTelemetryEnabled()
+      ? "full"
+      : "off";
+  if (telemetryMode === "off") {
     return runAgentTurnInner(
-      apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, null
+      apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, null, telemetryMode
     );
   }
   // startNewTrace detaches the turn from any active pageload/navigation trace,
@@ -685,7 +756,7 @@ export async function runAgentTurn(
       async (span) => {
         try {
           await runAgentTurnInner(
-            apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, span
+            apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, span, telemetryMode
           );
         } catch (err) {
           // User cancellations are not internal errors; this status sticks
@@ -702,7 +773,7 @@ async function runAgentTurnInner(
   apiKey: string,
   model: string,
   messages: MessageParam[],
-  systemPrompt: string,
+  systemPrompt: SystemPrompt,
   executeTool: (name: string, input: any, signal?: AbortSignal) => Promise<ToolResult>,
   callbacks: AgentCallbacks,
   signal: AbortSignal | undefined,
@@ -710,12 +781,18 @@ async function runAgentTurnInner(
   tools: Tool[],
   maxTokens: number,
   agentSpan: AgentSpan | null,
+  telemetryMode: ResolvedTelemetryMode,
 ): Promise<void> {
   const MAX_TOOL_ROUNDS = maxToolRounds;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
   let totalCacheReadTokens = 0;
   let totalCacheWriteTokens = 0;
+  let rounds = 0;
+  const diagnosticsEnabled = cacheDiagnosticsEnabled();
+  let diagnosticPreviousMessageId: string | null | undefined = diagnosticsEnabled
+    ? cacheDiagnosticMessageIds.get(messages) ?? null
+    : undefined;
   // Roll the turn's accumulated usage onto the invoke_agent span before each
   // onDone exit path.
   const recordTurnUsage = () => {
@@ -752,10 +829,27 @@ async function runAgentTurnInner(
     // errors (exponential backoff with jitter), and abort-signal short-circuiting.
     // Any error that escapes here is final — do not re-retry, which would
     // multiply attempts and resend the full conversation each time.
-    const { content, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } =
-      await streamOneRequest(
-        apiKey, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, agentSpan !== null
-      );
+    const request = await streamOneRequest(
+      apiKey, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, telemetryMode,
+      diagnosticPreviousMessageId,
+    );
+    const { content, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = request;
+    rounds++;
+    if (diagnosticsEnabled) {
+      if (request.messageId) {
+        cacheDiagnosticMessageIds.set(messages, request.messageId);
+        diagnosticPreviousMessageId = request.messageId;
+      }
+      const diagnostic: AgentCacheDiagnostics = {
+        messageId: request.messageId,
+        uncachedInputTokens: inputTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+        diagnostics: request.diagnostics,
+      };
+      callbacks.onCacheDiagnostics?.(diagnostic);
+      if (aiDebugEnabled()) console.info("[ai] cache diagnostics", diagnostic);
+    }
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
     totalCacheReadTokens += cacheReadTokens;
@@ -778,7 +872,13 @@ async function runAgentTurnInner(
 
     if (toolUseBlocks.length === 0) {
       recordTurnUsage();
-      callbacks.onDone({ inputTokens: totalInputTokens, outputTokens: totalOutputTokens });
+      callbacks.onDone({
+        inputTokens: totalInputTokens,
+        cacheReadTokens: totalCacheReadTokens,
+        cacheWriteTokens: totalCacheWriteTokens,
+        outputTokens: totalOutputTokens,
+        rounds,
+      });
       return;
     }
 
@@ -865,13 +965,13 @@ async function runAgentTurnInner(
               [ATTR.TOOL_TYPE]: "function",
               [ATTR.TOOL_CALL_ID]: block.id,
               [ATTR.AGENT_NAME]: AGENT_NAME,
-              [ATTR.TOOL_INPUT]: JSON.stringify(block.input),
+              ...(telemetryMode === "full" ? { [ATTR.TOOL_INPUT]: JSON.stringify(block.input) } : {}),
             },
           },
           async (toolSpan) => {
             try {
               const r = await executeTool(block.name, block.input, signal);
-              toolSpan.setAttribute(ATTR.TOOL_OUTPUT, serializeToolResult(r));
+              if (telemetryMode === "full") toolSpan.setAttribute(ATTR.TOOL_OUTPUT, serializeToolResult(r));
               return r;
             } catch (err) {
               if (isAbortError(err)) toolSpan.setStatus({ code: 2, message: "cancelled" });
@@ -935,7 +1035,13 @@ async function runAgentTurnInner(
       dropToolUseFromLastAssistant();
       recordTurnUsage();
       callbacks.onError(`Connection error — agent stopped. ${fatalMsg}`);
-      callbacks.onDone({ inputTokens: totalInputTokens, outputTokens: totalOutputTokens });
+      callbacks.onDone({
+        inputTokens: totalInputTokens,
+        cacheReadTokens: totalCacheReadTokens,
+        cacheWriteTokens: totalCacheWriteTokens,
+        outputTokens: totalOutputTokens,
+        rounds,
+      });
       return;
     }
 
@@ -944,7 +1050,13 @@ async function runAgentTurnInner(
 
   recordTurnUsage();
   callbacks.onError("Too many tool rounds. Try a simpler question.");
-  callbacks.onDone();
+  callbacks.onDone({
+    inputTokens: totalInputTokens,
+    cacheReadTokens: totalCacheReadTokens,
+    cacheWriteTokens: totalCacheWriteTokens,
+    outputTokens: totalOutputTokens,
+    rounds,
+  });
 }
 
 export { type MessageParam, type ContentBlock, type ToolResultBlock, type Tool };

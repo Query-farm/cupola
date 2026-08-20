@@ -22,6 +22,7 @@ import { sampleRowsForAI, QueryResultCache, executeReadQueryResults } from "@/li
 import { cacheChartRows, cacheChartExtra, evictChartRows } from "@/lib/chart-rows-store";
 import { compileChartSpec, renderChartToPng } from "./chat/chart-embed";
 import type { ToolResult } from "@/lib/ai-agent";
+import type { AgentUsage } from "@/lib/ai-usage";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 const uid = () => crypto.randomUUID();
 
@@ -38,7 +39,7 @@ interface ChatMessage {
   content?: string; // user messages only
   blocks?: ContentBlock[]; // assistant messages only
   isStreaming?: boolean;
-  usage?: { inputTokens: number; outputTokens: number };
+  usage?: AgentUsage;
 }
 
 interface Props {
