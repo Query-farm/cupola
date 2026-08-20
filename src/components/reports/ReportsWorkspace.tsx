@@ -19,7 +19,7 @@ import { ReportSparkline } from "@/components/reports/ReportSparkline";
 import { ReportKpi } from "@/components/reports/ReportKpi";
 import { ReportDatasetsView } from "@/components/reports/ReportDatasetsView";
 import { compileChartSpec, embedChart, downloadPNG, downloadSVG, renderChartToPng, type VegaView } from "@/components/chat/chart-embed";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -521,7 +521,7 @@ function ReportRunControl({ reader, running, disabled, label, interval, onRun, o
         aria-label="Report refresh options"
         title="Automatic refresh settings"
         disabled={running}
-        className="inline-flex h-8 w-8 items-center justify-center rounded-r-md border border-l-0 bg-background transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+        className={buttonVariants({ variant: "outline", size: "icon-sm", className: "rounded-l-none border-l-0" })}
       >
         <ChevronDown className="h-3.5 w-3.5" />
       </PopoverTrigger>
@@ -554,7 +554,7 @@ function ReportMoreMenu({ reader, revisions, onRestoreRevision, onShareDraft, on
 }) {
   return <Popover>
     <PopoverTrigger
-      className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border px-2 text-xs transition-colors hover:bg-muted"
+      className={buttonVariants({ variant: "outline", size: "sm" })}
       aria-label="More report actions"
       data-testid="report-more-menu"
     >

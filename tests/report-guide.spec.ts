@@ -36,6 +36,12 @@ test("report guide is a runnable in-product gallery backed by canned local data"
   await expect(page.getByRole("button", { name: "Edit with AI" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Publish", exact: true })).toBeVisible();
+  const reportActionHeights = await Promise.all([
+    page.getByTestId("reports-run"),
+    page.getByRole("button", { name: "Report refresh options" }),
+    page.getByTestId("report-more-menu"),
+  ].map((control) => control.evaluate((element) => element.getBoundingClientRect().height)));
+  expect(new Set(reportActionHeights).size).toBe(1);
   await page.getByRole("button", { name: "Report refresh options" }).click();
   await expect(page.getByTestId("report-auto-refresh-0")).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
