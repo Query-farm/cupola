@@ -1,6 +1,7 @@
 import { splitStatements } from "@/lib/editor/sql-statements";
 import { validateChartSpec } from "@/lib/ai-tool-executor";
 import type { ReportBlock, ReportDocumentV1, ReportOption, ReportParameter, ReportParameterRule, ReportParameterValue } from "./types";
+import { reportLayoutCollisions } from "./layout";
 
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const FORBIDDEN_SQL = /\b(?:INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE|COPY|ATTACH|DETACH|CALL|PRAGMA|INSTALL|LOAD|EXPORT|IMPORT|VACUUM|CHECKPOINT)\b/i;
@@ -591,6 +592,9 @@ export function validateReport(input: unknown): string[] {
         if (style.radius !== undefined && (!Number.isFinite(style.radius) || style.radius < 1 || style.radius > 50)) errors.push(`${b.title ?? b.id}: map radius must be between 1 and 50.`);
       }
     }
+  }
+  for (const { first, second } of reportLayoutCollisions(report.blocks)) {
+    errors.push(`Blocks “${first.title?.trim() || first.id}” and “${second.title?.trim() || second.id}” overlap in the report layout.`);
   }
   return errors;
 }

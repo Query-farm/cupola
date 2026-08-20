@@ -41,6 +41,7 @@ import { REPORT_TOOLS, upsertAgentBlock, upsertAgentDataset, upsertAgentGroup, t
 import { checkpointReportAgentPlan, parseReportAgentPlan, reportAgentRepair, validateReportAgentPlan, type ReportAgentPlan } from "@/lib/reports/agent-reliability";
 import { compileReportQuery, interpolateReportText, materializeReportQuery } from "@/lib/reports/parameters";
 import { generateReportNarrative, prepareNarrativeInput } from "@/lib/reports/narrative";
+import { normalizeReportLayout } from "@/lib/reports/layout";
 import { isReportTufteBlock, tufteBlockToVegaSpec } from "@/lib/reports/tufte";
 import { buildShareReportUrl, clearSharedReport, consumeSharedReport } from "@/lib/reports/share";
 import { deleteReport, exportReportJson, getStoredReport, importReportJson, listStoredReports, publishReport, restoreReportRevision, saveReport } from "@/lib/reports/store";
@@ -68,6 +69,17 @@ interface DatasetResult {
   retryAfterSeconds?: number;
   fetchedAt?: number;
   durationMs?: number;
+  previousDurationMs?: number;
+  planningMs?: number;
+  waitMs?: number;
+  queryMs?: number;
+  materializeMs?: number;
+  decodeMs?: number;
+  transferBytes?: number;
+  queuedAt?: number;
+  startedAt?: number;
+  finishedAt?: number;
+  runId?: number;
   dependencies?: string[];
   materialized?: boolean;
 }
@@ -764,15 +776,15 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     agentMessagesRef.current = [];
     resultCache.current = new QueryResultCache();
     reportChartViews.current.clear();
-    const copy = cloneReport(report);
-    const publishedCopy = publishedSnapshot ? cloneReport(publishedSnapshot) : null;
+    const copy = normalizeReportLayout(cloneReport(report));
+    const publishedCopy = publishedSnapshot ? normalizeReportLayout(cloneReport(publishedSnapshot)) : null;
     const viewed = mode === "reader" && publishedCopy ? publishedCopy : copy;
     const defaults = { ...defaultValues(viewed), ...initialValues };
     setSelected(persisted ? copy : null); setDraft(copy); setPublished(publishedCopy); setPublishedAt(publicationTime ?? null); setReaderMode(mode === "reader" && Boolean(publishedCopy)); setValues(defaults); setAppliedValues(defaults); setParameterIssues([]); setParametersExpanded(false); setWorkspaceView("report"); setResults({}); setNarrativeStates({}); setRunProgress(null); setRunFailureNotice(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false); setSelectedBlockId(null); setBlockEditor(null); setBlockEditorErrors([]); setAgentTargetBlockId(null); setDatasetEditorRequest(null);
     void getStoredReport(copy.id).then((stored) => {
       setRevisionOptions(stored?.revisions ?? []);
       if (!publishedSnapshot && stored?.publishedDocument) {
-        setPublished(cloneReport(stored.publishedDocument));
+        setPublished(normalizeReportLayout(cloneReport(stored.publishedDocument)));
         setPublishedAt(stored.publishedAt ?? null);
       }
     });
@@ -819,6 +831,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     if (datasets.length === 0) return [];
     const publishResults = !stagedResults;
     const generation = publishResults ? ++runGeneration.current : runGeneration.current;
+    const runQueuedAt = Date.now();
     const summaries: DatasetRunSummary[] = [];
     let stagedState: Record<string, DatasetResult> = {};
     stagedResults?.clear();
@@ -836,7 +849,8 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         if (isDatasetPending(result)) next[id] = { ...result, status: result.table ? "success" : "idle" };
       }
       for (const dataset of datasets) {
-        next[dataset.id] = { ...(next[dataset.id] ?? { table: null, rows: [] }), status: "queued", error: undefined, errorDetails: undefined, errorCode: undefined, retryable: undefined, retryAfterSeconds: undefined };
+        const existing = next[dataset.id] ?? { table: null, rows: [], status: "idle" as const };
+        next[dataset.id] = { ...existing, status: "queued", error: undefined, errorDetails: undefined, errorCode: undefined, retryable: undefined, retryAfterSeconds: undefined, durationMs: undefined, previousDurationMs: existing.durationMs ?? existing.previousDurationMs, planningMs: undefined, waitMs: undefined, queryMs: undefined, materializeMs: undefined, decodeMs: undefined, transferBytes: undefined, queuedAt: runQueuedAt, startedAt: undefined, finishedAt: undefined, runId: generation };
       }
       return next;
     });
@@ -876,6 +890,8 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error, errorDetails: error, errorCode: "service_unavailable", retryable: true }));
     }
     let plan: ReportDatasetExecutionPlan;
+    const planningStartedAt = performance.now();
+    let planningMs = 0;
     try {
       const dependencies = await inferReportDatasetDependencies(
         report.datasets,
@@ -888,37 +904,61 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       );
       plan = buildReportDatasetExecutionPlan(report.datasets, dependencies, onlyIds, includeDependents);
       datasets = plan.datasets;
+      planningMs = Math.round(performance.now() - planningStartedAt);
     } catch (cause) {
       const classified = classifyReportQueryError(cause);
+      planningMs = Math.round(performance.now() - planningStartedAt);
+      const finishedAt = Date.now();
       if (generation !== runGeneration.current) return summaries;
       updateDatasetResults((prev) => {
         const next = { ...prev };
         for (const dataset of datasets) next[dataset.id] = {
           ...(prev[dataset.id] ?? { table: null, rows: [] }),
           status: "error",
-          error: "Cupola could not plan the report dataset dependencies.",
+          error: classified.message,
           errorDetails: classified.technicalDetails,
-          errorCode: "query_failed",
-          retryable: false,
+          errorCode: classified.code,
+          retryable: classified.retryable,
+          retryAfterSeconds: classified.retryAfterSeconds,
+          planningMs,
+          waitMs: finishedAt - runQueuedAt,
+          queuedAt: runQueuedAt,
+          finishedAt,
+          runId: generation,
         };
         return next;
       });
-      return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error: "Cupola could not plan the report dataset dependencies.", errorDetails: classified.technicalDetails, errorCode: "query_failed", retryable: false }));
+      return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error: classified.message, errorDetails: classified.technicalDetails, errorCode: classified.code, retryable: classified.retryable, retryAfterSeconds: classified.retryAfterSeconds }));
     }
     if (generation !== runGeneration.current) return summaries;
     updateDatasetResults((prev) => {
       const next = { ...prev };
-      for (const dataset of datasets) next[dataset.id] = {
-        ...(prev[dataset.id] ?? { table: null, rows: [] }),
+      for (const dataset of datasets) {
+        const existing = prev[dataset.id] ?? { table: null, rows: [], status: "idle" as const };
+        next[dataset.id] = {
+        ...existing,
         status: "queued",
         error: undefined,
         errorDetails: undefined,
         errorCode: undefined,
         retryable: undefined,
         retryAfterSeconds: undefined,
+        durationMs: undefined,
+        previousDurationMs: existing.runId === generation ? existing.previousDurationMs : existing.durationMs ?? existing.previousDurationMs,
+        planningMs,
+        queuedAt: runQueuedAt,
+        startedAt: undefined,
+        finishedAt: undefined,
+        waitMs: undefined,
+        queryMs: undefined,
+        materializeMs: undefined,
+        decodeMs: undefined,
+        transferBytes: undefined,
+        runId: generation,
         dependencies: [...(plan.dependencies.get(dataset.id) ?? [])],
         materialized: plan.materialized.has(dataset.id),
       };
+      }
       return next;
     });
 
@@ -933,6 +973,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         if (failedDependency) {
           const dependencyName = report.datasets.find((candidate) => candidate.id === failedDependency)?.name ?? failedDependency;
           const blockedMessage = `Not refreshed because ${dependencyName} failed.`;
+          const blockedAt = Date.now();
           failed.add(dataset.id);
           updateDatasetResults((prev) => ({ ...prev, [dataset.id]: {
             ...(prev[dataset.id] ?? { table: null, rows: [] }),
@@ -941,6 +982,9 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
             errorDetails: `${dataset.name} depends on ${dependencyName}, so its query was not attempted.`,
             errorCode: "blocked",
             retryable: false,
+            durationMs: 0,
+            waitMs: blockedAt - runQueuedAt,
+            finishedAt: blockedAt,
             dependencies: [...(plan.dependencies.get(dataset.id) ?? [])],
             materialized: plan.materialized.has(dataset.id),
           } }));
@@ -948,40 +992,65 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
           if (publishResults) setRunProgress((progress) => progress?.generation === generation ? { ...progress, completed: progress.completed + 1, currentDatasetName: undefined } : progress);
           continue;
         }
+        const startedAtEpoch = Date.now();
+        const startedAt = performance.now();
         updateDatasetResults((prev) => ({
           ...prev,
-          [dataset.id]: { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "running", error: undefined, errorDetails: undefined, errorCode: undefined, retryable: undefined, retryAfterSeconds: undefined, dependencies: [...(plan.dependencies.get(dataset.id) ?? [])], materialized: plan.materialized.has(dataset.id) },
+          [dataset.id]: { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "running", error: undefined, errorDetails: undefined, errorCode: undefined, retryable: undefined, retryAfterSeconds: undefined, startedAt: startedAtEpoch, waitMs: startedAtEpoch - runQueuedAt, dependencies: [...(plan.dependencies.get(dataset.id) ?? [])], materialized: plan.materialized.has(dataset.id) },
         }));
         if (publishResults) setRunProgress((progress) => progress?.generation === generation
           ? { ...progress, currentDatasetName: dataset.name }
           : progress);
-        const startedAt = performance.now();
+        let materializeMs = 0;
+        let queryMs = 0;
+        let decodeMs = 0;
+        let phase: "query" | "materialize" | "decode" = "query";
+        let phaseStartedAt = performance.now();
         try {
           const readErrors = validateReadOnlySql(dataset.sql);
           if (readErrors.length) throw new Error(readErrors.join(" "));
           let response;
           if (plan.materialized.has(dataset.id)) {
             const identifier = quoteReportDatasetIdentifier(dataset.id);
+            phase = "materialize";
+            phaseStartedAt = performance.now();
             const create = await query(`CREATE TEMP TABLE ${identifier} AS ${materializeReportQuery(dataset.sql, report, runValues)}`);
+            materializeMs = Math.round(performance.now() - phaseStartedAt);
             if (!create.ok) throw new Error(create.error || "The shared dataset could not be materialized.");
             createdTempTables.push(dataset.id);
+            phase = "query";
+            phaseStartedAt = performance.now();
             response = await queryPrepared(`SELECT * FROM temp.main.${identifier}`, []);
           } else {
             const compiled = compileReportQuery(dataset.sql, report, runValues);
+            phase = "query";
+            phaseStartedAt = performance.now();
             response = await queryPrepared(compiled.sql, compiled.params);
           }
+          queryMs = Math.round(performance.now() - phaseStartedAt);
           if (generation !== runGeneration.current) return summaries;
           if (!response.ok || !response.arrowBuffers?.[0]) throw new Error(response.error || "Query returned no result.");
+          const transferBytes = response.arrowBuffers.reduce((sum, buffer) => sum + buffer.byteLength, 0);
+          phase = "decode";
+          phaseStartedAt = performance.now();
           const table = decodeArrowBuffer(response.arrowBuffers[0]);
           const rows = tableToRows(table);
+          decodeMs = Math.round(performance.now() - phaseStartedAt);
+          const finishedAt = Date.now();
+          const durationMs = Math.round(performance.now() - startedAt);
           captureRows?.set(dataset.id, rows);
-          updateDatasetResults((prev) => ({ ...prev, [dataset.id]: { table, rows, status: "success", fetchedAt: Date.now(), durationMs: Math.round(performance.now() - startedAt), dependencies: [...(plan.dependencies.get(dataset.id) ?? [])], materialized: plan.materialized.has(dataset.id) } }));
+          updateDatasetResults((prev) => ({ ...prev, [dataset.id]: { ...(prev[dataset.id] ?? {}), table, rows, status: "success", fetchedAt: finishedAt, durationMs, queryMs, materializeMs, decodeMs, transferBytes, startedAt: startedAtEpoch, finishedAt, waitMs: startedAtEpoch - runQueuedAt, planningMs, queuedAt: runQueuedAt, runId: generation, dependencies: [...(plan.dependencies.get(dataset.id) ?? [])], materialized: plan.materialized.has(dataset.id) } }));
           summaries.push({ datasetId: dataset.id, name: dataset.name, ok: true, rowCount: table.numRows, columns: table.schema.fields.map((field) => field.name), sample: rows.slice(0, 3) });
         } catch (e) {
           if (generation !== runGeneration.current) return summaries;
           failed.add(dataset.id);
+          const phaseDuration = Math.round(performance.now() - phaseStartedAt);
+          if (phase === "materialize" && materializeMs === 0) materializeMs = phaseDuration;
+          else if (phase === "query" && queryMs === 0) queryMs = phaseDuration;
+          else if (phase === "decode" && decodeMs === 0) decodeMs = phaseDuration;
           const classified = classifyReportQueryError(e);
           const stale = captureRows?.has(dataset.id) ?? false;
+          const finishedAt = Date.now();
           updateDatasetResults((prev) => ({
             ...prev,
             [dataset.id]: {
@@ -993,6 +1062,15 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
               retryable: classified.retryable,
               retryAfterSeconds: classified.retryAfterSeconds,
               durationMs: Math.round(performance.now() - startedAt),
+              queryMs,
+              materializeMs,
+              decodeMs,
+              startedAt: startedAtEpoch,
+              finishedAt,
+              waitMs: startedAtEpoch - runQueuedAt,
+              planningMs,
+              queuedAt: runQueuedAt,
+              runId: generation,
               dependencies: [...(plan.dependencies.get(dataset.id) ?? [])],
               materialized: plan.materialized.has(dataset.id),
             },
@@ -1001,6 +1079,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
           if (classified.stopRun) {
             const remaining = datasets.slice(datasetIndex + 1);
             const blockedMessage = `Not refreshed because ${dataset.name} hit a data-service rate limit.`;
+            const blockedAt = Date.now();
             updateDatasetResults((prev) => {
               const next = { ...prev };
               for (const blocked of remaining) {
@@ -1012,6 +1091,9 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
                   errorCode: "blocked",
                   retryable: true,
                   retryAfterSeconds: classified.retryAfterSeconds,
+                  durationMs: 0,
+                  waitMs: blockedAt - runQueuedAt,
+                  finishedAt: blockedAt,
                   dependencies: [...(plan.dependencies.get(blocked.id) ?? [])],
                   materialized: plan.materialized.has(blocked.id),
                 };
@@ -1270,7 +1352,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   }, [clearScheduledRateLimitRetry, draft, published]);
 
   const updateLayout = useCallback((layout: Layout) => {
-    setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => { const item = layout.find((l) => l.i === b.id); return item ? { ...b, layout: { x: item.x, y: item.y, w: item.w, h: item.h } } : b; }) } : current);
+    setDraft((current) => current ? normalizeReportLayout({ ...current, blocks: current.blocks.map((b) => { const item = layout.find((l) => l.i === b.id); return item ? { ...b, layout: { x: item.x, y: item.y, w: item.w, h: item.h } } : b; }) }) : current);
   }, []);
 
   const blockEditorDirty = Boolean(blockEditor && (blockEditor.isNew || JSON.stringify(blockEditor.block) !== blockEditor.initialJson));
@@ -1308,7 +1390,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const blocks = editor.isNew
       ? [...draft.blocks, structuredClone(editor.block)]
       : draft.blocks.map((block) => block.id === editor.block.id ? structuredClone(editor.block) : block);
-    return { ...draft, blocks, updatedAt: Date.now() };
+    return normalizeReportLayout({ ...draft, blocks, updatedAt: Date.now() }, editor.block.id);
   }, [draft]);
 
   const applyBlockEditor = useCallback(async () => {
@@ -1428,6 +1510,44 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     setShareStatus("Dataset changes applied using the validated results.");
   }, [reportWithDataset]);
 
+  const removeReportDataset = useCallback((datasetId: string) => {
+    if (!draft) return;
+    const dataset = draft.datasets.find((candidate) => candidate.id === datasetId);
+    if (!dataset) return;
+    const blockConsumers = draft.blocks.filter((block) => "datasetId" in block && block.datasetId === datasetId);
+    if (blockConsumers.length) {
+      setShareStatus(`“${dataset.name}” is still used by ${blockConsumers.length} report block${blockConsumers.length === 1 ? "" : "s"}.`);
+      return;
+    }
+    const parameterConsumers = draft.parameters.filter((parameter) => (parameter.options?.kind === "dataset" && parameter.options.datasetId === datasetId) || parameter.validationDataset?.datasetId === datasetId);
+    if (parameterConsumers.length) {
+      setShareStatus(`“${dataset.name}” is still used by ${parameterConsumers.length} report parameter${parameterConsumers.length === 1 ? "" : "s"}.`);
+      return;
+    }
+    const dependentDatasets = draft.datasets.filter((candidate) => results[candidate.id]?.dependencies?.includes(datasetId));
+    if (dependentDatasets.length) {
+      setShareStatus(`“${dataset.name}” is still used by ${dependentDatasets.map((candidate) => candidate.name).join(", ")}.`);
+      return;
+    }
+    const candidate = { ...draft, datasets: draft.datasets.filter((candidate) => candidate.id !== datasetId), updatedAt: Date.now() };
+    const errors = validateReport(candidate);
+    if (errors.length) {
+      setShareStatus(`Dataset could not be deleted: ${errors.join(" ")}`);
+      return;
+    }
+    setDraft(candidate);
+    setSourceText(exportReportJson(candidate));
+    setResults((current) => {
+      const next = { ...current };
+      delete next[datasetId];
+      return next;
+    });
+    datasetTestCacheRef.current = null;
+    setDatasetEditorRequest(null);
+    setDatasetEditorDirty(false);
+    setShareStatus(`Deleted dataset “${dataset.name}”.`);
+  }, [draft, results]);
+
   const resetAgentConversation = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -1521,6 +1641,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     };
     const finalizeWorkingReport = async (candidate: ReportDocumentV1, summary: string, clearResults = false): Promise<ToolResult> => {
       if (!agentPlan) return toolResult(reportAgentRepair("plan", "this authoring turn", ["Call plan_report before finalizing."], "plan_report"));
+      candidate = normalizeReportLayout(candidate);
       const checkpoint = checkpointReportAgentPlan(agentPlan, candidate);
       if (!checkpoint.complete) return toolResult({
         ...reportAgentRepair("finalize", "planned report", [checkpoint.nextAction], "finalize_report"),
@@ -1989,6 +2110,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
           onEditRequestHandled={() => setDatasetEditorRequest(null)}
           onTestDataset={testReportDataset}
           onApplyDataset={applyReportDataset}
+          onDeleteDataset={removeReportDataset}
           onDirtyChange={setDatasetEditorDirty}
           onRunDataset={(datasetId) => {
             const existing = results[datasetId];

@@ -70,6 +70,53 @@ test("dataset Apply is blocked when the result breaks consuming blocks", async (
   await expect(page.getByTestId("report-apply-dataset")).toBeDisabled();
 });
 
+test("dataset Test surfaces DuckDB syntax errors and keeps Apply blocked", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openGuide(page);
+  const sql = await openCurrentDatasetEditor(page);
+  await sql.fill("SELECT 1 + FROM (VALUES (1))");
+  const testQuery = page.getByRole("button", { name: "Test query" });
+  await expect(testQuery).toBeEnabled();
+  await testQuery.click();
+
+  const status = page.getByTestId("report-dataset-editor").getByRole("status");
+  await expect(status).toContainText(/Parser Error|syntax error/i, { timeout: T_SHELL_BOOT });
+  await expect(page.getByTestId("report-apply-dataset")).toBeDisabled();
+});
+
+test("direct block resizing reflows grouped neighbors instead of overlapping them", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openGuide(page);
+  const kpi = page.getByTestId("report-block-showcase-kpi");
+  const smallMultiples = page.getByTestId("report-block-showcase-small-multiples");
+  await kpi.hover();
+  await page.getByRole("button", { name: "Edit KPI · Humidity (%)" }).click();
+  await page.getByLabel("Height").fill("6");
+  await page.getByTestId("report-block-apply").click();
+
+  await expect.poll(async () => {
+    const editedBox = await kpi.boundingBox();
+    const neighborBox = await smallMultiples.boundingBox();
+    if (!editedBox || !neighborBox) return false;
+    return editedBox.y + editedBox.height <= neighborBox.y + 1;
+  }).toBe(true);
+});
+
+test("dataset deletion is guarded and editable SQL has a clear surface", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openGuide(page);
+  await page.getByTestId("report-datasets-tab").click();
+  await page.getByTestId("report-dataset-item-showcase-current").click();
+  const remove = page.getByTestId("report-delete-dataset");
+  await expect(remove).toBeDisabled();
+  await expect(remove).toHaveAttribute("title", /Used by .* report block/);
+
+  await page.getByTestId("report-edit-dataset").click();
+  const sql = page.getByTestId("report-dataset-sql-editor");
+  await expect(sql).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await expect(page.getByText(/Editable SQL/)).toBeVisible();
+});
+
 test("chart editor preserves advanced specs and never hides an invalid JSON lock", async ({ page }) => {
   test.setTimeout(60_000);
   await openGuide(page);

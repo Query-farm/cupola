@@ -107,6 +107,14 @@ test("classifies an Open-Meteo 429 without leaking its worker stack", () => {
   });
 });
 
+test("preserves DuckDB parser errors for dataset correction", () => {
+  const classified = classifyReportQueryError("Parser Error: syntax error at or near \"FROM\" at async query (cf.js:123:4)");
+  expect(classified.code).toBe("query_failed");
+  expect(classified.retryable).toBe(false);
+  expect(classified.message).toContain("Parser Error: syntax error at or near \"FROM\"");
+  expect(classified.message).not.toContain("cf.js");
+});
+
 test("summarizes a rate-limit circuit breaker without treating it as report validation", () => {
   const notice = buildReportRunFailureNotice([
     { name: "Climate normals", error: "Open-Meteo is temporarily limiting requests. Try again in about 1 minute.", errorDetails: "HTTP 429 from Open-Meteo: the request limit was exceeded.", errorCode: "rate_limited", retryAfterSeconds: 60, stale: true },

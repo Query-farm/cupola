@@ -1,5 +1,6 @@
 import type { ReportDocumentV1, StoredReport } from "./types";
 import { cloneReport } from "./types";
+import { normalizeReportLayout } from "./layout";
 import { validateReport } from "./validation";
 
 const DB_NAME = "cupola-reports";
@@ -99,7 +100,12 @@ export function exportReportJson(report: ReportDocumentV1): string {
 
 export function importReportJson(json: string): ReportDocumentV1 {
   const parsed = JSON.parse(json) as ReportDocumentV1;
-  const errors = validateReport(parsed);
+  // Preserve strict structural errors, but repair valid legacy/bulk layouts
+  // before collision validation so imported reports cannot render overlaps.
+  const structureErrors = validateReport(parsed).filter((error) => !error.includes("overlap in the report layout"));
+  if (structureErrors.length) throw new Error(structureErrors.join("\n"));
+  const normalized = normalizeReportLayout(parsed);
+  const errors = validateReport(normalized);
   if (errors.length) throw new Error(errors.join("\n"));
-  return parsed;
+  return normalized;
 }

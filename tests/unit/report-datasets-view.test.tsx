@@ -92,4 +92,82 @@ describe("report dataset browser", () => {
     expect(humidity.textContent).toContain("DOUBLE");
     expect(humidity.textContent).not.toContain("Float64");
   });
+
+  test("only enables dataset deletion when no report block uses it", () => {
+    const onDeleteDataset = mock(() => {});
+    const view = render(<ReportDatasetsView
+      report={report}
+      results={{}}
+      appliedValues={{ city: "Glen Allen" }}
+      running={false}
+      engineReady
+      canEdit
+      onRunDataset={() => {}}
+      onOpenSql={() => {}}
+      onDeleteDataset={onDeleteDataset}
+    />);
+
+    const usedDelete = view.getByTestId("report-delete-dataset") as HTMLButtonElement;
+    expect(usedDelete.disabled).toBe(true);
+    expect(usedDelete.title).toContain("Used by 2 report blocks");
+
+    fireEvent.click(view.getByTestId("report-dataset-item-choices"));
+    const unusedDelete = view.getByTestId("report-delete-dataset") as HTMLButtonElement;
+    expect(unusedDelete.disabled).toBe(false);
+    const originalConfirm = window.confirm;
+    window.confirm = mock(() => true);
+    try {
+      fireEvent.click(unusedDelete);
+      expect(onDeleteDataset).toHaveBeenCalledWith("choices");
+    } finally {
+      window.confirm = originalConfirm;
+    }
+  });
+
+  test("makes the editable query template visually distinct", () => {
+    const view = render(<ReportDatasetsView
+      report={report}
+      results={{}}
+      appliedValues={{ city: "Glen Allen" }}
+      running={false}
+      engineReady
+      canEdit
+      onRunDataset={() => {}}
+      onOpenSql={() => {}}
+    />);
+
+    fireEvent.click(view.getByTestId("report-edit-dataset"));
+    const editor = view.getByTestId("report-dataset-sql-editor");
+    expect(editor.className).toContain("bg-white");
+    expect(view.getByText(/Editable SQL/)).toBeTruthy();
+  });
+
+  test("shows sortable refresh profiling and an interactive dependency graph", () => {
+    const conditionsTable = tableFromArrays({ city: ["Norfolk"], humidity: [68] });
+    const choicesTable = tableFromArrays({ city: ["Glen Allen", "Norfolk"] });
+    const view = render(<ReportDatasetsView
+      report={report}
+      results={{
+        choices: { table: choicesTable, rows: [{ city: "Glen Allen" }, { city: "Norfolk" }], status: "success", durationMs: 20, previousDurationMs: 24, planningMs: 5, waitMs: 50, queryMs: 18, decodeMs: 2, transferBytes: 512, queuedAt: 1_000, startedAt: 1_050, finishedAt: 1_070, runId: 7, dependencies: [] },
+        conditions: { table: conditionsTable, rows: [{ city: "Norfolk", humidity: 68 }], status: "success", durationMs: 40, previousDurationMs: 30, planningMs: 5, waitMs: 10, queryMs: 35, decodeMs: 5, transferBytes: 1_024, queuedAt: 1_000, startedAt: 1_010, finishedAt: 1_050, runId: 7, dependencies: ["choices"], materialized: true },
+      }}
+      appliedValues={{ city: "Norfolk" }}
+      running={false}
+      engineReady
+      onRunDataset={() => {}}
+      onOpenSql={() => {}}
+    />);
+
+    fireEvent.click(view.getByTestId("report-dataset-profile-tab"));
+    const profile = view.getByTestId("report-dataset-profile");
+    expect(profile.textContent).toContain("Refresh profile");
+    expect(profile.textContent).toContain("70 ms");
+    expect(profile.textContent).toContain("1.5 KB");
+    expect(view.getByTestId("report-dataset-profile-table").textContent).toContain("Current conditions");
+    expect(view.getByTestId("report-dataset-dependency-graph")).toBeTruthy();
+
+    fireEvent.click(view.getByTestId("report-dataset-node-choices"));
+    expect(view.getByRole("heading", { name: "City choices" })).toBeTruthy();
+    expect(view.getByTestId("report-dataset-details-tab").getAttribute("aria-selected")).toBe("true");
+  });
 });

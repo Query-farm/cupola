@@ -217,6 +217,15 @@ test("infers dataset dependencies and reuses a refresh-scoped materialization", 
   await expect(page.getByText("Feeds").locator("..")).toContainText("weather_summary");
   await page.getByTestId("report-dataset-item-weather_summary").click();
   await expect(page.getByText("Reads from").locator("..")).toContainText("weather_base");
+  await page.getByTestId("report-dataset-profile-tab").click();
+  await expect(page.getByTestId("report-dataset-profile")).toContainText("Refresh profile");
+  await expect(page.getByTestId("report-dataset-profile-table").getByRole("row", { name: /Weather source/ })).toContainText(/ms|s/);
+  await expect(page.getByTestId("report-dataset-dependency-graph")).toBeVisible();
+  await expect(page.getByTestId("report-dataset-node-weather_base")).toBeVisible();
+  await expect(page.getByTestId("report-dataset-node-weather_summary")).toBeVisible();
+  await page.getByTestId("report-dataset-node-weather_base").click();
+  await expect(page.getByTestId("report-dataset-details-tab")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "Weather source" })).toBeVisible();
 });
 
 test("pauses a refresh after a rate limit and preserves dependent block data", async ({ page }) => {
