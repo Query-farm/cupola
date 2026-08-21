@@ -35,6 +35,10 @@ interface Props {
 interface PositionedTable {
   table: CatalogRelationshipTable;
   columns: CatalogRelationshipTable["columns"];
+  columnIndicator?: {
+    label: string;
+    description: string;
+  };
   x: number;
   y: number;
   width: number;
@@ -91,8 +95,20 @@ function layoutTables(tables: CatalogRelationshipTable[], relationships: Catalog
       const important = new Set([...table.primaryKeyColumns, ...table.foreignKeyColumns, ...table.referencedColumns]);
       const filtered = keysOnly ? table.columns.filter((column) => important.has(column.name)) : table.columns;
       const columns = filtered.length > 0 ? filtered : table.columns.slice(0, 4);
+      let columnIndicator: PositionedTable["columnIndicator"];
+      if (keysOnly && filtered.length > 0 && columns.length < table.columns.length) {
+        columnIndicator = {
+          label: `${columns.length} of ${table.columns.length}`,
+          description: `Showing ${columns.length} relationship and key columns out of ${table.columns.length} total. Choose All columns to show the complete schema.`,
+        };
+      } else if (keysOnly && filtered.length === 0 && columns.length < table.columns.length) {
+        columnIndicator = {
+          label: `Preview ${columns.length} of ${table.columns.length}`,
+          description: `This table has no relationship or key columns in the current graph, so the first ${columns.length} of ${table.columns.length} columns are shown as a preview. Choose All columns to show the complete schema.`,
+        };
+      }
       const height = HEADER_HEIGHT + columns.length * ROW_HEIGHT;
-      result.push({ table, columns, x: 24 + layer * (NODE_WIDTH + X_GAP), y, width: NODE_WIDTH, height });
+      result.push({ table, columns, columnIndicator, x: 24 + layer * (NODE_WIDTH + X_GAP), y, width: NODE_WIDTH, height });
       y += height + Y_GAP;
     }
   }
@@ -153,6 +169,16 @@ function RelationshipCard({ node, selected, onOpen, onFocus }: {
           <span className="block truncate text-[11px] text-muted-foreground">{table.catalog}.{table.schema}</span>
           <span className="block truncate font-mono text-sm font-semibold" title={`${table.schema}.${table.name}`}>{table.name}</span>
         </button>
+        {node.columnIndicator ? (
+          <Badge
+            variant="outline"
+            className="shrink-0 px-1.5 text-[9px] font-normal text-muted-foreground"
+            title={node.columnIndicator.description}
+            aria-label={node.columnIndicator.description}
+          >
+            {node.columnIndicator.label}
+          </Badge>
+        ) : null}
         {table.external ? <Badge variant="outline" className="text-[9px]">external</Badge> : (
           <button
             type="button"
