@@ -279,7 +279,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
               const parsed = JSON.parse(out.json);
               pendingDisplayResult = { columns: parsed.columns, rows: parsed.rows, rowCount: parsed.row_count, showing: parsed.showing };
               ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion });
-              setGrid({ running: false, ok: true, error: null, table: out.table, rowCount: out.table.numRows, elapsedMs: out.elapsedMs, ran: true });
+              setGrid({ running: false, ok: true, error: null, table: out.table, sourceSql: input.sql, rowCount: out.table.numRows, elapsedMs: out.elapsedMs, ran: true });
             },
           },
         );

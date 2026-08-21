@@ -17,6 +17,8 @@ export interface ResultState {
   ok: boolean;
   /** True once at least one statement has been run for this tab. */
   ran: boolean;
+  /** Exact statement which produced the current result table. */
+  sourceSql?: string;
 }
 
 export const emptyResult: ResultState = {

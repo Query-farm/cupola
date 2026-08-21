@@ -235,7 +235,7 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, pendingS
       return;
     }
     setActiveResult(docId, {
-      running: false, error: null, ok: true, table, rowCount: table.numRows, elapsedMs,
+      running: false, error: null, ok: true, table, sourceSql: trimmed, rowCount: table.numRows, elapsedMs,
     });
     recordQuery({ sql: trimmed, executionTimeMs: elapsedMs, success: true, rowCount: table.numRows });
   }, [setActiveResult]);
@@ -293,8 +293,21 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, pendingS
   const handleExport = useCallback(async (fmt: ExportFormat) => {
     const table = activeResult.table;
     if (!table) return;
+    if (settings.aiTelemetry) {
+      Sentry.addBreadcrumb({
+        category: "result-export",
+        level: "info",
+        message: "Exporting query result",
+        data: {
+          format: fmt,
+          sql: activeResult.sourceSql,
+          rows: table.numRows,
+          columns: table.schema?.fields?.length ?? 0,
+        },
+      });
+    }
     await exportResult(table, fmt, activeDoc?.name ?? "query-result");
-  }, [activeResult.table, activeDoc?.name]);
+  }, [activeResult.table, activeResult.sourceSql, activeDoc?.name, settings.aiTelemetry]);
 
   const handleOpenInPerspective = useCallback(() => {
     const table = activeResult.table;
