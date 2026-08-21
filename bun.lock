@@ -13,7 +13,7 @@
         "@codemirror/language": "^6.12.3",
         "@codemirror/state": "^6.6.0",
         "@codemirror/view": "^6.43.1",
-        "@haybarn/haybarn-wasm": "1.5.5-rc1",
+        "@haybarn/haybarn-wasm": "1.5.5-rc3",
         "@query-farm/apache-arrow": "21.1.1",
         "@query-farm/vgi-rpc": "0.21.3",
         "@radix-ui/react-accordion": "^1.2.12",
@@ -343,7 +343,7 @@
 
     "@happy-dom/global-registrator": ["@happy-dom/global-registrator@20.9.0", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^20.9.0" } }, "sha512-lBW6/m5BIFl3pMuWPNN0lIOYw9LMCmPfix53ExS3FBi4E+NELEljQ3xH6aAV9IYiQRfn9YIIgzzMrD0vIcD7tw=="],
 
-    "@haybarn/haybarn-wasm": ["@haybarn/haybarn-wasm@1.5.5-rc1", "", { "dependencies": { "apache-arrow": "^17.0.0", "qs": "^6.14.1" } }, "sha512-XT4BIU8+fcKEMEXFf47TnRGDlkcJ4UVOUbpqMA0zsNUf46ndw7ZPUbwfqvPb/81ElaDYe0TgTe83OCkwO7ZvWg=="],
+    "@haybarn/haybarn-wasm": ["@haybarn/haybarn-wasm@1.5.5-rc3", "", { "dependencies": { "apache-arrow": "^17.0.0", "qs": "^6.14.1" } }, "sha512-1KrrN+CN4TAjwnXT3nyUWdd3bwp4wTo0fHu+mdQ5F5vn33CONpKIu9piTmmIXGMUH4UM9vYkUSA1dmNtXcOr9g=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.12", "", { "peerDependencies": { "hono": "^4" } }, "sha512-txsUW4SQ1iilgE0l9/e9VQWmELXifEFvmdA1j6WFh/aFPj99hIntrSsq/if0UWyGVkmrRPKA1wCeP+UCr1B9Uw=="],
 
