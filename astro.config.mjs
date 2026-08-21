@@ -14,8 +14,6 @@ const requireJson = createRequire(import.meta.url);
 const pkg = requireJson('./package.json');
 const gitHash = execSync('git rev-parse --short HEAD').toString().trim();
 
-const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN;
-
 // https://astro.build/config
 export default defineConfig({
   // Version-prefix every emitted asset path so each release is content-isolated
@@ -34,40 +32,12 @@ export default defineConfig({
     react(),
     sentry({
       // Init lives in sentry.client.config.ts so the runtime DSN/release/scrubbing
-      // stay co-located. The integration here exists to inject the SDK into the
-      // client bundle and (optionally) upload source maps.
-      //
-      // These options MUST be top-level. The older `sourceMapsUploadOptions`
-      // wrapper only accepted flat keys — nesting `release`/`sourcemaps`
-      // objects inside it was silently ignored (which shipped .js.map files
-      // to R2 and mis-tagged browser uploads through v0.4.81).
-      ...(sentryAuthToken
-        ? {
-            org: process.env.SENTRY_ORG || 'query-farm-llc',
-            project: process.env.SENTRY_PROJECT || 'cupola',
-            authToken: sentryAuthToken,
-            telemetry: false,
-            // Pin the upload + cleanup globs to this project's dist layout.
-            // The @sentry/astro default auto-delete glob is `dist/**/client/**/*.map`
-            // which doesn't match our `dist/_astro/` layout, so without these
-            // the maps would either not get uploaded or would ship to R2
-            // alongside the JS (we want them stripped after upload).
-            sourcemaps: {
-              assets: ['dist/_astro/**/*.js', 'dist/_astro/**/*.js.map'],
-              filesToDeleteAfterUpload: ['dist/_astro/**/*.map'],
-            },
-            // Astro's integration omits the top-level `release` option; pass it
-            // through the vite-plugin escape hatch so browser artifact bundles
-            // land under the same release slug the SDK reports at runtime (and
-            // that publish.sh uses for the worker maps).
-            unstable_sentryVitePluginOptions: {
-              release: {
-                name: `cupola@${pkg.version}+${gitHash}`,
-                dist: gitHash,
-              },
-            },
-          }
-        : { sourcemaps: { disable: true } }),
+      // stay co-located. Source-map upload is deliberately disabled here: the
+      // Astro/Vite integration searches an intermediate client directory, but
+      // Cupola's final maps live in dist/_astro. publish.sh uploads that final
+      // directory explicitly, waits for Sentry processing, and only then strips
+      // the maps before syncing dist to R2.
+      sourcemaps: { disable: true },
     }),
   ],
 
@@ -76,7 +46,7 @@ export default defineConfig({
     // symbolicate production stack traces. `'hidden'` omits the
     // `//# sourceMappingURL=` trailer from the JS — the browser never
     // fetches the maps, and they're uploaded to Sentry then deleted
-    // from dist by `sourcemaps.filesToDeleteAfterUpload`.
+    // from dist by publish.sh after a successful Sentry upload.
     //
     // CRITICAL: Astro 6 uses Vite 6's environments API. The top-level
     // `vite.build.sourcemap` does NOT propagate to the client build —

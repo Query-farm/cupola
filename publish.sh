@@ -20,7 +20,8 @@ VERSION=$(node -e "console.log(require('./package.json').version)")
 echo "==> Version: ${VERSION}"
 
 # ---- Sentry: source map upload ----
-# SENTRY_AUTH_TOKEN unlocks browser source map upload during `astro build`.
+# SENTRY_AUTH_TOKEN unlocks browser and Worker source-map uploads after their
+# respective builds.
 # Without it, the build still succeeds but stack traces in Sentry stay minified.
 # Tokens come from .env (gitignored); load if present so callers don't need to
 # `source` it manually.
@@ -64,13 +65,11 @@ if [ "${1:-}" != "--skip-commit" ]; then
   fi
 fi
 
-# Capture the git hash AFTER any commit above so it matches the hash that
-# astro.config.mjs computes at build time (`git rev-parse --short HEAD`). Both
-# the browser source maps (uploaded by @sentry/astro during the build) and the
-# worker maps (uploaded below) must land under the same release slug
-# `cupola@${VERSION}+${GIT_HASH}`; capturing this before the commit put them
-# under different releases.
+# Capture the git hash AFTER any commit above. Browser and Worker source maps
+# must land under the exact release/dist values reported by their runtime SDKs;
+# capturing this before the commit would put them under different releases.
 GIT_HASH=$(git rev-parse --short HEAD)
+RELEASE="cupola@${VERSION}+${GIT_HASH}"
 
 # ---- Quality gates ----
 # Both must pass before we build anything. `astro check` is the typecheck; it
@@ -91,45 +90,40 @@ echo "==> Building..."
 # 8 GiB of old-space heap. With source maps enabled, the perspective +
 # duckdb-wasm chunks push past Node's 4 GiB default and crash with
 # "Ineffective mark-compacts near heap limit".
-# Tee the output so the source-map sanity check below can grep for the
-# sentry-vite-plugin success line (set -o pipefail preserves the exit code).
-BUILD_LOG=$(mktemp)
-NODE_OPTIONS="--max-old-space-size=8192" bun run build 2>&1 | tee "$BUILD_LOG"
+NODE_OPTIONS="--max-old-space-size=8192" bun run build
 
 echo "==> dist/ size: $(du -sh dist/ | cut -f1)"
 echo "==> Checking JavaScript bundle budget..."
 bun run check:bundle
 
-# ---- Source-map sanity check + strip ----
-# With SENTRY_AUTH_TOKEN set, the @sentry/astro integration uploads the maps
-# during `astro build` and its `sourcemaps.filesToDeleteAfterUpload` glob
-# removes them afterwards, so zero remaining maps is the healthy state. If the
-# token is set but the integration's hooks never saw any maps (e.g. the
-# vite sourcemap setting regressed), Sentry would show minified stack traces —
-# fail loudly here instead of finding out at the next production error.
+# ---- Sentry: validate, upload, and strip browser source maps ----
+# Upload the final Vite output rather than relying on @sentry/astro's build
+# hook, which searches an intermediate directory and can report success without
+# finding dist/_astro. --wait makes processing part of the release gate.
 MAP_COUNT=$(find dist/_astro -name "*.js.map" 2>/dev/null | wc -l | tr -d ' ')
 JS_COUNT=$(find dist/_astro -name "*.js" 2>/dev/null | wc -l | tr -d ' ')
-echo "==> Client maps post-build: ${MAP_COUNT} maps remain for ${JS_COUNT} JS files (0 means uploaded+deleted)"
+echo "==> Client source maps: ${MAP_COUNT} maps for ${JS_COUNT} JavaScript files"
 if [ -n "${SENTRY_AUTH_TOKEN:-}" ] && [ "$JS_COUNT" -gt 0 ]; then
-  if [ "$MAP_COUNT" -gt 0 ]; then
-    echo "ERROR: SENTRY_AUTH_TOKEN is set but ${MAP_COUNT} .js.map files survived the build." >&2
-    echo "       The Sentry integration's filesToDeleteAfterUpload glob did not run —" >&2
-    echo "       check the sentry() option shape in astro.config.mjs (options must be" >&2
-    echo "       top-level, NOT nested under sourceMapsUploadOptions)." >&2
+  if [ "$MAP_COUNT" -ne "$JS_COUNT" ]; then
+    echo "ERROR: Expected one source map per browser JavaScript file, but found" >&2
+    echo "       ${MAP_COUNT} maps for ${JS_COUNT} files. Refusing to publish minified" >&2
+    echo "       bundles that Sentry cannot fully symbolicate." >&2
     exit 1
   fi
-  if ! grep -q "Successfully uploaded source maps to Sentry" "$BUILD_LOG"; then
-    echo "ERROR: SENTRY_AUTH_TOKEN is set but the build log has no sentry-vite-plugin" >&2
-    echo "       upload-success line. The build likely emitted no .js.map files —" >&2
-    echo "       check vite.environments.client.build.sourcemap in astro.config.mjs." >&2
-    echo "       Sentry would show minified stack traces if this shipped." >&2
-    exit 1
-  fi
+
+  echo "==> Uploading browser source maps to Sentry (release ${RELEASE})..."
+  npx @sentry/cli sourcemaps upload \
+    --org "$SENTRY_ORG" \
+    --project "$SENTRY_PROJECT" \
+    --release "$RELEASE" \
+    --dist "$GIT_HASH" \
+    --url-prefix "~/v${VERSION}/_astro" \
+    --validate \
+    --wait \
+    --strict \
+    dist/_astro
 fi
-rm -f "$BUILD_LOG"
-# Defense-in-depth for the no-token path (and any future option-shape drift —
-# the old nested config silently shipped maps to R2 through v0.4.81): client
-# maps must never reach R2. Haybarn worker maps under dist/haybarn/ are
+# Client maps must never reach R2. Haybarn worker maps under dist/haybarn/ are
 # intentionally shipped (staged below) for the DuckDB worker bundles.
 find dist/_astro -name "*.js.map" -delete 2>/dev/null || true
 
@@ -217,10 +211,8 @@ npx wrangler deploy \
   --define "__GIT_HASH__:\"${GIT_HASH}\""
 
 # ---- Sentry: upload worker source maps under the same release as the browser ----
-# Browser maps are uploaded by @sentry/astro during `bun run build` above; this
-# block handles the worker side. The release slug must match exactly what the
-# worker's withSentry() reports at runtime (cupola@VERSION+HASH).
-RELEASE="cupola@${VERSION}+${GIT_HASH}"
+# Browser maps are uploaded after `bun run build` above; this block handles the
+# worker side under the same exact release/dist values.
 if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
   echo "==> Uploading worker source maps to Sentry (release ${RELEASE})..."
   npx @sentry/cli sourcemaps upload \
@@ -228,6 +220,10 @@ if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
     --project "$SENTRY_PROJECT" \
     --release "$RELEASE" \
     --dist "$GIT_HASH" \
+    --url-prefix "~/worker" \
+    --validate \
+    --wait \
+    --strict \
     "$WORKER_OUTDIR"
 else
   echo "==> SENTRY_AUTH_TOKEN not set — skipping worker source map upload."
