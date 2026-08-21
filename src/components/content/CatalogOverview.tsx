@@ -1,4 +1,4 @@
-import { Database, Folder } from "lucide-react";
+import { Database, Folder, Network } from "lucide-react";
 import { getColorForType } from "./CatalogIcons";
 import { ConnectBox } from "@/components/ConnectBox";
 import { useSettings } from "@/lib/settings";
@@ -10,6 +10,7 @@ import { filterDisplayTags, getTag, parseKeywords, TAG_DOC_MD, TAG_TITLE } from 
 import { DescriptionSection } from "./DescriptionSection";
 import { MetaChips } from "./MetaChips";
 import { ProvenanceCard } from "./ProvenanceCard";
+import { Button } from "@/components/ui/button";
 
 interface Props {
   catalog: CatalogData;
@@ -41,9 +42,9 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-6">
+      <div className="flex flex-wrap items-center gap-3 mb-6">
         <Database className="h-8 w-8 text-primary" />
-        <div>
+        <div className="mr-auto">
           <h1 className="text-2xl font-bold text-primary">{title || catalog.catalogName}</h1>
           {title && <p className="text-xs font-mono text-muted-foreground/70">{catalog.catalogName}</p>}
           <p className="text-sm text-muted-foreground">
@@ -52,6 +53,16 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate
             {totalFunctions > 0 && `, ${totalFunctions} functions`}
           </p>
         </div>
+        <Button
+          variant="outline"
+          onClick={() => onNavigate({
+            type: "relationships",
+            name: "relationships",
+            catalog: catalog.catalogName,
+          })}
+        >
+          <Network /> Relationships
+        </Button>
       </div>
 
       {catalog.catalogComment && (

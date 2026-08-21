@@ -11,6 +11,13 @@ import type { Selection } from "./tree";
 export function selectionToHash(selection: Selection | null): string {
   if (!selection || selection.type === "catalog") return "";
   const e = encodeURIComponent;
+  if (selection.type === "relationships") {
+    if (selection.schema && selection.focusTable) {
+      return `#/schema/${e(selection.schema)}/relationships/table/${e(selection.focusTable)}`;
+    }
+    if (selection.schema) return `#/schema/${e(selection.schema)}/relationships`;
+    return "#/relationships";
+  }
   if (selection.type === "schema") return `#/schema/${e(selection.name)}`;
   return `#/schema/${e(selection.schema!)}/${selection.type}/${e(selection.name)}`;
 }
@@ -20,6 +27,20 @@ export function hashToSelection(hash: string): Selection | null {
   if (!hash || hash === "#" || hash === "#/") return null;
   const path = hash.replace(/^#\/?/, "");
   const parts = path.split("/").map(decodeURIComponent);
+
+  if (parts[0] === "relationships" && parts.length === 1) {
+    return { type: "relationships", name: "relationships" };
+  }
+
+  if (parts[0] === "schema" && parts[2] === "relationships") {
+    const schema = parts[1];
+    if (parts.length === 3) {
+      return { type: "relationships", name: "relationships", schema };
+    }
+    if (parts.length === 5 && parts[3] === "table") {
+      return { type: "relationships", name: "relationships", schema, focusTable: parts[4] };
+    }
+  }
 
   // #/schema/{name}
   if (parts[0] === "schema" && parts.length === 2) {
@@ -50,6 +71,13 @@ export function updatePageTitle(selection: Selection | null, catalogName: string
   }
   if (selection.type === "schema") {
     document.title = `${catalogName} / ${selection.name} - VGI`;
+    return;
+  }
+  if (selection.type === "relationships") {
+    const scope = selection.focusTable
+      ? `${selection.schema} / ${selection.focusTable}`
+      : selection.schema || catalogName;
+    document.title = `${scope} relationships - VGI`;
     return;
   }
   document.title = `${catalogName} / ${selection.schema} / ${selection.name} - VGI`;

@@ -29,17 +29,22 @@ export type { TreeDataItem };
 
 /** Selection state for the content panel. */
 export interface Selection {
-  type: "catalog" | "schema" | "table" | "view" | "function" | "macro";
+  type: "catalog" | "schema" | "table" | "view" | "function" | "macro" | "relationships";
   name: string;
   schema?: string;
   /** Catalog name this selection belongs to (e.g. "memory" for in-memory tables). */
   catalog?: string;
+  /** Table to center in the relationship explorer. */
+  focusTable?: string;
 }
 
 /** Convert a Selection back to a tree item ID. */
 export function selectionToTreeId(selection: Selection, catalogName: string): string {
   const cat = selection.catalog ?? catalogName;
   if (selection.type === "catalog") return cat;
+  if (selection.type === "relationships") {
+    return selection.schema ? `${cat}::${selection.schema}` : cat;
+  }
   const schema = selection.schema ?? selection.name;
   if (selection.type === "schema") return `${cat}::${schema}`;
   const prefix = selection.type === "table" ? "t" : selection.type === "view" ? "v" : selection.type === "macro" ? "m" : "f";

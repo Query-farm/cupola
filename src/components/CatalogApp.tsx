@@ -37,6 +37,7 @@ import {
 const DuckDBShell = lazy(() => import("./DuckDBShell").then(m => ({ default: m.DuckDBShell })));
 const SqlEditorView = lazy(() => import("./editor/SqlEditorView").then(m => ({ default: m.SqlEditorView })));
 const ReportsWorkspace = lazy(() => import("./reports/ReportsWorkspace").then(m => ({ default: m.ReportsWorkspace })));
+const CatalogRelationships = lazy(() => import("./content/CatalogRelationships").then(m => ({ default: m.CatalogRelationships })));
 import { AppTabBar, type TabId } from "./AppTabBar";
 import { EngineStatusRibbon } from "./EngineStatusRibbon";
 import { CatalogOverview } from "./content/CatalogOverview";
@@ -882,7 +883,10 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
             still have a layout box to measure against while hidden. */}
         <div className="flex-1 relative overflow-hidden">
           {activeTab === "catalog" && (
-            <main className="absolute inset-0 overflow-y-auto p-3 sm:p-6">
+            <main className={selection?.type === "relationships"
+              ? "absolute inset-0 overflow-hidden"
+              : "absolute inset-0 overflow-y-auto p-3 sm:p-6"}
+            >
               <ErrorBoundary>
                 <ContentPanel data={data} memoryCatalog={memoryCatalog} attachedCatalogs={attachedCatalogs} selection={selection} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={navigate} onOpenShell={() => setActiveTab("shell")} />
               </ErrorBoundary>
@@ -1502,6 +1506,19 @@ function ContentPanel({
       : (selection.catalog
           ? attachedCatalogs?.find((c) => c.catalogName === selection.catalog)
           : undefined) ?? data;
+
+  if (selection.type === "relationships") {
+    return (
+      <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading relationship explorer…</div>}>
+        <CatalogRelationships
+          catalog={catalog}
+          initialSchema={selection.schema}
+          initialFocusTable={selection.focusTable}
+          onNavigate={onNavigate}
+        />
+      </Suspense>
+    );
+  }
 
   const schema = catalog.schemas.find((s) => s.info.name === selection.schema);
   if (!schema) return <CatalogOverview catalog={data} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;

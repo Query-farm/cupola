@@ -36,6 +36,10 @@ export interface ForeignKeyInfo {
   referencedTable: string;
   referencedSchema: string;
   referencedColumns: string[];
+  /** Catalog-qualified targets are possible for attached DuckDB databases. */
+  referencedCatalog?: string;
+  /** Stable database constraint name, when the catalog exposes one. */
+  constraintName?: string;
 }
 
 /** Fully resolved schema with its tables, views, and functions. */
@@ -56,8 +60,9 @@ export interface CatalogData {
   schemas: ResolvedSchema[];
 }
 
-interface TableWithColumnInfo extends TableInfo {
+interface TableWithMetadataOverrides extends TableInfo {
   _columnInfo?: ColumnInfo[];
+  _foreignKeys?: ForeignKeyInfo[];
 }
 
 // URL-param accessors moved to lib/url-params.ts. Re-exported here so existing
@@ -68,7 +73,7 @@ export { getServiceUrl, hasExplicitService, getAttachOptionsFromUrl } from "./ur
  *  Also supports a pre-built _columnInfo override (used for in-memory tables). */
 export function getColumns(table: TableInfo): ColumnInfo[] {
   // Check for pre-built column info (e.g., from DuckDB memory tables)
-  const override = (table as TableWithColumnInfo)._columnInfo;
+  const override = (table as TableWithMetadataOverrides)._columnInfo;
   if (Array.isArray(override)) return override;
 
   try {
@@ -98,6 +103,9 @@ export {
 
 /** Parse foreign key constraints from a TableInfo. */
 export function getForeignKeys(table: TableInfo): ForeignKeyInfo[] {
+  const override = (table as TableWithMetadataOverrides)._foreignKeys;
+  if (Array.isArray(override)) return override;
+
   try {
     return (table.foreign_key_constraints ?? []).map((bytes) => {
       const batch = deserializeBatch(bytes);

@@ -23,6 +23,8 @@ import {
 import { DescriptionSection } from "./DescriptionSection";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 import { ObjectMeta } from "./ObjectMeta";
+import { Network } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 interface Props {
   schema: ResolvedSchema;
@@ -96,7 +98,25 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
 
   return (
     <div>
-      <Breadcrumb catalogName={catalogName ?? ""} itemName={schemaName} itemType="schema" onNavigate={onNavigate} />
+      <Breadcrumb
+        catalogName={catalogName ?? ""}
+        itemName={schemaName}
+        itemType="schema"
+        onNavigate={onNavigate}
+        trailing={
+          <Button
+            variant="outline"
+            onClick={() => onNavigate({
+              type: "relationships",
+              name: "relationships",
+              schema: schemaName,
+              catalog: catalogName,
+            })}
+          >
+            <Network /> Relationships
+          </Button>
+        }
+      />
 
       {title && <h1 className="text-xl font-semibold mt-1 mb-1">{title}</h1>}
 

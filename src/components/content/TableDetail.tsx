@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { Key, Link2, ShieldCheck } from "lucide-react";
+import { Key, Link2, Network, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { TableInfo } from "vgi/client";
 import { getColumns, getForeignKeys, fetchColumnStats, type ForeignKeyInfo, type ColumnStats } from "@/lib/service";
@@ -12,6 +12,7 @@ import { filterDisplayTags, getTag, parseExecutableExamples, TAG_DOC_MD, TAG_EXA
 import { DescriptionSection } from "./DescriptionSection";
 import { ObjectMeta } from "./ObjectMeta";
 import { TableQueryButton } from "./TableQueryButton";
+import { Button } from "@/components/ui/button";
 
 interface Props {
   table: TableInfo;
@@ -73,7 +74,23 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell }: Pro
         itemName={table.name}
         itemType="table"
         onNavigate={onNavigate}
-        trailing={<TableQueryButton sql={defaultSql} onOpenShell={onOpenShell} withMenu />}
+        trailing={
+          <span className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => onNavigate?.({
+                type: "relationships",
+                name: "relationships",
+                schema: table.schema_name,
+                catalog: catalogName,
+                focusTable: table.name,
+              })}
+            >
+              <Network /> Relationships
+            </Button>
+            <TableQueryButton sql={defaultSql} onOpenShell={onOpenShell} withMenu />
+          </span>
+        }
       />
 
       {title && <h1 className="text-xl font-semibold mt-1 mb-1">{title}</h1>}
@@ -117,6 +134,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell }: Pro
                   type: "table",
                   name: fk.referencedTable,
                   schema: fk.referencedSchema,
+                  catalog: fk.referencedCatalog ?? catalogName,
                 })}
               >
                 <Link2 className="h-3 w-3 text-primary/60" />

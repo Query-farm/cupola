@@ -13,7 +13,7 @@
  * for that).
  */
 import { esc, readRows } from "./duckdb-query";
-import type { CatalogData, ColumnInfo, ResolvedSchema } from "./service";
+import type { CatalogData, ColumnInfo, ForeignKeyInfo, ResolvedSchema } from "./service";
 import type {
   FunctionInfo,
   MacroInfo,
@@ -43,7 +43,16 @@ function toStringArray(v: unknown): string[] {
   return [];
 }
 
-type AttachedTableInfo = TableInfo & { _columnInfo: ColumnInfo[] };
+function toNumberArray(v: unknown): number[] {
+  return toStringArray(v)
+    .map(Number)
+    .filter((value) => Number.isInteger(value) && value >= 0);
+}
+
+type AttachedTableInfo = TableInfo & {
+  _columnInfo: ColumnInfo[];
+  _foreignKeys: ForeignKeyInfo[];
+};
 type AttachedViewInfo = ViewInfo & { _columnInfo: ColumnInfo[] };
 type AttachedFunctionInfo = FunctionInfo & {
   _parameters: string[];
@@ -78,7 +87,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
   const dbLit = `'${esc(databaseName)}'`;
 
   // Parallel metadata fetches — none depend on each other.
-  const [schemaRows, tableRows, viewRows, columnRows, functionRows] = await Promise.all([
+  const [schemaRows, tableRows, viewRows, columnRows, functionRows, constraintRows] = await Promise.all([
     readRows(
       `SELECT schema_name, comment FROM duckdb_schemas() WHERE database_name = ${dbLit} AND NOT internal ORDER BY schema_name`
     ),
@@ -100,6 +109,14 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
       `SELECT schema_name, function_name, function_type, description, comment, parameters, parameter_types, return_type, macro_definition
        FROM duckdb_functions() WHERE database_name = ${dbLit} ORDER BY schema_name, function_name`
     ),
+    readRows(
+      `SELECT schema_name, table_name, constraint_type, constraint_text,
+              constraint_column_indexes, constraint_column_names, constraint_name,
+              referenced_table, referenced_column_names
+       FROM duckdb_constraints()
+       WHERE database_name = ${dbLit}
+       ORDER BY schema_name, table_name, constraint_index`
+    ).catch(() => []),
   ]);
 
   // Schema name → resolved slot. Seed with schemas from duckdb_schemas() so
@@ -161,14 +178,69 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
   const emptyColumns = new Uint8Array(0);
   const emptyFkBytes: Uint8Array[] = [];
 
+  interface ConstraintMetadata {
+    notNull: number[];
+    unique: number[][];
+    primaryKey: number[][];
+    checks: string[];
+    foreignKeys: ForeignKeyInfo[];
+  }
+  const constraintsByTable = new Map<string, ConstraintMetadata>();
+  const getConstraints = (schema: string, table: string): ConstraintMetadata => {
+    const key = `${schema}.${table}`;
+    let constraints = constraintsByTable.get(key);
+    if (!constraints) {
+      constraints = { notNull: [], unique: [], primaryKey: [], checks: [], foreignKeys: [] };
+      constraintsByTable.set(key, constraints);
+    }
+    return constraints;
+  };
+
+  for (const row of constraintRows ?? []) {
+    const schema = String(row.schema_name ?? "");
+    const table = String(row.table_name ?? "");
+    if (!schema || !table) continue;
+    const metadata = getConstraints(schema, table);
+    const type = String(row.constraint_type ?? "").toUpperCase();
+    const indexes = toNumberArray(row.constraint_column_indexes);
+    if (type === "NOT NULL") {
+      metadata.notNull.push(...indexes);
+    } else if (type === "PRIMARY KEY" && indexes.length > 0) {
+      metadata.primaryKey.push(indexes);
+    } else if (type === "UNIQUE" && indexes.length > 0) {
+      metadata.unique.push(indexes);
+    } else if (type === "CHECK") {
+      const text = String(row.constraint_text ?? "").trim();
+      if (text) metadata.checks.push(text);
+    } else if (type === "FOREIGN KEY") {
+      const referencedRaw = String(row.referenced_table ?? "");
+      if (!referencedRaw) continue;
+      // DuckDB currently reports the unqualified target for ordinary FKs, but
+      // preserve schema-qualified values if a catalog extension supplies one.
+      const targetParts = referencedRaw.split(".").map((part) => part.replace(/^"|"$/g, ""));
+      const referencedTable = targetParts.pop() ?? referencedRaw;
+      const referencedSchema = targetParts.pop() ?? schema;
+      const referencedCatalog = targetParts.pop();
+      metadata.foreignKeys.push({
+        columns: toStringArray(row.constraint_column_names),
+        referencedTable,
+        referencedSchema,
+        referencedColumns: toStringArray(row.referenced_column_names),
+        ...(referencedCatalog ? { referencedCatalog } : {}),
+        ...(row.constraint_name ? { constraintName: String(row.constraint_name) } : {}),
+      });
+    }
+  }
+
   for (const row of tableRows ?? []) {
     const schemaName = String(row.schema_name ?? "");
     if (!schemaName) continue;
     const name = String(row.table_name ?? "");
     const comment = row.comment == null ? null : String(row.comment);
     const cols = colsByTable.get(`${schemaName}.${name}`) ?? [];
-    const notNullConstraints: number[] = [];
-    cols.forEach((c, idx) => { if (!c.nullable) notNullConstraints.push(idx); });
+    const metadata = getConstraints(schemaName, name);
+    const notNullConstraints = new Set(metadata.notNull);
+    cols.forEach((c, idx) => { if (!c.nullable) notNullConstraints.add(idx); });
 
     // `columns` is normally a serialized Arrow schema. We leave it as an
     // empty Uint8Array and rely on the `_columnInfo` override path in
@@ -187,10 +259,10 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
       comment,
       tags: {},
       columns: emptyColumns,
-      not_null_constraints: notNullConstraints,
-      unique_constraints: [],
-      check_constraints: [],
-      primary_key_constraints: [],
+      not_null_constraints: [...notNullConstraints].sort((a, b) => a - b),
+      unique_constraints: metadata.unique,
+      check_constraints: metadata.checks,
+      primary_key_constraints: metadata.primaryKey,
       foreign_key_constraints: emptyFkBytes,
       supports_insert: false,
       supports_update: false,
@@ -198,6 +270,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
       supports_returning: false,
       supports_column_statistics: false,
       required_filters: [],
+      _foreignKeys: metadata.foreignKeys,
       _columnInfo: cols.map((c) => ({
         name: c.name,
         arrowType: c.duckdbType,
