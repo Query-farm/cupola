@@ -226,6 +226,9 @@ export function initShell(
   // Arrow IPC payloads travel as plain ArrayBuffers end to end (see the copy
   // in duckdb-worker-boot's runQueryWrapped); this holds one verbatim.
   let lastArrowBuffer: ArrayBuffer | null = null;
+  // Kept beside the buffer so a later `.perspective` can report the exact
+  // statement that produced an Arrow payload Perspective could not load.
+  let lastQuerySql: string | null = null;
 
   /** Handle the VGI extension's interactive OAuth popup request. Opens a
    *  popup window, waits for oauth-callback.html to post the real code back
@@ -670,6 +673,7 @@ export function initShell(
           set outputMode(m) { outputMode = m; },
           lastTable,
           lastArrowBuffer,
+          lastQuerySql,
           currentWasmVersion,
         };
         const shellIO: ShellIO = { writeln, serviceUrl: config.serviceUrl, runQueryAsync, tableFromIPC, downloadFile };
@@ -735,6 +739,7 @@ export function initShell(
       } else if (result.arrowBuffers && result.arrowBuffers.length > 0) {
         try {
           lastArrowBuffer = result.arrowBuffers[0];
+          lastQuerySql = trimmed;
           const table = tableFromIPC(lastArrowBuffer);
           lastTable = table;
           const fields = table.schema.fields;

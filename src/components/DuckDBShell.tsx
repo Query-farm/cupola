@@ -20,6 +20,7 @@ import { ShellBootScreen } from "./ShellBootScreen";
 import * as Sentry from "@sentry/astro";
 import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { initShell } from "@/lib/shell-init";
+import { describePerspectiveArrowInput } from "@/lib/perspective-diagnostics";
 
 import type { CatalogData } from "@/lib/service";
 import type { TableInfo, ViewInfo } from "vgi/client";
@@ -207,14 +208,18 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
 
   // Expose a callback for the shell to trigger Perspective view
   useEffect(() => {
-    ui.showPerspective = async (arrowBuffer: ArrayBuffer) => {
+    ui.showPerspective = async (arrowBuffer: ArrayBuffer, context) => {
       setActiveTab("perspective");
       setPerspectiveLoading(true);
       try {
-        await loadPerspective(perspectiveRef.current!, arrowBuffer);
+        await loadPerspective(perspectiveRef.current!, arrowBuffer, {
+          path: context?.source ?? "showPerspective",
+          sql: context?.sql,
+        });
       } catch (e: unknown) {
-        console.error("Perspective load error:", e);
-        Sentry.captureException(e, { tags: { component: "perspective", path: "showPerspective" } });
+        // loadPerspective logs and captures the failure with the Arrow schema
+        // and originating SQL. Keep this boundary from producing a duplicate
+        // Sentry event.
       } finally {
         setPerspectiveLoading(false);
       }
@@ -785,27 +790,57 @@ async function ensurePerspectiveLoaded(): Promise<void> {
   }
 }
 
-export async function loadPerspective(container: HTMLElement, arrowBuffer: ArrayBuffer) {
-  await ensurePerspectiveLoaded();
+export interface PerspectiveLoadContext {
+  /** Which UI path handed this payload to Perspective (editor, shell, report). */
+  path: string;
+  /** Exact SQL which produced the payload, when the caller has it. */
+  sql?: string;
+}
 
-  // Create or reuse the viewer element
-  let viewer = container.querySelector("perspective-viewer") as any;
-  if (!viewer) {
-    viewer = document.createElement("perspective-viewer");
-    viewer.setAttribute("theme", "Pro Light");
-    viewer.style.width = "100%";
-    viewer.style.height = "100%";
-    container.appendChild(viewer);
+export async function loadPerspective(
+  container: HTMLElement,
+  arrowBuffer: ArrayBuffer,
+  context: PerspectiveLoadContext = { path: "unknown" },
+) {
+  const arrow = describePerspectiveArrowInput(arrowBuffer);
+
+  try {
+    await ensurePerspectiveLoaded();
+
+    // Create or reuse the viewer element
+    let viewer = container.querySelector("perspective-viewer") as any;
+    if (!viewer) {
+      viewer = document.createElement("perspective-viewer");
+      viewer.setAttribute("theme", "Pro Light");
+      viewer.style.width = "100%";
+      viewer.style.height = "100%";
+      container.appendChild(viewer);
+    }
+
+    // Load Arrow data. This MUST be a real copy, not a view: perspective's
+    // table() may take ownership of (and detach) the buffer it is handed, and
+    // the caller's buffer is the shell's cached `lastArrowBuffer`, which
+    // `.preview` and a second `.perspective` still need to read.
+    // `new Uint8Array(someArrayBuffer)` aliases rather than copies, so allocate
+    // and set explicitly.
+    const copy = new Uint8Array(arrowBuffer.byteLength);
+    copy.set(new Uint8Array(arrowBuffer));
+    const table = await perspectiveWorker.table(copy.buffer);
+    await viewer.load(table);
+  } catch (error: unknown) {
+    const exception = error instanceof Error ? error : new Error(String(error));
+    const diagnosticContext = { source: context.path, sql: context.sql, arrow };
+    console.error("Perspective load error:", exception, diagnosticContext);
+    Sentry.captureException(exception, {
+      tags: { component: "perspective", path: context.path },
+      extra: {
+        sql: context.sql,
+        arrow,
+        // Preserve the complete schema in one searchable field even when
+        // Sentry's nested-object normalization depth is configured shallowly.
+        arrowSchemaJson: JSON.stringify(arrow.fields ?? []),
+      },
+    });
+    throw exception;
   }
-
-  // Load Arrow data. This MUST be a real copy, not a view: perspective's
-  // table() may take ownership of (and detach) the buffer it is handed, and
-  // the caller's buffer is the shell's cached `lastArrowBuffer`, which
-  // `.preview` and a second `.perspective` still need to read.
-  // `new Uint8Array(someArrayBuffer)` aliases rather than copies, so allocate
-  // and set explicitly.
-  const copy = new Uint8Array(arrowBuffer.byteLength);
-  copy.set(new Uint8Array(arrowBuffer));
-  const table = await perspectiveWorker.table(copy.buffer);
-  await viewer.load(table);
 }

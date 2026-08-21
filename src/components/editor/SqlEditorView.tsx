@@ -316,8 +316,8 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, pendingS
     // buffer (the Uint8Array view may be a subarray of a larger allocation).
     const ipc = tableToIPC(table, "file");
     const ab = ipc.buffer.slice(ipc.byteOffset, ipc.byteOffset + ipc.byteLength) as ArrayBuffer;
-    ui.showPerspective(ab);
-  }, [activeResult.table]);
+    ui.showPerspective(ab, { sql: activeResult.sourceSql, source: "editor" });
+  }, [activeResult.table, activeResult.sourceSql]);
 
   // Copy a share link for the active tab. The link carries the connection
   // context (service + ATTACH options) so the recipient lands on the same

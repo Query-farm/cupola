@@ -12,6 +12,8 @@ export interface ShellState {
   lastTable: any;
   /** Raw Arrow IPC bytes of the last result, as delivered by QueryResult. */
   lastArrowBuffer: ArrayBuffer | null;
+  /** SQL statement which produced lastArrowBuffer. */
+  lastQuerySql: string | null;
   currentWasmVersion: string;
 }
 
@@ -123,7 +125,7 @@ export async function handleDotCommand(trimmed: string, state: ShellState, io: S
     if (!state.lastArrowBuffer) {
       writeln("No result to view. Run a query first.", "31");
     } else {
-      ui.showPerspective?.(state.lastArrowBuffer);
+      ui.showPerspective?.(state.lastArrowBuffer, { sql: state.lastQuerySql ?? undefined, source: "shell" });
       writeln("Switched to Perspective viewer", "32");
     }
     return true;

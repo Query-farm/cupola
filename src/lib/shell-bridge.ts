@@ -156,7 +156,7 @@ export const ui = {
   onAttachedCatalogsChanged: null as (() => Promise<void>) | null,
   navigateToSelection: null as ((sel: Selection) => void) | null,
 
-  showPerspective: null as ((arrowBuf: ArrayBuffer) => void) | null,
+  showPerspective: null as ((arrowBuf: ArrayBuffer, context?: { sql?: string; source?: string }) => void) | null,
   /** Open the last shell result (Arrow IPC) in the Data Viewer tab. Invoked by
    *  the `.preview` dot-command. */
   showPreview: null as ((arrowBuf: ArrayBuffer) => void) | null,
