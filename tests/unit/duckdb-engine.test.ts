@@ -32,10 +32,10 @@ describe("SHELL_EXTENSIONS", () => {
 
   test("vgi installs the pinned build from the community repo", () => {
     const vgi = SHELL_EXTENSIONS.find((e) => e.name === "vgi");
-    expect(VGI_EXTENSION_VERSION).toBe("34655e01c6");
+    expect(VGI_EXTENSION_VERSION).toBe("c2f8dbb071");
     expect(vgi).toMatchObject({ source: "community", version: VGI_EXTENSION_VERSION });
     expect(extensionInstallSql(vgi!)).toBe(
-      "INSTALL vgi FROM community VERSION '34655e01c6'"
+      "INSTALL vgi FROM community VERSION 'c2f8dbb071'"
     );
   });
 

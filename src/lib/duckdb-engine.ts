@@ -28,10 +28,10 @@ export interface DuckDBExtension {
 }
 
 /**
- * VGI build published for Haybarn v1.5.5 on 2026-08-18.
- * Full extension commit: 34655e01c646e3d3b8da9df3ace01779f3ad66e9.
+ * VGI build published for Haybarn v1.5.5 on 2026-08-22.
+ * Full extension commit: c2f8dbb071f287228581c036f091c320a67c73e0.
  */
-export const VGI_EXTENSION_VERSION = "34655e01c6";
+export const VGI_EXTENSION_VERSION = "c2f8dbb071";
 
 /**
  * Extensions the shell installs and loads at startup, in order.
