@@ -20,7 +20,7 @@ import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps }
 import { attachInputHandlers, type CompletionItem } from "./shell-input";
 import { engine, terminal, ui, notifyQueryChange, recordQuery, setBootPhase, setEngineLifecycleError } from "./shell-bridge";
 import { quoteLiteral, quoteIdent } from "./duckdb-query";
-import { SHELL_EXTENSIONS, recordExtensionLoaded } from "./duckdb-engine";
+import { SHELL_EXTENSIONS, extensionInstallSql, recordExtensionLoaded } from "./duckdb-engine";
 import { QueryResultCache } from "./query-results";
 import { isRecoverableAuthError, isUnrecoverableAuthError } from "./auth-errors";
 import { getOAuthMeta, redirectToAuth } from "./auth";
@@ -425,8 +425,7 @@ export function initShell(
       for (const ext of SHELL_EXTENSIONS) {
         writeln(`Loading ${ext.name} extension...`, "33");
         setBootPhase(`Loading ${ext.name} extension`, null, "attaching");
-        const fromClause = ext.source ? ` FROM ${ext.source}` : "";
-        const install = await engine.query!(`INSTALL ${ext.name}${fromClause}`);
+        const install = await engine.query!(extensionInstallSql(ext));
         if (!install.ok) {
           const msg = `INSTALL ${ext.name} failed: ${install.error ?? ""}`;
           if (ext.required) {

@@ -21,9 +21,17 @@ export interface DuckDBExtension {
   name: string;
   /** FROM clause for INSTALL — omitted for core extensions. */
   source?: string;
+  /** Immutable extension build directory in the Haybarn repository. */
+  version?: string;
   /** The shell cannot function without it; failure aborts the boot flow. */
   required?: boolean;
 }
+
+/**
+ * VGI build published for Haybarn v1.5.5 on 2026-08-18.
+ * Full extension commit: 34655e01c646e3d3b8da9df3ace01779f3ad66e9.
+ */
+export const VGI_EXTENSION_VERSION = "34655e01c6";
 
 /**
  * Extensions the shell installs and loads at startup, in order.
@@ -36,7 +44,12 @@ export const SHELL_EXTENSIONS: readonly DuckDBExtension[] = [
   { name: "icu" },
   { name: "json" },
   { name: "httpfs" },
-  { name: "vgi", source: "community", required: true },
+  {
+    name: "vgi",
+    source: "community",
+    version: VGI_EXTENSION_VERSION,
+    required: true,
+  },
   { name: "iceberg" },
   { name: "spatial" },
   { name: "ducklake" },
@@ -44,6 +57,13 @@ export const SHELL_EXTENSIONS: readonly DuckDBExtension[] = [
   // completion and the SQL editor's CodeMirror completion source.
   { name: "autocomplete" },
 ];
+
+/** Build the explicit INSTALL statement used during shell startup. */
+export function extensionInstallSql(extension: DuckDBExtension): string {
+  const fromClause = extension.source ? ` FROM ${extension.source}` : "";
+  const versionClause = extension.version ? ` VERSION '${extension.version}'` : "";
+  return `INSTALL ${extension.name}${fromClause}${versionClause}`;
+}
 
 /** Runtime facts about the engine, as observed rather than assumed. */
 export interface EngineInfo {

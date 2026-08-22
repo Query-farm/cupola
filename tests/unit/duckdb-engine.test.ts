@@ -13,6 +13,8 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import {
   SHELL_EXTENSIONS,
+  VGI_EXTENSION_VERSION,
+  extensionInstallSql,
   recordExtensionLoaded,
   recordDuckDBVersion,
   getEngineInfo,
@@ -28,8 +30,19 @@ describe("SHELL_EXTENSIONS", () => {
     expect(required).toEqual(["vgi"]);
   });
 
-  test("vgi installs from the community repo", () => {
-    expect(SHELL_EXTENSIONS.find((e) => e.name === "vgi")?.source).toBe("community");
+  test("vgi installs the pinned build from the community repo", () => {
+    const vgi = SHELL_EXTENSIONS.find((e) => e.name === "vgi");
+    expect(VGI_EXTENSION_VERSION).toBe("34655e01c6");
+    expect(vgi).toMatchObject({ source: "community", version: VGI_EXTENSION_VERSION });
+    expect(extensionInstallSql(vgi!)).toBe(
+      "INSTALL vgi FROM community VERSION '34655e01c6'"
+    );
+  });
+
+  test("core extensions keep their unversioned INSTALL syntax", () => {
+    expect(extensionInstallSql(SHELL_EXTENSIONS.find((e) => e.name === "icu")!)).toBe(
+      "INSTALL icu"
+    );
   });
 
   test("includes the extensions other subsystems depend on", () => {

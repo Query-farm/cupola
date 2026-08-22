@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { VGI_EXTENSION_VERSION } from "@/lib/duckdb-engine";
 
 interface Props {
   catalogName: string;
@@ -37,6 +38,7 @@ const LANGS: { id: LangId; label: string }[] = [
  */
 function buildSnippets(catalogName: string, serviceUrl: string, opts: string) {
   const optsFragment = opts ? `, ${opts}` : "";
+  const installVgi = `INSTALL vgi FROM community VERSION '${VGI_EXTENSION_VERSION}'`;
   const attach = `ATTACH '${catalogName}' AS ${catalogName} (TYPE vgi, LOCATION '${serviceUrl}'${optsFragment});`;
   // Same statement inside a host-language string literal. The SQL uses single
   // quotes throughout, so double-quoting the host string needs no escaping.
@@ -44,7 +46,7 @@ function buildSnippets(catalogName: string, serviceUrl: string, opts: string) {
 
   return {
     duckdb: [
-      "INSTALL vgi FROM community;",
+      `${installVgi};`,
       "LOAD vgi;",
       "",
       attach,
@@ -57,7 +59,7 @@ function buildSnippets(catalogName: string, serviceUrl: string, opts: string) {
       "import haybarn",
       "",
       "con = haybarn.connect()",
-      'con.execute("INSTALL vgi FROM community")',
+      `con.execute("${installVgi}")`,
       'con.execute("LOAD vgi")',
       `con.execute("${attachInline}")`,
       "",
@@ -71,7 +73,7 @@ function buildSnippets(catalogName: string, serviceUrl: string, opts: string) {
       'const instance = await DuckDBInstance.create(":memory:");',
       "const connection = await instance.connect();",
       "",
-      'await connection.run("INSTALL vgi FROM community");',
+      `await connection.run("${installVgi}");`,
       'await connection.run("LOAD vgi");',
       `await connection.run("${attachInline}");`,
       "",
@@ -115,7 +117,7 @@ interface Rule { t: TokType; re: RegExp; call?: true }
 const RULES: Record<LangId, Rule[]> = {
   duckdb: [
     { t: "string", re: /'[^']*'|"[^"]*"/y },
-    { t: "keyword", re: /\b(?:INSTALL|LOAD|ATTACH|AS|TYPE|LOCATION|FROM|SHOW|ALL|TABLES|SELECT|WHERE|LIMIT|ORDER|BY|GROUP)\b/iy },
+    { t: "keyword", re: /\b(?:INSTALL|LOAD|ATTACH|AS|TYPE|LOCATION|FROM|VERSION|SHOW|ALL|TABLES|SELECT|WHERE|LIMIT|ORDER|BY|GROUP)\b/iy },
     { t: "num", re: /\d+(?:\.\d+)?/y },
     { t: "punct", re: /[(){}[\].,;:=]/y },
   ],
