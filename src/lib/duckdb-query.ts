@@ -102,6 +102,16 @@ export function tableToRows(table: Table): Record<string, any>[] {
   return rows;
 }
 
+// Well-known symbol apache-arrow tags its BigNum wrapper prototype with
+// (util/bn.mjs: `Symbol.for('isArrowBigNum')`) — DECIMAL/HUGEINT/UHUGEINT
+// columns' `.get()` returns one of these (BN.decimal(...)), not a primitive
+// bigint. Matching on the registered symbol avoids importing the class.
+const ARROW_BIGNUM_SYMBOL = Symbol.for("isArrowBigNum");
+
+function isArrowBigNum(v: unknown): v is { toString(): string } {
+  return v != null && typeof v === "object" && (v as any)[ARROW_BIGNUM_SYMBOL] === true;
+}
+
 /** Convert an Arrow scalar to a JSON-safe / JS-friendly form.
  *
  *  - BigInt → Number when within MAX_SAFE_INTEGER, otherwise String.
@@ -109,6 +119,12 @@ export function tableToRows(table: Table): Record<string, any>[] {
  *    throws on BigInt, and Vega's expression engine refuses arithmetic
  *    on it. Numbers above 2^53 lose precision — stringifying preserves
  *    the exact value at the cost of typeof === "string".
+ *  - Arrow BigNum (DECIMAL/HUGEINT/UHUGEINT columns) → same treatment,
+ *    routed through the BigInt branch. Unlike a primitive bigint,
+ *    `Number(bigNum)` *throws* a TypeError instead of losing precision
+ *    once the value exceeds MAX_SAFE_INTEGER (its valueOf/Symbol.toPrimitive
+ *    calls apache-arrow's bigIntToNumber, which rejects unsafe values) —
+ *    `.toString()` is the only conversion on it that never throws.
  *  - Date → epoch ms. Same reasoning: Vega and most consumers prefer
  *    numeric timestamps.
  *  - Arrays / plain objects → recursively coerce (struct columns).
@@ -123,6 +139,7 @@ export function coerceArrowValue(v: any): any {
     if (v > MAX_SAFE || v < MIN_SAFE) return v.toString();
     return Number(v);
   }
+  if (isArrowBigNum(v)) return coerceArrowValue(BigInt(v.toString()));
   if (v instanceof Date) return v.getTime();
   if (Array.isArray(v)) return v.map(coerceArrowValue);
   if (typeof v === "object" && v.constructor === Object) {

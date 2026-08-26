@@ -1,3 +1,5 @@
+import { safeNumber } from "./numeric";
+
 export interface SparklineDatum {
   value: number;
   row: Record<string, any>;
@@ -65,10 +67,8 @@ export function selectSparklineHeadline(
 /** Build a normalized 100×32 sparkline from rows in query-result order. */
 export function buildSparklineSeries(rows: Record<string, any>[], valueColumn: string): SparklineSeries {
   const data = rows.flatMap((row) => {
-    const raw = row[valueColumn];
-    if (raw == null || raw === "" || typeof raw === "boolean") return [];
-    const value = Number(raw);
-    return Number.isFinite(value) ? [{ value, row }] : [];
+    const value = safeNumber(row[valueColumn]);
+    return value != null ? [{ value, row }] : [];
   });
   if (data.length === 0) return { data, points: "", areaPoints: "", latest: null };
   const min = Math.min(...data.map((datum) => datum.value));

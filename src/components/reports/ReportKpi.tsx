@@ -1,15 +1,10 @@
 import type { ReportKpiBlock } from "@/lib/reports/types";
+import { safeNumber as finiteNumber } from "@/lib/reports/numeric";
 
 interface Props {
   block: ReportKpiBlock;
   row?: Record<string, any>;
   formatValue: (value: unknown, format?: ReportKpiBlock["format"]) => string;
-}
-
-function finiteNumber(value: unknown): number | null {
-  if (value == null || value === "" || typeof value === "boolean") return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
 }
 
 function positionWithinRange(value: number, low: number, high: number): number {

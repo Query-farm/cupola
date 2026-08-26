@@ -10,6 +10,7 @@ import type { CatalogData } from "@/lib/service";
 import { engine, getEngineLifecycleSnapshot, ui, waitForEngineReady } from "@/lib/shell-bridge";
 import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { decodeArrowBuffer, tableToRows } from "@/lib/duckdb-query";
+import { safeNumber } from "@/lib/reports/numeric";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 import { ChatMessageAssistant, type ContentBlock, type ToolCallEntry } from "@/components/chat/ChatMessageAssistant";
 import { ChatMessageUser } from "@/components/chat/ChatMessageUser";
@@ -276,8 +277,8 @@ function nextY(report: ReportDocumentV1): number {
 function formatKpi(value: unknown, format?: "number" | "currency" | "percent" | "text"): string {
   if (value == null) return "—";
   if (format === "text") return String(value);
-  const number = Number(value);
-  if (!Number.isFinite(number)) return String(value);
+  const number = safeNumber(value);
+  if (number == null) return String(value);
   if (format === "currency") return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(number);
   if (format === "percent") return new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 }).format(number);
   return new Intl.NumberFormat().format(number);

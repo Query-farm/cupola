@@ -1,4 +1,5 @@
 import { wkbToGeoJSON } from "@/lib/wkb";
+import { safeNumber } from "./numeric";
 import type { ReportMapBlock } from "./types";
 
 export interface ReportMapFeature {
@@ -36,11 +37,9 @@ export function buildReportMapFeatures(rows: Record<string, any>[], block: Repor
     let geometry: Record<string, any> | null = null;
     if (block.geometryColumn) geometry = asGeometry(row[block.geometryColumn]);
     else if (block.latitudeColumn && block.longitudeColumn) {
-      const rawLatitude = row[block.latitudeColumn];
-      const rawLongitude = row[block.longitudeColumn];
-      const latitude = rawLatitude === null || rawLatitude === undefined || rawLatitude === "" ? Number.NaN : Number(rawLatitude);
-      const longitude = rawLongitude === null || rawLongitude === undefined || rawLongitude === "" ? Number.NaN : Number(rawLongitude);
-      if (Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
+      const latitude = safeNumber(row[block.latitudeColumn]);
+      const longitude = safeNumber(row[block.longitudeColumn]);
+      if (latitude != null && longitude != null && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
         geometry = { type: "Point", coordinates: [longitude, latitude] };
       }
     }
