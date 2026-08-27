@@ -693,3 +693,89 @@ test("renders a declarative Leaflet map from query coordinates", async ({ page }
   await expect(map.getByText("New York", { exact: false })).toBeVisible();
   expect(await map.evaluate((element) => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
 });
+
+// Regression coverage for the BigNum crash fixed in coerceArrowValue
+// (src/lib/duckdb-query.ts): DuckDB HUGEINT/UHUGEINT/DECIMAL columns arrive
+// from Arrow as an object-wrapped BigNum (BN.decimal(...)), not a primitive
+// bigint. Number(bigNum) *throws* instead of losing precision once the value
+// exceeds Number.MAX_SAFE_INTEGER — a real production report crashed a KPI
+// block on exactly this (Sentry: "2200620179644536746 is not safe to convert
+// to a number"). This runs the real DuckDB-WASM engine end to end (no mocked
+// Arrow objects) so it exercises the actual coercion path, not a stand-in.
+test("renders KPI and sparkline blocks over oversized HUGEINT/UHUGEINT/DECIMAL values without crashing", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.getByTestId("tab-reports").click();
+  const now = Date.now();
+  // All four values exceed Number.MAX_SAFE_INTEGER (2^53-1); huge_value
+  // reuses the exact value from the Sentry report.
+  const report = {
+    schemaVersion: 1,
+    id: "bignum-example",
+    title: "Oversized integer example",
+    createdAt: now,
+    updatedAt: now,
+    revision: 1,
+    requiredSources: [],
+    parameters: [],
+    datasets: [
+      {
+        id: "bignum_kpi",
+        name: "Bignum KPI row",
+        sql: "SELECT CAST(2200620179644536746 AS HUGEINT) AS huge_value, CAST(0 AS HUGEINT) AS low_bound, CAST(9223372036854775807 AS UHUGEINT) AS high_bound, CAST(4611686018427387904 AS DECIMAL(38,0)) AS target_value",
+      },
+      {
+        id: "bignum_series",
+        name: "Bignum series",
+        sql: "SELECT * FROM (VALUES (1, CAST(1000000000000000 AS HUGEINT)), (2, CAST(2200620179644536746 AS HUGEINT)), (3, CAST(9223372036854775807 AS HUGEINT))) AS t(seq, huge_value) ORDER BY seq",
+      },
+    ],
+    blocks: [
+      {
+        id: "bignum-kpi",
+        type: "kpi",
+        datasetId: "bignum_kpi",
+        title: "Huge value",
+        valueColumn: "huge_value",
+        format: "text",
+        lowColumn: "low_bound",
+        highColumn: "high_bound",
+        targetColumn: "target_value",
+        rangeLabel: "Range",
+        layout: { x: 0, y: 0, w: 4, h: 2 },
+      },
+      {
+        id: "bignum-sparkline",
+        type: "sparkline",
+        datasetId: "bignum_series",
+        title: "Huge trend",
+        valueColumn: "huge_value",
+        labelColumn: "seq",
+        layout: { x: 4, y: 0, w: 3, h: 2 },
+      },
+    ],
+  };
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "bignum.cupola-report.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(report)),
+  });
+  await page.getByTestId("reports-run").click();
+
+  // format: "text" round-trips the value verbatim through coerceArrowValue's
+  // string fallback — this also confirms no precision was silently lost.
+  const kpi = page.getByTestId("report-block-bignum-kpi");
+  await expect(kpi.getByTestId("report-kpi-value")).toHaveText("2200620179644536746", { timeout: T_NORMAL });
+  await expect(kpi.getByTestId("report-kpi-range")).toBeVisible();
+
+  const sparkline = page.getByTestId("report-block-bignum-sparkline");
+  await expect(sparkline.getByTestId("report-sparkline")).toBeVisible({ timeout: T_NORMAL });
+  await expect(sparkline.locator("svg polyline")).toBeVisible();
+
+  await expect(page.getByText("Something went wrong")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
