@@ -129,6 +129,11 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   const rootRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const perspectiveRef = useRef<HTMLDivElement>(null);
+  // Set by `ui.showPerspective` right before it switches to the Perspective
+  // tab to show a specific query/shell snapshot. Consumed by the
+  // sidebar-driven virtual-server auto-load effect below, on the one render
+  // where that tab switch actually happens — see the effect for why.
+  const perspectiveSnapshotEntryRef = useRef(false);
   const { settings } = useSettings();
   // Overlay visibility is driven by engine.bootPhase, not by external-script
   // loading. The DuckDB worker boot (downloading WASM, spinning up pthreads,
@@ -193,6 +198,11 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   // Expose a callback for the shell to trigger Perspective view
   useEffect(() => {
     ui.showPerspective = async (arrowBuffer: ArrayBuffer, context) => {
+      // Mark this as an explicit snapshot open *before* switching tabs, so
+      // the sidebar-driven virtual-server effect below can tell "the tab
+      // switched to Perspective because of this call" apart from "the user
+      // clicked the Perspective tab" — see that effect for why it matters.
+      perspectiveSnapshotEntryRef.current = true;
       setActiveTab("perspective");
       setPerspectiveLoading(true);
       try {
@@ -318,7 +328,28 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
 
   // Auto-load Perspective virtual server when tab is active and a table is selected
   const perspectiveTableRef = useRef<string | null>(null);
+  // Tracks the previous activeTab so the guard below can tell "the tab just
+  // switched to Perspective" apart from "we were already here and the
+  // sidebar selection changed" — only the former can be a snapshot open.
+  const perspectivePrevTabRef = useRef<TabId | null>(null);
   useEffect(() => {
+    const enteringPerspectiveTab = perspectivePrevTabRef.current !== "perspective" && activeTab === "perspective";
+    perspectivePrevTabRef.current = activeTab;
+
+    if (enteringPerspectiveTab && perspectiveSnapshotEntryRef.current) {
+      // We landed on the Perspective tab because the editor's "Open in
+      // Perspective" (or the shell's `.perspective`) explicitly loaded a
+      // query/shell result — not because the user picked a sidebar table.
+      // Selecting a table earlier while browsing elsewhere shouldn't cause
+      // that snapshot to be silently swapped out for the sidebar table the
+      // instant this tab becomes active. A sidebar selection made *after*
+      // arriving here (handled below, since it changes `selection`) still
+      // switches to the virtual server as normal.
+      perspectiveSnapshotEntryRef.current = false;
+      return;
+    }
+    perspectiveSnapshotEntryRef.current = false;
+
     if (activeTab !== "perspective" || !selectedTable) return;
     // Every catalog source now exposes `schema_name` (VGI wire format; the
     // memory + attached builders match it). The active selection always has it
