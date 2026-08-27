@@ -8,7 +8,7 @@
  * (e.g. the empty-result handling, the dynamic-vs-static import) had to be
  * repeated N times. These helpers are the only correct way to decode.
  */
-import { tableFromIPC, type Table } from "@query-farm/apache-arrow";
+import { tableFromIPC, RecordBatchFileReader, Table } from "@query-farm/apache-arrow";
 import { engine } from "./shell-bridge";
 
 /** SQL-escape a string for inlining into a literal. DuckDB uses SQL-standard
@@ -51,6 +51,24 @@ export function quoteIdent(name: string): string {
  *  Uint8Array views some paths carry. */
 export function decodeArrowBuffer(buf: ArrayBuffer | Uint8Array): Table {
   return tableFromIPC(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+}
+
+/** `tableFromIPC` that preserves dictionary batches.
+ *
+ *  Arrow's plain `tableFromIPC` doesn't populate dictionary data from the IPC
+ *  *file* format, which is what DuckDB returns — DICTIONARY-encoded columns
+ *  (e.g. low-cardinality VARCHAR) come back with empty values. Reading the
+ *  record batches explicitly and constructing the Table keeps them. Falls back
+ *  to the plain path for anything the file reader can't parse. */
+export function tableFromIPCWithDictionaries(buf: ArrayBuffer | Uint8Array): Table {
+  try {
+    const reader = RecordBatchFileReader.from(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
+    const batches = [...reader];
+    if (batches.length === 0) return tableFromIPC(buf);
+    return new Table(batches);
+  } catch {
+    return tableFromIPC(buf);
+  }
 }
 
 /** Run SQL and decode the result to an Apache Arrow `Table`. Returns null if

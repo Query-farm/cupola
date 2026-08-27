@@ -13,7 +13,9 @@ import { treeIdToShellText } from "@/lib/tree";
 import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
 import { getAuthToken, getAuthTokenForService } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
-import { tableFromIPC, RecordBatchFileReader, Table as ArrowTable } from "@query-farm/apache-arrow";
+import { tableFromIPC, Table as ArrowTable } from "@query-farm/apache-arrow";
+import { tableFromIPCWithDictionaries } from "@/lib/duckdb-query";
+import { coerceArrowBufferForPerspective } from "@/lib/perspective-bignum-coerce";
 import { engine, terminal, ui, setBootPhase, setEngineLifecycleError } from "@/lib/shell-bridge";
 import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { ShellBootScreen } from "./ShellBootScreen";
@@ -84,24 +86,6 @@ const CDN_CSS = "https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css";
 // dictionary-aware reader below is now built from the single bundled
 // @query-farm/apache-arrow instead.
 const READLINE_CDN = "https://cdn.jsdelivr.net/npm/xterm-readline@1.1.2/+esm";
-
-/** `tableFromIPC` that preserves dictionary batches.
- *
- *  Arrow's plain `tableFromIPC` doesn't populate dictionary data from the IPC
- *  *file* format, which is what DuckDB returns — DICTIONARY-encoded columns
- *  (e.g. low-cardinality VARCHAR) come back with empty values. Reading the
- *  record batches explicitly and constructing the Table keeps them. Falls back
- *  to the plain path for anything the file reader can't parse. */
-function tableFromIPCWithDictionaries(buf: ArrayBuffer | Uint8Array): ArrowTable {
-  try {
-    const reader = RecordBatchFileReader.from(buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf);
-    const batches = [...reader];
-    if (batches.length === 0) return tableFromIPC(buf);
-    return new ArrowTable(batches);
-  } catch {
-    return tableFromIPC(buf);
-  }
-}
 
 let scriptsLoaded = false;
 let scriptsLoading: Promise<void> | null = null;
@@ -823,8 +807,14 @@ export async function loadPerspective(
     // `.preview` and a second `.perspective` still need to read.
     // `new Uint8Array(someArrayBuffer)` aliases rather than copies, so allocate
     // and set explicitly.
-    const copy = new Uint8Array(arrowBuffer.byteLength);
-    copy.set(new Uint8Array(arrowBuffer));
+    //
+    // DuckDB's lossless Arrow export represents HUGEINT/UHUGEINT/oversized
+    // DECIMAL as raw-bytes extension columns Perspective's static loader
+    // can't ingest (see perspective-bignum-coerce.ts) — flatten those to
+    // Float64 first. A no-op (same buffer back) for ordinary result sets.
+    const coerced = coerceArrowBufferForPerspective(arrowBuffer);
+    const copy = new Uint8Array(coerced.byteLength);
+    copy.set(new Uint8Array(coerced));
     const table = await perspectiveWorker.table(copy.buffer);
     await viewer.load(table);
   } catch (error: unknown) {

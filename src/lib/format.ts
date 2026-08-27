@@ -753,8 +753,10 @@ function getTimezoneOffsetSeconds(tzName: string, utcDays: number, utcHour: numb
 // DuckDB Arrow extension type helpers (arrow_lossless_conversion=true)
 // ============================================================================
 
-/** Extract DuckDB type name from Arrow extension metadata. */
-function getDuckDBExtensionType(field: any): string | null {
+/** Extract DuckDB type name from Arrow extension metadata.
+ *  Exported for `perspective-bignum-coerce.ts`, which needs the same
+ *  detection to intercept these columns before they reach Perspective. */
+export function getDuckDBExtensionType(field: any): string | null {
   try {
     const extMeta = field.metadata?.get?.("ARROW:extension:metadata");
     if (extMeta) {
@@ -776,8 +778,9 @@ function formatFloat(value: number, sigFigs: number): string {
   return s;
 }
 
-/** Read a 16-byte FixedSizeBinary as a signed or unsigned 128-bit BigInt. */
-function readInt128(bytes: Uint8Array, signed: boolean): bigint {
+/** Read a 16-byte FixedSizeBinary as a signed or unsigned 128-bit BigInt.
+ *  Exported for `perspective-bignum-coerce.ts` (see `getDuckDBExtensionType`). */
+export function readInt128(bytes: Uint8Array, signed: boolean): bigint {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, 16);
   const lo = dv.getBigUint64(0, true);
   const hi = dv.getBigUint64(8, true);
@@ -975,17 +978,18 @@ function formatNestedValue(val: any): string {
   return String(val);
 }
 
-/** Format DuckDB's BIGNUM binary format to a decimal string.
+/** Decode DuckDB's BIGNUM/VARINT binary format to a BigInt.
  *  Header (3 bytes): byte[0] bit 7 = sign (0=negative, 1=positive),
  *  remaining 23 bits = data byte count.
- *  Data bytes: big-endian magnitude. For negative, bytes are bitwise inverted. */
-function formatBignum(bytes: Uint8Array): string {
-  if (bytes.length < 3) return "0";
+ *  Data bytes: big-endian magnitude. For negative, bytes are bitwise inverted.
+ *  Exported for `perspective-bignum-coerce.ts` (see `getDuckDBExtensionType`). */
+export function bignumBytesToBigInt(bytes: Uint8Array): bigint {
+  if (bytes.length < 3) return 0n;
   const HEADER_SIZE = 3;
   const isPositive = (bytes[0] & 0x80) !== 0;
   // Data byte count from header (23 bits: 7 bits of byte[0] + byte[1] + byte[2])
   const dataSize = ((bytes[0] & 0x7F) << 16) | (bytes[1] << 8) | bytes[2];
-  if (dataSize === 0) return "0";
+  if (dataSize === 0) return 0n;
 
   // Extract magnitude bytes (big-endian). For negative, invert each byte.
   let magnitude = BigInt(0);
@@ -995,7 +999,12 @@ function formatBignum(bytes: Uint8Array): string {
     magnitude = (magnitude << 8n) | BigInt(b);
   }
 
-  return isPositive ? magnitude.toString() : "-" + magnitude.toString();
+  return isPositive ? magnitude : -magnitude;
+}
+
+/** Format DuckDB's BIGNUM/VARINT binary format to a decimal string. */
+function formatBignum(bytes: Uint8Array): string {
+  return bignumBytesToBigInt(bytes).toString();
 }
 
 /** Format a 16-byte FixedSizeBinary as a signed or unsigned 128-bit integer string. */
