@@ -130,5 +130,17 @@ find "$DEST" -name '*.d.ts' -delete
 # client maps before the R2 sync anyway.
 find "$DEST" -name '*.map' -delete
 
+# Every bundle above still ends in `//# sourceMappingURL=<name>.js.map`, and
+# the browser devtools fetch that map unconditionally the moment the script
+# loads — regardless of whether the app itself ever references it. Deleting
+# the .map without stripping the comment just turns "no source map" into a
+# 404 in the console on every Perspective load. sourceMappingURL is always
+# the last line of these bundles. (Not `xargs`: macOS xargs has no
+# `-r`/no-run-if-empty, so an empty file list would invoke sed once with no
+# file argument and it would hang reading stdin.)
+for f in $(grep -rl 'sourceMappingURL' "$DEST" --include='*.js' 2>/dev/null); do
+    sed -i '' -e '/^\/\/# sourceMappingURL=/d' "$f"
+done
+
 echo "==> Done. $(find "$DEST" -type f | wc -l | tr -d ' ') files, $(du -sh "$DEST" | cut -f1)"
 find "$DEST" -type f -name '*.js' -o -type f -name '*.wasm' -o -type f -name '*.css' | sort | sed "s|$DEST|  public/perspective|"

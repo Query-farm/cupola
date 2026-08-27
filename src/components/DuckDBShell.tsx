@@ -15,7 +15,7 @@ import { getAuthToken, getAuthTokenForService } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
 import { tableFromIPC, Table as ArrowTable } from "@query-farm/apache-arrow";
 import { tableFromIPCWithDictionaries } from "@/lib/duckdb-query";
-import { coerceArrowBufferForPerspective } from "@/lib/perspective-bignum-coerce";
+import { coerceArrowBufferForPerspective } from "@/lib/perspective-extension-coerce";
 import { engine, terminal, ui, setBootPhase, setEngineLifecycleError } from "@/lib/shell-bridge";
 import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { ShellBootScreen } from "./ShellBootScreen";
@@ -839,10 +839,10 @@ export async function loadPerspective(
     // `new Uint8Array(someArrayBuffer)` aliases rather than copies, so allocate
     // and set explicitly.
     //
-    // DuckDB's lossless Arrow export represents HUGEINT/UHUGEINT/oversized
-    // DECIMAL as raw-bytes extension columns Perspective's static loader
-    // can't ingest (see perspective-bignum-coerce.ts) — flatten those to
-    // Float64 first. A no-op (same buffer back) for ordinary result sets.
+    // DuckDB's lossless Arrow export wraps HUGEINT/UHUGEINT/oversized
+    // DECIMAL/BIT/TIME_TZ/UUID in canonical Arrow extension types Perspective's
+    // static loader aborts on (see perspective-extension-coerce.ts) — neutralize
+    // those first. A no-op (same buffer back) for ordinary result sets.
     const coerced = coerceArrowBufferForPerspective(arrowBuffer);
     const copy = new Uint8Array(coerced.byteLength);
     copy.set(new Uint8Array(coerced));

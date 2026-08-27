@@ -660,8 +660,9 @@ function formatInterval(value: any): string {
   return parts.join(" ") + " " + timeStr;
 }
 
-/** Format DuckDB BIT extension type — first byte is padding count (bits to skip at start). */
-function formatBitString(bytes: Uint8Array): string {
+/** Format DuckDB BIT extension type — first byte is padding count (bits to skip at start).
+ *  Exported for `perspective-extension-coerce.ts` (see `getDuckDBExtensionType`). */
+export function formatBitString(bytes: Uint8Array): string {
   if (bytes.length < 2) return "";
   const padding = bytes[0];
   let bits = "";
@@ -1027,8 +1028,9 @@ function formatTzOffset(offsetSecs: number): string {
 
 /** Format an 8-byte FixedSizeBinary as DuckDB's TIME WITH TIME ZONE.
  *  DuckDB packs time_tz as: bits[63:24] = microseconds, bits[23:0] = offset_encoded
- *  where offset_encoded = 57599 - offset_seconds (so UTC+00 = 57599, max = 115198) */
-function formatFixedBinaryTimeTz(bytes: Uint8Array): string {
+ *  where offset_encoded = 57599 - offset_seconds (so UTC+00 = 57599, max = 115198)
+ *  Exported for `perspective-extension-coerce.ts` (see `getDuckDBExtensionType`). */
+export function formatFixedBinaryTimeTz(bytes: Uint8Array): string {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, 8);
   const raw = dv.getBigUint64(0, true);
   const micros = Number(raw >> 24n);
@@ -1036,8 +1038,9 @@ function formatFixedBinaryTimeTz(bytes: Uint8Array): string {
   return `${formatTimeValue(micros, "us", false)}${formatTzOffset(offsetSecs)}`;
 }
 
-/** Format a 16-byte FixedSizeBinary as a UUID string. */
-function formatUUID(bytes: Uint8Array): string {
+/** Format a 16-byte FixedSizeBinary as a UUID string.
+ *  Exported for `perspective-extension-coerce.ts` (see `getDuckDBExtensionType`). */
+export function formatUUID(bytes: Uint8Array): string {
   const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
