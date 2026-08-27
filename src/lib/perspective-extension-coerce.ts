@@ -38,22 +38,28 @@
  * ingestion so arrow-cpp never sees the extension wrapper at all:
  * hugeint/uhugeint/bignum/varint flatten to `Float64` (matching the virtual
  * server), bit/time_tz/uuid flatten to a formatted `Utf8` string (matching
- * how the grid already displays them), and anything else carrying
- * `ARROW:extension:name` (geoarrow.* geometry, `arrow.bool8`, or an
- * extension this function doesn't specifically recognize) simply has the
- * extension tag stripped, leaving its underlying storage type — the C++
- * loader already handles plain Binary/Boolean/etc. columns, just not their
- * extension-wrapped form.
+ * how the grid already displays them), `arrow.bool8` flattens to a native
+ * Arrow `Bool` (its storage is a plain Int8 — 0/1, one full byte per value,
+ * per DuckDB's own extension registration — so simply stripping its tag like
+ * the fallback below would leave it as an *integer* column, not a boolean
+ * one), and anything else carrying `ARROW:extension:name` (geoarrow.*
+ * geometry, or an extension this function doesn't specifically recognize)
+ * simply has the extension tag stripped, leaving its underlying storage
+ * type — the C++ loader already handles plain Binary/etc. columns, just not
+ * their extension-wrapped form.
  */
-import { Field, Float64, RecordBatch, Schema, Struct, Table, Utf8, makeData, tableToIPC, vectorFromArray } from "@query-farm/apache-arrow";
+import { Bool, Field, Float64, RecordBatch, Schema, Struct, Table, Utf8, makeData, tableToIPC, vectorFromArray } from "@query-farm/apache-arrow";
 import { tableFromIPCWithDictionaries } from "./duckdb-query";
 import { bignumBytesToBigInt, formatBitString, formatFixedBinaryTimeTz, formatUUID, getDuckDBExtensionType, readInt128 } from "./format";
 
 /** How to neutralize one extension-tagged field so arrow-cpp reads it as a
  *  plain type instead of `arrow::ExtensionType`. */
 type ExtensionAction =
-  | { kind: "float64"; decode: (bytes: Uint8Array) => number }
-  | { kind: "string"; decode: (bytes: Uint8Array) => string }
+  | { kind: "float64"; decode: (raw: Uint8Array) => number }
+  | { kind: "string"; decode: (raw: Uint8Array) => string }
+  // arrow.bool8's storage is a plain Int8 (0/1), so `column.get()` hands back
+  // a number here, not raw bytes like the other kinds.
+  | { kind: "bool"; decode: (raw: number) => boolean }
   // Metadata-only: keep the field's existing physical type and values,
   // just drop the two ARROW:extension:* keys.
   | { kind: "strip" };
@@ -87,10 +93,11 @@ function classifyExtensionField(field: any): ExtensionAction | null {
   if (typeName === "bit") return { kind: "string", decode: formatBitString };
   if (typeName === "time_tz") return { kind: "string", decode: formatFixedBinaryTimeTz };
   if (typeName === "uuid" || extName === "arrow.uuid") return { kind: "string", decode: formatUUID };
+  if (extName === "arrow.bool8") return { kind: "bool", decode: (raw) => raw !== 0 };
 
-  // arrow.bool8, or any extension this function doesn't specifically
-  // recognize (a future DuckDB/Arrow addition) — strip and pass the
-  // underlying storage bytes through unchanged.
+  // Any extension this function doesn't specifically recognize (a future
+  // DuckDB/Arrow addition) — strip and pass the underlying storage bytes
+  // through unchanged.
   return { kind: "strip" };
 }
 
@@ -115,7 +122,7 @@ export function coerceArrowBufferForPerspective(arrowBuffer: ArrayBuffer): Array
     // walks chunk boundaries transparently), keyed by column index. Only
     // "float64"/"string" actions need decoded values — "strip" just needs
     // its field's metadata cleared, tracked separately below.
-    const valueOverrides = new Map<number, { type: Float64 | Utf8; values: (number | string | null)[] }>();
+    const valueOverrides = new Map<number, { type: Float64 | Utf8 | Bool; values: (number | string | boolean | null)[] }>();
     const stripOnly = new Set<number>();
     const changedNames: string[] = [];
 
@@ -133,12 +140,13 @@ export function coerceArrowBufferForPerspective(arrowBuffer: ArrayBuffer): Array
       const column = table.getChildAt(i);
       if (!column) continue;
 
-      const values: (number | string | null)[] = new Array(table.numRows);
+      const values: (number | string | boolean | null)[] = new Array(table.numRows);
       for (let row = 0; row < table.numRows; row++) {
         const raw = column.get(row);
-        values[row] = raw == null ? null : action.decode(raw as Uint8Array);
+        values[row] = raw == null ? null : (action.decode as (raw: any) => number | string | boolean)(raw);
       }
-      valueOverrides.set(i, { type: action.kind === "float64" ? new Float64() : new Utf8(), values });
+      const type = action.kind === "float64" ? new Float64() : action.kind === "bool" ? new Bool() : new Utf8();
+      valueOverrides.set(i, { type, values });
       changedNames.push(`${field.name} (${action.kind})`);
     }
 

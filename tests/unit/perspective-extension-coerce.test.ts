@@ -12,7 +12,7 @@
  * See the module doc comment for the full chain.
  */
 import { test, expect, describe } from "bun:test";
-import { Binary, Field, FixedSizeBinary, RecordBatch, Schema, Struct, Table, Utf8, makeData, tableFromIPC, tableToIPC, vectorFromArray, type Vector } from "@query-farm/apache-arrow";
+import { Binary, Field, FixedSizeBinary, Int8, RecordBatch, Schema, Struct, Table, Utf8, makeData, tableFromIPC, tableToIPC, vectorFromArray, type Vector } from "@query-farm/apache-arrow";
 
 const { coerceArrowBufferForPerspective } = await import("../../src/lib/perspective-extension-coerce");
 
@@ -257,9 +257,31 @@ describe("coerceArrowBufferForPerspective", () => {
     expect(decoded.getChild("geom")!.get(0)).toEqual(wkb);
   });
 
-  test("unrecognized extension (e.g. arrow.bool8) is untagged, storage type and values unchanged", () => {
+  test("arrow.bool8 column is flattened to a native Bool, not left as a raw 0/1 integer", () => {
+    // DuckDB registers arrow.bool8 with Arrow C Data Interface format "c"
+    // (Int8) — one full byte per value, not Arrow's native bit-packed Bool —
+    // so leaving it as its bare storage type would show as an integer
+    // column in Perspective instead of a boolean one.
     const schema = new Schema([
-      new Field("flag", new FixedSizeBinary(1), true, new Map([["ARROW:extension:name", "arrow.bool8"]])),
+      new Field("active", new Int8(), true, new Map([["ARROW:extension:name", "arrow.bool8"]])),
+    ]);
+    const activeVector = vectorFromArray([1, 0, null], new Int8());
+    const buffer = tableToBuffer(buildTable(schema, [activeVector]));
+
+    const decoded = tableFromIPC(new Uint8Array(coerceArrowBufferForPerspective(buffer)));
+    const field = decoded.schema.fields.find((f) => f.name === "active")!;
+    expect(field.type.toString()).toBe("Bool");
+    expect(field.metadata.get("ARROW:extension:name")).toBeUndefined();
+
+    const column = decoded.getChild("active")!;
+    expect(column.get(0)).toBe(true);
+    expect(column.get(1)).toBe(false);
+    expect(column.get(2)).toBe(null);
+  });
+
+  test("an extension name this function doesn't recognize is untagged, storage type and values unchanged", () => {
+    const schema = new Schema([
+      new Field("flag", new FixedSizeBinary(1), true, new Map([["ARROW:extension:name", "arrow.some_future_type"]])),
     ]);
     const flagVector = vectorFromArray([new Uint8Array([1])], new FixedSizeBinary(1));
     const buffer = tableToBuffer(buildTable(schema, [flagVector]));
