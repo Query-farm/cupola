@@ -848,6 +848,23 @@ export async function loadPerspective(
     copy.set(new Uint8Array(coerced));
     const table = await perspectiveWorker.table(copy.buffer);
     await viewer.load(table);
+
+    // Perspective defaults to showing every column when no config is
+    // restored, which overwhelms a wide query result — mirror the
+    // virtual-server path's own no-primary-key default (`DuckDBShell.tsx`'s
+    // other Perspective effect: "start with just the first column to avoid
+    // overwhelming the grid") so a static snapshot starts minimal too. The
+    // static path renames nothing (unlike the virtual server's `_`->`-`
+    // column mapping), so the raw Arrow field name is also Perspective's
+    // column name here. Best-effort: a restore/config hiccup shouldn't turn
+    // a successful data load into a reported failure.
+    try {
+      const firstColumn = arrow.fields?.[0]?.name;
+      if (firstColumn) await viewer.restore({ columns: [firstColumn] });
+      await viewer.toggleConfig(true);
+    } catch (restoreError: unknown) {
+      console.warn("Perspective default-config restore failed (data still loaded):", restoreError);
+    }
   } catch (error: unknown) {
     const exception = error instanceof Error ? error : new Error(String(error));
     const diagnosticContext = { source: context.path, sql: context.sql, arrow };
