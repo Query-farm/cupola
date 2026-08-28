@@ -9,6 +9,16 @@
 # ViewTraversal in src/lib/perspective-duckdb-handler.ts depends on. None of
 # that exists upstream, so the artifacts must be built from the fork.
 #
+# Also builds the Memory64 server binary (perspective-server.memory64.wasm)
+# alongside the default wasm32 one. `perspective.cdn.ts` already registers
+# both and prefers wasm64 whenever the host supports it (Chrome 133+, Firefox
+# 134+ by default; Safari has no shipped support as of this writing), falling
+# back to wasm32 otherwise — so this raises the heap ceiling from 4GB to 16GB
+# for large result sets on supporting browsers with no behavior change
+# anywhere else. Before this, cupola never built the memory64 variant at all,
+# so every browser silently ran wasm32 regardless of what it could support —
+# see the "malloc of size 2147483648 failed" class of failure this fixes.
+#
 # Usage:  ./build-perspective.sh [--stage-only] [path-to-perspective-checkout]
 #
 #   --stage-only   Skip the build and just re-copy the existing dist/ output.
@@ -65,6 +75,12 @@ if [ "$STAGE_ONLY" -eq 0 ]; then
     # `metadata` must come first — the client build depends on its output.
     export PACKAGE="metadata,server,client,viewer,viewer-datagrid,viewer-charts"
 
+    # Any value other than unset/"only" builds BOTH wasm32 and wasm64 server
+    # binaries (rust/perspective-server/build.mjs) — "only" would skip wasm32
+    # entirely, which we still need as the fallback for hosts without
+    # Memory64 support.
+    export PSP_WASM64=1
+
     echo "==> Building"
     (
         cd "$PSP_SRC"
@@ -108,6 +124,17 @@ cp "$PSP_SRC/rust/perspective-js/dist/wasm/perspective-js.wasm"           "$DEST
 
 # @perspective-dev/server — reached via the cdn->wasm rewrite above.
 cp "$PSP_SRC/rust/perspective-server/dist/wasm/perspective-server.wasm"   "$DEST/server/dist/wasm/"
+
+# Memory64 variant, if this build produced one (PSP_WASM64 above, or a prior
+# full build when re-staging with --stage-only). perspective.cdn.ts fetches
+# this by convention; a missing file here is not an error — the client falls
+# back to the wasm32 binary above with a console warning, same as if
+# PSP_WASM64 had never been set.
+if [ -f "$PSP_SRC/rust/perspective-server/dist/wasm/perspective-server.memory64.wasm" ]; then
+    cp "$PSP_SRC/rust/perspective-server/dist/wasm/perspective-server.memory64.wasm" "$DEST/server/dist/wasm/"
+else
+    echo "==> No perspective-server.memory64.wasm produced — staging wasm32 only (host will fall back to it regardless)"
+fi
 
 # @perspective-dev/viewer — cdn/ + wasm/ (incl. wasm-bindgen snippets).
 cp "$PSP_SRC/rust/perspective-viewer/dist/cdn/perspective-viewer.js"      "$DEST/viewer/dist/cdn/"
