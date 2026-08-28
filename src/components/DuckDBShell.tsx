@@ -892,12 +892,27 @@ export async function loadPerspective(
     // which rendered with every column as its fallback — so a `columns`
     // restore that fails must retry with an unrestricted one rather than
     // silently leaving the viewer blank.
+    //
+    // `restore()` is a PARTIAL update (perspective-client's ViewConfigUpdate:
+    // every field is `Option<Vec<_>>`, and an omitted key means "leave
+    // unchanged", not "reset") — and this viewer element is reused across
+    // unrelated queries (see "Create or reuse the viewer element" above), so
+    // a sort/group-by/filter/expression left over from an *earlier* query's
+    // schema silently survives onto this one. If the new query doesn't have
+    // that column, Perspective's `validate_names` rejects the restore with
+    // "Unknown column ... in field `sort`" (or group_by/filter/etc) even
+    // though this call never mentions that field — including on the
+    // unrestricted fallback below, which is why it used to fail identically.
+    // Explicitly resetting every column-referencing key makes each static
+    // snapshot start from a truly clean slate regardless of what a prior,
+    // unrelated query left configured.
+    const RESET_VIEW_CONFIG = { group_by: [], split_by: [], sort: [], filter: [], expressions: {}, windows: {}, aggregates: {} };
     const firstColumn = arrow.fields?.[0]?.name;
     try {
-      await viewer.restore({ table: tableName, columns: firstColumn ? [firstColumn] : undefined });
+      await viewer.restore({ ...RESET_VIEW_CONFIG, table: tableName, columns: firstColumn ? [firstColumn] : undefined });
     } catch (restoreError: unknown) {
       console.warn("Perspective default-column restore failed, falling back to all columns:", restoreError);
-      await viewer.restore({ table: tableName });
+      await viewer.restore({ ...RESET_VIEW_CONFIG, table: tableName });
     }
     // Opening the config panel is a nicety, not load-bearing — don't let a
     // hiccup here turn an otherwise-successful data load into a reported failure.
