@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { tableFromArrays, tableToIPC } from "@query-farm/apache-arrow";
+import { tableFromArrays, tableFromIPC, tableToIPC } from "@query-farm/apache-arrow";
 import { describePerspectiveArrowInput } from "../../src/lib/perspective-diagnostics";
 
 describe("Perspective Arrow diagnostics", () => {
@@ -41,6 +41,16 @@ describe("Perspective Arrow diagnostics", () => {
     const serialized = JSON.stringify(diagnostics);
     expect(serialized).not.toContain("private-account-value");
     expect(serialized).not.toContain("must-not-be-recorded");
+  });
+
+  test("a pre-parsed table (loadPerspective's shared-parse path) produces identical diagnostics", () => {
+    const table = tableFromArrays({ n: [1, 2, 3] });
+    const bytes = tableToIPC(table, "file");
+
+    const fromBuffer = describePerspectiveArrowInput(bytes);
+    const fromPreParsed = describePerspectiveArrowInput(bytes, tableFromIPC(bytes));
+
+    expect(fromPreParsed).toEqual(fromBuffer);
   });
 
   test("still describes malformed IPC without throwing", () => {

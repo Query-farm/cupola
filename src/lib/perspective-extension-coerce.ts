@@ -108,14 +108,18 @@ function classifyExtensionField(field: any): ExtensionAction | null {
  * (same reference) when no such columns are present — the common case — so
  * callers pay no re-serialization cost for ordinary result sets.
  *
+ * Pass `preParsedTable` when the caller has already decoded the buffer
+ * dictionary-safely for another purpose (`loadPerspective` builds diagnostics
+ * from the same parse) to skip the second full IPC decode.
+ *
  * Never throws: a decode/rebuild failure logs a warning and falls back to the
  * original buffer, since a crash-prone Perspective load is worse than one
  * that shows a raw or reformatted column, and a totally broken load is worse
  * than either.
  */
-export function coerceArrowBufferForPerspective(arrowBuffer: ArrayBuffer): ArrayBuffer {
+export function coerceArrowBufferForPerspective(arrowBuffer: ArrayBuffer, preParsedTable?: Table): ArrayBuffer {
   try {
-    const table = tableFromIPCWithDictionaries(arrowBuffer);
+    const table = preParsedTable ?? tableFromIPCWithDictionaries(arrowBuffer);
     const fields = table.schema.fields;
 
     // Decode each matching column across the whole table up front (Vector.get

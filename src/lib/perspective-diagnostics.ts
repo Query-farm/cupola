@@ -4,7 +4,7 @@
  * We intentionally record the schema and shape, but never inspect or serialize
  * row values. SQL is supplied separately by the caller when it is available.
  */
-import { tableFromIPC, type Field } from "@query-farm/apache-arrow";
+import { tableFromIPC, type Field, type Table } from "@query-farm/apache-arrow";
 
 export interface PerspectiveArrowFieldDiagnostics {
   index: number;
@@ -55,9 +55,16 @@ function describeField(field: Field, index: number): PerspectiveArrowFieldDiagno
 
 /** Describe enough of an Arrow payload to reproduce type-loader failures.
  * Never includes cell values. Malformed IPC still produces buffer-level
- * diagnostics plus the Arrow decoder error. */
+ * diagnostics plus the Arrow decoder error.
+ *
+ * Pass `preParsedTable` when the caller has already decoded the buffer for
+ * another purpose (`loadPerspective` parses once for
+ * `coerceArrowBufferForPerspective` and reuses that table here) — this
+ * function never inspects values, only schema shape, so it's indifferent to
+ * which decode produced the table. Skips the second full IPC parse. */
 export function describePerspectiveArrowInput(
   buffer: ArrayBuffer | Uint8Array,
+  preParsedTable?: Table,
 ): PerspectiveArrowDiagnostics {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
   const isFile = bytes.byteLength >= 6
@@ -70,7 +77,7 @@ export function describePerspectiveArrowInput(
   };
 
   try {
-    const table = tableFromIPC(bytes);
+    const table = preParsedTable ?? tableFromIPC(bytes);
     diagnostics.decoded = true;
     diagnostics.rowCount = table.numRows;
     diagnostics.batchCount = table.batches.length;

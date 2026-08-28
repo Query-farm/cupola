@@ -116,6 +116,20 @@ describe("coerceArrowBufferForPerspective", () => {
     expect(result).toBe(buffer);
   });
 
+  test("a pre-parsed table (loadPerspective's shared-parse path) skips the internal re-parse but produces identical output", () => {
+    const schema = new Schema([
+      new Field("total", new FixedSizeBinary(16), true, opaqueMetadata("hugeint")),
+    ]);
+    const totalVector = vectorFromArray([int128Bytes(42n)], new FixedSizeBinary(16));
+    const buffer = tableToBuffer(buildTable(schema, [totalVector]));
+
+    const fromInternalParse = coerceArrowBufferForPerspective(buffer);
+    const fromPreParsed = coerceArrowBufferForPerspective(buffer, tableFromIPC(new Uint8Array(buffer)));
+
+    expect(tableFromIPC(new Uint8Array(fromPreParsed)).getChild("total")!.get(0)).toBe(42);
+    expect(fromPreParsed.byteLength).toBe(fromInternalParse.byteLength);
+  });
+
   test("HUGEINT column is flattened to Float64, values preserved within safe range", () => {
     const schema = new Schema([
       new Field("id", new Utf8(), true),

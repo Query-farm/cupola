@@ -823,7 +823,19 @@ export async function loadPerspective(
   arrowBuffer: ArrayBuffer,
   context: PerspectiveLoadContext = { path: "unknown" },
 ) {
-  const arrow = describePerspectiveArrowInput(arrowBuffer);
+  // Parse once, dictionary-safely, and share it below with both diagnostics
+  // and extension-column coercion — each used to parse the same buffer
+  // separately (one via plain tableFromIPC, one via the dictionary-safe
+  // variant), doubling the decode cost on every Perspective load. Diagnostics
+  // only reads schema shape, which is identical either way. A parse failure
+  // here isn't reported yet — describePerspectiveArrowInput's own try/catch
+  // re-parses and reports the decode error, and a still-malformed buffer
+  // surfaces through perspectiveWorker.table() below same as before.
+  let parsedTable: ArrowTable | undefined;
+  try {
+    parsedTable = tableFromIPCWithDictionaries(arrowBuffer);
+  } catch { /* see describePerspectiveArrowInput call below */ }
+  const arrow = describePerspectiveArrowInput(arrowBuffer, parsedTable);
 
   try {
     await ensurePerspectiveLoaded();
@@ -849,7 +861,7 @@ export async function loadPerspective(
     // DECIMAL/BIT/TIME_TZ/UUID in canonical Arrow extension types Perspective's
     // static loader aborts on (see perspective-extension-coerce.ts) — neutralize
     // those first. A no-op (same buffer back) for ordinary result sets.
-    const coerced = coerceArrowBufferForPerspective(arrowBuffer);
+    const coerced = coerceArrowBufferForPerspective(arrowBuffer, parsedTable);
     const copy = new Uint8Array(coerced.byteLength);
     copy.set(new Uint8Array(coerced));
 
