@@ -771,6 +771,12 @@ let perspectiveWorker: any = null;
 let perspectiveClient: any = null;
 /** In-memory cache of Perspective viewer configs keyed by tableId (catalog.schema.table). */
 const perspectiveConfigCache = new Map<string, any>();
+/** The Table most recently loaded by loadPerspective's static-snapshot path,
+ *  so it can be `.delete()`d before the next one replaces it — `viewer.load`
+ *  no longer takes ownership of a Table the way the deprecated `load(table)`
+ *  overload implied, so nothing else frees it. */
+let currentStaticPerspectiveTable: any = null;
+let staticPerspectiveTableCounter = 0;
 
 /** Load Perspective CSS and scripts (idempotent). */
 async function ensurePerspectiveLoaded(): Promise<void> {
@@ -846,8 +852,20 @@ export async function loadPerspective(
     const coerced = coerceArrowBufferForPerspective(arrowBuffer);
     const copy = new Uint8Array(coerced.byteLength);
     copy.set(new Uint8Array(coerced));
-    const table = await perspectiveWorker.table(copy.buffer);
-    await viewer.load(table);
+
+    // `viewer.load(table)` is deprecated (Perspective now warns on it) in
+    // favor of `viewer.load(client)` + `viewer.restore({table: name})`.
+    // Loading a Table directly used to hand the viewer ownership of it, so
+    // nothing here freed the *previous* one on a second `.perspective` /
+    // "Open in Perspective" — under the client+name pattern that's no
+    // longer implicit, so free it ourselves before creating the next.
+    if (currentStaticPerspectiveTable) {
+      try { await currentStaticPerspectiveTable.delete(); } catch { /* already gone */ }
+      currentStaticPerspectiveTable = null;
+    }
+    const tableName = `cupola-static-${++staticPerspectiveTableCounter}`;
+    currentStaticPerspectiveTable = await perspectiveWorker.table(copy.buffer, { name: tableName });
+    await viewer.load(perspectiveWorker);
 
     // Perspective defaults to showing every column when no config is
     // restored, which overwhelms a wide query result — mirror the
@@ -856,15 +874,22 @@ export async function loadPerspective(
     // overwhelming the grid") so a static snapshot starts minimal too. The
     // static path renames nothing (unlike the virtual server's `_`->`-`
     // column mapping), so the raw Arrow field name is also Perspective's
-    // column name here. Best-effort: a restore/config hiccup shouldn't turn
-    // a successful data load into a reported failure.
+    // column name here.
+    //
+    // `load(client)` alone renders nothing — unlike the old `load(table)`,
+    // which rendered with every column as its fallback — so a `columns`
+    // restore that fails must retry with an unrestricted one rather than
+    // silently leaving the viewer blank.
+    const firstColumn = arrow.fields?.[0]?.name;
     try {
-      const firstColumn = arrow.fields?.[0]?.name;
-      if (firstColumn) await viewer.restore({ columns: [firstColumn] });
-      await viewer.toggleConfig(true);
+      await viewer.restore({ table: tableName, columns: firstColumn ? [firstColumn] : undefined });
     } catch (restoreError: unknown) {
-      console.warn("Perspective default-config restore failed (data still loaded):", restoreError);
+      console.warn("Perspective default-column restore failed, falling back to all columns:", restoreError);
+      await viewer.restore({ table: tableName });
     }
+    // Opening the config panel is a nicety, not load-bearing — don't let a
+    // hiccup here turn an otherwise-successful data load into a reported failure.
+    try { await viewer.toggleConfig(true); } catch { /* cosmetic only */ }
   } catch (error: unknown) {
     const exception = error instanceof Error ? error : new Error(String(error));
     const diagnosticContext = { source: context.path, sql: context.sql, arrow };
