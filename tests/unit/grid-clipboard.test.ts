@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { buildGridClipboard, type CellRect } from "../../src/lib/grid-clipboard";
+import { buildGridClipboard, buildTableClipboard, type CellRect } from "../../src/lib/grid-clipboard";
 import type { ColumnInfo } from "../../src/lib/service";
 
 const columnNames = ["id", "name", "notes"];
@@ -61,5 +61,27 @@ describe("buildGridClipboard", () => {
     const { text } = buildGridClipboard(rows, columnNames, fieldByName, infoByName, rect(0, 99, 0, 99));
     expect(text.split("\n").length).toBe(3);
     expect(text.split("\n")[0]).toBe("1\tAlice\tfirst");
+  });
+});
+
+describe("buildTableClipboard", () => {
+  it("includes headers in TSV and semantic, styled HTML", () => {
+    const { text, html } = buildTableClipboard([
+      ["City", "High"],
+      ["Richmond", "87"],
+    ], 1);
+
+    expect(text).toBe("City\tHigh\nRichmond\t87");
+    expect(html).toContain("<thead><tr><th");
+    expect(html).toContain(">City</th>");
+    expect(html).toContain("<tbody><tr><td");
+    expect(html).toContain("border-collapse:collapse");
+  });
+
+  it("escapes cell values for TSV and HTML", () => {
+    const { text, html } = buildTableClipboard([["a\tb", "<warm & sunny>"]]);
+
+    expect(text).toBe('"a\tb"\t<warm & sunny>');
+    expect(html).toContain("&lt;warm &amp; sunny&gt;");
   });
 });

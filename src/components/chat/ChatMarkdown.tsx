@@ -1,12 +1,61 @@
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Check, Copy } from "lucide-react";
 import { SqlCodeBlock } from "../content/SqlCodeBlock";
+import { buildTableClipboard, writeGridClipboard } from "@/lib/grid-clipboard";
 
 interface Props {
   content: string;
+  /** Show a copy action on GFM tables. Intended for agent responses. */
+  copyTables?: boolean;
 }
 
-export function ChatMarkdown({ content }: Props) {
+function CopyableMarkdownTable({ children }: { children: React.ReactNode }) {
+  const tableRef = useRef<HTMLTableElement>(null);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => () => {
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+  }, []);
+
+  const copyTable = async () => {
+    const table = tableRef.current;
+    if (!table) return;
+
+    const rows = Array.from(table.rows, (row) =>
+      Array.from(row.cells, (cell) => (cell.textContent ?? "").trim()),
+    );
+    const headerRowCount = table.querySelectorAll(":scope > thead > tr").length;
+    await writeGridClipboard(buildTableClipboard(rows, headerRowCount));
+    setCopied(true);
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="border rounded-md overflow-hidden my-2 bg-card shadow-sm">
+      <div className="flex justify-end border-b border-border bg-muted/20 px-2 py-1">
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          onClick={() => void copyTable()}
+          aria-label={copied ? "Table copied" : "Copy table"}
+          title="Copy table for email or spreadsheets"
+        >
+          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          {copied ? "Copied" : "Copy table"}
+        </button>
+      </div>
+      <div className="overflow-auto">
+        <table ref={tableRef} className="w-full text-xs">{children}</table>
+      </div>
+    </div>
+  );
+}
+
+export function ChatMarkdown({ content, copyTables = false }: Props) {
   return (
     <div className="text-sm leading-relaxed space-y-2">
       <ReactMarkdown
@@ -55,7 +104,9 @@ export function ChatMarkdown({ content }: Props) {
             );
           },
           pre: ({ children }) => <>{children}</>,
-          table: ({ children }) => (
+          table: ({ children }) => copyTables ? (
+            <CopyableMarkdownTable>{children}</CopyableMarkdownTable>
+          ) : (
             <div className="border rounded-md overflow-auto my-2 bg-card shadow-sm">
               <table className="w-full text-xs">{children}</table>
             </div>

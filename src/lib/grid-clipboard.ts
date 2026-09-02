@@ -24,6 +24,33 @@ export interface GridClipboard {
   html: string;
 }
 
+/**
+ * Build clipboard payloads for an already-rendered table. This is used by
+ * small, ad hoc Markdown tables, where there is no Arrow schema or grid
+ * selection to format. Header rows are emitted as <th> cells so rich-text
+ * destinations retain the table's structure.
+ */
+export function buildTableClipboard(rows: string[][], headerRowCount = 0): GridClipboard {
+  const text = rows
+    .map((row) => row.map((value) => tsvEscape(value)).join("\t"))
+    .join("\n");
+
+  const cellStyle = "border:1px solid #d1d5db;padding:6px 10px;text-align:left;vertical-align:top";
+  const headerStyle = `${cellStyle};font-weight:600;background-color:#f3f4f6`;
+  const htmlRows = rows.map((row, rowIndex) => {
+    const tag = rowIndex < headerRowCount ? "th" : "td";
+    const style = rowIndex < headerRowCount ? headerStyle : cellStyle;
+    return `<tr>${row.map((value) => `<${tag} style="${style}">${htmlEscape(value)}</${tag}>`).join("")}</tr>`;
+  });
+  const headerRows = htmlRows.slice(0, headerRowCount).join("");
+  const bodyRows = htmlRows.slice(headerRowCount).join("");
+
+  return {
+    text,
+    html: `<table style="border-collapse:collapse">${headerRows ? `<thead>${headerRows}</thead>` : ""}<tbody>${bodyRows}</tbody></table>`,
+  };
+}
+
 /** A TSV field needs quoting when it contains a tab, newline, CR, or a double quote.
  *  Excel/Sheets accept CSV-style quoting inside TSV: wrap in `"`, double internal `"`. */
 function tsvEscape(value: string): string {

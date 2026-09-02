@@ -195,7 +195,7 @@ export function ChatMessageAssistant({
         {/* Render blocks in stream order */}
         {blocks.map((block) => {
           if (block.type === "text") {
-            return block.content ? <ChatMarkdown key={block.id} content={block.content} /> : null;
+            return block.content ? <ChatMarkdown key={block.id} content={block.content} copyTables /> : null;
           }
           if (block.type === "tool_call") {
             const tc = block.toolCall;
