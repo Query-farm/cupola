@@ -212,6 +212,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive, onBusyChange }: P
 
   const handleSend = useCallback(async (text: string) => {
     const apiKey = getSetting("anthropicApiKey") || "";
+    const workspaceId = getSetting("anthropicWorkspaceId") || "";
     if (!apiKey) {
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(), role: "assistant",
@@ -570,7 +571,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive, onBusyChange }: P
 
     try {
       await runAgentTurn(
-        apiKey, model, agentMessages.current, systemPrompt, executeTool,
+        { apiKey, workspaceId }, model, agentMessages.current, systemPrompt, executeTool,
         {
           onText: (chunk) => {
             removeThinking();

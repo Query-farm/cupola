@@ -273,7 +273,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         console.log("[shell] Initializing DuckDB shell, token:", shellToken ? shellToken.substring(0, 20) + "..." : "NONE");
         const { cleanup, insertText } = initShell(
           containerRef.current,
-          { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, threadCount: resolveThreadCount(settings.shellThreads), catalogData, aiApiKey: settings.anthropicApiKey, aiModel: settings.aiModel, attachOptions },
+          { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, threadCount: resolveThreadCount(settings.shellThreads), catalogData, aiApiKey: settings.anthropicApiKey, aiWorkspaceId: settings.anthropicWorkspaceId, aiModel: settings.aiModel, attachOptions },
           { tableFromIPC: tableFromIPCWithDictionaries, Readline },
           { onAuthError, onAttachError }
         );

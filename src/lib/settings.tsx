@@ -24,6 +24,9 @@ export interface Settings {
    *  deliberately do not — see `formatCellValue`'s `grouping` option. */
   numberGrouping: boolean;
   anthropicApiKey: string;
+  /** Optional for workspace-scoped keys; required for identity-linked keys
+   *  that can act in more than one Anthropic workspace. */
+  anthropicWorkspaceId: string;
   aiModel: string;
   aiMaxToolRounds: number;
   /** Max output tokens per AI request. Clamped to the selected model's own
@@ -72,6 +75,7 @@ const defaultSettings: Settings = {
   geometryAsText: false,
   numberGrouping: false,
   anthropicApiKey: "",
+  anthropicWorkspaceId: "",
   aiModel: DEFAULT_AI_MODEL,
   aiMaxToolRounds: 20,
   aiMaxTokens: DEFAULT_AI_MAX_TOKENS,

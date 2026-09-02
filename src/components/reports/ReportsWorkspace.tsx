@@ -753,7 +753,10 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       if (!forceIds?.has(block.id) && block.snapshot?.dataFingerprint === prepared.fingerprint) return;
       setNarrativeStates((states) => ({ ...states, [block.id]: { status: "running" } }));
       try {
-        const snapshot = await generateReportNarrative(settings.anthropicApiKey, settings.aiModel, block, rows, report, runValues, controller.signal);
+        const snapshot = await generateReportNarrative(
+          { apiKey: settings.anthropicApiKey, workspaceId: settings.anthropicWorkspaceId },
+          settings.aiModel, block, rows, report, runValues, controller.signal,
+        );
         if (controller.signal.aborted) return;
         generated.set(block.id, snapshot);
         setNarrativeStates((states) => ({ ...states, [block.id]: { status: "success" } }));
@@ -774,7 +777,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         ? { ...block, snapshot: generated.get(block.id) }
         : block),
     };
-  }, [settings.aiModel, settings.anthropicApiKey]);
+  }, [settings.aiModel, settings.anthropicApiKey, settings.anthropicWorkspaceId]);
 
   const openReport = useCallback((report: ReportDocumentV1, initialValues?: Record<string, ReportParameterValue>, autoRun = true, persisted = true, mode: "edit" | "reader" = "edit", publishedSnapshot?: ReportDocumentV1, publicationTime?: number) => {
     abortRef.current?.abort();
@@ -1780,7 +1783,9 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
       cacheControl: true,
     }];
     try {
-      await runAgentTurn(settings.anthropicApiKey, settings.aiModel, agentMessagesRef.current, system, async (name, input) => {
+      await runAgentTurn(
+        { apiKey: settings.anthropicApiKey, workspaceId: settings.anthropicWorkspaceId },
+        settings.aiModel, agentMessagesRef.current, system, async (name, input) => {
         if (name === "list_tables") return executeListTables(catalogData);
         if (name === "describe_table") return executeDescribeTable(catalogData, input.schema, input.table);
         if (name === "preview_sql") {

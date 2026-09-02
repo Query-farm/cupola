@@ -63,8 +63,9 @@ export interface AIShellOps {
 }
 
 /** Read fresh AI settings from localStorage (user may change mid-session). */
-function readAISettings(defaults: { apiKey: string; model: string }): { apiKey: string; model: string; maxToolRounds: number; maxTokens: number } {
+function readAISettings(defaults: { apiKey: string; workspaceId: string; model: string }): { apiKey: string; workspaceId: string; model: string; maxToolRounds: number; maxTokens: number } {
   let apiKey = defaults.apiKey;
+  let workspaceId = defaults.workspaceId;
   let model = defaults.model;
   let maxToolRounds = 20;
   let maxTokens = DEFAULT_AI_MAX_TOKENS;
@@ -73,12 +74,13 @@ function readAISettings(defaults: { apiKey: string; model: string }): { apiKey: 
     if (stored) {
       const s = JSON.parse(stored);
       if (s.anthropicApiKey) apiKey = s.anthropicApiKey;
+      if (typeof s.anthropicWorkspaceId === "string") workspaceId = s.anthropicWorkspaceId;
       if (s.aiModel) model = s.aiModel;
       if (s.aiMaxToolRounds) maxToolRounds = s.aiMaxToolRounds;
       if (s.aiMaxTokens) maxTokens = s.aiMaxTokens;
     }
   } catch {}
-  return { apiKey, model, maxToolRounds, maxTokens };
+  return { apiKey, workspaceId, model, maxToolRounds, maxTokens };
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +286,7 @@ export async function runAIMode(
   conv: AIConversationState,
   term: AITerminal,
   ops: AIShellOps,
-  defaults: { apiKey: string; model: string },
+  defaults: { apiKey: string; workspaceId: string; model: string },
 ): Promise<void> {
   // .ai name <text> — set name without entering the loop
   if (trimmed.startsWith(".ai name ")) {
@@ -293,7 +295,7 @@ export async function runAIMode(
     return;
   }
 
-  const { apiKey, model, maxToolRounds, maxTokens } = readAISettings(defaults);
+  const { apiKey, workspaceId, model, maxToolRounds, maxTokens } = readAISettings(defaults);
   if (!apiKey) {
     term.writeln("No API key configured. Set your Anthropic API key in Settings.", "31");
     return;
@@ -398,7 +400,7 @@ export async function runAIMode(
       const agent = createAgentCallbacks(term, spinner, model);
 
       try {
-        await runAgentTurn(apiKey, model, conv.messages, systemPrompt, executeTool, agent.callbacks, abort.signal, maxToolRounds, undefined, maxTokens);
+        await runAgentTurn({ apiKey, workspaceId }, model, conv.messages, systemPrompt, executeTool, agent.callbacks, abort.signal, maxToolRounds, undefined, maxTokens);
       } catch (err: any) {
         spinner.stop();
         if (err.name === "AbortError" || err.message === "Cancelled.") {

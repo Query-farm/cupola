@@ -282,6 +282,24 @@ export function SettingsModal() {
                   className="font-mono text-sm mt-2"
                 />
               </div>
+              <div className="py-3">
+                <SettingLabel
+                  title="Anthropic Workspace ID"
+                  htmlFor="anthropic-workspace-id"
+                  description="Required only for identity-linked keys with access to multiple workspaces. Find the wrkspc_… ID under Anthropic Console → Settings → Workspaces."
+                />
+                <Input
+                  id="anthropic-workspace-id"
+                  type="text"
+                  placeholder="wrkspc_… (optional)"
+                  value={settings.anthropicWorkspaceId}
+                  onChange={(e) => updateSettings({ anthropicWorkspaceId: e.target.value.trim() })}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className="font-mono text-sm mt-2"
+                />
+              </div>
               <SettingRow>
                 <SettingLabel
                   title="Model"

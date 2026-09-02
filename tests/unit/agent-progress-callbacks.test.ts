@@ -84,7 +84,7 @@ describe("agent progress callbacks", () => {
 
     const { trace, callbacks } = recorder();
     await runAgentTurn(
-      "key", "claude-sonnet-4-6", [{ role: "user", content: "hi" }], "system",
+      { apiKey: "key" }, "claude-sonnet-4-6", [{ role: "user", content: "hi" }], "system",
       async () => JSON.stringify({ ok: true }),
       callbacks,
     );
@@ -109,7 +109,7 @@ describe("agent progress callbacks", () => {
 
     const { callbacks } = recorder();
     await runAgentTurn(
-      "key", "claude-sonnet-4-6", [{ role: "user", content: "hi" }], "system",
+      { apiKey: "key" }, "claude-sonnet-4-6", [{ role: "user", content: "hi" }], "system",
       async () => JSON.stringify({ ok: true }),
       {
         ...callbacks,
@@ -133,7 +133,7 @@ describe("agent progress callbacks", () => {
     const { trace, callbacks } = recorder();
     const { onToolInputStart, ...withoutInputStart } = callbacks;
     await runAgentTurn(
-      "key", "claude-sonnet-4-6", [{ role: "user", content: "hi" }], "system",
+      { apiKey: "key" }, "claude-sonnet-4-6", [{ role: "user", content: "hi" }], "system",
       async () => JSON.stringify({ ok: true }),
       withoutInputStart,
     );

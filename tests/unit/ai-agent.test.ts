@@ -51,6 +51,27 @@ describe("fetchWithRetry", () => {
     expect(calls).toBe(1);
   });
 
+  test("workspace-required errors point to the workspace setting", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      error: {
+        message: "anthropic-workspace-id is required when authenticating with an identity-linked API key; send the id of the workspace this request acts in.",
+      },
+    }), { status: 400, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+
+    await expect(fetchWithRetry("https://x", {}, noopCallbacks(), 3)).rejects.toThrow(/workspace ID.*Settings/i);
+  });
+
+  test("invalid and inaccessible workspaces stay actionable", async () => {
+    const responses = [
+      new Response(JSON.stringify({ error: { message: "anthropic-workspace-id header must be a valid workspace ID." } }), { status: 400 }),
+      new Response(JSON.stringify({ error: { message: "Workspace `wrkspc_missing` not found." } }), { status: 404 }),
+    ];
+    globalThis.fetch = (async () => responses.shift()!) as unknown as typeof fetch;
+
+    await expect(fetchWithRetry("https://x", {}, noopCallbacks(), 0)).rejects.toThrow(/Invalid Anthropic workspace ID/i);
+    await expect(fetchWithRetry("https://x", {}, noopCallbacks(), 0)).rejects.toThrow(/workspace not found.*does not have access/i);
+  });
+
   test("429 with retry-after: 1 succeeds on second attempt", async () => {
     let calls = 0;
     globalThis.fetch = (async () => {

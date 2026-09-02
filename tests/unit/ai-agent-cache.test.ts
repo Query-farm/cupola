@@ -48,6 +48,34 @@ afterEach(() => {
 });
 
 describe("agent prompt caching and usage", () => {
+  test("sends a workspace header only when the credential specifies one", async () => {
+    const capturedHeaders: Record<string, string>[] = [];
+    globalThis.fetch = (async (_url, init) => {
+      capturedHeaders.push(init?.headers as Record<string, string>);
+      return finalTurn();
+    }) as typeof fetch;
+
+    const run = (workspaceId?: string) => runAgentTurn(
+      { apiKey: "key", workspaceId },
+      "claude-sonnet-4-6",
+      [{ role: "user", content: "Hello" }],
+      "Stable system",
+      async () => "ok",
+      callbacks(() => {}),
+      undefined,
+      20,
+      [],
+      8_192,
+      false,
+    );
+    await run();
+    await run("  wrkspc_example123  ");
+
+    expect(capturedHeaders[0]["x-api-key"]).toBe("key");
+    expect(capturedHeaders[0]["anthropic-workspace-id"]).toBeUndefined();
+    expect(capturedHeaders[1]["anthropic-workspace-id"]).toBe("wrkspc_example123");
+  });
+
   test("sends stable explicit breakpoints plus an advancing conversation breakpoint", async () => {
     const requests: any[] = [];
     const responses = [toolTurn(), finalTurn()];
@@ -62,7 +90,7 @@ describe("agent prompt caching and usage", () => {
     ];
     let completed: AgentUsage | undefined;
     await runAgentTurn(
-      "key",
+      { apiKey: "key" },
       "claude-sonnet-4-6",
       [{ role: "user", content: "Build it" }],
       system,
@@ -100,7 +128,7 @@ describe("agent prompt caching and usage", () => {
     cb.onError = (message) => { error = message; };
 
     await runAgentTurn(
-      "key",
+      { apiKey: "key" },
       "claude-sonnet-4-6",
       [{ role: "user", content: "Build it" }],
       "Stable system",
@@ -150,7 +178,7 @@ describe("agent prompt caching and usage", () => {
     cb.onCacheDiagnostics = (value) => diagnostics.push(value);
 
     await runAgentTurn(
-      "key", "claude-sonnet-4-6", [{ role: "user", content: "Build it" }], "Stable system",
+      { apiKey: "key" }, "claude-sonnet-4-6", [{ role: "user", content: "Build it" }], "Stable system",
       async () => "ok", cb, undefined, 20,
       [{ name: "lookup", description: "Look up data", input_schema: { type: "object" } }],
       8_192, false,

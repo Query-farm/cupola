@@ -531,7 +531,7 @@ function systemPromptBlocks(systemPrompt: SystemPrompt): Array<Record<string, un
  *  telemetry is on. The span covers fetch (including ai-fetch retries) through
  *  SSE stream end; request content goes on at start, usage/output at end. */
 async function streamOneRequest(
-  apiKey: string,
+  credentials: AnthropicCredentials,
   model: string,
   messages: MessageParam[],
   systemPrompt: SystemPrompt,
@@ -543,7 +543,7 @@ async function streamOneRequest(
   diagnosticPreviousMessageId?: string | null,
 ): Promise<StreamResult> {
   if (telemetryMode === "off") {
-    return streamOneRequestInner(apiKey, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, diagnosticPreviousMessageId);
+    return streamOneRequestInner(credentials, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, diagnosticPreviousMessageId);
   }
   return Sentry.startSpan(
     {
@@ -563,7 +563,7 @@ async function streamOneRequest(
     async (span) => {
       try {
         const result = await streamOneRequestInner(
-          apiKey, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, diagnosticPreviousMessageId
+          credentials, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, diagnosticPreviousMessageId
         );
         span.setAttributes({
           ...mapUsageAttributes(result),
@@ -582,7 +582,7 @@ async function streamOneRequest(
 }
 
 async function streamOneRequestInner(
-  apiKey: string,
+  credentials: AnthropicCredentials,
   model: string,
   messages: MessageParam[],
   systemPrompt: SystemPrompt,
@@ -592,12 +592,14 @@ async function streamOneRequestInner(
   signal?: AbortSignal,
   diagnosticPreviousMessageId?: string | null,
 ): Promise<StreamResult> {
+  const workspaceId = credentials.workspaceId?.trim();
   const response = await fetchWithRetry(
     "https://api.anthropic.com/v1/messages",
     {
       method: "POST",
       headers: {
-        "x-api-key": apiKey,
+        "x-api-key": credentials.apiKey,
+        ...(workspaceId ? { "anthropic-workspace-id": workspaceId } : {}),
         "anthropic-version": "2023-06-01",
         "anthropic-beta": diagnosticPreviousMessageId !== undefined
           ? "prompt-caching-2024-07-31,cache-diagnosis-2026-04-07"
@@ -712,8 +714,14 @@ import { sanitizeConversation } from "./ai-history";
 // Public API — run a full agent turn (may loop for tool calls)
 // ---------------------------------------------------------------------------
 
+export interface AnthropicCredentials {
+  apiKey: string;
+  /** Required for personal/service-account keys that can access more than one workspace. */
+  workspaceId?: string;
+}
+
 export async function runAgentTurn(
-  apiKey: string,
+  credentials: AnthropicCredentials,
   model: string,
   messages: MessageParam[],
   systemPrompt: SystemPrompt,
@@ -732,7 +740,7 @@ export async function runAgentTurn(
       : "off";
   if (telemetryMode === "off") {
     return runAgentTurnInner(
-      apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, null, telemetryMode
+      credentials, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, null, telemetryMode
     );
   }
   // startNewTrace detaches the turn from any active pageload/navigation trace,
@@ -756,7 +764,7 @@ export async function runAgentTurn(
       async (span) => {
         try {
           await runAgentTurnInner(
-            apiKey, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, span, telemetryMode
+            credentials, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, span, telemetryMode
           );
         } catch (err) {
           // User cancellations are not internal errors; this status sticks
@@ -770,7 +778,7 @@ export async function runAgentTurn(
 }
 
 async function runAgentTurnInner(
-  apiKey: string,
+  credentials: AnthropicCredentials,
   model: string,
   messages: MessageParam[],
   systemPrompt: SystemPrompt,
@@ -830,7 +838,7 @@ async function runAgentTurnInner(
     // Any error that escapes here is final — do not re-retry, which would
     // multiply attempts and resend the full conversation each time.
     const request = await streamOneRequest(
-      apiKey, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, telemetryMode,
+      credentials, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, telemetryMode,
       diagnosticPreviousMessageId,
     );
     const { content, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = request;

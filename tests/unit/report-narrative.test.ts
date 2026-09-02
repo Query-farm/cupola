@@ -74,7 +74,7 @@ describe("AI report narrative input", () => {
     }) as typeof fetch;
 
     const snapshot = await generateReportNarrative(
-      "test-key",
+      { apiKey: "test-key" },
       "claude-sonnet-4-6",
       block({ columns: ["humidity"] }),
       [{ humidity: 68 }],

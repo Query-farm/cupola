@@ -160,6 +160,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
 
   const send = useCallback(async (text: string) => {
     const apiKey = getSetting("anthropicApiKey") || "";
+    const workspaceId = getSetting("anthropicWorkspaceId") || "";
     const c = getConvo(docId);
     const myDoc = docId; // capture: stays correct even if the user switches sub-tabs mid-turn
 
@@ -315,7 +316,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
 
     try {
       await runAgentTurn(
-        apiKey, model, c.agentMessages, systemPrompt, executeTool,
+        { apiKey, workspaceId }, model, c.agentMessages, systemPrompt, executeTool,
         {
           onText: (chunk) => {
             removeThinking();

@@ -62,6 +62,15 @@ export async function fetchWithRetry(
 
     // Don't retry auth or not-found errors
     if (status === 401 || status === 403) throw new Error("Invalid API key. Check Settings.");
+    if (status === 400 && errorMsg.includes("anthropic-workspace-id is required")) {
+      throw new Error("This API key requires an Anthropic workspace ID. Add it in Settings.");
+    }
+    if (status === 400 && errorMsg.includes("anthropic-workspace-id header must be a valid workspace ID")) {
+      throw new Error("Invalid Anthropic workspace ID. Check the wrkspc_… value in Settings.");
+    }
+    if (status === 404 && /workspace .*not found/i.test(errorMsg)) {
+      throw new Error("Anthropic workspace not found, or this API key does not have access to it. Check Settings.");
+    }
     if (status === 404) throw new Error(`API endpoint not found (404). Check your API configuration.`);
 
     // Retry on rate limit (429) and overloaded (529)

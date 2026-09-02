@@ -37,6 +37,7 @@ export interface ShellConfig {
   threadCount?: number;
   catalogData?: CatalogData;
   aiApiKey?: string;
+  aiWorkspaceId?: string;
   aiModel?: string;
   attachOptions?: string;
 }
@@ -700,7 +701,11 @@ export function initShell(
           clearProgressBar,
           resetCancelFlag: () => { if (engine.cancelInt32) Atomics.store(engine.cancelInt32, 0, 0); },
         };
-        await runAIMode(trimmed, aiConv, aiTerm, aiOps, { apiKey: config.aiApiKey || "", model: config.aiModel || "claude-sonnet-4-6" });
+        await runAIMode(trimmed, aiConv, aiTerm, aiOps, {
+          apiKey: config.aiApiKey || "",
+          workspaceId: config.aiWorkspaceId || "",
+          model: config.aiModel || "claude-sonnet-4-6",
+        });
         continue;
       }
 
