@@ -385,8 +385,11 @@ export const REPORT_TOOLS: Tool[] = [
       required: ["objective", "approach", "datasets", "blocks", "parameters", "acceptanceCriteria"],
     },
   },
-  { name: "list_tables", description: "List the connected catalog's schemas, tables, and views.", input_schema: { type: "object", additionalProperties: false, properties: {} } },
+  { name: "list_catalogs", description: "List all catalogs attached to the DuckDB session.", input_schema: { type: "object", additionalProperties: false, properties: { cursor: stringSchema, limit: { type: "number" } } } },
+  { name: "list_tables", description: "Search and page through objects in one attached catalog.", input_schema: { type: "object", additionalProperties: false, properties: { catalog: stringSchema, schema: stringSchema, category: stringSchema, query: stringSchema, cursor: stringSchema, limit: { type: "number" } } } },
+  { name: "list_categories", description: "List controlled semantic categories for one catalog/schema.", input_schema: { type: "object", additionalProperties: false, properties: { catalog: stringSchema, schema: stringSchema } } },
   { name: "describe_table", description: "Describe a table before writing SQL for it.", input_schema: { type: "object", additionalProperties: false, properties: { catalog: stringSchema, schema: stringSchema, table: stringSchema }, required: ["schema", "table"] } },
+  { name: "describe_function", description: "Describe a function or macro before using it.", input_schema: { type: "object", additionalProperties: false, properties: { catalog: stringSchema, schema: stringSchema, function: stringSchema }, required: ["schema", "function"] } },
   { name: "preview_sql", description: "Run one read-only SQL query to verify columns and sample results.", input_schema: { type: "object", additionalProperties: false, properties: { sql: stringSchema }, required: ["sql"] } },
   {
     name: "configure_report",

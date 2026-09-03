@@ -21,6 +21,8 @@ import type {
   TableInfo,
   ViewInfo,
 } from "vgi/client";
+import { normalizeTags, TAG_REQUIRED_FILTERS } from "./tags";
+import type { FunctionArg, FunctionReturn } from "./function-info";
 
 interface ArrayLikeValue extends Iterable<unknown> {
   toArray?: () => unknown[];
@@ -49,6 +51,26 @@ function toNumberArray(v: unknown): number[] {
     .filter((value) => Number.isInteger(value) && value >= 0);
 }
 
+function toChoices(v: unknown): string[] | undefined {
+  if (typeof v === "string") {
+    try {
+      const parsed = JSON.parse(v);
+      if (Array.isArray(parsed)) return parsed.map(String);
+    } catch { /* malformed metadata degrades to no constraint */ }
+  }
+  const values = toStringArray(v);
+  return values.length ? values : undefined;
+}
+
+function toDefaultValue(v: unknown): string | undefined {
+  if (v == null || v === "") return undefined;
+  const raw = String(v);
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "string" ? parsed : String(parsed);
+  } catch { return raw; }
+}
+
 type AttachedTableInfo = TableInfo & {
   _columnInfo: ColumnInfo[];
   _foreignKeys: ForeignKeyInfo[];
@@ -58,10 +80,36 @@ type AttachedFunctionInfo = FunctionInfo & {
   _parameters: string[];
   _parameterTypes: string[];
   _returnType: string;
+  _functionArgs: FunctionArg[];
+  _functionReturn: FunctionReturn;
 };
 
-function schemaInfo(name: string, comment: string | null): SchemaInfo {
-  return { name, comment, tags: {}, attach_opaque_data: new Uint8Array(0) };
+function schemaInfo(name: string, comment: string | null, tags: unknown = null): SchemaInfo {
+  return { name, comment, tags: normalizeTags(tags), attach_opaque_data: new Uint8Array(0) };
+}
+
+function parseRequiredFilters(tags: Record<string, string>): string[][] {
+  try {
+    const value = JSON.parse(tags[TAG_REQUIRED_FILTERS] || "[]");
+    return Array.isArray(value)
+      ? value.filter(Array.isArray).map((group) => group.map(String))
+      : [];
+  } catch { return []; }
+}
+
+function normalizeExamples(value: unknown): FunctionInfo["examples"] {
+  const items = Array.isArray(value)
+    ? value
+    : value && typeof value === "object" && typeof (value as ArrayLikeValue).toArray === "function"
+      ? (value as ArrayLikeValue).toArray!()
+      : [];
+  return items.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    const sql = String(row.sql ?? "").trim();
+    if (!sql) return [];
+    return [{ sql, description: String(row.description ?? ""), expected_output: row.expected_output == null ? null : String(row.expected_output) }];
+  });
 }
 
 function normalizeFunctionType(value: string): FunctionInfo["function_type"] {
@@ -87,15 +135,16 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
   const dbLit = `'${esc(databaseName)}'`;
 
   // Parallel metadata fetches — none depend on each other.
-  const [schemaRows, tableRows, viewRows, columnRows, functionRows, constraintRows] = await Promise.all([
+  const [databaseRows, schemaRows, tableRows, viewRows, columnRows, functionRows, constraintRows, argumentRows] = await Promise.all([
+    readRows(`SELECT * FROM duckdb_databases() WHERE database_name = ${dbLit}`),
     readRows(
-      `SELECT schema_name, comment FROM duckdb_schemas() WHERE database_name = ${dbLit} AND NOT internal ORDER BY schema_name`
+      `SELECT * FROM duckdb_schemas() WHERE database_name = ${dbLit} ORDER BY schema_name`
     ),
     readRows(
-      `SELECT schema_name, table_name, comment FROM duckdb_tables() WHERE database_name = ${dbLit} AND NOT temporary ORDER BY schema_name, table_name`
+      `SELECT * FROM duckdb_tables() WHERE database_name = ${dbLit} AND NOT temporary ORDER BY schema_name, table_name`
     ),
     readRows(
-      `SELECT schema_name, view_name, comment, sql FROM duckdb_views() WHERE database_name = ${dbLit} AND NOT temporary ORDER BY schema_name, view_name`
+      `SELECT * FROM duckdb_views() WHERE database_name = ${dbLit} AND NOT temporary ORDER BY schema_name, view_name`
     ),
     readRows(
       `SELECT schema_name, table_name, column_name, column_index, data_type, is_nullable, column_default, comment
@@ -106,8 +155,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     // and rely on the sidebar's `hideTableBackingFunctions` setting to
     // dedupe same-named table + table function pairs.
     readRows(
-      `SELECT schema_name, function_name, function_type, description, comment, parameters, parameter_types, return_type, macro_definition
-       FROM duckdb_functions() WHERE database_name = ${dbLit} ORDER BY schema_name, function_name`
+      `SELECT * FROM duckdb_functions() WHERE database_name = ${dbLit} ORDER BY schema_name, function_name`
     ),
     readRows(
       `SELECT schema_name, table_name, constraint_type, constraint_text,
@@ -116,6 +164,9 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
        FROM duckdb_constraints()
        WHERE database_name = ${dbLit}
        ORDER BY schema_name, table_name, constraint_index`
+    ).catch(() => []),
+    readRows(
+      `SELECT * FROM vgi_function_arguments() WHERE catalog_name = ${dbLit} ORDER BY schema_name, function_name, field_index`
     ).catch(() => []),
   ]);
 
@@ -142,7 +193,30 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     if (!name) continue;
     const comment = row.comment == null ? null : String(row.comment);
     // Overwrite the default-created slot with the real comment
-    getSchema(name, comment).info = schemaInfo(name, comment);
+    getSchema(name, comment).info = schemaInfo(name, comment, row.tags);
+  }
+
+  const argsByFunction = new Map<string, FunctionArg[]>();
+  for (const row of argumentRows ?? []) {
+    const key = `${String(row.schema_name ?? "")}.${String(row.function_name ?? "")}`;
+    const args = argsByFunction.get(key) ?? [];
+    args.push({
+      name: String(row.arg_name ?? ""),
+      arrowType: String(row.arg_type ?? ""),
+      duckdbType: String(row.arg_type ?? ""),
+      nullable: !Boolean(row.is_const),
+      named: Boolean(row.is_named),
+      isTableInput: Boolean(row.is_table_input),
+      isAnyType: Boolean(row.is_any_type),
+      isVarargs: Boolean(row.is_varargs),
+      isConst: Boolean(row.is_const),
+      description: row.arg_description == null ? undefined : String(row.arg_description),
+      defaultValue: toDefaultValue(row.arg_default),
+      choices: toChoices(row.arg_choices),
+      range: row.arg_range == null ? undefined : String(row.arg_range),
+      pattern: row.arg_pattern == null ? undefined : String(row.arg_pattern),
+    });
+    argsByFunction.set(key, args);
   }
 
   // Group columns by schema.table into a map so we can attach them as
@@ -237,6 +311,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     if (!schemaName) continue;
     const name = String(row.table_name ?? "");
     const comment = row.comment == null ? null : String(row.comment);
+    const tags = normalizeTags(row.tags);
     const cols = colsByTable.get(`${schemaName}.${name}`) ?? [];
     const metadata = getConstraints(schemaName, name);
     const notNullConstraints = new Set(metadata.notNull);
@@ -257,7 +332,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
       name,
       schema_name: schemaName,
       comment,
-      tags: {},
+      tags,
       columns: emptyColumns,
       not_null_constraints: [...notNullConstraints].sort((a, b) => a - b),
       unique_constraints: metadata.unique,
@@ -269,7 +344,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
       supports_delete: false,
       supports_returning: false,
       supports_column_statistics: false,
-      required_filters: [],
+      required_filters: parseRequiredFilters(tags),
       _foreignKeys: metadata.foreignKeys,
       _columnInfo: cols.map((c) => ({
         name: c.name,
@@ -289,6 +364,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     const name = String(row.view_name ?? "");
     const comment = row.comment == null ? null : String(row.comment);
     const definition = row.sql == null ? "" : String(row.sql);
+    const tags = normalizeTags(row.tags);
     const cols = colsByTable.get(`${schemaName}.${name}`) ?? [];
 
     // Snake_case TableInfo/ViewInfo shape — see the note on the table entry above.
@@ -296,7 +372,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
       name,
       schema_name: schemaName,
       comment,
-      tags: {},
+      tags,
       definition,
       column_comments: {},
       _columnInfo: cols.map((c) => ({
@@ -320,6 +396,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     const parameters = toStringArray(row.parameters);
     const parameterTypes = toStringArray(row.parameter_types);
     const returnType = row.return_type == null ? "" : String(row.return_type);
+    const tags = normalizeTags(row.tags);
 
     if (MACRO_TYPES.has(functionType)) {
       const macroType = functionType === "table_macro" ? "TABLE" : "SCALAR";
@@ -332,7 +409,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
         parameter_default_values: null,
         definition,
         comment,
-        tags: {},
+        tags,
       };
       getSchema(schemaName).macros.push(entry);
     } else {
@@ -342,11 +419,11 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
         function_type: normalizeFunctionType(functionType),
         arguments: emptyColumns,
         output_schema: emptyColumns,
-        stability: null,
+        stability: (row.stability as FunctionInfo["stability"]) ?? null,
         null_handling: null,
         description,
-        examples: [],
-        categories: [],
+        examples: normalizeExamples(row.examples),
+        categories: toStringArray(row.categories),
         projection_pushdown: null,
         filter_pushdown: null,
         sampling_pushdown: null,
@@ -368,12 +445,30 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
         required_settings: [],
         required_secrets: [],
         comment,
-        tags: {},
+        tags,
         // Overrides consumed by any future parameter-rendering UI that
         // prefers parsed info over the binary-serialized VGI form.
         _parameters: parameters,
         _parameterTypes: parameterTypes,
         _returnType: returnType,
+        _functionReturn: {
+          isTable: normalizeFunctionType(functionType) === "TABLE" || normalizeFunctionType(functionType) === "TABLE_BUFFERING",
+          columns: normalizeFunctionType(functionType) === "TABLE" || normalizeFunctionType(functionType) === "TABLE_BUFFERING" || !returnType
+            ? []
+            : [{ name: "return", arrowType: returnType, duckdbType: returnType, nullable: true }],
+        },
+        _functionArgs: argsByFunction.get(`${schemaName}.${name}`)
+          ?? parameters.map((parameter, index) => ({
+            name: parameter,
+            arrowType: parameterTypes[index] || "ANY",
+            duckdbType: parameterTypes[index] || "ANY",
+            nullable: true,
+            named: false,
+            isTableInput: false,
+            isAnyType: (parameterTypes[index] || "").toUpperCase() === "ANY",
+            isVarargs: false,
+            isConst: false,
+          })),
       };
       getSchema(schemaName).functions.push(entry);
     }
@@ -388,8 +483,8 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
 
   return {
     catalogName: databaseName,
-    catalogComment: null,
-    catalogTags: {},
+    catalogComment: databaseRows?.[0]?.comment == null ? null : String(databaseRows[0].comment),
+    catalogTags: normalizeTags(databaseRows?.[0]?.tags),
     defaultSchema,
     schemas,
   };

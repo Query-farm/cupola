@@ -10,6 +10,7 @@ import {
   groupByCategory,
   filterDisplayTags,
   filterTagsForAI,
+  filterTagsForAIDetail,
   TAG_DOC_LLM,
   TAG_DOC_MD,
   TAG_RESULT_COLUMNS_MD,
@@ -29,7 +30,8 @@ describe("getTag", () => {
   it("falls back to the deprecated alias when canonical is absent", () => {
     expect(getTag({ "vgi.description_llm": "old" }, TAG_DOC_LLM)).toBe("old");
     expect(getTag({ "vgi.description_md": "old" }, TAG_DOC_MD)).toBe("old");
-    expect(getTag({ "vgi.columns_md": "old" }, TAG_RESULT_COLUMNS_MD)).toBe("old");
+    // Retired result-schema keys are deliberately not aliases: their shape changed.
+    expect(getTag({ "vgi.columns_md": "old" }, TAG_RESULT_COLUMNS_MD)).toBeUndefined();
     expect(getTag({ "vgi.category_tags": '["x"]' }, TAG_CLASSIFICATION_TAGS)).toBe('["x"]');
   });
   it("prefers the canonical key over the deprecated alias", () => {
@@ -42,6 +44,17 @@ describe("getTag", () => {
     expect(getTag({}, TAG_KEYWORDS)).toBeUndefined();
     expect(getTag({ [TAG_KEYWORDS]: "  " }, TAG_KEYWORDS)).toBeUndefined();
     expect(getTag(null, TAG_KEYWORDS)).toBeUndefined();
+  });
+});
+
+describe("bounded AI metadata", () => {
+  it("keeps rich detail bounded and never emits private task graders", () => {
+    const detail = filterTagsForAIDetail({
+      [TAG_DOC_MD]: "x".repeat(5_000),
+      [TAG_AGENT_TEST_TASKS]: '[{"name":"secret"}]',
+    })!;
+    expect(detail[TAG_DOC_MD].length).toBeLessThan(4_050);
+    expect(detail[TAG_AGENT_TEST_TASKS]).toBeUndefined();
   });
 });
 

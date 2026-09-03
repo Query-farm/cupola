@@ -901,6 +901,7 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
                 <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading editor…</div>}>
                   <SqlEditorView
                     catalogData={data}
+                    attachedCatalogs={attachedCatalogs}
                     serviceUrl={serviceUrl}
                     attachOptions={attachOptions}
                     pendingSql={pendingEditorSql}
@@ -922,6 +923,7 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
                     catalogData={data}
                     serviceUrl={serviceUrl}
                     attachedCatalogNames={attachedCatalogs.map((c) => c.catalogName)}
+                    attachedCatalogs={attachedCatalogs}
                     initialReport={showcaseReport}
                   />
                 </Suspense>

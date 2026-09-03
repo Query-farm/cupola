@@ -25,6 +25,9 @@ import {
   runAgentTurn,
   buildSystemPrompt,
   executeListTables,
+  executeListCatalogs,
+  executeListCategories,
+  executeDescribeFunction,
   TOOLS,
   type MessageParam,
 } from "@/lib/ai-agent";
@@ -73,6 +76,7 @@ interface Props {
   /** Active editor doc id — the conversation key. */
   docId: string;
   catalogData: CatalogData;
+  attachedCatalogs?: CatalogData[];
   serviceUrl: string;
   /** Live current query (selection → statement → doc) for per-turn context. */
   getCurrentSql: () => string;
@@ -88,7 +92,7 @@ interface Props {
   onBusyChange?: (docId: string, busy: boolean) => void;
 }
 
-export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, apply, runIdRef, setActiveResult, onClose, onBusyChange }: Props) {
+export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], serviceUrl, getCurrentSql, apply, runIdRef, setActiveResult, onClose, onBusyChange }: Props) {
   const engineLifecycle = useEngineLifecycle();
   const { settings } = useSettings();
   const convos = useRef<Map<string, ConversationState>>(new Map());
@@ -195,7 +199,9 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
 
     if (settings.aiTelemetry) Sentry.setConversationId(c.conversationId);
 
-    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), ui.memoryCatalog, false) +
+    const catalogs = [catalogData, ...attachedCatalogs, ui.memoryCatalog]
+      .filter((value): value is CatalogData => Boolean(value));
+    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), catalogs.slice(1), false) +
       "\n\nYou are an AI assistant embedded in a SQL editor. The user is editing SQL in the adjacent pane. Be concise. When you run a query, its results appear in the editor's results grid. When you produce a final query for the user, run it with run_sql so it can be applied to the editor. Do not produce charts.";
     const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
@@ -286,12 +292,15 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
         );
       }
       if (name === "read_query_results") return executeReadQueryResults(c.resultCache, input.result_id, input.offset, input.limit);
-      if (name === "list_tables") return executeListTables(catalogData);
+      if (name === "list_catalogs") return executeListCatalogs(catalogs, input);
+      if (name === "list_tables") return executeListTables(catalogs, input);
+      if (name === "list_categories") return executeListCategories(catalogs, input);
       if (name === "describe_table") {
         const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB engine not ready");
-        return describeTableWithFallback(catalogData, { query: queryFn }, input);
+        return describeTableWithFallback(catalogs, { query: queryFn }, input);
       }
+      if (name === "describe_function") return executeDescribeFunction(catalogs, input);
       if (name === "ask_user") {
         const blockId = uid();
         return new Promise<string>((resolve) => {
@@ -388,7 +397,7 @@ export function EditorAiPanel({ docId, catalogData, serviceUrl, getCurrentSql, a
       bump();
       onBusyChange?.(myDoc, false);
     }
-  }, [docId, catalogData, serviceUrl, settings, getCurrentSql, getConvo, apply, runIdRef, setActiveResult, onBusyChange]);
+  }, [docId, catalogData, attachedCatalogs, serviceUrl, settings, getCurrentSql, getConvo, apply, runIdRef, setActiveResult, onBusyChange]);
 
   const stop = useCallback(() => {
     const c = convos.current.get(docId);

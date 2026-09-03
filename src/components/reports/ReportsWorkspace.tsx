@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSettings } from "@/lib/settings";
-import { runAgentTurn, executeListTables, executeDescribeTable, type MessageParam, type SystemPrompt, type ToolResult, type ToolResultContent } from "@/lib/ai-agent";
+import { runAgentTurn, executeListCatalogs, executeListTables, executeListCategories, executeDescribeTable, executeDescribeFunction, type MessageParam, type SystemPrompt, type ToolResult, type ToolResultContent } from "@/lib/ai-agent";
 import { executeRunSql, validateChartSpec } from "@/lib/ai-tool-executor";
 import { QueryResultCache } from "@/lib/query-results";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
@@ -55,6 +55,7 @@ interface Props {
   catalogData: CatalogData;
   serviceUrl: string;
   attachedCatalogNames?: string[];
+  attachedCatalogs?: CatalogData[];
   onBusyChange?: (busy: boolean) => void;
   initialReport?: ReportDocumentV1;
 }
@@ -628,7 +629,7 @@ function freshnessLabel(timestamp: number): string {
   return `Updated ${Math.round(hours / 24)} d ago`;
 }
 
-export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames = [], onBusyChange, initialReport }: Props) {
+export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames = [], attachedCatalogs = [], onBusyChange, initialReport }: Props) {
   const { settings } = useSettings();
   const [reports, setReports] = useState<ReportDocumentV1[]>([]);
   const [publishedReports, setPublishedReports] = useState<Record<string, ReportDocumentV1>>({});
@@ -1786,8 +1787,13 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
       await runAgentTurn(
         { apiKey: settings.anthropicApiKey, workspaceId: settings.anthropicWorkspaceId },
         settings.aiModel, agentMessagesRef.current, system, async (name, input) => {
-        if (name === "list_tables") return executeListTables(catalogData);
-        if (name === "describe_table") return executeDescribeTable(catalogData, input.schema, input.table);
+        const catalogs = [catalogData, ...attachedCatalogs, ui.memoryCatalog]
+          .filter((value): value is CatalogData => Boolean(value));
+        if (name === "list_catalogs") return executeListCatalogs(catalogs, input);
+        if (name === "list_tables") return executeListTables(catalogs, input);
+        if (name === "list_categories") return executeListCategories(catalogs, input);
+        if (name === "describe_table") return executeDescribeTable(catalogs, input.schema, input.table, input.catalog);
+        if (name === "describe_function") return executeDescribeFunction(catalogs, input);
         if (name === "preview_sql") {
           const errors = validateReadOnlySql(String(input.sql ?? "")); if (errors.length) throw new Error(errors.join(" "));
           if (!engine.query) throw new Error("DuckDB is not ready.");
@@ -1966,7 +1972,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [draft, agentPrompt, agentBusy, settings, catalogData, runDatasets, agentTargetBlockId]);
+  }, [draft, agentPrompt, agentBusy, settings, catalogData, attachedCatalogs, runDatasets, agentTargetBlockId]);
 
   const compatibleCatalogs = useMemo(() => new Set([catalogData.catalogName, ...attachedCatalogNames, "memory"]), [catalogData.catalogName, attachedCatalogNames]);
   const isCompatible = (r: ReportDocumentV1) => r.requiredSources.every((s) => compatibleCatalogs.has(s.catalog));

@@ -19,6 +19,8 @@
     "check:bundle": "node scripts/check-bundle-size.mjs",
     "audit": "bun audit --production",
     "test": "bun test ./tests/unit",
+    "tags:sync": "bun scripts/sync-vgi-tag-contract.ts",
+    "tags:check": "bun scripts/sync-vgi-tag-contract.ts --check",
     "test:report-agent-evals": "bun test ./tests/unit/report-agent-evals.test.ts ./tests/unit/report-agent-reliability.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:smoke": "playwright test tests/sidebar.spec.ts tests/settings.spec.ts tests/app-tabs.spec.ts tests/responsive.spec.ts tests/accessibility.spec.ts",

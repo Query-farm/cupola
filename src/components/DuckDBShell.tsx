@@ -49,6 +49,8 @@ interface Props {
   onShellReady?: (insertText: (text: string) => void) => void;
   /** Catalog metadata for AI agent tools. */
   catalogData?: CatalogData;
+  /** Metadata for every additional VGI catalog attached through this shell. */
+  attachedCatalogs?: CatalogData[];
   /** Current selection — used for Data Viewer tab when a table is selected. */
   selection?: import("@/lib/tree").Selection | null;
   /**
@@ -122,7 +124,11 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, onQueryHistoryCountChange, onAiBusyChange, onShellReady, catalogData, selection, onAuthError, onAttachError, attachOptions }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, onQueryHistoryCountChange, onAiBusyChange, onShellReady, catalogData, attachedCatalogs = [], selection, onAuthError, onAttachError, attachOptions }: Props) {
+  useEffect(() => {
+    ui.attachedCatalogs = attachedCatalogs;
+    return () => { ui.attachedCatalogs = []; };
+  }, [attachedCatalogs]);
   // The parent controls the active tab; expose a local alias so the existing
   // setActiveTab(...) call sites (history re-run, bridge slots) keep working.
   const setActiveTab = onTabChange;
@@ -167,13 +173,15 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
 
   // Resolve selected table or view for Data Viewer and Perspective tabs
-  // Search both VGI catalog and memory catalog
-  const allCatalogs = [catalogData, ui.memoryCatalog].filter((catalog): catalog is CatalogData => catalog !== null && catalog !== undefined);
-  function findInCatalogs(type: "table", name?: string, schema?: string): TableInfo | null;
-  function findInCatalogs(type: "view", name?: string, schema?: string): ViewInfo | null;
-  function findInCatalogs(type: "table" | "view", name?: string, schema?: string): TableInfo | ViewInfo | null {
+  // Search the primary, every secondary VGI worker, and the memory catalog.
+  const allCatalogs = [catalogData, ...attachedCatalogs, ui.memoryCatalog]
+    .filter((catalog): catalog is CatalogData => catalog !== null && catalog !== undefined);
+  function findInCatalogs(type: "table", name?: string, schema?: string, catalog?: string): TableInfo | null;
+  function findInCatalogs(type: "view", name?: string, schema?: string, catalog?: string): ViewInfo | null;
+  function findInCatalogs(type: "table" | "view", name?: string, schema?: string, catalog?: string): TableInfo | ViewInfo | null {
     if (!name || !schema) return null;
     for (const cat of allCatalogs) {
+      if (catalog && cat.catalogName !== catalog) continue;
       const resolvedSchema = cat.schemas.find((candidate) => candidate.info.name === schema);
       if (type === "table") {
         const table = resolvedSchema?.tables.find((candidate) => candidate.name === name);
@@ -185,8 +193,8 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     }
     return null;
   }
-  const selectedTable = selection?.type === "table" ? findInCatalogs("table", selection.name, selection.schema) : null;
-  const selectedView = selection?.type === "view" ? findInCatalogs("view", selection.name, selection.schema) : null;
+  const selectedTable = selection?.type === "table" ? findInCatalogs("table", selection.name, selection.schema, selection.catalog) : null;
+  const selectedView = selection?.type === "view" ? findInCatalogs("view", selection.name, selection.schema, selection.catalog) : null;
   const hasSelectedTableOrView = !!(selectedTable || selectedView || (selection && (selection.type === "table" || selection.type === "view")));
 
   // Expose a function to switch to the shell tab.
@@ -554,6 +562,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         }>
           <AskAIChat
             catalogData={catalogData}
+            attachedCatalogs={attachedCatalogs}
             serviceUrl={serviceUrl}
             catalogName={catalogName}
             isActive={activeTab === "askai"}

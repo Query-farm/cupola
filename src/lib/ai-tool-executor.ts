@@ -19,7 +19,7 @@
  * exports from `./ai-agent` — both surfaces import them as-is.
  */
 import type { Table } from "@query-farm/apache-arrow";
-import { executeDescribeTable } from "./ai-agent";
+import { executeDescribeTable, type CatalogCollection } from "./ai-agent";
 import { formatArrowTableAsJson, QueryResultCache } from "./query-results";
 import { quoteLiteral, decodeArrowBuffer } from "./duckdb-query";
 import type { CatalogData } from "./service";
@@ -185,7 +185,10 @@ async function fetchColumnsViaSql(
     const def = t.getChildAt(3)?.get(i);
     if (def) col.default = String(def);
     const cmt = t.getChildAt(4)?.get(i);
-    if (cmt) col.comment = String(cmt);
+    if (cmt) {
+      const comment = String(cmt);
+      col.comment = comment.length > 4_000 ? `${comment.slice(0, 4_000)}… [truncated]` : comment;
+    }
     cols.push(col);
   }
   return cols;
@@ -204,22 +207,32 @@ async function fetchColumnsViaSql(
  * otherwise the agent gets no column names and loops re-listing tables.
  */
 export async function describeTableWithFallback(
-  catalogData: CatalogData | null,
+  catalogData: CatalogCollection | null,
   env: RunSqlEnv,
   input: DescribeTableInput,
 ): Promise<string> {
-  // Primary-catalog fast path — use the in-memory CatalogData.
-  if ((!input.catalog || (catalogData && input.catalog === catalogData.catalogName)) && catalogData) {
-    const base = executeDescribeTable(catalogData, input.schema, input.table);
+  const catalogs = catalogData == null
+    ? []
+    : Array.isArray(catalogData) ? catalogData : [catalogData as CatalogData];
+  const selected = input.catalog
+    ? catalogs.find((catalog) => catalog.catalogName === input.catalog)
+    : catalogs.filter((catalog) => catalog.catalogName !== "memory").length === 1
+      ? catalogs.find((catalog) => catalog.catalogName !== "memory")
+      : catalogs.length === 1 ? catalogs[0] : undefined;
+
+  // Any fetched catalog has authoritative tags/comments; enrich views with
+  // live columns because ViewInfo itself does not carry a column schema.
+  if (selected) {
+    const base = executeDescribeTable(catalogs, input.schema, input.table, selected.catalogName);
     const parsed = JSON.parse(base);
     // Tables (and not-found errors) already carry everything they can; only
     // views need the live-column enrichment below.
     if (parsed?.type !== "view") return base;
 
-    const cols = await fetchColumnsViaSql(env, catalogData.catalogName, input.schema, input.table);
-    const viewInfo = catalogData.schemas
-      .find((s) => s.info.name === input.schema)?.views
-      .find((v) => v.name === input.table);
+    const cols = await fetchColumnsViaSql(env, selected.catalogName, input.schema, input.table);
+    const viewInfo = selected.schemas
+      .find((s: CatalogData["schemas"][number]) => s.info.name === input.schema)?.views
+      .find((v: CatalogData["schemas"][number]["views"][number]) => v.name === input.table);
     if (cols) {
       // DuckDB often lacks per-column comments for views; the VGI catalog's
       // column_comments map is authoritative, so backfill from it.
@@ -231,15 +244,18 @@ export async function describeTableWithFallback(
     }
     // The view's SQL definition lets the agent see exactly how each column is
     // derived — cheap to include and high-value for query planning.
-    if (viewInfo?.definition) parsed.definition = viewInfo.definition;
+    if (viewInfo?.definition) parsed.definition = viewInfo.definition.length > 4_000
+      ? `${viewInfo.definition.slice(0, 4_000)}… [truncated]`
+      : viewInfo.definition;
     return JSON.stringify(parsed);
   }
 
   // Secondary catalog (memory / attached) — query DuckDB introspection tables.
-  const cols = await fetchColumnsViaSql(env, input.catalog!, input.schema, input.table);
+  if (!input.catalog) return executeDescribeTable(catalogs, input.schema, input.table);
+  const cols = await fetchColumnsViaSql(env, input.catalog, input.schema, input.table);
   if (!cols) {
     // Fall back to whatever the primary catalog knows (may be empty).
-    return catalogData ? executeDescribeTable(catalogData, input.schema, input.table)
+    return catalogs.length ? executeDescribeTable(catalogs, input.schema, input.table, input.catalog)
                        : JSON.stringify({ error: `Table ${input.schema}.${input.table} not found` });
   }
 
@@ -273,7 +289,9 @@ export async function describeTableWithFallback(
     schema: input.schema,
     name: input.table,
     type: "table",
-    comment: tableComment,
+    comment: tableComment && tableComment.length > 4_000
+      ? `${tableComment.slice(0, 4_000)}… [truncated]`
+      : tableComment,
     primary_key: primaryKey,
     unique_constraints: uniqueConstraints.length > 0 ? uniqueConstraints : null,
     check_constraints: checkConstraints.length > 0 ? checkConstraints : null,

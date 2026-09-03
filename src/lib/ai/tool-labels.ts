@@ -21,6 +21,12 @@ export function toolInputLabel(name: string): string {
       return "Composing chart";
     case "describe_table":
       return "Looking up columns";
+    case "describe_function":
+      return "Looking up function";
+    case "list_catalogs":
+      return "Looking up catalogs";
+    case "list_categories":
+      return "Looking up categories";
     case "list_tables":
       return "Looking up tables";
     case "read_query_results":
@@ -52,7 +58,13 @@ export function toolInputLabel(name: string): string {
 export function toolActivityLabel(name: string, input?: any): string {
   switch (name) {
     case "describe_table":
-      return `Looking up ${input?.schema}.${input?.table}`;
+      return `Looking up ${input?.catalog ? `${input.catalog}.` : ""}${input?.schema}.${input?.table}`;
+    case "describe_function":
+      return `Looking up ${input?.catalog ? `${input.catalog}.` : ""}${input?.schema}.${input?.function}`;
+    case "list_catalogs":
+      return "Looking up catalogs";
+    case "list_categories":
+      return "Looking up categories";
     case "list_tables":
       return "Looking up tables";
     case "read_query_results":

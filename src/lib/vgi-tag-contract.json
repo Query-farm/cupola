@@ -1,0 +1,254 @@
+{
+  "aliases": [
+    {
+      "canonical": "vgi.doc_llm",
+      "key": "vgi.description_llm",
+      "symbol": "TAG_DESCRIPTION_LLM"
+    },
+    {
+      "canonical": "vgi.doc_md",
+      "key": "vgi.description_md",
+      "symbol": "TAG_DESCRIPTION_MD"
+    },
+    {
+      "canonical": "vgi.classification_tags",
+      "key": "vgi.category_tags",
+      "symbol": "TAG_CATEGORY_TAGS"
+    }
+  ],
+  "contract_revision": 1,
+  "extension_tags": [
+    {
+      "format": "json",
+      "key": "vgi_required_filters",
+      "symbol": "TAG_REQUIRED_FILTERS"
+    }
+  ],
+  "retired": [
+    {
+      "key": "vgi.result_columns_md",
+      "replacement": [
+        "vgi.result_columns_schema",
+        "vgi.result_dynamic_columns_md"
+      ],
+      "symbol": "TAG_RESULT_COLUMNS_MD"
+    },
+    {
+      "key": "vgi.columns_md",
+      "replacement": [
+        "vgi.result_columns_schema",
+        "vgi.result_dynamic_columns_md"
+      ],
+      "symbol": "TAG_COLUMNS_MD"
+    }
+  ],
+  "tags": [
+    {
+      "format": "markdown",
+      "key": "vgi.doc_llm",
+      "scopes": [
+        "catalog",
+        "schema",
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_DOC_LLM"
+    },
+    {
+      "format": "markdown",
+      "key": "vgi.doc_md",
+      "scopes": [
+        "catalog",
+        "schema",
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_DOC_MD"
+    },
+    {
+      "format": "json",
+      "key": "vgi.doc_links",
+      "scopes": [
+        "catalog",
+        "schema",
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_DOC_LINKS"
+    },
+    {
+      "format": "json",
+      "key": "vgi.example_queries",
+      "scopes": [
+        "catalog",
+        "schema",
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_EXAMPLE_QUERIES"
+    },
+    {
+      "format": "json",
+      "key": "vgi.executable_examples",
+      "scopes": [
+        "catalog",
+        "schema",
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_EXECUTABLE_EXAMPLES"
+    },
+    {
+      "format": "json",
+      "key": "vgi.agent_test_tasks",
+      "public_fields": [
+        "name",
+        "prompt"
+      ],
+      "scopes": [
+        "catalog"
+      ],
+      "symbol": "TAG_AGENT_TEST_TASKS"
+    },
+    {
+      "format": "text",
+      "key": "vgi.title",
+      "scopes": [
+        "catalog",
+        "schema",
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_TITLE"
+    },
+    {
+      "format": "json",
+      "key": "vgi.keywords",
+      "scopes": [
+        "catalog",
+        "schema",
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_KEYWORDS"
+    },
+    {
+      "format": "text",
+      "key": "vgi.category",
+      "scopes": [
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_CATEGORY"
+    },
+    {
+      "format": "json",
+      "key": "vgi.categories",
+      "scopes": [
+        "schema"
+      ],
+      "symbol": "TAG_CATEGORIES"
+    },
+    {
+      "format": "json",
+      "key": "vgi.classification_tags",
+      "scopes": [
+        "catalog",
+        "schema",
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_CLASSIFICATION_TAGS"
+    },
+    {
+      "format": "json",
+      "key": "vgi.result_columns_schema",
+      "scopes": [
+        "function"
+      ],
+      "symbol": "TAG_RESULT_COLUMNS_SCHEMA"
+    },
+    {
+      "format": "markdown",
+      "key": "vgi.result_dynamic_columns_md",
+      "scopes": [
+        "function"
+      ],
+      "symbol": "TAG_RESULT_DYNAMIC_COLUMNS_MD"
+    },
+    {
+      "format": "url",
+      "key": "vgi.source_url",
+      "scopes": [
+        "catalog",
+        "schema",
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_SOURCE_URL"
+    },
+    {
+      "format": "text",
+      "key": "vgi.author",
+      "scopes": [
+        "catalog",
+        "schema",
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_AUTHOR"
+    },
+    {
+      "format": "text",
+      "key": "vgi.copyright",
+      "scopes": [
+        "catalog"
+      ],
+      "symbol": "TAG_COPYRIGHT"
+    },
+    {
+      "format": "text",
+      "key": "vgi.license",
+      "scopes": [
+        "catalog"
+      ],
+      "symbol": "TAG_LICENSE"
+    },
+    {
+      "format": "text",
+      "key": "vgi.support_contact",
+      "scopes": [
+        "catalog"
+      ],
+      "symbol": "TAG_SUPPORT_CONTACT"
+    },
+    {
+      "format": "url",
+      "key": "vgi.support_policy_url",
+      "scopes": [
+        "catalog"
+      ],
+      "symbol": "TAG_SUPPORT_POLICY_URL"
+    },
+    {
+      "format": "url",
+      "key": "vgi.icon_url",
+      "scopes": [
+        "catalog"
+      ],
+      "symbol": "TAG_ICON_URL"
+    }
+  ],
+  "title": "VGI DuckDB metadata tag contract"
+}

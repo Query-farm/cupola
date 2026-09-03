@@ -11,6 +11,27 @@ import { Schema, Field, Utf8, Int64, Float64, Binary, RecordBatchStreamWriter, t
 import type { FunctionInfo } from "vgi/client";
 import { getFunctionArgs, getFunctionReturn, formatFunctionSignature } from "../../src/lib/function-info";
 
+test("attached-catalog parsed overrides preserve argument constraints and return type", () => {
+  const fn = {
+    name: "convert",
+    function_type: "SCALAR",
+    arguments: new Uint8Array(),
+    output_schema: new Uint8Array(),
+    _functionArgs: [{
+      name: "unit", arrowType: "VARCHAR", duckdbType: "VARCHAR", nullable: true,
+      named: true, isTableInput: false, isAnyType: false, isVarargs: false, isConst: true,
+      choices: ["m", "km"],
+    }],
+    _functionReturn: {
+      isTable: false,
+      columns: [{ name: "return", arrowType: "DOUBLE", duckdbType: "DOUBLE", nullable: true }],
+    },
+  } as unknown as FunctionInfo;
+  expect(getFunctionArgs(fn)[0].choices).toEqual(["m", "km"]);
+  expect(getFunctionReturn(fn).columns[0].duckdbType).toBe("DOUBLE");
+  expect(formatFunctionSignature(fn)).toBe("convert(unit := VARCHAR) → DOUBLE");
+});
+
 /** Build an Arrow Field with optional custom metadata. */
 function f(name: string, type: DataType, meta?: Record<string, string>): Field {
   return new Field(name, type, true, meta ? new Map(Object.entries(meta)) : undefined);

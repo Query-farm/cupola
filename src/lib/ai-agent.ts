@@ -15,7 +15,8 @@ type AgentSpan = Parameters<Parameters<typeof Sentry.startSpan>[1]>[0];
 
 import type { CatalogData } from "./service";
 import { getColumns, getForeignKeys } from "./service";
-import { filterTagsForAI } from "./tags";
+import { filterTagsForAI, filterTagsForAIDetail, getTag, parseCategories, TAG_CATEGORY } from "./tags";
+import { formatFunctionSignature, getFunctionArgs, getFunctionReturn } from "./function-info";
 import { fetchWithRetry } from "./ai-fetch";
 import {
   AGENT_NAME,
@@ -223,11 +224,37 @@ export const TOOLS: Tool[] = [
     },
   },
   {
-    name: "list_tables",
-    description: "List all schemas, tables, and views in the database. Returns catalog name, schema names with comments and tags, and each table/view with comment, column count, and tags.",
+    name: "list_catalogs",
+    description: "List every catalog currently attached to this DuckDB session. Use this before discovery when more than one worker may be attached.",
     input_schema: {
       type: "object",
-      properties: {},
+      properties: {
+        cursor: { type: "string", description: "Opaque cursor from the previous response" },
+        limit: { type: "number", description: "Maximum catalogs (default 25, max 50)" },
+      },
+    },
+  },
+  {
+    name: "list_tables",
+    description: "Search and page through tables, views, functions, and macros in one attached catalog. When multiple worker catalogs exist, catalog is required.",
+    input_schema: {
+      type: "object",
+      properties: {
+        catalog: { type: "string" },
+        schema: { type: "string" },
+        category: { type: "string" },
+        query: { type: "string", description: "Case-insensitive name/comment/tag search" },
+        cursor: { type: "string" },
+        limit: { type: "number", description: "Default 100, max 200" },
+      },
+    },
+  },
+  {
+    name: "list_categories",
+    description: "List the controlled vgi.categories registry for schemas in one catalog.",
+    input_schema: {
+      type: "object",
+      properties: { catalog: { type: "string" }, schema: { type: "string" } },
     },
   },
   {
@@ -241,6 +268,19 @@ export const TOOLS: Tool[] = [
         table: { type: "string", description: "Table or view name (e.g., 'parcels')" },
       },
       required: ["schema", "table"],
+    },
+  },
+  {
+    name: "describe_function",
+    description: "Describe a scalar/table function or macro, including its arguments, constraints, return schema, examples, category, and tags.",
+    input_schema: {
+      type: "object",
+      properties: {
+        catalog: { type: "string" },
+        schema: { type: "string" },
+        function: { type: "string" },
+      },
+      required: ["schema", "function"],
     },
   },
   {
@@ -326,55 +366,141 @@ export { buildSystemPrompt } from "./ai/system-prompt";
 // Tool executors
 // ---------------------------------------------------------------------------
 
-export function executeListTables(catalog: CatalogData): string {
-  const result: any = {
-    catalog: catalog.catalogName,
-    default_schema: catalog.defaultSchema,
-    schemas: catalog.schemas.map((schema) => {
-      const schemaInfo: any = {
-        name: schema.info.name,
-        comment: schema.info.comment || null,
-      };
-      const schemaTags = filterTagsForAI(schema.info.tags);
-      if (schemaTags) schemaInfo.tags = schemaTags;
-      schemaInfo.tables = schema.tables.map((table) => {
-        const cols = getColumns(table);
-        const entry: any = {
-          name: table.name,
-          type: "table",
-          comment: table.comment || null,
-          columns: cols.length,
-        };
-        const tTags = filterTagsForAI(table.tags);
-        if (tTags) entry.tags = tTags;
-        return entry;
-      });
-      schemaInfo.views = schema.views.map((view) => {
-        const entry: any = {
-          name: view.name,
-          type: "view",
-          comment: view.comment || null,
-        };
-        const vTags = filterTagsForAI(view.tags);
-        if (vTags) entry.tags = vTags;
-        return entry;
-      });
-      if (schema.macros?.length > 0) {
-        schemaInfo.macros = schema.macros.map((macro) => ({
-          name: macro.name,
-          type: macro.macro_type === "TABLE" ? "table_macro" : "scalar_macro",
-          parameters: macro.parameters,
-          comment: macro.comment || null,
-        }));
-      }
-      return schemaInfo;
-    }),
-  };
-  return JSON.stringify(result);
+export type CatalogCollection = CatalogData | readonly CatalogData[];
+
+function catalogsOf(value: CatalogCollection): readonly CatalogData[] {
+  return Array.isArray(value) ? value : [value as CatalogData];
 }
 
-export function executeDescribeTable(catalog: CatalogData, schemaName: string, tableName: string): string {
-  const schema = catalog.schemas.find((s) => s.info.name === schemaName);
+function resolveCatalog(value: CatalogCollection, requested?: string): CatalogData | string {
+  const catalogs = catalogsOf(value);
+  if (requested) {
+    return catalogs.find((catalog) => catalog.catalogName === requested)
+      ?? JSON.stringify({ error: `Catalog '${requested}' is not attached`, catalogs: catalogs.map((c) => c.catalogName) });
+  }
+  const workers = catalogs.filter((catalog) => catalog.catalogName !== "memory");
+  if (workers.length === 1) return workers[0];
+  if (catalogs.length === 1) return catalogs[0];
+  return JSON.stringify({
+    error: "Catalog is required because multiple worker catalogs are attached",
+    catalogs: workers.map((catalog) => catalog.catalogName),
+  });
+}
+
+function offsetCursor(cursor: unknown): number {
+  const offset = Number(cursor ?? 0);
+  return Number.isInteger(offset) && offset >= 0 ? offset : 0;
+}
+
+function page<T>(items: T[], cursor: unknown, requestedLimit: unknown, fallback: number, maximum: number) {
+  const offset = offsetCursor(cursor);
+  const rawLimit = Number(requestedLimit ?? fallback);
+  const limit = Math.min(maximum, Math.max(1, Number.isFinite(rawLimit) ? Math.floor(rawLimit) : fallback));
+  const values = items.slice(offset, offset + limit);
+  return { values, next_cursor: offset + limit < items.length ? String(offset + limit) : null, total: items.length };
+}
+
+function clipText(value: unknown, limit: number): string | null {
+  if (value == null || value === "") return null;
+  const text = String(value);
+  return text.length > limit ? `${text.slice(0, limit)}… [truncated]` : text;
+}
+
+const listingText = (value: unknown) => clipText(value, 500);
+const detailText = (value: unknown) => clipText(value, 4_000);
+
+export function executeListCatalogs(collection: CatalogCollection, input: any = {}): string {
+  const items = catalogsOf(collection).map((catalog, index) => ({
+    catalog: catalog.catalogName,
+    type: catalog.catalogName === "memory" ? "memory" : "vgi",
+    primary: index === 0,
+    comment: listingText(catalog.catalogComment),
+    tags: filterTagsForAI(catalog.catalogTags),
+    schemas: catalog.schemas.length,
+    objects: catalog.schemas.reduce(
+      (count, schema) => count + schema.tables.length + schema.views.length + schema.functions.length + schema.macros.length,
+      0,
+    ),
+  }));
+  const result = page(items, input.cursor, input.limit, 25, 50);
+  return JSON.stringify({ catalogs: result.values, total: result.total, next_cursor: result.next_cursor });
+}
+
+export function executeListTables(collection: CatalogCollection, input: any = {}): string {
+  const resolved = resolveCatalog(collection, input.catalog);
+  if (typeof resolved === "string") return resolved;
+  const query = String(input.query || "").trim().toLowerCase();
+  const items: any[] = [];
+  for (const schema of resolved.schemas) {
+    if (input.schema && schema.info.name !== input.schema) continue;
+    const append = (object: any, type: string, extra: Record<string, unknown> = {}) => {
+      const tags = filterTagsForAI(object.tags);
+      const category = getTag(object.tags, TAG_CATEGORY);
+      if (input.category && category !== input.category) return;
+      const entry = {
+        catalog: resolved.catalogName,
+        schema: schema.info.name,
+        name: object.name,
+        qualified_name: `${resolved.catalogName}.${schema.info.name}.${object.name}`,
+        type,
+        comment: listingText(object.comment || object.description),
+        category: category || null,
+        ...(tags ? { tags } : {}),
+        ...extra,
+      };
+      if (query && !JSON.stringify(entry).toLowerCase().includes(query)) return;
+      items.push(entry);
+    };
+    schema.tables.forEach((table) => append(table, "table", { columns: getColumns(table).length }));
+    schema.views.forEach((view) => append(view, "view"));
+    schema.functions.forEach((func) => append(func, "function", { signature: formatFunctionSignature(func) }));
+    schema.macros.forEach((macro) => append(macro, macro.macro_type === "TABLE" ? "table_macro" : "scalar_macro", { parameters: macro.parameters }));
+  }
+  const result = page(items, input.cursor, input.limit, 100, 200);
+  return JSON.stringify({
+    catalog: resolved.catalogName,
+    default_schema: resolved.defaultSchema,
+    schemas: resolved.schemas
+      .filter((schema) => !input.schema || schema.info.name === input.schema)
+      .map((schema) => ({
+        catalog: resolved.catalogName,
+        name: schema.info.name,
+        comment: listingText(schema.info.comment),
+        tags: filterTagsForAI(schema.info.tags),
+      })),
+    objects: result.values,
+    total: result.total,
+    next_cursor: result.next_cursor,
+  });
+}
+
+export function executeListCategories(collection: CatalogCollection, input: any = {}): string {
+  const resolved = resolveCatalog(collection, input.catalog);
+  if (typeof resolved === "string") return resolved;
+  const schemas = resolved.schemas
+    .filter((schema) => !input.schema || schema.info.name === input.schema)
+    .map((schema) => ({
+      catalog: resolved.catalogName,
+      schema: schema.info.name,
+      categories: parseCategories(schema.info.tags).map((category) => ({
+        ...category,
+        description: detailText(category.description) || undefined,
+        doc_md: detailText(category.doc_md) || undefined,
+      })),
+    }));
+  if (input.schema && schemas.length === 0) return JSON.stringify({ error: `Schema '${input.schema}' not found`, catalog: resolved.catalogName });
+  return JSON.stringify({ catalog: resolved.catalogName, schemas });
+}
+
+export function executeDescribeTable(
+  collection: CatalogCollection,
+  schemaName: string,
+  tableName: string,
+  catalogName?: string,
+): string {
+  const resolved = resolveCatalog(collection, catalogName);
+  if (typeof resolved === "string") return resolved;
+  const schema = resolved.schemas.find((s) => s.info.name === schemaName);
   if (!schema) return JSON.stringify({ error: `Schema '${schemaName}' not found` });
 
   const table = schema.tables.find((t) => t.name === tableName);
@@ -418,11 +544,14 @@ export function executeDescribeTable(catalog: CatalogData, schemaName: string, t
     }));
 
     return JSON.stringify({
+      catalog: resolved.catalogName,
       schema: schemaName,
       name: tableName,
+      qualified_name: `${resolved.catalogName}.${schemaName}.${tableName}`,
       type: "table",
-      comment: table.comment || null,
-      tags: filterTagsForAI(table.tags),
+      comment: detailText(table.comment),
+      tags: filterTagsForAIDetail(table.tags),
+      required_filters: table.required_filters?.length ? table.required_filters : null,
       primary_key: pkColumns.length > 0 ? pkColumns : null,
       foreign_keys: foreignKeys.length > 0 ? foreignKeys : null,
       unique_constraints: uniqueConstraints.length > 0 ? uniqueConstraints : null,
@@ -433,7 +562,7 @@ export function executeDescribeTable(catalog: CatalogData, schemaName: string, t
           type: c.duckdbType,
           nullable: c.nullable,
           not_null: notNullSet.has(i),
-          comment: c.comment || null,
+          comment: detailText(c.comment),
         };
         if (c.defaultValue) col.default = c.defaultValue;
         const fkRef = fkByCol.get(c.name);
@@ -446,12 +575,71 @@ export function executeDescribeTable(catalog: CatalogData, schemaName: string, t
 
   // View — less metadata available
   return JSON.stringify({
+    catalog: resolved.catalogName,
     schema: schemaName,
     name: tableName,
+    qualified_name: `${resolved.catalogName}.${schemaName}.${tableName}`,
     type: "view",
-    comment: view!.comment || null,
-    tags: filterTagsForAI(view!.tags),
+    comment: detailText(view!.comment),
+    tags: filterTagsForAIDetail(view!.tags),
   });
+}
+
+function boundedExamples(examples: Array<{ sql: string; description?: string | null }>) {
+  return examples.slice(0, 5).map((example) => ({
+    description: example.description || null,
+    sql: example.sql.length > 4_000 ? `${example.sql.slice(0, 4_000)}… [truncated]` : example.sql,
+  }));
+}
+
+export function executeDescribeFunction(collection: CatalogCollection, input: any): string {
+  const resolved = resolveCatalog(collection, input.catalog);
+  if (typeof resolved === "string") return resolved;
+  const schema = resolved.schemas.find((candidate) => candidate.info.name === input.schema);
+  if (!schema) return JSON.stringify({ error: `Schema '${input.schema}' not found`, catalog: resolved.catalogName });
+  const func = schema.functions.find((candidate) => candidate.name === input.function);
+  if (func) {
+    const returned = getFunctionReturn(func);
+    return JSON.stringify({
+      catalog: resolved.catalogName,
+      schema: input.schema,
+      name: input.function,
+      qualified_name: `${resolved.catalogName}.${input.schema}.${input.function}`,
+      type: func.function_type,
+      signature: formatFunctionSignature(func),
+      comment: detailText(func.comment),
+      description: detailText(func.description),
+      category: getTag(func.tags, TAG_CATEGORY) || null,
+      categories: func.categories,
+      stability: func.stability || null,
+      arguments: getFunctionArgs(func).map((argument) => ({
+        ...argument,
+        description: detailText(argument.description) || undefined,
+        defaultValue: detailText(argument.defaultValue) || undefined,
+        range: detailText(argument.range) || undefined,
+        pattern: detailText(argument.pattern) || undefined,
+      })),
+      returns: returned,
+      examples: boundedExamples(func.examples || []),
+      tags: filterTagsForAIDetail(func.tags),
+    });
+  }
+  const macro = schema.macros.find((candidate) => candidate.name === input.function);
+  if (macro) {
+    return JSON.stringify({
+      catalog: resolved.catalogName,
+      schema: input.schema,
+      name: input.function,
+      qualified_name: `${resolved.catalogName}.${input.schema}.${input.function}`,
+      type: macro.macro_type === "TABLE" ? "table_macro" : "scalar_macro",
+      comment: detailText(macro.comment),
+      parameters: macro.parameters,
+      definition: detailText(macro.definition),
+      category: getTag(macro.tags, TAG_CATEGORY) || null,
+      tags: filterTagsForAIDetail(macro.tags),
+    });
+  }
+  return JSON.stringify({ error: `Function or macro '${input.function}' not found in schema '${input.schema}'`, catalog: resolved.catalogName });
 }
 
 // ---------------------------------------------------------------------------

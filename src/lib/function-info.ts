@@ -106,6 +106,8 @@ export function isTableFunction(func: FunctionInfo): boolean {
  *  Field order is already positional-first then named (set at serialization), so it
  *  is consumed as-is. Returns [] for no-arg functions or an unreadable schema. */
 export function getFunctionArgs(func: FunctionInfo): FunctionArg[] {
+  const override = (func as FunctionInfo & { _functionArgs?: FunctionArg[] })._functionArgs;
+  if (Array.isArray(override)) return override;
   if (!func.arguments || func.arguments.length === 0) return [];
   try {
     const schema = deserializeSchema(func.arguments);
@@ -142,6 +144,8 @@ export function getFunctionArgs(func: FunctionInfo): FunctionArg[] {
  *  `{ columns: [], isTable }`. */
 export function getFunctionReturn(func: FunctionInfo): FunctionReturn {
   const isTable = isTableFunction(func);
+  const override = (func as FunctionInfo & { _functionReturn?: FunctionReturn })._functionReturn;
+  if (override) return override;
   if (!func.output_schema || func.output_schema.length === 0) {
     return { columns: [], isTable };
   }

@@ -9,52 +9,88 @@
  * strings and decoded *defensively* — a malformed value yields an empty result,
  * never a throw.
  */
+import contract from "./vgi-tag-contract.json";
+
+type ContractEntry = { symbol: string; key: string; canonical?: string };
+const CONTRACT_ENTRIES: ContractEntry[] = [
+  ...contract.tags,
+  ...contract.aliases,
+  ...contract.retired,
+  ...contract.extension_tags,
+];
+const CONTRACT_VALUES = new Map(CONTRACT_ENTRIES.map((entry) => [entry.symbol, entry.key]));
+function tagValue(symbol: string): string {
+  const value = CONTRACT_VALUES.get(symbol);
+  if (!value) throw new Error(`VGI tag contract is missing ${symbol}`);
+  return value;
+}
+
+export const TAG_CONTRACT_REVISION = contract.contract_revision;
 
 // ── Canonical reserved keys ────────────────────────────────────────────────
-export const TAG_DOC_LLM = "vgi.doc_llm";
-export const TAG_DOC_MD = "vgi.doc_md";
-export const TAG_RESULT_COLUMNS_MD = "vgi.result_columns_md";
-export const TAG_DOC_LINKS = "vgi.doc_links";
-export const TAG_TITLE = "vgi.title";
-export const TAG_KEYWORDS = "vgi.keywords";
-export const TAG_CATEGORY = "vgi.category";
-export const TAG_CATEGORIES = "vgi.categories";
-export const TAG_CLASSIFICATION_TAGS = "vgi.classification_tags";
-export const TAG_EXAMPLE_QUERIES = "vgi.example_queries";
-export const TAG_EXECUTABLE_EXAMPLES = "vgi.executable_examples";
-export const TAG_AGENT_TEST_TASKS = "vgi.agent_test_tasks";
-export const TAG_SOURCE_URL = "vgi.source_url";
-export const TAG_AUTHOR = "vgi.author";
-export const TAG_COPYRIGHT = "vgi.copyright";
-export const TAG_LICENSE = "vgi.license";
-export const TAG_SUPPORT_CONTACT = "vgi.support_contact";
-export const TAG_SUPPORT_POLICY_URL = "vgi.support_policy_url";
+export const TAG_DOC_LLM = tagValue("TAG_DOC_LLM");
+export const TAG_DOC_MD = tagValue("TAG_DOC_MD");
+export const TAG_DOC_LINKS = tagValue("TAG_DOC_LINKS");
+export const TAG_TITLE = tagValue("TAG_TITLE");
+export const TAG_KEYWORDS = tagValue("TAG_KEYWORDS");
+export const TAG_CATEGORY = tagValue("TAG_CATEGORY");
+export const TAG_CATEGORIES = tagValue("TAG_CATEGORIES");
+export const TAG_CLASSIFICATION_TAGS = tagValue("TAG_CLASSIFICATION_TAGS");
+export const TAG_EXAMPLE_QUERIES = tagValue("TAG_EXAMPLE_QUERIES");
+export const TAG_EXECUTABLE_EXAMPLES = tagValue("TAG_EXECUTABLE_EXAMPLES");
+export const TAG_AGENT_TEST_TASKS = tagValue("TAG_AGENT_TEST_TASKS");
+export const TAG_RESULT_COLUMNS_SCHEMA = tagValue("TAG_RESULT_COLUMNS_SCHEMA");
+export const TAG_RESULT_DYNAMIC_COLUMNS_MD = tagValue("TAG_RESULT_DYNAMIC_COLUMNS_MD");
+export const TAG_SOURCE_URL = tagValue("TAG_SOURCE_URL");
+export const TAG_AUTHOR = tagValue("TAG_AUTHOR");
+export const TAG_COPYRIGHT = tagValue("TAG_COPYRIGHT");
+export const TAG_LICENSE = tagValue("TAG_LICENSE");
+export const TAG_SUPPORT_CONTACT = tagValue("TAG_SUPPORT_CONTACT");
+export const TAG_SUPPORT_POLICY_URL = tagValue("TAG_SUPPORT_POLICY_URL");
+export const TAG_ICON_URL = tagValue("TAG_ICON_URL");
+export const TAG_REQUIRED_FILTERS = tagValue("TAG_REQUIRED_FILTERS");
 
 // ── Deprecated keys (older workers still emit these; §8) ───────────────────
-export const TAG_DESCRIPTION_LLM = "vgi.description_llm";
-export const TAG_DESCRIPTION_MD = "vgi.description_md";
-export const TAG_COLUMNS_MD = "vgi.columns_md";
-export const TAG_CATEGORY_TAGS = "vgi.category_tags";
+export const TAG_DESCRIPTION_LLM = tagValue("TAG_DESCRIPTION_LLM");
+export const TAG_DESCRIPTION_MD = tagValue("TAG_DESCRIPTION_MD");
+export const TAG_CATEGORY_TAGS = tagValue("TAG_CATEGORY_TAGS");
+export const TAG_RESULT_COLUMNS_MD = tagValue("TAG_RESULT_COLUMNS_MD");
+export const TAG_COLUMNS_MD = tagValue("TAG_COLUMNS_MD");
 
 /** Canonical key → its deprecated alias, for read-time fallback. */
-const DEPRECATED_ALIASES: Record<string, string> = {
-  [TAG_DOC_LLM]: TAG_DESCRIPTION_LLM,
-  [TAG_DOC_MD]: TAG_DESCRIPTION_MD,
-  [TAG_RESULT_COLUMNS_MD]: TAG_COLUMNS_MD,
-  [TAG_CLASSIFICATION_TAGS]: TAG_CATEGORY_TAGS,
-};
+const DEPRECATED_ALIASES: Record<string, string> = Object.fromEntries(
+  contract.aliases.map((entry) => [entry.canonical, entry.key]),
+);
 
 /** All reserved keys (canonical + deprecated) — hidden from the raw TagsTable. */
-export const RESERVED_TAG_KEYS: ReadonlySet<string> = new Set([
-  TAG_DOC_LLM, TAG_DOC_MD, TAG_RESULT_COLUMNS_MD, TAG_DOC_LINKS, TAG_TITLE,
-  TAG_KEYWORDS, TAG_CATEGORY, TAG_CATEGORIES, TAG_CLASSIFICATION_TAGS,
-  TAG_EXAMPLE_QUERIES, TAG_EXECUTABLE_EXAMPLES, TAG_AGENT_TEST_TASKS,
-  TAG_SOURCE_URL, TAG_AUTHOR, TAG_COPYRIGHT, TAG_LICENSE,
-  TAG_SUPPORT_CONTACT, TAG_SUPPORT_POLICY_URL,
-  TAG_DESCRIPTION_LLM, TAG_DESCRIPTION_MD, TAG_COLUMNS_MD, TAG_CATEGORY_TAGS,
-]);
+export const RESERVED_TAG_KEYS: ReadonlySet<string> = new Set(
+  [...contract.tags, ...contract.aliases, ...contract.retired].map((entry) => entry.key),
+);
 
 type Tags = Record<string, string> | null | undefined;
+
+/** Normalize DuckDB MAP values returned as objects, Maps, or Arrow entry lists. */
+export function normalizeTags(value: unknown): Record<string, string> {
+  if (value == null) return {};
+  if (value instanceof Map) {
+    return Object.fromEntries([...value.entries()].map(([k, v]) => [String(k), String(v)]));
+  }
+  if (Array.isArray(value)) {
+    const entries = value.flatMap((item): [string, string][] => {
+      if (Array.isArray(item) && item.length >= 2) return [[String(item[0]), String(item[1])]];
+      if (item && typeof item === "object" && "key" in item && "value" in item) {
+        const pair = item as { key: unknown; value: unknown };
+        return [[String(pair.key), String(pair.value)]];
+      }
+      return [];
+    });
+    return Object.fromEntries(entries);
+  }
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, String(v)]));
+  }
+  return {};
+}
 
 /**
  * Read a reserved tag by its canonical key, falling back to the deprecated
@@ -273,21 +309,43 @@ export function filterDisplayTags(tags?: Record<string, string> | null): Record<
  * dropped; the LLM discovery signals (`vgi.doc_llm`, keywords, category,
  * classification tags, title) and all free-form tags are kept.
  */
-const AI_DROP_KEYS: ReadonlySet<string> = new Set([
-  TAG_DOC_MD, TAG_DESCRIPTION_MD,
-  TAG_EXAMPLE_QUERIES, TAG_EXECUTABLE_EXAMPLES,
+const AI_ALWAYS_DROP_KEYS: ReadonlySet<string> = new Set([
   TAG_AGENT_TEST_TASKS,
-  TAG_DOC_LINKS,
   TAG_SOURCE_URL, TAG_AUTHOR, TAG_COPYRIGHT, TAG_LICENSE,
   TAG_SUPPORT_CONTACT, TAG_SUPPORT_POLICY_URL,
 ]);
+const AI_LISTING_DROP_KEYS: ReadonlySet<string> = new Set([
+  TAG_DOC_MD, TAG_DESCRIPTION_MD,
+  TAG_EXAMPLE_QUERIES, TAG_EXECUTABLE_EXAMPLES,
+  TAG_DOC_LINKS,
+]);
 
-/** Filter tags for AI agent tool output. See {@link AI_DROP_KEYS}. */
-export function filterTagsForAI(tags?: Record<string, string> | null): Record<string, string> | undefined {
+export const CATALOG_DOC_CHAR_LIMIT = 8_000;
+export const LISTING_TAG_VALUE_CHAR_LIMIT = 500;
+export const DETAIL_TAG_VALUE_CHAR_LIMIT = 4_000;
+export const MAX_AI_EXAMPLES = 5;
+
+function filterTags(
+  tags: Record<string, string> | null | undefined,
+  drop: ReadonlySet<string>,
+  valueLimit: number,
+): Record<string, string> | undefined {
   if (!tags) return undefined;
   const filtered: Record<string, string> = {};
   for (const [k, v] of Object.entries(tags)) {
-    if (!AI_DROP_KEYS.has(k)) filtered[k] = v;
+    if (!AI_ALWAYS_DROP_KEYS.has(k) && !drop.has(k)) {
+      filtered[k] = v.length > valueLimit ? `${v.slice(0, valueLimit)}… [truncated]` : v;
+    }
   }
   return Object.keys(filtered).length > 0 ? filtered : undefined;
+}
+
+/** Compact discovery metadata for list tools and prompt inventories. */
+export function filterTagsForAI(tags?: Record<string, string> | null): Record<string, string> | undefined {
+  return filterTags(tags, AI_LISTING_DROP_KEYS, LISTING_TAG_VALUE_CHAR_LIMIT);
+}
+
+/** Rich, bounded metadata for describe tools. Private agent graders never leave the database. */
+export function filterTagsForAIDetail(tags?: Record<string, string> | null): Record<string, string> | undefined {
+  return filterTags(tags, new Set(), DETAIL_TAG_VALUE_CHAR_LIMIT);
 }

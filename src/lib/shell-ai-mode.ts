@@ -6,6 +6,9 @@ import {
   runAgentTurn,
   buildSystemPrompt,
   executeListTables,
+  executeListCatalogs,
+  executeListCategories,
+  executeDescribeFunction,
   type MessageParam,
 } from "@/lib/ai-agent";
 import { executeRunSql, describeTableWithFallback } from "@/lib/ai-tool-executor";
@@ -126,6 +129,8 @@ function createToolExecutor(
   spinner: ReturnType<typeof createSpinner>,
 ) {
   return async (name: string, input: any): Promise<string> => {
+    const catalogs = [ops.catalogData, ...ui.attachedCatalogs, ui.memoryCatalog]
+      .filter((value): value is CatalogData => Boolean(value));
     if (name === "run_sql") {
       const lastUserMsg = conv.messages.filter(m => m.role === "user").pop();
       const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
@@ -172,11 +177,20 @@ function createToolExecutor(
     if (name === "read_query_results") {
       return executeReadQueryResults(conv.resultCache, input.result_id, input.offset, input.limit);
     }
+    if (name === "list_catalogs") {
+      return executeListCatalogs(catalogs, input);
+    }
     if (name === "list_tables") {
-      return executeListTables(ops.catalogData);
+      return executeListTables(catalogs, input);
+    }
+    if (name === "list_categories") {
+      return executeListCategories(catalogs, input);
     }
     if (name === "describe_table") {
-      return describeTableWithFallback(ops.catalogData, { query: ops.runQueryAsync }, input);
+      return describeTableWithFallback(catalogs, { query: ops.runQueryAsync }, input);
+    }
+    if (name === "describe_function") {
+      return executeDescribeFunction(catalogs, input);
     }
     if (name === "ask_user") {
       spinner.stop();
@@ -326,7 +340,11 @@ export async function runAIMode(
   // Group this session's gen_ai spans in Sentry's Conversations view. Cleared
   // in the exit finally so SQL-mode spans don't inherit it.
   if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
-  const systemPrompt = buildSystemPrompt(ops.catalogData, getEngineInfo(), ui.memoryCatalog);
+  const systemPrompt = buildSystemPrompt(
+    ops.catalogData,
+    getEngineInfo(),
+    [...ui.attachedCatalogs, ...(ui.memoryCatalog ? [ui.memoryCatalog] : [])],
+  );
   const spinner = createSpinner(term);
 
   // Ctrl+D / Escape exits AI mode

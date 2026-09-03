@@ -12,6 +12,9 @@ import {
   runAgentTurn,
   buildSystemPrompt,
   executeListTables,
+  executeListCatalogs,
+  executeListCategories,
+  executeDescribeFunction,
   TOOLS,
   CHART_TOOL,
   type MessageParam,
@@ -44,6 +47,7 @@ interface ChatMessage {
 
 interface Props {
   catalogData?: CatalogData;
+  attachedCatalogs?: CatalogData[];
   serviceUrl: string;
   catalogName: string;
   isActive?: boolean;
@@ -52,7 +56,7 @@ interface Props {
   onBusyChange?: (busy: boolean) => void;
 }
 
-export function AskAIChat({ catalogData, serviceUrl, isActive, onBusyChange }: Props) {
+export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isActive, onBusyChange }: Props) {
   const engineLifecycle = useEngineLifecycle();
   const { settings } = useSettings();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -244,7 +248,9 @@ export function AskAIChat({ catalogData, serviceUrl, isActive, onBusyChange }: P
     // hasChartTool = true: include render_chart capability in the prompt
     // guidance (and CHART_TOOL in the tool list below). Terminal `.ai` mode
     // passes a different surface and would set this false.
-    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), ui.memoryCatalog, true);
+    const catalogs = [catalogData, ...attachedCatalogs, ui.memoryCatalog]
+      .filter((value): value is CatalogData => Boolean(value));
+    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), catalogs.slice(1), true);
     const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
     const maxTokens = getSetting("aiMaxTokens") || DEFAULT_AI_MAX_TOKENS;
@@ -402,13 +408,22 @@ export function AskAIChat({ catalogData, serviceUrl, isActive, onBusyChange }: P
       if (name === "read_query_results") {
         return executeReadQueryResults(resultCacheRef.current, input.result_id, input.offset, input.limit);
       }
+      if (name === "list_catalogs") {
+        return executeListCatalogs(catalogs, input);
+      }
       if (name === "list_tables") {
-        return executeListTables(catalogData!);
+        return executeListTables(catalogs, input);
+      }
+      if (name === "list_categories") {
+        return executeListCategories(catalogs, input);
       }
       if (name === "describe_table") {
         const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB shell not initialized");
-        return describeTableWithFallback(catalogData!, { query: queryFn }, input);
+        return describeTableWithFallback(catalogs, { query: queryFn }, input);
+      }
+      if (name === "describe_function") {
+        return executeDescribeFunction(catalogs, input);
       }
       if (name === "ask_user") {
         const blockId = uid();
@@ -693,7 +708,7 @@ export function AskAIChat({ catalogData, serviceUrl, isActive, onBusyChange }: P
       setIsLoading(false);
       abortRef.current = null;
     }
-  }, [catalogData, serviceUrl, settings]);
+  }, [catalogData, attachedCatalogs, serviceUrl, settings]);
 
   // The resolver (installed by the ask_user tool) owns marking the block
   // answered — it can reach the turn's live block array, which this callback
@@ -734,7 +749,9 @@ export function AskAIChat({ catalogData, serviceUrl, isActive, onBusyChange }: P
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
   // Pass hasChartTool=true so the preview shown to the user matches what
   // the agent actually sees at runtime (see line 128).
-  const systemPrompt = useMemo(() => catalogData ? buildSystemPrompt(catalogData, getEngineInfo(), ui.memoryCatalog, true) : null, [catalogData, serviceUrl]);
+  const systemPrompt = useMemo(() => catalogData
+    ? buildSystemPrompt(catalogData, getEngineInfo(), [...attachedCatalogs, ...(ui.memoryCatalog ? [ui.memoryCatalog] : [])], true)
+    : null, [catalogData, attachedCatalogs, serviceUrl]);
 
   return (
     <div className="flex flex-col h-full bg-background">

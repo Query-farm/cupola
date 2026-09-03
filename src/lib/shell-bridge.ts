@@ -152,6 +152,7 @@ export const ui = {
   insertIntoEditor: null as ((text: string) => void) | null,
 
   memoryCatalog: null as CatalogData | null,
+  attachedCatalogs: [] as CatalogData[],
   refreshMemoryTables: null as (() => Promise<void>) | null,
   onAttachedCatalogsChanged: null as (() => Promise<void>) | null,
   navigateToSelection: null as ((sel: Selection) => void) | null,

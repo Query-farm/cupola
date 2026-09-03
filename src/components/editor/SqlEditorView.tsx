@@ -47,6 +47,7 @@ export interface PendingEditorSql {
 
 interface Props {
   catalogData: CatalogData;
+  attachedCatalogs?: CatalogData[];
   serviceUrl: string;
   /** Resolved ATTACH options fragment, propagated into share links. */
   attachOptions?: string;
@@ -59,7 +60,7 @@ interface Props {
   onAiBusyChange?: (busy: boolean) => void;
 }
 
-export function SqlEditorView({ catalogData, serviceUrl, attachOptions, pendingSql, onPendingConsumed, onAiBusyChange }: Props) {
+export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, attachOptions, pendingSql, onPendingConsumed, onAiBusyChange }: Props) {
   const { settings } = useSettings();
   const isNarrow = useMediaQuery("(max-width: 767px)");
   // Transient "Copied" confirmation on the Share button.
@@ -562,6 +563,7 @@ export function SqlEditorView({ catalogData, serviceUrl, attachOptions, pendingS
           <EditorAiPanel
             docId={activeDoc?.id ?? "none"}
             catalogData={catalogData}
+            attachedCatalogs={attachedCatalogs}
             serviceUrl={serviceUrl}
             getCurrentSql={getCurrentSql}
             apply={aiApply}

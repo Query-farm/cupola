@@ -140,7 +140,7 @@ describe("memory catalog", () => {
   test("listed when it holds objects", () => {
     const mem = catalog(1, 1);
     mem.catalogName = "memory";
-    expect(buildSystemPrompt(catalog(1, 1), engine(), mem)).toContain("memory (in-memory tables)");
+    expect(buildSystemPrompt(catalog(1, 1), engine(), mem)).toContain("memory (writable memory catalog)");
   });
 
   test("omitted when empty", () => {
