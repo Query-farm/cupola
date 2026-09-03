@@ -195,6 +195,38 @@ export interface NormalizedExample {
   sql: string;
 }
 
+/** `vgi.example_queries`: JSON array of `{description, sql}` — shown, never executed. */
+export function parseExampleQueries(tags: Tags): NormalizedExample[] {
+  const parsed = parseJsonTag(tags, TAG_EXAMPLE_QUERIES);
+  if (!Array.isArray(parsed)) return [];
+  const out: NormalizedExample[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as any;
+    const sql = typeof o.sql === "string" ? o.sql.trim() : "";
+    if (!sql) continue;
+    out.push({
+      description: typeof o.description === "string" && o.description.trim() ? o.description.trim() : undefined,
+      sql,
+    });
+  }
+  return out;
+}
+
+/**
+ * `vgi_required_filters` (extension-injected): a JSON array of arrays of column
+ * paths — an AND of OR-groups. `[["a"],["b","c"]]` means `a AND (b OR c)`.
+ * Malformed → `[]` (no enforcement can be inferred).
+ */
+export function parseRequiredFilters(tags: Tags): string[][] {
+  const parsed = parseJsonTag(tags, TAG_REQUIRED_FILTERS);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter(Array.isArray)
+    .map((group) => group.filter((path: unknown) => typeof path === "string" && path.trim()).map(String))
+    .filter((group) => group.length > 0);
+}
+
 /** Flatten an executable-example `sql` (string | string[] | step[]) to one block. */
 function flattenExecutableSql(sql: unknown): string {
   if (typeof sql === "string") return sql;
@@ -232,6 +264,39 @@ export function parseExecutableExamples(tags: Tags): NormalizedExample[] {
       description: typeof o.description === "string" && o.description.trim() ? o.description.trim() : undefined,
       sql,
     });
+  }
+  return out;
+}
+
+export interface AIExample {
+  description: string | null;
+  sql: string;
+}
+
+/**
+ * Examples for the describe tools: native catalog examples first, then the
+ * tag-carried illustrative (`vgi.example_queries`) and executable
+ * (`vgi.executable_examples`) ones, deduplicated on whitespace-normalized SQL,
+ * capped at MAX_AI_EXAMPLES with each body bounded — the same shape the
+ * linter's `simulate` describe tools return, so both agents see one contract.
+ */
+export function examplesForAI(
+  tags: Tags,
+  native: ReadonlyArray<{ sql: string; description?: string | null }> = [],
+): AIExample[] {
+  const seen = new Set<string>();
+  const out: AIExample[] = [];
+  for (const candidate of [...native, ...parseExampleQueries(tags), ...parseExecutableExamples(tags)]) {
+    const sql = (candidate.sql || "").trim();
+    if (!sql) continue;
+    const key = sql.replace(/\s+/g, " ").toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      description: candidate.description?.trim() || null,
+      sql: sql.length > DETAIL_TAG_VALUE_CHAR_LIMIT ? `${sql.slice(0, DETAIL_TAG_VALUE_CHAR_LIMIT)}… [truncated]` : sql,
+    });
+    if (out.length >= MAX_AI_EXAMPLES) break;
   }
   return out;
 }
@@ -318,6 +383,23 @@ const AI_LISTING_DROP_KEYS: ReadonlySet<string> = new Set([
   TAG_DOC_MD, TAG_DESCRIPTION_MD,
   TAG_EXAMPLE_QUERIES, TAG_EXECUTABLE_EXAMPLES,
   TAG_DOC_LINKS,
+  // The registry is navigation structure, not a discovery signal. It is served
+  // parsed by list_categories, so listings and prompt headings don't repeat it.
+  TAG_CATEGORIES,
+]);
+/** Detail tools lift these into dedicated fields (`examples`, `required_filters`),
+ *  so the raw JSON is not sent a second time inside `tags`. */
+const AI_DETAIL_DROP_KEYS: ReadonlySet<string> = new Set([
+  TAG_EXAMPLE_QUERIES, TAG_EXECUTABLE_EXAMPLES, TAG_REQUIRED_FILTERS,
+]);
+
+/** Keys the contract declares JSON-valued (plus their deprecated aliases):
+ *  decoded before they reach the model instead of shipped as escaped strings. */
+const JSON_TAG_KEYS: ReadonlySet<string> = new Set([
+  ...[...contract.tags, ...contract.extension_tags].filter((e) => e.format === "json").map((e) => e.key),
+  ...contract.aliases
+    .filter((a) => contract.tags.some((t) => t.key === a.canonical && t.format === "json"))
+    .map((a) => a.key),
 ]);
 
 export const CATALOG_DOC_CHAR_LIMIT = 8_000;
@@ -325,27 +407,51 @@ export const LISTING_TAG_VALUE_CHAR_LIMIT = 500;
 export const DETAIL_TAG_VALUE_CHAR_LIMIT = 4_000;
 export const MAX_AI_EXAMPLES = 5;
 
+/** A tag value as the model sees it: JSON-valued keys arrive decoded. */
+export type AITagValue = string | unknown[] | Record<string, unknown>;
+
 function filterTags(
   tags: Record<string, string> | null | undefined,
   drop: ReadonlySet<string>,
   valueLimit: number,
-): Record<string, string> | undefined {
+): Record<string, AITagValue> | undefined {
   if (!tags) return undefined;
-  const filtered: Record<string, string> = {};
+  const filtered: Record<string, AITagValue> = {};
   for (const [k, v] of Object.entries(tags)) {
-    if (!AI_ALWAYS_DROP_KEYS.has(k) && !drop.has(k)) {
-      filtered[k] = v.length > valueLimit ? `${v.slice(0, valueLimit)}… [truncated]` : v;
+    if (AI_ALWAYS_DROP_KEYS.has(k) || drop.has(k)) continue;
+    if (v.length > valueLimit) {
+      filtered[k] = `${v.slice(0, valueLimit)}… [truncated]`;
+      continue;
     }
+    if (JSON_TAG_KEYS.has(k)) {
+      try {
+        const parsed = JSON.parse(v);
+        if (parsed && typeof parsed === "object") {
+          filtered[k] = parsed;
+          continue;
+        }
+      } catch { /* malformed JSON degrades to the raw string */ }
+    }
+    filtered[k] = v;
   }
   return Object.keys(filtered).length > 0 ? filtered : undefined;
 }
 
 /** Compact discovery metadata for list tools and prompt inventories. */
-export function filterTagsForAI(tags?: Record<string, string> | null): Record<string, string> | undefined {
+export function filterTagsForAI(tags?: Record<string, string> | null): Record<string, AITagValue> | undefined {
   return filterTags(tags, AI_LISTING_DROP_KEYS, LISTING_TAG_VALUE_CHAR_LIMIT);
 }
 
 /** Rich, bounded metadata for describe tools. Private agent graders never leave the database. */
-export function filterTagsForAIDetail(tags?: Record<string, string> | null): Record<string, string> | undefined {
-  return filterTags(tags, new Set(), DETAIL_TAG_VALUE_CHAR_LIMIT);
+export function filterTagsForAIDetail(tags?: Record<string, string> | null): Record<string, AITagValue> | undefined {
+  return filterTags(tags, AI_DETAIL_DROP_KEYS, DETAIL_TAG_VALUE_CHAR_LIMIT);
+}
+
+/** Render one AI tag value on a single prompt line. */
+export function formatAITagValue(value: AITagValue): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && value.every((item) => typeof item === "string" || typeof item === "number")) {
+    return value.join(", ");
+  }
+  return JSON.stringify(value);
 }

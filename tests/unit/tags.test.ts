@@ -11,6 +11,12 @@ import {
   filterDisplayTags,
   filterTagsForAI,
   filterTagsForAIDetail,
+  formatAITagValue,
+  examplesForAI,
+  parseRequiredFilters,
+  TAG_CATEGORIES,
+  TAG_EXECUTABLE_EXAMPLES,
+  TAG_REQUIRED_FILTERS,
   TAG_DOC_LLM,
   TAG_DOC_MD,
   TAG_RESULT_COLUMNS_MD,
@@ -55,6 +61,43 @@ describe("bounded AI metadata", () => {
     })!;
     expect(detail[TAG_DOC_MD].length).toBeLessThan(4_050);
     expect(detail[TAG_AGENT_TEST_TASKS]).toBeUndefined();
+  });
+});
+
+describe("examplesForAI", () => {
+  it("merges native + tag examples, dedupes on normalized SQL, caps at five", () => {
+    const tags = {
+      [TAG_EXAMPLE_QUERIES]: JSON.stringify([
+        { description: "dup", sql: "select   1" },
+        { description: "two", sql: "SELECT 2" },
+        { sql: "" },
+        "not an object",
+      ]),
+      [TAG_EXECUTABLE_EXAMPLES]: JSON.stringify([
+        { description: "three", sql: ["SELECT 3", "SELECT 4"] },
+        { description: "five", sql: "SELECT 5" },
+        { description: "six", sql: "SELECT 6" },
+        { description: "seven", sql: "SELECT 7" },
+      ]),
+    };
+    const out = examplesForAI(tags, [{ sql: "SELECT 1", description: "native" }]);
+    expect(out.map((e) => e.sql)).toEqual(["SELECT 1", "SELECT 2", "SELECT 3;\n\nSELECT 4", "SELECT 5", "SELECT 6"]);
+    expect(out[0].description).toBe("native");
+    expect(out).toHaveLength(5);
+  });
+  it("bounds each example body", () => {
+    const out = examplesForAI({ [TAG_EXAMPLE_QUERIES]: JSON.stringify([{ sql: "x".repeat(5_000) }]) });
+    expect(out[0].sql.length).toBeLessThan(4_050);
+    expect(out[0].description).toBeNull();
+  });
+});
+
+describe("parseRequiredFilters", () => {
+  it("decodes an AND of OR-groups and drops malformed entries", () => {
+    expect(parseRequiredFilters({ [TAG_REQUIRED_FILTERS]: '[["a"],["b","c"]]' })).toEqual([["a"], ["b", "c"]]);
+    expect(parseRequiredFilters({ [TAG_REQUIRED_FILTERS]: '[["a"], "b", [], [1, "c"]]' })).toEqual([["a"], ["c"]]);
+    expect(parseRequiredFilters({ [TAG_REQUIRED_FILTERS]: "nope" })).toEqual([]);
+    expect(parseRequiredFilters(null)).toEqual([]);
   });
 });
 
@@ -197,11 +240,40 @@ describe("filterTagsForAI", () => {
     });
     expect(out).toEqual({
       [TAG_DOC_LLM]: "llm",
-      [TAG_KEYWORDS]: "[]",
+      [TAG_KEYWORDS]: [],
       [TAG_CATEGORY]: "eruptions",
       [TAG_TITLE]: "Nice",
       domain: "volcanology",
     });
+  });
+  it("decodes JSON-valued keys instead of shipping escaped strings", () => {
+    const out = filterTagsForAI({
+      [TAG_KEYWORDS]: '["volcano","eruption"]',
+      [TAG_CLASSIFICATION_TAGS]: '["geospatial"]',
+      "vgi.category_tags": '["legacy"]',
+      [TAG_REQUIRED_FILTERS]: '[["id"]]',
+      [TAG_CATEGORIES]: '[{"name":"eruptions"}]',
+      broken: "{not json",
+    })!;
+    expect(out[TAG_KEYWORDS]).toEqual(["volcano", "eruption"]);
+    expect(out[TAG_CLASSIFICATION_TAGS]).toEqual(["geospatial"]);
+    expect(out["vgi.category_tags"]).toEqual(["legacy"]);
+    expect(out[TAG_REQUIRED_FILTERS]).toEqual([["id"]]);
+    // The registry is served by list_categories; listings never repeat it.
+    expect(out[TAG_CATEGORIES]).toBeUndefined();
+    expect(out.broken).toBe("{not json");
+    expect(formatAITagValue(out[TAG_KEYWORDS])).toBe("volcano, eruption");
+    expect(formatAITagValue("plain")).toBe("plain");
+    expect(formatAITagValue([{ a: 1 }])).toBe('[{"a":1}]');
+  });
+  it("detail drops the keys that describe tools lift into dedicated fields", () => {
+    const out = filterTagsForAIDetail({
+      [TAG_EXAMPLE_QUERIES]: '[{"description":"d","sql":"SELECT 1"}]',
+      [TAG_EXECUTABLE_EXAMPLES]: '[{"description":"d","sql":"SELECT 2"}]',
+      [TAG_REQUIRED_FILTERS]: '[["id"]]',
+      [TAG_DOC_MD]: "md",
+    })!;
+    expect(Object.keys(out)).toEqual([TAG_DOC_MD]);
   });
   it("never emits agent_test_tasks and returns undefined when empty", () => {
     expect(filterTagsForAI({ [TAG_AGENT_TEST_TASKS]: "[]" })).toBeUndefined();

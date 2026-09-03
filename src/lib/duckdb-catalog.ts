@@ -21,7 +21,7 @@ import type {
   TableInfo,
   ViewInfo,
 } from "vgi/client";
-import { normalizeTags, TAG_REQUIRED_FILTERS } from "./tags";
+import { normalizeTags, parseRequiredFilters } from "./tags";
 import type { FunctionArg, FunctionReturn } from "./function-info";
 
 interface ArrayLikeValue extends Iterable<unknown> {
@@ -86,15 +86,6 @@ type AttachedFunctionInfo = FunctionInfo & {
 
 function schemaInfo(name: string, comment: string | null, tags: unknown = null): SchemaInfo {
   return { name, comment, tags: normalizeTags(tags), attach_opaque_data: new Uint8Array(0) };
-}
-
-function parseRequiredFilters(tags: Record<string, string>): string[][] {
-  try {
-    const value = JSON.parse(tags[TAG_REQUIRED_FILTERS] || "[]");
-    return Array.isArray(value)
-      ? value.filter(Array.isArray).map((group) => group.map(String))
-      : [];
-  } catch { return []; }
 }
 
 function normalizeExamples(value: unknown): FunctionInfo["examples"] {

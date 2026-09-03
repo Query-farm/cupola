@@ -136,6 +136,36 @@ describe("chart tool guidance", () => {
   });
 });
 
+describe("catalog metadata reaches the prompt", () => {
+  test("schema tags render decoded on the heading; the registry is left to list_categories", () => {
+    const cat = catalog(1, 1);
+    cat.schemas[0].info.tags = {
+      "vgi.doc_llm": "Eruption history",
+      "vgi.keywords": '["volcano","eruption"]',
+      "vgi.categories": '[{"name":"eruptions","description":"Eruption tables"}]',
+      "vgi.agent_test_tasks": '[{"name":"secret","prompt":"p"}]',
+      domain: "volcanology",
+    };
+    const p = buildSystemPrompt(cat, engine());
+    expect(p).toContain("**Schema: demo.s0** [vgi.doc_llm: Eruption history, vgi.keywords: volcano, eruption, domain: volcanology]");
+    expect(p).not.toContain("vgi.categories");
+    expect(p).not.toContain("agent_test_tasks");
+  });
+
+  test("catalog doc_llm becomes the Catalog Description section", () => {
+    const cat = catalog(1, 1);
+    cat.catalogTags = { "vgi.doc_llm": "Smithsonian volcano data" };
+    expect(buildSystemPrompt(cat, engine())).toContain("## Catalog Description\nSmithsonian volcano data");
+  });
+
+  test("explains required filters and examples so tool output is self-describing", () => {
+    const p = buildSystemPrompt(catalog(1, 1), engine());
+    expect(p).toContain("### Required filters");
+    expect(p).toContain("at least one column from every group");
+    expect(p).toContain("### Examples");
+  });
+});
+
 describe("memory catalog", () => {
   test("listed when it holds objects", () => {
     const mem = catalog(1, 1);

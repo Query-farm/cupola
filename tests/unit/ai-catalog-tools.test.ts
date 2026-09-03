@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  executeDescribeFunction,
   executeDescribeTable,
   executeListCatalogs,
   executeListCategories,
   executeListTables,
+  REQUIRED_FILTERS_RULE,
 } from "../../src/lib/ai-agent";
 import type { CatalogData } from "../../src/lib/service";
 
@@ -24,7 +26,13 @@ function catalog(name: string, table: string, category = "reference"): CatalogDa
         name: table,
         schema_name: "main",
         comment: `${table} rows`,
-        tags: { "vgi.category": category, "vgi_required_filters": '[["id"]]' },
+        tags: {
+          "vgi.category": category,
+          "vgi_required_filters": '[["id"]]',
+          "vgi.keywords": '["place","reference"]',
+          "vgi.example_queries": JSON.stringify([{ description: "all", sql: `SELECT * FROM ${name}.main.${table}` }]),
+          "vgi.executable_examples": JSON.stringify([{ description: "dup", sql: `select * from ${name}.main.${table}` }]),
+        },
         columns: new Uint8Array(),
         not_null_constraints: [], unique_constraints: [], check_constraints: [],
         primary_key_constraints: [], foreign_key_constraints: [],
@@ -65,7 +73,40 @@ describe("multi-catalog agent discovery", () => {
     ));
     expect(result.qualified_name).toBe("beta.main.places");
     expect(result.required_filters).toEqual([["id"]]);
-    expect(result.tags.vgi_required_filters).toBe('[["id"]]');
+    // The rule travels with the data, and the raw tag is not sent twice.
+    expect(result.required_filters_rule).toBe(REQUIRED_FILTERS_RULE);
+    expect(result.tags?.vgi_required_filters).toBeUndefined();
+    expect(result.tags?.["vgi.example_queries"]).toBeUndefined();
+    // Illustrative + executable examples collapse to one deduplicated list.
+    expect(result.examples).toEqual([{ description: "all", sql: "SELECT * FROM beta.main.places" }]);
+  });
+
+  test("omits the rule when a table has no required filters", () => {
+    const cat = catalog("alpha", "items");
+    cat.schemas[0].tables[0].required_filters = [];
+    delete (cat.schemas[0].tables[0].tags as any).vgi_required_filters;
+    const result = JSON.parse(executeDescribeTable([cat], "main", "items"));
+    expect(result.required_filters).toBeNull();
+    expect(result.required_filters_rule).toBeUndefined();
+  });
+
+  test("listings decode JSON-valued tags", () => {
+    const result = JSON.parse(executeListTables([catalog("alpha", "items")]));
+    expect(result.objects[0].tags["vgi.keywords"]).toEqual(["place", "reference"]);
+    expect(result.objects[0].tags.vgi_required_filters).toEqual([["id"]]);
+    expect(result.objects[0].tags["vgi.example_queries"]).toBeUndefined();
+  });
+
+  test("describe_function lists examples for macros", () => {
+    const cat = catalog("alpha", "items");
+    cat.schemas[0].macros = [{
+      name: "double_it", macro_type: "SCALAR", parameters: ["x"], parameter_types: null,
+      parameter_default_values: null, definition: "x * 2", comment: "Doubles",
+      tags: { "vgi.example_queries": JSON.stringify([{ description: "d", sql: "SELECT alpha.main.double_it(2)" }]) },
+    }] as any;
+    const result = JSON.parse(executeDescribeFunction([cat], { schema: "main", function: "double_it" }));
+    expect(result.type).toBe("scalar_macro");
+    expect(result.examples).toEqual([{ description: "d", sql: "SELECT alpha.main.double_it(2)" }]);
   });
 
   test("lists schema category registries per catalog", () => {

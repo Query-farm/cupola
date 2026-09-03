@@ -15,7 +15,15 @@ type AgentSpan = Parameters<Parameters<typeof Sentry.startSpan>[1]>[0];
 
 import type { CatalogData } from "./service";
 import { getColumns, getForeignKeys } from "./service";
-import { filterTagsForAI, filterTagsForAIDetail, getTag, parseCategories, TAG_CATEGORY } from "./tags";
+import {
+  examplesForAI,
+  filterTagsForAI,
+  filterTagsForAIDetail,
+  getTag,
+  parseCategories,
+  parseRequiredFilters,
+  TAG_CATEGORY,
+} from "./tags";
 import { formatFunctionSignature, getFunctionArgs, getFunctionReturn } from "./function-info";
 import { fetchWithRetry } from "./ai-fetch";
 import {
@@ -259,7 +267,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "describe_table",
-    description: "Get detailed information for a table or view: columns (name, type, nullable, comment, default, FK references), primary key, foreign keys, unique constraints, check constraints, and tags.",
+    description: "Get detailed information for a table or view: columns (name, type, nullable, comment, default, FK references), primary key, foreign keys, unique and check constraints, required_filters (WHERE-filter groups the table refuses queries without), up to 5 example queries, and tags.",
     input_schema: {
       type: "object",
       properties: {
@@ -272,7 +280,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "describe_function",
-    description: "Describe a scalar/table function or macro, including its arguments, constraints, return schema, examples, category, and tags.",
+    description: "Describe a scalar/table function or macro: signature, per-argument descriptions and constraints (allowed values, ranges, patterns, defaults), return schema, up to 5 example queries, category, and tags. Call it before using any unfamiliar function.",
     input_schema: {
       type: "object",
       properties: {
@@ -408,6 +416,17 @@ function clipText(value: unknown, limit: number): string | null {
 
 const listingText = (value: unknown) => clipText(value, 500);
 const detailText = (value: unknown) => clipText(value, 4_000);
+
+/** Required filters are an AND of OR-groups; the rule ships with the data so the
+ *  model never has to infer what the nested arrays mean. */
+export const REQUIRED_FILTERS_RULE =
+  "AND of OR-groups: the WHERE clause must filter on at least one column from every group, or the query fails at bind time.";
+
+function requiredFiltersForAI(groups: ReadonlyArray<ReadonlyArray<string>> | null | undefined) {
+  const present = (groups ?? []).filter((group) => group.length > 0);
+  if (present.length === 0) return { required_filters: null };
+  return { required_filters: present, required_filters_rule: REQUIRED_FILTERS_RULE };
+}
 
 export function executeListCatalogs(collection: CatalogCollection, input: any = {}): string {
   const items = catalogsOf(collection).map((catalog, index) => ({
@@ -551,7 +570,8 @@ export function executeDescribeTable(
       type: "table",
       comment: detailText(table.comment),
       tags: filterTagsForAIDetail(table.tags),
-      required_filters: table.required_filters?.length ? table.required_filters : null,
+      ...requiredFiltersForAI(table.required_filters?.length ? table.required_filters : parseRequiredFilters(table.tags)),
+      examples: examplesForAI(table.tags),
       primary_key: pkColumns.length > 0 ? pkColumns : null,
       foreign_keys: foreignKeys.length > 0 ? foreignKeys : null,
       unique_constraints: uniqueConstraints.length > 0 ? uniqueConstraints : null,
@@ -582,14 +602,9 @@ export function executeDescribeTable(
     type: "view",
     comment: detailText(view!.comment),
     tags: filterTagsForAIDetail(view!.tags),
+    ...requiredFiltersForAI(parseRequiredFilters(view!.tags)),
+    examples: examplesForAI(view!.tags),
   });
-}
-
-function boundedExamples(examples: Array<{ sql: string; description?: string | null }>) {
-  return examples.slice(0, 5).map((example) => ({
-    description: example.description || null,
-    sql: example.sql.length > 4_000 ? `${example.sql.slice(0, 4_000)}… [truncated]` : example.sql,
-  }));
 }
 
 export function executeDescribeFunction(collection: CatalogCollection, input: any): string {
@@ -620,7 +635,7 @@ export function executeDescribeFunction(collection: CatalogCollection, input: an
         pattern: detailText(argument.pattern) || undefined,
       })),
       returns: returned,
-      examples: boundedExamples(func.examples || []),
+      examples: examplesForAI(func.tags, func.examples || []),
       tags: filterTagsForAIDetail(func.tags),
     });
   }
@@ -636,6 +651,7 @@ export function executeDescribeFunction(collection: CatalogCollection, input: an
       parameters: macro.parameters,
       definition: detailText(macro.definition),
       category: getTag(macro.tags, TAG_CATEGORY) || null,
+      examples: examplesForAI(macro.tags),
       tags: filterTagsForAIDetail(macro.tags),
     });
   }

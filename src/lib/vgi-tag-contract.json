@@ -83,7 +83,6 @@
       "format": "json",
       "key": "vgi.example_queries",
       "scopes": [
-        "catalog",
         "schema",
         "table",
         "view",
@@ -122,8 +121,7 @@
         "catalog",
         "schema",
         "table",
-        "view",
-        "function"
+        "view"
       ],
       "symbol": "TAG_TITLE"
     },
@@ -134,8 +132,7 @@
         "catalog",
         "schema",
         "table",
-        "view",
-        "function"
+        "view"
       ],
       "symbol": "TAG_KEYWORDS"
     },
@@ -161,7 +158,6 @@
       "format": "json",
       "key": "vgi.classification_tags",
       "scopes": [
-        "catalog",
         "schema",
         "table",
         "view",
@@ -201,11 +197,7 @@
       "format": "text",
       "key": "vgi.author",
       "scopes": [
-        "catalog",
-        "schema",
-        "table",
-        "view",
-        "function"
+        "catalog"
       ],
       "symbol": "TAG_AUTHOR"
     },
