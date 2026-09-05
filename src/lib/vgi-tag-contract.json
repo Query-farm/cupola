@@ -240,6 +240,58 @@
         "catalog"
       ],
       "symbol": "TAG_ICON_URL"
+    },
+    {
+      "format": "json",
+      "key": "vgi.semantic_catalog",
+      "schema": "catalog",
+      "scopes": [
+        "catalog"
+      ],
+      "symbol": "TAG_SEMANTIC_CATALOG"
+    },
+    {
+      "format": "json",
+      "key": "vgi.semantic_entity",
+      "schema": "entity",
+      "scopes": [
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_SEMANTIC_ENTITY"
+    },
+    {
+      "format": "json",
+      "key": "vgi.semantic_members",
+      "schema": "members",
+      "scopes": [
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_SEMANTIC_MEMBERS"
+    },
+    {
+      "format": "json",
+      "key": "vgi.semantic_member",
+      "schema": "member",
+      "scopes": [
+        "column"
+      ],
+      "symbol": "TAG_SEMANTIC_MEMBER"
+    },
+    {
+      "format": "json",
+      "key": "vgi.semantic_relationships",
+      "schema": "relationships",
+      "scopes": [
+        "catalog",
+        "table",
+        "view",
+        "function"
+      ],
+      "symbol": "TAG_SEMANTIC_RELATIONSHIPS"
     }
   ],
   "title": "VGI DuckDB metadata tag contract"

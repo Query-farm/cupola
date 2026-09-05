@@ -22,9 +22,17 @@ import {
   getTag,
   parseCategories,
   parseRequiredFilters,
+  parseJsonTag,
   TAG_CATEGORY,
+  TAG_SEMANTIC_CATALOG,
+  TAG_SEMANTIC_ENTITY,
+  TAG_SEMANTIC_MEMBER,
+  TAG_SEMANTIC_MEMBERS,
+  TAG_SEMANTIC_RELATIONSHIPS,
 } from "./tags";
 import { formatFunctionSignature, getFunctionArgs, getFunctionReturn } from "./function-info";
+import { SEMANTIC_QUERY_TOOL } from "./semantic-tool";
+import { buildSemanticEnvironment } from "./semantic-model";
 import { fetchWithRetry } from "./ai-fetch";
 import {
   AGENT_NAME,
@@ -207,6 +215,7 @@ function tryJson(s: string): unknown {
 // ---------------------------------------------------------------------------
 
 export const TOOLS: Tool[] = [
+  SEMANTIC_QUERY_TOOL,
   {
     name: "run_sql",
     description: "Execute a SQL query against the connected DuckDB database. Returns results as JSON with columns, types, first 20 rows, total row count, and a result_id for paging.",
@@ -417,6 +426,46 @@ function clipText(value: unknown, limit: number): string | null {
 const listingText = (value: unknown) => clipText(value, 500);
 const detailText = (value: unknown) => clipText(value, 4_000);
 
+function semanticMembersForAI(tags: Record<string, string> | null | undefined, detailed = false) {
+  const members = parseJsonTag(tags, TAG_SEMANTIC_MEMBERS);
+  if (!Array.isArray(members)) return null;
+  const limit = detailed ? 100 : 25;
+  return {
+    total: members.length,
+    members: members.slice(0, limit).map((value) => {
+      const member = value && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+      const compact = {
+        member_id: member.member_id,
+        kind: member.kind,
+        title: member.title,
+        hidden: member.hidden === true || undefined,
+      };
+      if (!detailed) return compact;
+      return {
+        ...compact,
+        description: clipText(member.description, 1_000),
+        data_type: member.data_type,
+        output_type: member.output_type,
+        aggregation: member.aggregation,
+        member: member.member,
+        additivity: member.additivity,
+        timezone: member.timezone,
+        granularities: member.granularities,
+        week_start: member.week_start,
+      };
+    }),
+    truncated: members.length > limit,
+  };
+}
+
+function semanticRelationshipsForAI(tags: Record<string, string> | null | undefined) {
+  const relationships = parseJsonTag(tags, TAG_SEMANTIC_RELATIONSHIPS);
+  if (!Array.isArray(relationships)) return null;
+  return { total: relationships.length, relationships: relationships.slice(0, 50), truncated: relationships.length > 50 };
+}
+
 /** Required filters are an AND of OR-groups; the rule ships with the data so the
  *  model never has to infer what the nested arrays mean. */
 export const REQUIRED_FILTERS_RULE =
@@ -429,12 +478,15 @@ function requiredFiltersForAI(groups: ReadonlyArray<ReadonlyArray<string>> | nul
 }
 
 export function executeListCatalogs(collection: CatalogCollection, input: any = {}): string {
-  const items = catalogsOf(collection).map((catalog, index) => ({
+  const catalogs = catalogsOf(collection);
+  const semantic = buildSemanticEnvironment(catalogs);
+  const items = catalogs.map((catalog, index) => ({
     catalog: catalog.catalogName,
     type: catalog.catalogName === "memory" ? "memory" : "vgi",
     primary: index === 0,
     comment: listingText(catalog.catalogComment),
     tags: filterTagsForAI(catalog.catalogTags),
+    semantic_catalog: parseJsonTag(catalog.catalogTags, TAG_SEMANTIC_CATALOG),
     schemas: catalog.schemas.length,
     objects: catalog.schemas.reduce(
       (count, schema) => count + schema.tables.length + schema.views.length + schema.functions.length + schema.macros.length,
@@ -442,7 +494,23 @@ export function executeListCatalogs(collection: CatalogCollection, input: any = 
     ),
   }));
   const result = page(items, input.cursor, input.limit, 25, 50);
-  return JSON.stringify({ catalogs: result.values, total: result.total, next_cursor: result.next_cursor });
+  return JSON.stringify({
+    catalogs: result.values,
+    total: result.total,
+    next_cursor: result.next_cursor,
+    semantic_relationships: semantic.relationships.slice(0, 200).map((relationship) => ({
+      relationship_id: relationship.relationshipId,
+      from: relationship.from,
+      to: relationship.to,
+      resolution_status: relationship.resolutionStatus,
+      attestation: relationship.attestation,
+      host_aliases: relationship.hostAliases,
+    })),
+    semantic_relationships_total: semantic.relationships.length,
+    semantic_relationships_truncated: semantic.relationships.length > 200,
+    semantic_diagnostics: semantic.diagnostics.slice(0, 100),
+    semantic_diagnostics_total: semantic.diagnostics.length,
+  });
 }
 
 export function executeListTables(collection: CatalogCollection, input: any = {}): string {
@@ -464,6 +532,8 @@ export function executeListTables(collection: CatalogCollection, input: any = {}
         type,
         comment: listingText(object.comment || object.description),
         category: category || null,
+        semantic_entity: parseJsonTag(object.tags, TAG_SEMANTIC_ENTITY),
+        semantic_members: semanticMembersForAI(object.tags),
         ...(tags ? { tags } : {}),
         ...extra,
       };
@@ -570,6 +640,9 @@ export function executeDescribeTable(
       type: "table",
       comment: detailText(table.comment),
       tags: filterTagsForAIDetail(table.tags),
+      semantic_entity: parseJsonTag(table.tags, TAG_SEMANTIC_ENTITY),
+      semantic_members: semanticMembersForAI(table.tags, true),
+      semantic_relationships: semanticRelationshipsForAI(table.tags),
       ...requiredFiltersForAI(table.required_filters?.length ? table.required_filters : parseRequiredFilters(table.tags)),
       examples: examplesForAI(table.tags),
       primary_key: pkColumns.length > 0 ? pkColumns : null,
@@ -583,6 +656,7 @@ export function executeDescribeTable(
           nullable: c.nullable,
           not_null: notNullSet.has(i),
           comment: detailText(c.comment),
+          semantic_member: parseJsonTag(c.tags, TAG_SEMANTIC_MEMBER),
         };
         if (c.defaultValue) col.default = c.defaultValue;
         const fkRef = fkByCol.get(c.name);
@@ -602,6 +676,9 @@ export function executeDescribeTable(
     type: "view",
     comment: detailText(view!.comment),
     tags: filterTagsForAIDetail(view!.tags),
+    semantic_entity: parseJsonTag(view!.tags, TAG_SEMANTIC_ENTITY),
+    semantic_members: semanticMembersForAI(view!.tags, true),
+    semantic_relationships: semanticRelationshipsForAI(view!.tags),
     ...requiredFiltersForAI(parseRequiredFilters(view!.tags)),
     examples: examplesForAI(view!.tags),
   });
@@ -627,6 +704,8 @@ export function executeDescribeFunction(collection: CatalogCollection, input: an
       category: getTag(func.tags, TAG_CATEGORY) || null,
       categories: func.categories,
       stability: func.stability || null,
+      input_from_args: Boolean(func.input_from_args),
+      supports_correlated_input: Boolean(func.input_from_args),
       arguments: getFunctionArgs(func).map((argument) => ({
         ...argument,
         description: detailText(argument.description) || undefined,
@@ -637,6 +716,9 @@ export function executeDescribeFunction(collection: CatalogCollection, input: an
       returns: returned,
       examples: examplesForAI(func.tags, func.examples || []),
       tags: filterTagsForAIDetail(func.tags),
+      semantic_entity: parseJsonTag(func.tags, TAG_SEMANTIC_ENTITY),
+      semantic_members: semanticMembersForAI(func.tags, true),
+      semantic_relationships: semanticRelationshipsForAI(func.tags),
     });
   }
   const macro = schema.macros.find((candidate) => candidate.name === input.function);

@@ -11,12 +11,12 @@ import {
   executeDescribeFunction,
   type MessageParam,
 } from "@/lib/ai-agent";
-import { executeRunSql, describeTableWithFallback } from "@/lib/ai-tool-executor";
+import { executeRunSql, executeSemanticQuery, describeTableWithFallback } from "@/lib/ai-tool-executor";
 import { isAiTelemetryEnabled } from "@/lib/ai-telemetry";
 import { createMarkdownRenderer } from "@/lib/markdown-ansi";
 import { estimateCost, formatCost } from "@/lib/pricing";
 import { cacheHitRate, totalInputTokens, type AgentUsage } from "@/lib/ai-usage";
-import { terminal, ui, recordQuery } from "@/lib/shell-bridge";
+import { engine, terminal, ui, recordQuery } from "@/lib/shell-bridge";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
@@ -131,6 +131,28 @@ function createToolExecutor(
   return async (name: string, input: any): Promise<string> => {
     const catalogs = [ops.catalogData, ...ui.attachedCatalogs, ui.memoryCatalog]
       .filter((value): value is CatalogData => Boolean(value));
+    if (name === "query_semantic_model") {
+      const lastUserMsg = conv.messages.filter(m => m.role === "user").pop();
+      const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
+      return executeSemanticQuery(catalogs, input, {
+        query: ops.runQueryAsync,
+        queryPrepared: engine.queryPrepared ?? undefined,
+        resultCache: conv.resultCache,
+      }, {
+        onStart: () => { spinner.stop(); },
+        onEnd: () => { ops.clearProgressBar(); ops.resetCancelFlag(); },
+        onOutcome: async (out) => {
+          if (out.kind === "error") {
+            term.println(`\x1b[31m  Error: ${out.errMsg}\x1b[0m`);
+            recordQuery({ sql: out.sql, executionTimeMs: out.elapsedMs, success: false, error: out.errMsg, userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName });
+            return;
+          }
+          if (out.kind !== "table") return;
+          await ops.printTable(out.table);
+          recordQuery({ sql: out.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName });
+        },
+      });
+    }
     if (name === "run_sql") {
       const lastUserMsg = conv.messages.filter(m => m.role === "user").pop();
       const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;

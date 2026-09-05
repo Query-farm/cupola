@@ -28,7 +28,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSettings } from "@/lib/settings";
 import { runAgentTurn, executeListCatalogs, executeListTables, executeListCategories, executeDescribeTable, executeDescribeFunction, type MessageParam, type SystemPrompt, type ToolResult, type ToolResultContent } from "@/lib/ai-agent";
-import { executeRunSql, validateChartSpec } from "@/lib/ai-tool-executor";
+import { executeRunSql, executeSemanticQuery, validateChartSpec } from "@/lib/ai-tool-executor";
 import { QueryResultCache } from "@/lib/query-results";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import { toolInputLabel } from "@/lib/ai/tool-labels";
@@ -1794,6 +1794,10 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
         if (name === "list_categories") return executeListCategories(catalogs, input);
         if (name === "describe_table") return executeDescribeTable(catalogs, input.schema, input.table, input.catalog);
         if (name === "describe_function") return executeDescribeFunction(catalogs, input);
+        if (name === "query_semantic_model") {
+          if (!engine.query) throw new Error("DuckDB is not ready.");
+          return executeSemanticQuery(catalogs, input, { query: engine.query, queryPrepared: engine.queryPrepared ?? undefined, resultCache: resultCache.current });
+        }
         if (name === "preview_sql") {
           const errors = validateReadOnlySql(String(input.sql ?? "")); if (errors.length) throw new Error(errors.join(" "));
           if (!engine.query) throw new Error("DuckDB is not ready.");

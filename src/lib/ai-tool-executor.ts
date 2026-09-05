@@ -24,6 +24,7 @@ import { formatArrowTableAsJson, QueryResultCache } from "./query-results";
 import { quoteLiteral, decodeArrowBuffer } from "./duckdb-query";
 import type { CatalogData } from "./service";
 import type { QueryResult } from "./shell-bridge";
+import { compileSemanticQuery, type SemanticQuery } from "./semantic-compiler";
 
 // ---------------------------------------------------------------------------
 // run_sql
@@ -36,12 +37,40 @@ export interface RunSqlEnv {
    *  QueryResultCache. Optional so the describe_table-only call sites don't
    *  have to construct one they'd never use. */
   resultCache?: QueryResultCache;
+  queryPrepared?: (sql: string, params: unknown[]) => Promise<QueryResult>;
+}
+
+/** Compile a semantic request and, unless compile_only is set, execute the
+ * deterministic parameterized SQL through the same result/cache path as run_sql. */
+export async function executeSemanticQuery(
+  catalogs: readonly CatalogData[],
+  input: SemanticQuery,
+  env: RunSqlEnv,
+  callbacks: RunSqlCallbacks = {},
+): Promise<string> {
+  const compiled = compileSemanticQuery(catalogs, input);
+  if (!compiled.ok) return JSON.stringify(compiled);
+  if (input.compile_only) return JSON.stringify(compiled);
+  if (!env.queryPrepared) {
+    return JSON.stringify({ ok: false, diagnostics: [{ stage: "duckdb_execution", code: "prepared_query_unavailable", message: "The prepared-query bridge is not available" }] });
+  }
+  try {
+    const output = await executeRunSql(
+      compiled.plan.sql,
+      { ...env, query: () => env.queryPrepared!(compiled.plan.sql, compiled.plan.parameters) },
+      callbacks,
+    );
+    return JSON.stringify({ ok: true, plan: compiled.plan, result: JSON.parse(output) });
+  } catch (error) {
+    if ((error as { fatal?: boolean })?.fatal) throw error;
+    return JSON.stringify({ ok: false, diagnostics: [{ stage: "duckdb_execution", code: "query_failed", message: error instanceof Error ? error.message : String(error) }], plan: compiled.plan });
+  }
 }
 
 export type RunSqlOutcome =
   /** Query failed. errMsg is the user-facing message; isFatal means the
    *  outer agent loop should stop (VGI server unreachable, etc.). */
-  | { kind: "error"; errMsg: string; elapsedMs: number; isFatal: boolean }
+  | { kind: "error"; sql: string; errMsg: string; elapsedMs: number; isFatal: boolean }
   /** Query succeeded with no result buffer (e.g. SET, COMMENT, INSERT). */
   | { kind: "empty"; elapsedMs: number }
   /** DDL — single "Count" column, ≤1 row. Surface should refresh catalog. */
@@ -96,7 +125,7 @@ export async function executeRunSql(
   if (!result.ok) {
     const errMsg = result.error || "Query failed";
     const isFatal = isFatalSqlError(errMsg);
-    await callbacks.onOutcome?.({ kind: "error", errMsg, elapsedMs, isFatal });
+    await callbacks.onOutcome?.({ kind: "error", sql, errMsg, elapsedMs, isFatal });
     if (isFatal) {
       const err = new Error(`VGI connection error: ${errMsg}`);
       (err as any).fatal = true;

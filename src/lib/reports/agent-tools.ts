@@ -1,4 +1,5 @@
 import type { Tool } from "@/lib/ai-agent";
+import { SEMANTIC_QUERY_TOOL } from "@/lib/semantic-tool";
 import { cloneReport, newReportId, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportGroup, type ReportLayout } from "./types";
 
 const stringSchema = { type: "string" };
@@ -385,6 +386,7 @@ export const REPORT_TOOLS: Tool[] = [
       required: ["objective", "approach", "datasets", "blocks", "parameters", "acceptanceCriteria"],
     },
   },
+  SEMANTIC_QUERY_TOOL,
   { name: "list_catalogs", description: "List all catalogs attached to the DuckDB session.", input_schema: { type: "object", additionalProperties: false, properties: { cursor: stringSchema, limit: { type: "number" } } } },
   { name: "list_tables", description: "Search and page through objects in one attached catalog.", input_schema: { type: "object", additionalProperties: false, properties: { catalog: stringSchema, schema: stringSchema, category: stringSchema, query: stringSchema, cursor: stringSchema, limit: { type: "number" } } } },
   { name: "list_categories", description: "List controlled semantic categories for one catalog/schema.", input_schema: { type: "object", additionalProperties: false, properties: { catalog: stringSchema, schema: stringSchema } } },

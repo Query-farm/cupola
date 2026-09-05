@@ -49,6 +49,11 @@ export const TAG_SUPPORT_CONTACT = tagValue("TAG_SUPPORT_CONTACT");
 export const TAG_SUPPORT_POLICY_URL = tagValue("TAG_SUPPORT_POLICY_URL");
 export const TAG_ICON_URL = tagValue("TAG_ICON_URL");
 export const TAG_REQUIRED_FILTERS = tagValue("TAG_REQUIRED_FILTERS");
+export const TAG_SEMANTIC_CATALOG = tagValue("TAG_SEMANTIC_CATALOG");
+export const TAG_SEMANTIC_ENTITY = tagValue("TAG_SEMANTIC_ENTITY");
+export const TAG_SEMANTIC_MEMBERS = tagValue("TAG_SEMANTIC_MEMBERS");
+export const TAG_SEMANTIC_MEMBER = tagValue("TAG_SEMANTIC_MEMBER");
+export const TAG_SEMANTIC_RELATIONSHIPS = tagValue("TAG_SEMANTIC_RELATIONSHIPS");
 
 // ── Deprecated keys (older workers still emit these; §8) ───────────────────
 export const TAG_DESCRIPTION_LLM = tagValue("TAG_DESCRIPTION_LLM");
@@ -109,7 +114,7 @@ export function getTag(tags: Tags, canonicalKey: string): string | undefined {
 }
 
 /** Parse a JSON-valued tag defensively. Malformed/absent → `null`. */
-function parseJsonTag(tags: Tags, key: string): unknown {
+export function parseJsonTag(tags: Tags, key: string): unknown {
   const raw = getTag(tags, key);
   if (!raw) return null;
   try {
@@ -383,6 +388,8 @@ const AI_LISTING_DROP_KEYS: ReadonlySet<string> = new Set([
   TAG_DOC_MD, TAG_DESCRIPTION_MD,
   TAG_EXAMPLE_QUERIES, TAG_EXECUTABLE_EXAMPLES,
   TAG_DOC_LINKS,
+  TAG_SEMANTIC_CATALOG, TAG_SEMANTIC_ENTITY, TAG_SEMANTIC_MEMBERS,
+  TAG_SEMANTIC_MEMBER, TAG_SEMANTIC_RELATIONSHIPS,
   // The registry is navigation structure, not a discovery signal. It is served
   // parsed by list_categories, so listings and prompt headings don't repeat it.
   TAG_CATEGORIES,
@@ -391,6 +398,8 @@ const AI_LISTING_DROP_KEYS: ReadonlySet<string> = new Set([
  *  so the raw JSON is not sent a second time inside `tags`. */
 const AI_DETAIL_DROP_KEYS: ReadonlySet<string> = new Set([
   TAG_EXAMPLE_QUERIES, TAG_EXECUTABLE_EXAMPLES, TAG_REQUIRED_FILTERS,
+  TAG_SEMANTIC_CATALOG, TAG_SEMANTIC_ENTITY, TAG_SEMANTIC_MEMBERS,
+  TAG_SEMANTIC_MEMBER, TAG_SEMANTIC_RELATIONSHIPS,
 ]);
 
 /** Keys the contract declares JSON-valued (plus their deprecated aliases):

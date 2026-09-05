@@ -28,6 +28,8 @@ export interface ColumnInfo {
   nullable: boolean;
   comment?: string;
   defaultValue?: string;
+  /** DuckDB 2.0 native column tags; absent on DuckDB 1.5. */
+  tags?: Record<string, string>;
 }
 
 /** Parsed foreign key constraint. */

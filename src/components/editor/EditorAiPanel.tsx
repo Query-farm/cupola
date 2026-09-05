@@ -31,7 +31,7 @@ import {
   TOOLS,
   type MessageParam,
 } from "@/lib/ai-agent";
-import { executeRunSql, describeTableWithFallback } from "@/lib/ai-tool-executor";
+import { executeRunSql, executeSemanticQuery, describeTableWithFallback } from "@/lib/ai-tool-executor";
 import { toolInputLabel } from "@/lib/ai/tool-labels";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessageUser } from "@/components/chat/ChatMessageUser";
@@ -246,6 +246,37 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
     }
 
     const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<any> => {
+      if (name === "query_semantic_model") {
+        const queryFn = engine.query;
+        if (!queryFn) throw new Error("DuckDB engine is still starting — try again in a moment.");
+        const myRun = ++runIdRef.current;
+        const setGrid = (patch: Partial<ResultState>) => { if (myRun === runIdRef.current) setActiveResult(myDoc, patch); };
+        const prevProgress = engine.progress;
+        const updateProgress = (pct: number) => {
+          blocks = blocks.map((b) => (b.type === "tool_call" && b.toolCall.isExecuting ? { ...b, toolCall: { ...b.toolCall, progress: pct } } : b));
+          updateBlocks(blocks);
+        };
+        return executeSemanticQuery(catalogs, input, {
+          query: (sql) => withAbort(queryFn(sql), signal),
+          queryPrepared: engine.queryPrepared ? (sql, params) => withAbort(engine.queryPrepared!(sql, params), signal) : undefined,
+          resultCache: c.resultCache,
+        }, {
+          onStart: () => { engine.progress = updateProgress; setGrid({ running: true, ran: true, error: null }); },
+          onEnd: () => { engine.progress = prevProgress; },
+          onOutcome: async (out) => {
+            if (out.kind === "error") {
+              ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: out.sql, executionTimeMs: out.elapsedMs, success: false, error: out.errMsg, userQuestion: text });
+              setGrid({ running: false, ok: false, error: out.errMsg, table: null });
+              return;
+            }
+            if (out.kind !== "table") return;
+            const parsed = JSON.parse(out.json);
+            pendingDisplayResult = { columns: parsed.columns, rows: parsed.rows, rowCount: parsed.row_count, showing: parsed.showing };
+            ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: out.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion: text });
+            setGrid({ running: false, ok: true, error: null, table: out.table, sourceSql: out.sql, rowCount: out.table.numRows, elapsedMs: out.elapsedMs, ran: true });
+          },
+        });
+      }
       if (name === "run_sql") {
         const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB engine is still starting — try again in a moment.");

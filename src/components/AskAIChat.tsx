@@ -19,7 +19,7 @@ import {
   CHART_TOOL,
   type MessageParam,
 } from "@/lib/ai-agent";
-import { executeRunSql, describeTableWithFallback, validateChartSpec, validateExtraData } from "@/lib/ai-tool-executor";
+import { executeRunSql, executeSemanticQuery, describeTableWithFallback, validateChartSpec, validateExtraData } from "@/lib/ai-tool-executor";
 import { readRows } from "@/lib/duckdb-query";
 import { sampleRowsForAI, QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
 import { cacheChartRows, cacheChartExtra, evictChartRows } from "@/lib/chart-rows-store";
@@ -323,6 +323,39 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     // Returns ToolResult, not string: render_chart replies with the multi-part
     // [text, image] form so the model can see the chart it just drew.
     const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<ToolResult> => {
+      if (name === "query_semantic_model") {
+        const queryFn = engine.query;
+        if (!queryFn) throw new Error("DuckDB shell not initialized — open SQL Shell first");
+        const lastUserMsg = agentMessages.current.filter(m => m.role === "user").pop();
+        const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
+        const prevProgress = engine.progress;
+        const updateProgress = (pct: number) => {
+          blocks = blocks.map(b =>
+            b.type === "tool_call" && b.toolCall.isExecuting
+              ? { ...b, toolCall: { ...b.toolCall, progress: pct } }
+              : b
+          );
+          updateBlocks(blocks);
+        };
+        return executeSemanticQuery(catalogs, input, {
+          query: (sql) => withAbort(queryFn(sql), signal),
+          queryPrepared: engine.queryPrepared ? (sql, params) => withAbort(engine.queryPrepared!(sql, params), signal) : undefined,
+          resultCache: resultCacheRef.current,
+        }, {
+          onStart: () => { engine.progress = updateProgress; },
+          onEnd: () => { engine.progress = prevProgress; },
+          onOutcome: async (out) => {
+            if (out.kind === "error") {
+              ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: out.sql, executionTimeMs: out.elapsedMs, success: false, error: out.errMsg, userQuestion });
+              return;
+            }
+            if (out.kind !== "table") return;
+            const parsed = JSON.parse(out.json);
+            pendingDisplayResult = { columns: parsed.columns, rows: parsed.rows, rowCount: parsed.row_count, showing: parsed.showing };
+            ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: out.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion });
+          },
+        });
+      }
       if (name === "run_sql") {
         const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB shell not initialized — open SQL Shell first");

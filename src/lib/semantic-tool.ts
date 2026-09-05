@@ -1,0 +1,57 @@
+/** One shared tool definition for every AI surface. */
+export const SEMANTIC_QUERY_TOOL = {
+  name: "query_semantic_model",
+  description: "Compile and execute a governed measure/dimension query from VGI semantic tags. Prefer this when the requested concepts are modeled. Query-local inputs and source_bindings can safely drive correlated table functions and bounded function pipelines. All measures must share one root entity. Set compile_only=true to inspect SQL without executing it; compile-only performs no DuckDB query.",
+  input_schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      measures: { type: "array", maxItems: 50, items: { $ref: "#/$defs/measure_selection" } },
+      dimensions: { type: "array", maxItems: 50, items: { $ref: "#/$defs/dimension_selection" } },
+      filters: { $ref: "#/$defs/filter" },
+      measure_filters: { $ref: "#/$defs/filter" },
+      order: { type: "array", maxItems: 50, items: { type: "object", additionalProperties: false, properties: { member: { type: "string" }, direction: { enum: ["asc", "desc"] } }, required: ["member", "direction"] } },
+      limit: { type: "integer", minimum: 1, maximum: 10000 },
+      compile_only: { type: "boolean" },
+      root_entity: { $ref: "#/$defs/entity_ref" },
+      bindings: { type: "object", additionalProperties: { type: "string" } },
+      parameters: { type: "object" },
+      inputs: { type: "array", maxItems: 10, items: { $ref: "#/$defs/input" } },
+      source_bindings: { type: "array", maxItems: 10, items: { $ref: "#/$defs/source_binding" } },
+      allow_driving_grain_reduction: { type: "boolean" },
+      execution_limits: { type: "object", additionalProperties: false, properties: { max_invocations: { type: "integer", minimum: 1, maximum: 1000 } } },
+    },
+    $defs: {
+      entity_ref: { type: "object", additionalProperties: false, properties: { catalog_id: { type: "string" }, entity_id: { type: "string" } }, required: ["catalog_id", "entity_id"] },
+      member_ref: { type: "object", additionalProperties: false, properties: { catalog_id: { type: "string" }, entity_id: { type: "string" }, member_id: { type: "string" } }, required: ["catalog_id", "entity_id", "member_id"] },
+      input_column: { type: "object", additionalProperties: false, properties: { name: { type: "string" }, type: { type: "string" }, nullable: { type: "boolean" } }, required: ["name", "type"] },
+      input: { type: "object", additionalProperties: false, properties: { input_id: { type: "string" }, grain: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string" } }, columns: { type: "array", minItems: 1, maxItems: 32, items: { $ref: "#/$defs/input_column" } }, rows: { type: "array", minItems: 1, maxItems: 100, items: { type: "array", maxItems: 32 } } }, required: ["input_id", "grain", "columns", "rows"] },
+      source_argument_binding: { oneOf: [
+        { type: "object", additionalProperties: false, properties: { parameter: { type: "string" } }, required: ["parameter"] },
+        { type: "object", additionalProperties: false, properties: { input_column: { type: "string" } }, required: ["input_column"] },
+        { type: "object", additionalProperties: false, properties: { member: { $ref: "#/$defs/member_ref" } }, required: ["member"] },
+      ] },
+      driver: { oneOf: [
+        { type: "object", additionalProperties: false, properties: { input_id: { type: "string" } }, required: ["input_id"] },
+        { type: "object", additionalProperties: false, properties: { entity: { $ref: "#/$defs/entity_ref" }, max_rows: { type: "integer", minimum: 1, maximum: 1000 }, filters: { $ref: "#/$defs/filter" }, order: { type: "array", maxItems: 20, items: { type: "object", additionalProperties: false, properties: { member_id: { type: "string" }, direction: { enum: ["asc", "desc"] } }, required: ["member_id", "direction"] } } }, required: ["entity", "max_rows"] },
+      ] },
+      source_binding: { type: "object", additionalProperties: false, properties: { entity: { $ref: "#/$defs/entity_ref" }, driver: { $ref: "#/$defs/driver" }, arguments: { type: "object", additionalProperties: { $ref: "#/$defs/source_argument_binding" } }, max_output_rows: { type: "integer", minimum: 1, maximum: 10000 } }, required: ["entity", "driver", "arguments"] },
+      measure_selection: { type: "object", additionalProperties: false, properties: { catalog_id: { type: "string" }, entity_id: { type: "string" }, member_id: { type: "string" }, alias: { type: "string" } }, required: ["catalog_id", "entity_id", "member_id"] },
+      dimension_selection: { type: "object", additionalProperties: false, properties: { catalog_id: { type: "string" }, entity_id: { type: "string" }, member_id: { type: "string" }, alias: { type: "string" }, relationship_path: { type: "array", items: { type: "string" } }, granularity: { enum: ["minute", "hour", "day", "week", "month", "quarter", "year"] } }, required: ["catalog_id", "entity_id", "member_id"] },
+      filter: { oneOf: [
+        { type: "object", additionalProperties: false, properties: { and: { type: "array", minItems: 1, maxItems: 100, items: { $ref: "#/$defs/filter" } } }, required: ["and"] },
+        { type: "object", additionalProperties: false, properties: { or: { type: "array", minItems: 1, maxItems: 100, items: { $ref: "#/$defs/filter" } } }, required: ["or"] },
+        { $ref: "#/$defs/filter_predicate" },
+      ] },
+      filter_member_ref: { type: "object", additionalProperties: false, properties: { catalog_id: { type: "string" }, entity_id: { type: "string" }, member_id: { type: "string" }, relationship_path: { type: "array", items: { type: "string" } } }, required: ["catalog_id", "entity_id", "member_id"] },
+      filter_member: { oneOf: [{ type: "string" }, { $ref: "#/$defs/filter_member_ref" }] },
+      filter_predicate: { oneOf: [
+        { type: "object", additionalProperties: false, properties: { member: { $ref: "#/$defs/filter_member" }, operator: { enum: ["eq", "neq", "gt", "gte", "lt", "lte"] }, value: {} }, required: ["member", "operator", "value"] },
+        { type: "object", additionalProperties: false, properties: { member: { $ref: "#/$defs/filter_member" }, operator: { enum: ["in", "not_in"] }, values: { type: "array", minItems: 1, maxItems: 100 } }, required: ["member", "operator", "values"] },
+        { type: "object", additionalProperties: false, properties: { member: { $ref: "#/$defs/filter_member" }, operator: { const: "between" }, values: { type: "array", minItems: 2, maxItems: 2 } }, required: ["member", "operator", "values"] },
+        { type: "object", additionalProperties: false, properties: { member: { $ref: "#/$defs/filter_member" }, operator: { enum: ["is_null", "is_not_null"] } }, required: ["member", "operator"] },
+      ] },
+    },
+    anyOf: [{ required: ["measures"] }, { required: ["dimensions"] }],
+  },
+} as const;

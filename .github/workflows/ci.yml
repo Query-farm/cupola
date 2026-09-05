@@ -21,6 +21,15 @@ jobs:
         with:
           path: cupola
 
+      - name: Checkout VGI lint contract
+        uses: actions/checkout@v4
+        with:
+          repository: Query-farm/vgi-lint-check
+          path: vgi-lint-check
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -37,6 +46,12 @@ jobs:
       - name: Unit tests
         working-directory: cupola
         run: bun run test
+
+      - name: Verify vendored VGI contract
+        working-directory: cupola
+        env:
+          VGI_LINT_REPO: ../vgi-lint-check
+        run: bun run tags:check
 
       - name: Production build
         working-directory: cupola

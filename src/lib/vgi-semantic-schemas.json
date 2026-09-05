@@ -1,0 +1,1586 @@
+{
+  "catalog": {
+    "$id": "https://query.farm/schema/vgi/semantic/catalog.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "binding_key": {
+        "$ref": "definitions.json#/$defs/semantic_id"
+      },
+      "catalog_id": {
+        "$ref": "definitions.json#/$defs/catalog_id"
+      },
+      "catalog_instance_id": {
+        "$ref": "definitions.json#/$defs/semantic_id"
+      },
+      "default_timezone": {
+        "maxLength": 100,
+        "minLength": 1,
+        "type": "string"
+      },
+      "description": {
+        "maxLength": 4000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "catalog_id"
+    ],
+    "type": "object"
+  },
+  "definitions": {
+    "$defs": {
+      "additivity": {
+        "oneOf": [
+          {
+            "const": "additive"
+          },
+          {
+            "const": "non_additive"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "semi_additive"
+              },
+              "prohibited_dimensions": {
+                "items": {
+                  "$ref": "#/$defs/semantic_id"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "kind",
+              "prohibited_dimensions"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "cardinality": {
+        "additionalProperties": false,
+        "properties": {
+          "max": {
+            "enum": [
+              1,
+              "many"
+            ]
+          },
+          "min": {
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/$defs/semantic_id"
+            },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "min",
+          "max"
+        ],
+        "type": "object"
+      },
+      "catalog_id": {
+        "$ref": "#/$defs/semantic_id"
+      },
+      "entity_ref": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_id": {
+            "$ref": "#/$defs/catalog_id"
+          },
+          "entity_id": {
+            "$ref": "#/$defs/semantic_id"
+          }
+        },
+        "required": [
+          "catalog_id",
+          "entity_id"
+        ],
+        "type": "object"
+      },
+      "semantic_id": {
+        "maxLength": 200,
+        "minLength": 1,
+        "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$",
+        "type": "string"
+      },
+      "source_argument": {
+        "additionalProperties": false,
+        "description": "Maps one physical table-function argument to a semantic query parameter. Calling convention and order are inferred from vgi_function_arguments(), never duplicated here.",
+        "properties": {
+          "argument": {
+            "description": "Exact physical argument name reported by vgi_function_arguments().",
+            "minLength": 1,
+            "type": "string"
+          },
+          "parameter": {
+            "$ref": "#/$defs/semantic_id",
+            "description": "Semantic request parameter name."
+          },
+          "required": {
+            "default": true,
+            "description": "Whether the semantic request must supply the parameter. False requires a physical function default.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "argument",
+          "parameter"
+        ],
+        "type": "object"
+      }
+    },
+    "$id": "https://query.farm/schema/vgi/semantic/definitions.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema"
+  },
+  "diagnostic": {
+    "$id": "https://query.farm/schema/vgi/semantic/diagnostic.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "code": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "details": {
+        "type": "object"
+      },
+      "message": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "path": {
+        "type": "string"
+      },
+      "stage": {
+        "enum": [
+          "request_validation",
+          "model_resolution",
+          "multi_fact_not_supported",
+          "catalog_binding",
+          "relationship_resolution",
+          "source_binding",
+          "execution_limit",
+          "type_check",
+          "fanout",
+          "required_filter",
+          "sql_generation",
+          "duckdb_execution"
+        ]
+      }
+    },
+    "required": [
+      "stage",
+      "code",
+      "message"
+    ],
+    "type": "object"
+  },
+  "entity": {
+    "$id": "https://query.farm/schema/vgi/semantic/entity.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "default_time_dimension": {
+        "$ref": "definitions.json#/$defs/semantic_id"
+      },
+      "description": {
+        "maxLength": 4000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "entity_id": {
+        "$ref": "definitions.json#/$defs/semantic_id"
+      },
+      "grain": {
+        "items": {
+          "$ref": "definitions.json#/$defs/semantic_id"
+        },
+        "minItems": 1,
+        "type": "array",
+        "uniqueItems": true
+      },
+      "source": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "items": {
+              "$ref": "definitions.json#/$defs/source_argument"
+            },
+            "maxItems": 50,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "title": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "entity_id",
+      "grain"
+    ],
+    "type": "object"
+  },
+  "environment": {
+    "$id": "https://query.farm/schema/vgi/semantic/environment.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "attachments": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "alias": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "binding_key": {
+              "$ref": "definitions.json#/$defs/semantic_id"
+            },
+            "catalog_id": {
+              "$ref": "definitions.json#/$defs/catalog_id"
+            },
+            "catalog_instance_id": {
+              "$ref": "definitions.json#/$defs/semantic_id"
+            }
+          },
+          "required": [
+            "alias",
+            "catalog_id"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "attachments"
+    ],
+    "type": "object"
+  },
+  "expression": {
+    "$defs": {
+      "expr": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "member": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
+              "op": {
+                "const": "member"
+              }
+            },
+            "required": [
+              "op",
+              "member"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "op": {
+                "const": "literal"
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "left": {
+                "$ref": "#/$defs/expr"
+              },
+              "op": {
+                "enum": [
+                  "add",
+                  "subtract",
+                  "multiply",
+                  "divide",
+                  "safe_divide"
+                ]
+              },
+              "right": {
+                "$ref": "#/$defs/expr"
+              }
+            },
+            "required": [
+              "op",
+              "left",
+              "right"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "args": {
+                "items": {
+                  "$ref": "#/$defs/expr"
+                },
+                "maxItems": 20,
+                "minItems": 1,
+                "type": "array"
+              },
+              "op": {
+                "enum": [
+                  "coalesce"
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "op": {
+                "const": "nullif"
+              },
+              "other": {
+                "$ref": "#/$defs/expr"
+              },
+              "value": {
+                "$ref": "#/$defs/expr"
+              }
+            },
+            "required": [
+              "op",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "op": {
+                "const": "cast"
+              },
+              "type": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/$defs/expr"
+              }
+            },
+            "required": [
+              "op",
+              "value",
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "else": {
+                "$ref": "#/$defs/expr"
+              },
+              "op": {
+                "const": "case"
+              },
+              "then": {
+                "$ref": "#/$defs/expr"
+              },
+              "when": {
+                "$ref": "#/$defs/expr"
+              }
+            },
+            "required": [
+              "op",
+              "when",
+              "then"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "$id": "https://query.farm/schema/vgi/semantic/expression.json",
+    "$ref": "#/$defs/expr",
+    "$schema": "https://json-schema.org/draft/2020-12/schema"
+  },
+  "member": {
+    "$defs": {
+      "base": {
+        "properties": {
+          "data_type": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "identifier",
+              "dimension",
+              "time_dimension",
+              "measure"
+            ]
+          },
+          "member_id": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "output_type": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "member_id",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "dimension": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/base"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "column": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "data_type": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "expression": {
+                "$ref": "expression.json"
+              },
+              "hidden": {
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "dimension"
+              },
+              "member_id": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
+              "output_type": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "member_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "identifier": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/base"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "column": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "data_type": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "hidden": {
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "identifier"
+              },
+              "member_id": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
+              "output_type": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "member_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "measure": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/base"
+          },
+          {
+            "additionalProperties": false,
+            "oneOf": [
+              {
+                "required": [
+                  "aggregation"
+                ]
+              },
+              {
+                "required": [
+                  "expression"
+                ]
+              }
+            ],
+            "properties": {
+              "additivity": {
+                "$ref": "definitions.json#/$defs/additivity"
+              },
+              "aggregation": {
+                "enum": [
+                  "count_rows",
+                  "count",
+                  "count_distinct",
+                  "sum",
+                  "min",
+                  "max",
+                  "avg"
+                ]
+              },
+              "data_type": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "expression": {
+                "$ref": "expression.json"
+              },
+              "hidden": {
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "measure"
+              },
+              "member": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
+              "member_id": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
+              "output_type": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "member_id",
+              "kind",
+              "additivity"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "time_dimension": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/base"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "column": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "data_type": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "expression": {
+                "$ref": "expression.json"
+              },
+              "granularities": {
+                "items": {
+                  "enum": [
+                    "minute",
+                    "hour",
+                    "day",
+                    "week",
+                    "month",
+                    "quarter",
+                    "year"
+                  ]
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "hidden": {
+                "type": "boolean"
+              },
+              "kind": {
+                "const": "time_dimension"
+              },
+              "member_id": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
+              "output_type": {
+                "type": "string"
+              },
+              "timezone": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "week_start": {
+                "const": "monday"
+              }
+            },
+            "required": [
+              "member_id",
+              "kind",
+              "timezone",
+              "granularities"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "$id": "https://query.farm/schema/vgi/semantic/member.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "$ref": "#/$defs/identifier"
+      },
+      {
+        "$ref": "#/$defs/dimension"
+      },
+      {
+        "$ref": "#/$defs/time_dimension"
+      },
+      {
+        "$ref": "#/$defs/measure"
+      }
+    ]
+  },
+  "members": {
+    "$id": "https://query.farm/schema/vgi/semantic/members.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "items": {
+      "$ref": "member.json"
+    },
+    "maxItems": 500,
+    "type": "array"
+  },
+  "plan": {
+    "$defs": {
+      "fact_branch": {
+        "additionalProperties": false,
+        "properties": {
+          "attachment_alias": {
+            "type": "string"
+          },
+          "driver": {
+            "type": "object"
+          },
+          "driving_grain_reduced": {
+            "type": "boolean"
+          },
+          "effective_source_grain": {
+            "items": {
+              "$ref": "#/$defs/grain_item"
+            },
+            "type": "array"
+          },
+          "entities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "estimated_invocations": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "invocations": {
+            "items": {
+              "$ref": "#/$defs/invocation"
+            },
+            "maxItems": 10,
+            "type": "array"
+          },
+          "result_grain": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "root": {
+            "$ref": "definitions.json#/$defs/entity_ref"
+          }
+        },
+        "required": [
+          "root",
+          "attachment_alias",
+          "entities",
+          "invocations",
+          "effective_source_grain",
+          "result_grain",
+          "estimated_invocations",
+          "driving_grain_reduced"
+        ],
+        "type": "object"
+      },
+      "grain_item": {
+        "additionalProperties": false,
+        "properties": {
+          "member": {
+            "type": "string"
+          },
+          "output_name": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "member",
+          "output_name"
+        ],
+        "type": "object"
+      },
+      "invocation": {
+        "additionalProperties": false,
+        "properties": {
+          "argument_bindings": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "driver": {
+            "type": "string"
+          },
+          "driver_kind": {
+            "enum": [
+              "inline_input",
+              "entity"
+            ]
+          },
+          "entity": {
+            "$ref": "definitions.json#/$defs/entity_ref"
+          },
+          "estimated_invocations": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entity",
+          "driver_kind",
+          "driver",
+          "argument_bindings",
+          "estimated_invocations"
+        ],
+        "type": "object"
+      }
+    },
+    "$id": "https://query.farm/schema/vgi/semantic/plan.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "fact_branches": {
+        "items": {
+          "$ref": "#/$defs/fact_branch"
+        },
+        "maxItems": 1,
+        "minItems": 1,
+        "type": "array"
+      },
+      "parameters": {
+        "type": "array"
+      },
+      "sql": {
+        "type": "string"
+      },
+      "validation_scope": {
+        "const": "semantic"
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "fact_branches",
+      "sql",
+      "parameters",
+      "validation_scope"
+    ],
+    "type": "object"
+  },
+  "query": {
+    "$defs": {
+      "dimension_selection": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "catalog_id": {
+            "$ref": "definitions.json#/$defs/catalog_id"
+          },
+          "entity_id": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "granularity": {
+            "enum": [
+              "minute",
+              "hour",
+              "day",
+              "week",
+              "month",
+              "quarter",
+              "year"
+            ]
+          },
+          "member_id": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "relationship_path": {
+            "items": {
+              "$ref": "definitions.json#/$defs/semantic_id"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "catalog_id",
+          "entity_id",
+          "member_id"
+        ],
+        "type": "object"
+      },
+      "driver": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "input_id": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              }
+            },
+            "required": [
+              "input_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "entity": {
+                "$ref": "definitions.json#/$defs/entity_ref"
+              },
+              "filters": {
+                "$ref": "#/$defs/filter"
+              },
+              "max_rows": {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "order": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "direction": {
+                      "enum": [
+                        "asc",
+                        "desc"
+                      ]
+                    },
+                    "member_id": {
+                      "$ref": "definitions.json#/$defs/semantic_id"
+                    }
+                  },
+                  "required": [
+                    "member_id",
+                    "direction"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 20,
+                "type": "array"
+              }
+            },
+            "required": [
+              "entity",
+              "max_rows"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "filter": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "and": {
+                "items": {
+                  "$ref": "#/$defs/filter"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "and"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "or": {
+                "items": {
+                  "$ref": "#/$defs/filter"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "or"
+            ],
+            "type": "object"
+          },
+          {
+            "$ref": "#/$defs/filter_predicate"
+          }
+        ]
+      },
+      "filter_member": {
+        "oneOf": [
+          {
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "catalog_id": {
+                "$ref": "definitions.json#/$defs/catalog_id"
+              },
+              "entity_id": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
+              "member_id": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
+              "relationship_path": {
+                "items": {
+                  "$ref": "definitions.json#/$defs/semantic_id"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "catalog_id",
+              "entity_id",
+              "member_id"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "filter_predicate": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "member": {
+                "$ref": "#/$defs/filter_member"
+              },
+              "operator": {
+                "enum": [
+                  "eq",
+                  "neq",
+                  "gt",
+                  "gte",
+                  "lt",
+                  "lte"
+                ]
+              },
+              "value": {}
+            },
+            "required": [
+              "member",
+              "operator",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "member": {
+                "$ref": "#/$defs/filter_member"
+              },
+              "operator": {
+                "enum": [
+                  "in",
+                  "not_in"
+                ]
+              },
+              "values": {
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "member",
+              "operator",
+              "values"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "member": {
+                "$ref": "#/$defs/filter_member"
+              },
+              "operator": {
+                "const": "between"
+              },
+              "values": {
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              }
+            },
+            "required": [
+              "member",
+              "operator",
+              "values"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "member": {
+                "$ref": "#/$defs/filter_member"
+              },
+              "operator": {
+                "enum": [
+                  "is_null",
+                  "is_not_null"
+                ]
+              }
+            },
+            "required": [
+              "member",
+              "operator"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "input": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/$defs/input_column"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array"
+          },
+          "grain": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "input_id": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "rows": {
+            "items": {
+              "maxItems": 32,
+              "type": "array"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "input_id",
+          "grain",
+          "columns",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "input_column": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "nullable": {
+            "default": false,
+            "type": "boolean"
+          },
+          "type": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "measure_selection": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "catalog_id": {
+            "$ref": "definitions.json#/$defs/catalog_id"
+          },
+          "entity_id": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "member_id": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          }
+        },
+        "required": [
+          "catalog_id",
+          "entity_id",
+          "member_id"
+        ],
+        "type": "object"
+      },
+      "member_ref": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_id": {
+            "$ref": "definitions.json#/$defs/catalog_id"
+          },
+          "entity_id": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "member_id": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          }
+        },
+        "required": [
+          "catalog_id",
+          "entity_id",
+          "member_id"
+        ],
+        "type": "object"
+      },
+      "source_argument_binding": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "parameter": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              }
+            },
+            "required": [
+              "parameter"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "input_column": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "input_column"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "member": {
+                "$ref": "#/$defs/member_ref"
+              }
+            },
+            "required": [
+              "member"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "source_binding": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "additionalProperties": {
+              "$ref": "#/$defs/source_argument_binding"
+            },
+            "minProperties": 1,
+            "type": "object"
+          },
+          "driver": {
+            "$ref": "#/$defs/driver"
+          },
+          "entity": {
+            "$ref": "definitions.json#/$defs/entity_ref"
+          },
+          "max_output_rows": {
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entity",
+          "driver",
+          "arguments"
+        ],
+        "type": "object"
+      }
+    },
+    "$id": "https://query.farm/schema/vgi/semantic/query.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "anyOf": [
+      {
+        "required": [
+          "measures"
+        ]
+      },
+      {
+        "required": [
+          "dimensions"
+        ]
+      }
+    ],
+    "properties": {
+      "allow_driving_grain_reduction": {
+        "default": false,
+        "type": "boolean"
+      },
+      "bindings": {
+        "additionalProperties": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "compile_only": {
+        "default": false,
+        "type": "boolean"
+      },
+      "dimensions": {
+        "items": {
+          "$ref": "#/$defs/dimension_selection"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "execution_limits": {
+        "additionalProperties": false,
+        "properties": {
+          "max_invocations": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "filters": {
+        "$ref": "#/$defs/filter"
+      },
+      "inputs": {
+        "items": {
+          "$ref": "#/$defs/input"
+        },
+        "maxItems": 10,
+        "type": "array"
+      },
+      "limit": {
+        "default": 1000,
+        "maximum": 10000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "measure_filters": {
+        "$ref": "#/$defs/filter"
+      },
+      "measures": {
+        "items": {
+          "$ref": "#/$defs/measure_selection"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "order": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "direction": {
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            },
+            "member": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "member",
+            "direction"
+          ],
+          "type": "object"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "parameters": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "root_entity": {
+        "$ref": "definitions.json#/$defs/entity_ref"
+      },
+      "source_bindings": {
+        "items": {
+          "$ref": "#/$defs/source_binding"
+        },
+        "maxItems": 10,
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "relationship": {
+    "$id": "https://query.farm/schema/vgi/semantic/relationship.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "description": {
+        "type": "string"
+      },
+      "from": {
+        "$ref": "definitions.json#/$defs/entity_ref"
+      },
+      "from_cardinality": {
+        "$ref": "definitions.json#/$defs/cardinality"
+      },
+      "predicate": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "from_member": {
+              "$ref": "definitions.json#/$defs/semantic_id"
+            },
+            "nulls": {
+              "default": "not_equal",
+              "enum": [
+                "not_equal",
+                "equal"
+              ]
+            },
+            "to_member": {
+              "$ref": "definitions.json#/$defs/semantic_id"
+            }
+          },
+          "required": [
+            "from_member",
+            "to_member"
+          ],
+          "type": "object"
+        },
+        "maxItems": 20,
+        "minItems": 1,
+        "type": "array"
+      },
+      "relationship_id": {
+        "$ref": "definitions.json#/$defs/semantic_id"
+      },
+      "title": {
+        "type": "string"
+      },
+      "to": {
+        "$ref": "definitions.json#/$defs/entity_ref"
+      },
+      "to_cardinality": {
+        "$ref": "definitions.json#/$defs/cardinality"
+      }
+    },
+    "required": [
+      "relationship_id",
+      "from",
+      "to",
+      "from_cardinality",
+      "to_cardinality",
+      "predicate"
+    ],
+    "type": "object"
+  },
+  "relationships": {
+    "$id": "https://query.farm/schema/vgi/semantic/relationships.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "items": {
+      "$ref": "relationship.json"
+    },
+    "maxItems": 500,
+    "type": "array"
+  },
+  "result": {
+    "$id": "https://query.farm/schema/vgi/semantic/result.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "plan": {
+            "$ref": "plan.json"
+          },
+          "result": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "ok",
+          "plan"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "diagnostics": {
+            "items": {
+              "$ref": "diagnostic.json"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "ok": {
+            "const": false
+          },
+          "plan": {
+            "$ref": "plan.json"
+          }
+        },
+        "required": [
+          "ok",
+          "diagnostics"
+        ],
+        "type": "object"
+      }
+    ]
+  }
+}

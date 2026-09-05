@@ -20,6 +20,12 @@ export interface FunctionArg {
   nullable: boolean;
   /** Named (keyword) argument rather than positional. */
   named: boolean;
+  /** Ordinary SQL positional argument. */
+  positional?: boolean;
+  /** SQL positional ordinal from vgi_function_arguments(); absent for named/varargs. */
+  position?: number;
+  /** Declaration order across every argument kind. */
+  fieldIndex?: number;
   /** Accepts a table as input (table-in-out functions). */
   isTableInput: boolean;
   /** Polymorphic ANY-typed argument. */
@@ -111,21 +117,30 @@ export function getFunctionArgs(func: FunctionInfo): FunctionArg[] {
   if (!func.arguments || func.arguments.length === 0) return [];
   try {
     const schema = deserializeSchema(func.arguments);
-    return schema.fields.map((f) => {
+    let positionalOrdinal = 0;
+    return schema.fields.map((f, fieldIndex) => {
       const m = f.metadata;
       const vgiType = m?.get(VGI_TYPE_KEY);
       const doc = m?.get(VGI_DOC_KEY);
       const range = m?.get(VGI_RANGE_KEY);
       const pattern = m?.get(VGI_PATTERN_KEY);
+      const named = m?.get(VGI_ARG_KEY) === VGI_ARG_NAMED;
+      const isVarargs = m?.get(VGI_VARARGS_KEY) === "true";
+      const isTableInput = vgiType === VGI_TYPE_TABLE;
+      const hasPosition = !named && !isVarargs;
+      const position = hasPosition ? positionalOrdinal++ : undefined;
       return {
         name: f.name,
         arrowType: f.type.toString(),
         duckdbType: arrowFieldToDuckDB(f),
         nullable: f.nullable,
-        named: m?.get(VGI_ARG_KEY) === VGI_ARG_NAMED,
-        isTableInput: vgiType === VGI_TYPE_TABLE,
+        named,
+        positional: !named && !isVarargs && !isTableInput,
+        position,
+        fieldIndex,
+        isTableInput,
         isAnyType: vgiType === VGI_TYPE_ANY,
-        isVarargs: m?.get(VGI_VARARGS_KEY) === "true",
+        isVarargs,
         isConst: m?.get(VGI_CONST_KEY) === "true",
         description: doc || undefined,
         defaultValue: parseArgDefault(m?.get(VGI_DEFAULT_KEY)),

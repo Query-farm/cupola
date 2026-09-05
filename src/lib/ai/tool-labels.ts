@@ -17,6 +17,8 @@ export function toolInputLabel(name: string): string {
   switch (name) {
     case "run_sql":
       return "Writing query";
+    case "query_semantic_model":
+      return "Composing semantic query";
     case "render_chart":
       return "Composing chart";
     case "describe_table":
@@ -71,6 +73,8 @@ export function toolActivityLabel(name: string, input?: any): string {
       return "Reading more results";
     case "render_chart":
       return "Rendering chart";
+    case "query_semantic_model":
+      return input?.compile_only ? "Compiling semantic query" : "Running semantic query";
     case "preview_sql":
       return "Running report query";
     case "plan_report":
