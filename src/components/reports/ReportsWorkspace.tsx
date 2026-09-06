@@ -31,6 +31,7 @@ import { runAgentTurn, executeListCatalogs, executeListTables, executeListCatego
 import { executeRunSql, executeSemanticQuery, validateChartSpec } from "@/lib/ai-tool-executor";
 import { QueryResultCache } from "@/lib/query-results";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
+import { normalizeAIQueryMode } from "@/lib/ai/query-mode";
 import { toolInputLabel } from "@/lib/ai/tool-labels";
 import { exportResult, safeFileStem, triggerDownload } from "@/lib/editor/result-export";
 import { consumeReportPromotion, type ReportPromotion } from "@/lib/reports/events";
@@ -1589,6 +1590,23 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const runAgent = useCallback(async () => {
     const prompt = agentPrompt.trim();
     if (!draft || !prompt || agentBusy || engine.lifecycleStatus !== "ready") return;
+    const queryMode = normalizeAIQueryMode(settings.aiQueryMode);
+    if (queryMode === "semantic-only") {
+      setAgentConversation((messages) => [...messages,
+        { id: crypto.randomUUID(), role: "user", content: prompt },
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          blocks: [{
+            type: "text",
+            id: crypto.randomUUID(),
+            content: "AI report authoring is unavailable in **Semantic only** mode because report datasets are currently persisted as editable SQL. Choose **Semantic preferred** or **Unrestricted SQL** for report authoring; manual report editing remains available.",
+          }],
+        },
+      ]);
+      setAgentPrompt("");
+      return;
+    }
     if (!settings.anthropicApiKey) {
       setAgentConversation((messages) => [...messages, {
         id: crypto.randomUUID(),
@@ -1745,7 +1763,12 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         narrativeErrors,
       }, charts.feedback);
     };
+    const semanticPreference = queryMode === "semantic-preferred"
+      ? "When requested measures and dimensions are modeled, call query_semantic_model first to validate the governed query shape. Use SQL-backed report datasets only where persistence requires them or the requested operation is genuinely unmodeled; never silently treat a semantic diagnostic as permission to change the requested meaning.\n\n"
+      : "";
     const system: SystemPrompt = [{ text: `You are Cupola's report-authoring agent. Build and revise a declarative, rerunnable report. Never add JavaScript.
+
+${semanticPreference}
 
 Use a compositional workflow: (1) inspect tables, (2) call plan_report with the concrete work and acceptance criteria for this turn, (3) call configure_report, (4) create any meaningful visual sections with upsert_report_group, (5) call upsert_report_dataset for one dataset and fix its SQL before continuing, (6) call upsert_report_block for one block and fix any compile/render error before continuing, and (7) call finalize_report. Do not mutate the report before plan_report succeeds. Tool results include a checkpoint showing planned versus completed work. Do not finish until finalize_report returns ok=true. Prefer these tools over replace_report_draft.
 

@@ -19,6 +19,7 @@ import { engine, ui } from "@/lib/shell-bridge";
 import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
+import { deniedAIQueryToolResult, normalizeAIQueryMode, toolsForAIQueryMode } from "@/lib/ai/query-mode";
 import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
 import type { CatalogData } from "@/lib/service";
 import {
@@ -201,8 +202,11 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
 
     const catalogs = [catalogData, ...attachedCatalogs, ui.memoryCatalog]
       .filter((value): value is CatalogData => Boolean(value));
-    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), catalogs.slice(1), false) +
-      "\n\nYou are an AI assistant embedded in a SQL editor. The user is editing SQL in the adjacent pane. Be concise. When you run a query, its results appear in the editor's results grid. When you produce a final query for the user, run it with run_sql so it can be applied to the editor. Do not produce charts.";
+    const queryMode = normalizeAIQueryMode(getSetting("aiQueryMode"));
+    const editorGuidance = queryMode === "semantic-only"
+      ? "\n\nYou are an AI assistant embedded in a SQL editor. The user is editing SQL in the adjacent pane. Be concise. Semantic query results appear in the editor's results grid. Do not produce or execute raw SQL, and do not produce charts."
+      : "\n\nYou are an AI assistant embedded in a SQL editor. The user is editing SQL in the adjacent pane. Be concise. When you run a query, its results appear in the editor's results grid. When you produce a final query for the user, run it with run_sql so it can be applied to the editor. Do not produce charts.";
+    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), catalogs.slice(1), false, queryMode) + editorGuidance;
     const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
     const maxTokens = getSetting("aiMaxTokens") || DEFAULT_AI_MAX_TOKENS;
@@ -246,6 +250,8 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
     }
 
     const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<any> => {
+      const denied = deniedAIQueryToolResult(name, queryMode);
+      if (denied) return denied;
       if (name === "query_semantic_model") {
         const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB engine is still starting — try again in a moment.");
@@ -400,7 +406,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
             updateBlocks(blocks);
           },
         },
-        c.abort.signal, maxRounds, TOOLS, maxTokens,
+        c.abort.signal, maxRounds, toolsForAIQueryMode(TOOLS, queryMode), maxTokens,
       );
     } catch (err: any) {
       removeThinking();

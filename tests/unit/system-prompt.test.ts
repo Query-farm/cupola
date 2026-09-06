@@ -136,6 +136,34 @@ describe("chart tool guidance", () => {
   });
 });
 
+describe("AI query access modes", () => {
+  test("defaults to the existing unrestricted SQL behavior", () => {
+    const p = buildSystemPrompt(catalog(1, 1), engine(), null, true);
+    expect(p).toContain("Query access mode: unrestricted SQL");
+    expect(p).toContain("**run_sql**");
+    expect(p).toContain("**query_semantic_model**");
+    expect(p).toContain("**render_chart**");
+  });
+
+  test("semantic preferred keeps SQL as an explicit fallback", () => {
+    const p = buildSystemPrompt(catalog(1, 1), engine(), null, false, "semantic-preferred");
+    expect(p).toContain("Query access mode: semantic preferred");
+    expect(p).toContain("Use query_semantic_model first");
+    expect(p).toContain("Use run_sql only");
+    expect(p).toContain("**run_sql**");
+  });
+
+  test("semantic only omits raw SQL and SQL-backed chart guidance", () => {
+    const p = buildSystemPrompt(catalog(1, 1), engine(), null, true, "semantic-only");
+    expect(p).toContain("Query access mode: semantic only");
+    expect(p).toContain("only through query_semantic_model");
+    expect(p).toContain("**query_semantic_model**");
+    expect(p).not.toContain("**run_sql**");
+    expect(p).not.toContain("**render_chart**");
+    expect(p).not.toContain("### SQL style");
+  });
+});
+
 describe("catalog metadata reaches the prompt", () => {
   test("schema tags render decoded on the heading; the registry is left to list_categories", () => {
     const cat = catalog(1, 1);

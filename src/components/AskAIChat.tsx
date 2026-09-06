@@ -6,6 +6,7 @@ import { engine, ui } from "@/lib/shell-bridge";
 import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
+import { deniedAIQueryToolResult, normalizeAIQueryMode, toolsForAIQueryMode } from "@/lib/ai/query-mode";
 import { toolInputLabel } from "@/lib/ai/tool-labels";
 import type { CatalogData } from "@/lib/service";
 import {
@@ -250,7 +251,8 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     // passes a different surface and would set this false.
     const catalogs = [catalogData, ...attachedCatalogs, ui.memoryCatalog]
       .filter((value): value is CatalogData => Boolean(value));
-    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), catalogs.slice(1), true);
+    const queryMode = normalizeAIQueryMode(getSetting("aiQueryMode"));
+    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), catalogs.slice(1), true, queryMode);
     const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
     const maxTokens = getSetting("aiMaxTokens") || DEFAULT_AI_MAX_TOKENS;
@@ -323,6 +325,8 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     // Returns ToolResult, not string: render_chart replies with the multi-part
     // [text, image] form so the model can see the chart it just drew.
     const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<ToolResult> => {
+      const denied = deniedAIQueryToolResult(name, queryMode);
+      if (denied) return denied;
       if (name === "query_semantic_model") {
         const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB shell not initialized — open SQL Shell first");
@@ -696,7 +700,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
         // AskAIChat is the only surface that can render charts. Terminal
         // .ai mode passes the default TOOLS via shell-ai-mode.ts and
         // doesn't see render_chart at all.
-        [...TOOLS, CHART_TOOL],
+        toolsForAIQueryMode([...TOOLS, CHART_TOOL], queryMode),
         maxTokens,
       );
     } catch (err: any) {
@@ -783,8 +787,8 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   // Pass hasChartTool=true so the preview shown to the user matches what
   // the agent actually sees at runtime (see line 128).
   const systemPrompt = useMemo(() => catalogData
-    ? buildSystemPrompt(catalogData, getEngineInfo(), [...attachedCatalogs, ...(ui.memoryCatalog ? [ui.memoryCatalog] : [])], true)
-    : null, [catalogData, attachedCatalogs, serviceUrl]);
+    ? buildSystemPrompt(catalogData, getEngineInfo(), [...attachedCatalogs, ...(ui.memoryCatalog ? [ui.memoryCatalog] : [])], true, normalizeAIQueryMode(settings.aiQueryMode))
+    : null, [catalogData, attachedCatalogs, serviceUrl, settings.aiQueryMode]);
 
   return (
     <div className="flex flex-col h-full bg-background">

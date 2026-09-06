@@ -22,6 +22,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
 import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { useMediaQuery } from "@/lib/use-media-query";
+import { AI_QUERY_MODES, normalizeAIQueryMode, type AIQueryMode } from "@/lib/ai/query-mode";
 
 function SettingRow({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
@@ -49,6 +50,12 @@ const AI_MODELS: { value: string; label: string }[] = [
   { value: "claude-sonnet-4-6", label: "Sonnet (balanced)" },
   { value: "claude-opus-4-8", label: "Opus (best)" },
 ];
+
+const AI_QUERY_MODE_LABELS: Record<AIQueryMode, string> = {
+  "unrestricted-sql": "Unrestricted SQL",
+  "semantic-preferred": "Semantic preferred",
+  "semantic-only": "Semantic only",
+};
 
 export function SettingsModal() {
   const { settings, updateSettings } = useSettings();
@@ -317,6 +324,27 @@ export function SettingsModal() {
                   <SelectContent>
                     {AI_MODELS.map(m => (
                       <SelectItem key={m.value} value={m.value} className="text-sm">{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </SettingRow>
+              <SettingRow>
+                <SettingLabel
+                  title="AI query access"
+                  description="Unrestricted SQL preserves existing behavior. Semantic preferred uses the governed model first. Semantic only removes raw-SQL and SQL-backed chart tools and pauses AI report authoring; manual SQL and report editing remain available."
+                />
+                <Select
+                  value={settings.aiQueryMode}
+                  onValueChange={(val) => updateSettings({ aiQueryMode: normalizeAIQueryMode(val) })}
+                >
+                  <SelectTrigger className="w-44 h-8 text-sm shrink-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AI_QUERY_MODES.map((mode) => (
+                      <SelectItem key={mode} value={mode} className="text-sm">
+                        {AI_QUERY_MODE_LABELS[mode]}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

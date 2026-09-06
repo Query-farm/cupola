@@ -102,3 +102,22 @@ diagnostics; callers must not fall back to `run_sql` automatically.
 
 Reports remain SQL-backed. A report agent may use compile-only output as a dataset query, but once a
 user edits or persists that SQL it no longer carries compiler provenance.
+
+## AI query access modes
+
+The AI settings expose three query-access policies. They affect AI-issued database operations only;
+SQL entered manually by a user is never restricted.
+
+- `unrestricted-sql` is the backward-compatible default. `query_semantic_model`, `run_sql`, and the
+  SQL-backed chart tool remain available.
+- `semantic-preferred` keeps the same tools but instructs agents to use the semantic compiler first
+  for modeled concepts. Raw SQL remains an explicit fallback for genuinely unmodeled operations;
+  semantic failures are never retried as SQL silently.
+- `semantic-only` removes `run_sql` and SQL-backed chart tools from Ask AI, editor AI, and shell AI.
+  Their dispatchers enforce the same restriction in case stale conversation state requests a tool
+  that is no longer advertised. The agent must return the compiler diagnostic or explain the
+  missing model concept rather than bypassing the contract.
+
+Report datasets are currently persisted as editable SQL and therefore cannot retain semantic-plan
+provenance. AI report authoring is unavailable in `semantic-only` mode until reports support a
+first-class semantic dataset representation. Manual report editing and execution remain available.

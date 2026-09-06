@@ -9,6 +9,7 @@ import {
   executeListCatalogs,
   executeListCategories,
   executeDescribeFunction,
+  TOOLS,
   type MessageParam,
 } from "@/lib/ai-agent";
 import { executeRunSql, executeSemanticQuery, describeTableWithFallback } from "@/lib/ai-tool-executor";
@@ -22,6 +23,7 @@ import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
 import type { CatalogData } from "@/lib/service";
 import * as Sentry from "@sentry/astro";
+import { deniedAIQueryToolResult, normalizeAIQueryMode, toolsForAIQueryMode, type AIQueryMode } from "@/lib/ai/query-mode";
 
 /** Persistent AI conversation state — survives across .ai mode entries. */
 export interface AIConversationState {
@@ -66,10 +68,11 @@ export interface AIShellOps {
 }
 
 /** Read fresh AI settings from localStorage (user may change mid-session). */
-function readAISettings(defaults: { apiKey: string; workspaceId: string; model: string }): { apiKey: string; workspaceId: string; model: string; maxToolRounds: number; maxTokens: number } {
+function readAISettings(defaults: { apiKey: string; workspaceId: string; model: string }): { apiKey: string; workspaceId: string; model: string; queryMode: AIQueryMode; maxToolRounds: number; maxTokens: number } {
   let apiKey = defaults.apiKey;
   let workspaceId = defaults.workspaceId;
   let model = defaults.model;
+  let queryMode: AIQueryMode = "unrestricted-sql";
   let maxToolRounds = 20;
   let maxTokens = DEFAULT_AI_MAX_TOKENS;
   try {
@@ -79,11 +82,12 @@ function readAISettings(defaults: { apiKey: string; workspaceId: string; model: 
       if (s.anthropicApiKey) apiKey = s.anthropicApiKey;
       if (typeof s.anthropicWorkspaceId === "string") workspaceId = s.anthropicWorkspaceId;
       if (s.aiModel) model = s.aiModel;
+      queryMode = normalizeAIQueryMode(s.aiQueryMode);
       if (s.aiMaxToolRounds) maxToolRounds = s.aiMaxToolRounds;
       if (s.aiMaxTokens) maxTokens = s.aiMaxTokens;
     }
   } catch {}
-  return { apiKey, workspaceId, model, maxToolRounds, maxTokens };
+  return { apiKey, workspaceId, model, queryMode, maxToolRounds, maxTokens };
 }
 
 // ---------------------------------------------------------------------------
@@ -127,8 +131,11 @@ function createToolExecutor(
   term: AITerminal,
   ops: AIShellOps,
   spinner: ReturnType<typeof createSpinner>,
+  queryMode: AIQueryMode,
 ) {
   return async (name: string, input: any): Promise<string> => {
+    const denied = deniedAIQueryToolResult(name, queryMode);
+    if (denied) return denied;
     const catalogs = [ops.catalogData, ...ui.attachedCatalogs, ui.memoryCatalog]
       .filter((value): value is CatalogData => Boolean(value));
     if (name === "query_semantic_model") {
@@ -331,7 +338,7 @@ export async function runAIMode(
     return;
   }
 
-  const { apiKey, workspaceId, model, maxToolRounds, maxTokens } = readAISettings(defaults);
+  const { apiKey, workspaceId, model, queryMode, maxToolRounds, maxTokens } = readAISettings(defaults);
   if (!apiKey) {
     term.writeln("No API key configured. Set your Anthropic API key in Settings.", "31");
     return;
@@ -366,6 +373,8 @@ export async function runAIMode(
     ops.catalogData,
     getEngineInfo(),
     [...ui.attachedCatalogs, ...(ui.memoryCatalog ? [ui.memoryCatalog] : [])],
+    false,
+    queryMode,
   );
   const spinner = createSpinner(term);
 
@@ -436,11 +445,11 @@ export async function runAIMode(
       });
 
       spinner.start("Thinking...");
-      const executeTool = createToolExecutor(conv, term, ops, spinner);
+      const executeTool = createToolExecutor(conv, term, ops, spinner, queryMode);
       const agent = createAgentCallbacks(term, spinner, model);
 
       try {
-        await runAgentTurn({ apiKey, workspaceId }, model, conv.messages, systemPrompt, executeTool, agent.callbacks, abort.signal, maxToolRounds, undefined, maxTokens);
+        await runAgentTurn({ apiKey, workspaceId }, model, conv.messages, systemPrompt, executeTool, agent.callbacks, abort.signal, maxToolRounds, toolsForAIQueryMode(TOOLS, queryMode), maxTokens);
       } catch (err: any) {
         spinner.stop();
         if (err.name === "AbortError" || err.message === "Cancelled.") {

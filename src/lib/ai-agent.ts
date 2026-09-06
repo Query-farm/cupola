@@ -233,7 +233,7 @@ export const TOOLS: Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        result_id: { type: "string", description: "Result ID from a previous run_sql response" },
+        result_id: { type: "string", description: "Result ID from a previous query response" },
         offset: { type: "number", description: "Row offset to start reading from (default 0)" },
         limit: { type: "number", description: "Max rows to return (default 20, max 100)" },
       },

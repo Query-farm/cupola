@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { consumeAiKey } from "./url-params";
 import { DEFAULT_AI_MAX_TOKENS } from "./ai/model-limits";
+import { DEFAULT_AI_QUERY_MODE, normalizeAIQueryMode, type AIQueryMode } from "./ai/query-mode";
 
 export interface Settings {
   showDuckDBTypes: boolean;
@@ -28,6 +29,9 @@ export interface Settings {
    *  that can act in more than one Anthropic workspace. */
   anthropicWorkspaceId: string;
   aiModel: string;
+  /** Governs which database-query tools AI surfaces may use. This never
+   * restricts SQL entered manually by the user. */
+  aiQueryMode: AIQueryMode;
   aiMaxToolRounds: number;
   /** Max output tokens per AI request. Clamped to the selected model's own
    *  ceiling before the request goes out (over it is a 400). The old
@@ -77,6 +81,7 @@ const defaultSettings: Settings = {
   anthropicApiKey: "",
   anthropicWorkspaceId: "",
   aiModel: DEFAULT_AI_MODEL,
+  aiQueryMode: DEFAULT_AI_QUERY_MODE,
   aiMaxToolRounds: 20,
   aiMaxTokens: DEFAULT_AI_MAX_TOKENS,
   aiChartFeedback: true,
@@ -92,6 +97,7 @@ function loadSettings(): Settings {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) stored = { ...defaultSettings, ...JSON.parse(raw) };
   } catch {}
+  stored = { ...stored, aiQueryMode: normalizeAIQueryMode(stored.aiQueryMode) };
   // Heal a persisted retired model ID → current replacement, and persist so
   // the upgrade sticks even if the user never opens Settings.
   const migrated = migrateModel(stored.aiModel);
