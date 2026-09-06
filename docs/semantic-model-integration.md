@@ -14,6 +14,19 @@ bounded correlated table-function pipelines. It rejects multi-root measures, tra
 side, unsafe casts, ambiguous bindings and invalid invocation dataflow. Its deterministic plan always
 contains one `fact_branches` element and positional parameters.
 
+`column` is one literal physical column identifier, including when its name contains a dot. Nested
+DuckDB `STRUCT` access uses an explicit `column_path` such as `["bbox", "xmin"]`. The model builder
+validates the full path when detailed type discovery is available, and the compiler quotes every
+path segment independently (`"bbox"."xmin"`). This also lets a nested member satisfy a matching
+source-local required filter without introducing a raw-SQL expression escape hatch.
+
+Relationship predicates are typed. In addition to backward-compatible equality, the compiler
+supports `spatial_contains`, `spatial_within`, `spatial_intersects`, and repeated-field
+`list_contains` with an explicitly identified collection-side element path. Optional discriminator
+conditions compare a physical member to a model-owned scalar through a positional parameter. These
+forms still use the normal single-fact cardinality checks; richer predicate syntax never permits
+traversal into a `many` endpoint and never accepts raw SQL.
+
 For a parameterized table-function source, the semantic tag maps physical argument names to stable
 semantic parameter names only. The compiler resolves calling convention from
 `vgi_function_arguments()`: positional arguments are emitted as `?` in `arg_position` order, then
@@ -25,8 +38,26 @@ parameter list.
 
 The catalog loader also retains the function-level `input_from_args` capability repeated by
 `vgi_function_arguments()`. `defineRowTransformFunction()` supplies it through `FunctionInfo`; it is
-not a semantic tag. `describe_function` exposes both `input_from_args` and the derived
-`supports_correlated_input` label to agents.
+not a semantic tag. The value is deliberately tri-state: `true` permits correlated column input,
+`false` means the runtime explicitly does not support it, and `null` means the installed extension
+does not expose capability discovery. Scalar calls remain valid for all three states, while a
+correlated call with `null` returns an actionable upgrade diagnostic instead of being misreported as
+explicitly unsupported. `describe_function` preserves that tri-state value in both
+`input_from_args` and `supports_correlated_input` for agents.
+
+Dimensions and measures may declare either a static physical `unit` or a parameter-dependent
+`unit_parameter`; the two forms are mutually exclusive. Dynamic units map the effective value of a
+semantic source argument to a unit string. The model builder verifies that the argument is unique,
+is exposed by the entity's source-argument mapping, and covers every advertised argument choice.
+UCUM strings are recommended where a suitable code exists, but the contract intentionally accepts
+any non-empty unit string.
+
+The compiler reports selected-column units in `plan.output_units` without changing SQL. A dynamic
+unit uses an explicit scalar parameter value first and the physical argument default second. A
+column- or member-bound correlated value is row-dependent, so it is always reported as `null` with
+a `unit_parameter_value_unresolved` warning—even when the physical argument declares a default.
+The compiler safely carries a source member's unit through `sum`, `min`, `max`, and `avg`; it does
+not infer units through other derived arithmetic. Warnings appear in `plan.unit_diagnostics`.
 
 `inputs` supplies a bounded typed `VALUES` row set with a declared grain. `source_bindings` binds one
 table-function entity to an inline input or semantic entity driver. An argument binding is a scalar

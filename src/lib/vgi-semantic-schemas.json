@@ -177,6 +177,7 @@
           "catalog_binding",
           "relationship_resolution",
           "source_binding",
+          "unit_resolution",
           "execution_limit",
           "type_check",
           "fanout",
@@ -485,6 +486,16 @@
         ],
         "type": "object"
       },
+      "column_path": {
+        "items": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 16,
+        "minItems": 2,
+        "type": "array"
+      },
       "dimension": {
         "allOf": [
           {
@@ -492,10 +503,29 @@
           },
           {
             "additionalProperties": false,
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "unit",
+                    "unit_parameter"
+                  ]
+                },
+                {
+                  "required": [
+                    "column",
+                    "column_path"
+                  ]
+                }
+              ]
+            },
             "properties": {
               "column": {
                 "minLength": 1,
                 "type": "string"
+              },
+              "column_path": {
+                "$ref": "#/$defs/column_path"
               },
               "data_type": {
                 "type": "string"
@@ -520,6 +550,13 @@
               },
               "title": {
                 "type": "string"
+              },
+              "unit": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "unit_parameter": {
+                "$ref": "#/$defs/unit_parameter"
               }
             },
             "required": [
@@ -537,10 +574,19 @@
           },
           {
             "additionalProperties": false,
+            "not": {
+              "required": [
+                "column",
+                "column_path"
+              ]
+            },
             "properties": {
               "column": {
                 "minLength": 1,
                 "type": "string"
+              },
+              "column_path": {
+                "$ref": "#/$defs/column_path"
               },
               "data_type": {
                 "type": "string"
@@ -579,6 +625,12 @@
           },
           {
             "additionalProperties": false,
+            "not": {
+              "required": [
+                "unit",
+                "unit_parameter"
+              ]
+            },
             "oneOf": [
               {
                 "required": [
@@ -632,6 +684,13 @@
               },
               "title": {
                 "type": "string"
+              },
+              "unit": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "unit_parameter": {
+                "$ref": "#/$defs/unit_parameter"
               }
             },
             "required": [
@@ -650,10 +709,29 @@
           },
           {
             "additionalProperties": false,
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "unit",
+                    "unit_parameter"
+                  ]
+                },
+                {
+                  "required": [
+                    "column",
+                    "column_path"
+                  ]
+                }
+              ]
+            },
             "properties": {
               "column": {
                 "minLength": 1,
                 "type": "string"
+              },
+              "column_path": {
+                "$ref": "#/$defs/column_path"
               },
               "data_type": {
                 "type": "string"
@@ -699,6 +777,13 @@
               "title": {
                 "type": "string"
               },
+              "unit": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "unit_parameter": {
+                "$ref": "#/$defs/unit_parameter"
+              },
               "week_start": {
                 "const": "monday"
               }
@@ -712,6 +797,31 @@
             "type": "object"
           }
         ]
+      },
+      "unit_parameter": {
+        "additionalProperties": false,
+        "properties": {
+          "argument": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "values": {
+            "additionalProperties": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "minProperties": 1,
+            "propertyNames": {
+              "minLength": 1
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "argument",
+          "values"
+        ],
+        "type": "object"
       }
     },
     "$id": "https://query.farm/schema/vgi/semantic/member.json",
@@ -867,11 +977,26 @@
         "minItems": 1,
         "type": "array"
       },
+      "output_units": {
+        "additionalProperties": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": "object"
+      },
       "parameters": {
         "type": "array"
       },
       "sql": {
         "type": "string"
+      },
+      "unit_diagnostics": {
+        "items": {
+          "$ref": "diagnostic.json"
+        },
+        "type": "array"
       },
       "validation_scope": {
         "const": "semantic"
@@ -1461,10 +1586,154 @@
     "type": "object"
   },
   "relationship": {
+    "$defs": {
+      "element_path": {
+        "items": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 16,
+        "minItems": 0,
+        "type": "array"
+      },
+      "equality_predicate": {
+        "additionalProperties": false,
+        "properties": {
+          "from_member": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "nulls": {
+            "default": "not_equal",
+            "enum": [
+              "not_equal",
+              "equal"
+            ]
+          },
+          "operator": {
+            "const": "equal"
+          },
+          "to_member": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          }
+        },
+        "required": [
+          "from_member",
+          "to_member"
+        ],
+        "type": "object"
+      },
+      "list_predicate": {
+        "additionalProperties": false,
+        "not": {
+          "required": [
+            "from_element_path",
+            "to_element_path"
+          ]
+        },
+        "oneOf": [
+          {
+            "required": [
+              "from_element_path"
+            ]
+          },
+          {
+            "required": [
+              "to_element_path"
+            ]
+          }
+        ],
+        "properties": {
+          "from_element_path": {
+            "$ref": "#/$defs/element_path"
+          },
+          "from_member": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "operator": {
+            "const": "list_contains"
+          },
+          "to_element_path": {
+            "$ref": "#/$defs/element_path"
+          },
+          "to_member": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          }
+        },
+        "required": [
+          "from_member",
+          "to_member",
+          "operator"
+        ],
+        "type": "object"
+      },
+      "literal_condition": {
+        "additionalProperties": false,
+        "properties": {
+          "member": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "operator": {
+            "const": "equal"
+          },
+          "side": {
+            "enum": [
+              "from",
+              "to"
+            ]
+          },
+          "value": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "side",
+          "member",
+          "value"
+        ],
+        "type": "object"
+      },
+      "spatial_predicate": {
+        "additionalProperties": false,
+        "properties": {
+          "from_member": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "operator": {
+            "enum": [
+              "spatial_contains",
+              "spatial_within",
+              "spatial_intersects"
+            ]
+          },
+          "to_member": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          }
+        },
+        "required": [
+          "from_member",
+          "to_member",
+          "operator"
+        ],
+        "type": "object"
+      }
+    },
     "$id": "https://query.farm/schema/vgi/semantic/relationship.json",
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": false,
     "properties": {
+      "conditions": {
+        "items": {
+          "$ref": "#/$defs/literal_condition"
+        },
+        "maxItems": 20,
+        "type": "array"
+      },
       "description": {
         "type": "string"
       },
@@ -1476,27 +1745,17 @@
       },
       "predicate": {
         "items": {
-          "additionalProperties": false,
-          "properties": {
-            "from_member": {
-              "$ref": "definitions.json#/$defs/semantic_id"
+          "oneOf": [
+            {
+              "$ref": "#/$defs/equality_predicate"
             },
-            "nulls": {
-              "default": "not_equal",
-              "enum": [
-                "not_equal",
-                "equal"
-              ]
+            {
+              "$ref": "#/$defs/spatial_predicate"
             },
-            "to_member": {
-              "$ref": "definitions.json#/$defs/semantic_id"
+            {
+              "$ref": "#/$defs/list_predicate"
             }
-          },
-          "required": [
-            "from_member",
-            "to_member"
-          ],
-          "type": "object"
+          ]
         },
         "maxItems": 20,
         "minItems": 1,

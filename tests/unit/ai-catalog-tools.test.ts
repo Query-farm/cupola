@@ -109,6 +109,31 @@ describe("multi-catalog agent discovery", () => {
     expect(result.examples).toEqual([{ description: "d", sql: "SELECT alpha.main.double_it(2)" }]);
   });
 
+  test("describe_function preserves an unavailable correlated-input capability", () => {
+    const cat = catalog("alpha", "items");
+    cat.schemas[0].functions = [{
+      name: "forecast",
+      schema_name: "main",
+      function_type: "TABLE",
+      comment: "Forecast rows",
+      description: "Returns a forecast",
+      tags: {},
+      arguments: new Uint8Array(),
+      output_schema: new Uint8Array(),
+      examples: [],
+      categories: [],
+      input_from_args: null,
+      _functionArgs: [],
+    }] as any;
+
+    const result = JSON.parse(executeDescribeFunction(
+      [cat],
+      { catalog: "alpha", schema: "main", function: "forecast" },
+    ));
+    expect(result.input_from_args).toBeNull();
+    expect(result.supports_correlated_input).toBeNull();
+  });
+
   test("lists schema category registries per catalog", () => {
     const result = JSON.parse(executeListCategories([catalog("alpha", "items")], { catalog: "alpha" }));
     expect(result.schemas[0].categories[0].name).toBe("reference");

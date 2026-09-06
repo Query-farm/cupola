@@ -88,6 +88,15 @@ type AttachedTableInfo = TableInfo & {
   _foreignKeys: ForeignKeyInfo[];
 };
 type AttachedViewInfo = ViewInfo & { _columnInfo: ColumnInfo[] };
+type AttachedMacroInfo = MacroInfo & {
+  function_type: string;
+  input_from_args: null;
+  _parameters: string[];
+  _parameterTypes: string[];
+  _functionArgs: FunctionArg[];
+  _functionArgsDetailed: boolean;
+  _functionReturn: FunctionReturn;
+};
 type AttachedFunctionInfo = FunctionInfo & {
   _parameters: string[];
   _parameterTypes: string[];
@@ -200,13 +209,13 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
   }
 
   const argsByFunction = new Map<string, FunctionArg[]>();
-  const inputFromArgsByFunction = new Map<string, boolean>();
+  const inputFromArgsByFunction = new Map<string, Array<boolean | null>>();
   for (const row of argumentRows ?? []) {
     const key = argumentFunctionKey(row.schema_name, row.function_name, row.function_type);
-    inputFromArgsByFunction.set(
-      key,
-      (inputFromArgsByFunction.get(key) ?? false) || Boolean(row.input_from_args),
-    );
+    const advertised = "input_from_args" in row && row.input_from_args != null
+      ? Boolean(row.input_from_args)
+      : null;
+    inputFromArgsByFunction.set(key, [...(inputFromArgsByFunction.get(key) ?? []), advertised]);
     const args = argsByFunction.get(key) ?? [];
     args.push({
       name: String(row.arg_name ?? ""),
@@ -415,7 +424,29 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
     if (MACRO_TYPES.has(functionType)) {
       const macroType = functionType === "table_macro" ? "TABLE" : "SCALAR";
       const definition = row.macro_definition == null ? "" : String(row.macro_definition);
-      const entry: MacroInfo = {
+      let resultColumns: ColumnInfo[] = [];
+      try {
+        const declared = JSON.parse(tags["vgi.result_columns_schema"] ?? "[]");
+        if (Array.isArray(declared))
+          resultColumns = declared
+            .filter(
+              (column): column is { name: string; type: string; description?: string } =>
+                column &&
+                typeof column.name === "string" &&
+                typeof column.type === "string",
+            )
+            .map((column) => ({
+              name: column.name,
+              arrowType: column.type,
+              duckdbType: column.type,
+              nullable: true,
+              comment: column.description,
+            }));
+      } catch {
+        resultColumns = [];
+      }
+      const macroKey = argumentFunctionKey(schemaName, name, functionType);
+      const entry: AttachedMacroInfo = {
         name,
         schema_name: schemaName,
         macro_type: macroType,
@@ -424,6 +455,13 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
         definition,
         comment,
         tags,
+        function_type: functionType,
+        input_from_args: null,
+        _parameters: parameters,
+        _parameterTypes: parameterTypes,
+        _functionArgsDetailed: argsByFunction.has(macroKey),
+        _functionArgs: argsByFunction.get(macroKey) ?? [],
+        _functionReturn: { isTable: macroType === "TABLE", columns: resultColumns },
       };
       getSchema(schemaName).macros.push(entry);
     } else {
@@ -455,9 +493,15 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
         source_order_dependent: false,
         sink_order_dependent: false,
         requires_input_batch_index: false,
-        input_from_args: inputFromArgsByFunction.get(
-          argumentFunctionKey(schemaName, name, functionType),
-        ) ?? false,
+        input_from_args: (() => {
+          const values = inputFromArgsByFunction.get(
+            argumentFunctionKey(schemaName, name, functionType),
+          ) ?? [];
+          const explicit = new Set(values.filter((value): value is boolean => value !== null));
+          return (values.length > 0 && explicit.size === 1 && values.every((value) => value !== null)
+            ? [...explicit][0]
+            : null) as boolean;
+        })(),
         required_settings: [],
         required_secrets: [],
         comment,

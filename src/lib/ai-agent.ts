@@ -692,6 +692,7 @@ export function executeDescribeFunction(collection: CatalogCollection, input: an
   const func = schema.functions.find((candidate) => candidate.name === input.function);
   if (func) {
     const returned = getFunctionReturn(func);
+    const inputFromArgs = typeof func.input_from_args === "boolean" ? func.input_from_args : null;
     return JSON.stringify({
       catalog: resolved.catalogName,
       schema: input.schema,
@@ -704,8 +705,8 @@ export function executeDescribeFunction(collection: CatalogCollection, input: an
       category: getTag(func.tags, TAG_CATEGORY) || null,
       categories: func.categories,
       stability: func.stability || null,
-      input_from_args: Boolean(func.input_from_args),
-      supports_correlated_input: Boolean(func.input_from_args),
+      input_from_args: inputFromArgs,
+      supports_correlated_input: inputFromArgs,
       arguments: getFunctionArgs(func).map((argument) => ({
         ...argument,
         description: detailText(argument.description) || undefined,

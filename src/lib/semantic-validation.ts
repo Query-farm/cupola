@@ -65,8 +65,11 @@ function validate(schema: JsonSchema, value: unknown, path: string, documentName
   }
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     const object = value as Record<string, unknown>;
+    if (schema.minProperties != null && Object.keys(object).length < schema.minProperties) errors.push(`${path}: needs at least ${schema.minProperties} properties`);
+    if (schema.maxProperties != null && Object.keys(object).length > schema.maxProperties) errors.push(`${path}: exceeds ${schema.maxProperties} properties`);
     for (const key of schema.required ?? []) if (!(key in object)) errors.push(`${path}: missing required property ${key}`);
     for (const [key, item] of Object.entries(object)) {
+      if (schema.propertyNames) errors.push(...validate(schema.propertyNames, key, `${path}.${key}`, documentName));
       if (schema.properties?.[key]) errors.push(...validate(schema.properties[key], item, `${path}.${key}`, documentName));
       else if (schema.additionalProperties === false) errors.push(`${path}: additional property ${key} is not allowed`);
       else if (schema.additionalProperties && typeof schema.additionalProperties === "object") errors.push(...validate(schema.additionalProperties, item, `${path}.${key}`, documentName));
