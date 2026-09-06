@@ -66,6 +66,7 @@ export interface SemanticMember {
   description?: string;
   column?: string;
   column_path?: string[];
+  source_argument?: string;
   expression?: SemanticExpression;
   data_type?: string;
   output_type?: string;
@@ -304,7 +305,10 @@ function structFields(dataType: string): Map<string, string> | null {
   return result;
 }
 
-export function resolveNestedType(dataType: string, path: string[]): string | null {
+export function resolveNestedType(
+  dataType: string,
+  path: string[],
+): string | null {
   let current = dataType;
   for (const segment of path) {
     const fields = structFields(current);
@@ -321,8 +325,9 @@ function semanticMemberType(
   if (member.output_type || member.data_type)
     return member.output_type ?? member.data_type;
   const path = member.column_path ?? (member.column ? [member.column] : []);
-  const physical = entity.columns.find((column) => column.name === path[0])
-    ?.duckdbType;
+  const physical = entity.columns.find(
+    (column) => column.name === path[0],
+  )?.duckdbType;
   if (!physical || path.length < 2) return physical;
   return resolveNestedType(physical, path.slice(1)) ?? undefined;
 }
@@ -387,7 +392,50 @@ function addMembers(
   source: string,
   diagnostics: SemanticDiagnostic[],
 ) {
+  const values: unknown[] = [];
+  const templateIds = new Set<string>();
   for (const value of asArray(raw)) {
+    const candidate = asObject(value);
+    if (!candidate || !("template_id" in candidate)) {
+      values.push(value);
+      continue;
+    }
+    const templateId = String(candidate.template_id ?? "");
+    if (templateIds.has(templateId))
+      diagnostics.push({
+        stage: "model_resolution",
+        code: "duplicate_member_template",
+        message: `Member template '${templateId}' is declared more than once`,
+        path: source,
+      });
+    templateIds.add(templateId);
+    const defaults = asObject(candidate.template);
+    if (!defaults) continue;
+    for (const override of asArray(candidate.members)) {
+      const patch = asObject(override);
+      if (!patch) continue;
+      const expanded = { ...defaults, ...patch };
+      const errors = validateSemanticValue("member", expanded);
+      if (errors.length) {
+        diagnostics.push({
+          stage: "model_resolution",
+          code: "invalid_expanded_member",
+          message: `Member template '${templateId}' entry is invalid: ${errors.join("; ")}`,
+          path: source,
+        });
+      } else values.push(expanded);
+    }
+  }
+  if (values.length > 500) {
+    diagnostics.push({
+      stage: "model_resolution",
+      code: "member_template_expansion_limit",
+      message: `Packed semantic members expand to ${values.length} entries; the limit is 500`,
+      path: source,
+    });
+    values.length = 500;
+  }
+  for (const value of values) {
     const member = asObject(value) as SemanticMember | null;
     if (
       !member ||
@@ -405,6 +453,42 @@ function addMembers(
       });
     } else if (!previous) target.set(member.member_id, member);
   }
+}
+
+function normalizedType(value: string | undefined): string {
+  const raw = String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, " ");
+  return (
+    {
+      STRING: "VARCHAR",
+      TEXT: "VARCHAR",
+      INT: "INTEGER",
+      INT4: "INTEGER",
+      INT8: "BIGINT",
+      FLOAT: "REAL",
+      FLOAT8: "DOUBLE",
+      BOOL: "BOOLEAN",
+    }[raw] ?? raw
+  );
+}
+
+function typesCompatible(leftValue?: string, rightValue?: string): boolean {
+  const left = normalizedType(leftValue);
+  const right = normalizedType(rightValue);
+  if (!left || !right || left === "ANY" || right === "ANY" || left === right)
+    return true;
+  const numeric = [
+    "TINYINT",
+    "SMALLINT",
+    "INTEGER",
+    "BIGINT",
+    "HUGEINT",
+    "REAL",
+    "DOUBLE",
+  ];
+  return numeric.includes(left) && numeric.includes(right);
 }
 
 export function buildSemanticEnvironment(
@@ -619,8 +703,7 @@ export function buildSemanticEnvironment(
           kind === "table_function"
             ? (overloadCounts.get(
                 `${object.name}:${object.function_type ?? object.macro_type}`,
-              ) ??
-              1)
+              ) ?? 1)
             : 1;
         if (kind !== "table_function" && sourceArguments.length)
           diagnostics.push({
@@ -780,6 +863,62 @@ export function buildSemanticEnvironment(
             });
         }
         for (const member of members.values()) {
+          if (!member.source_argument) continue;
+          const argumentName = member.source_argument;
+          const matches = detailedArguments.filter(
+            (argument) => argument.name === argumentName,
+          );
+          const mappings = sourceArguments.filter(
+            (mapping) => mapping.argument === argumentName,
+          );
+          if (kind !== "table_function")
+            diagnostics.push({
+              stage: "model_resolution",
+              code: "source_argument_member_on_relation",
+              message: `Member '${member.member_id}' uses source_argument on a relation`,
+              path: objectPath,
+            });
+          else if (!matches.length)
+            diagnostics.push({
+              stage: "model_resolution",
+              code: "source_argument_member_missing",
+              message: `Member '${member.member_id}' references missing function argument '${argumentName}'`,
+              path: objectPath,
+            });
+          else if (matches.length !== 1 || functionOverloadCount > 1)
+            diagnostics.push({
+              stage: "model_resolution",
+              code: "source_argument_member_ambiguous",
+              message: `Member '${member.member_id}' source argument '${argumentName}' is ambiguous`,
+              path: objectPath,
+            });
+          else if (mappings.length !== 1)
+            diagnostics.push({
+              stage: "model_resolution",
+              code: "source_argument_member_unmapped",
+              message: `Member '${member.member_id}' source argument '${argumentName}' must be exposed by exactly one semantic source-argument mapping`,
+              path: objectPath,
+            });
+          const declaredType = member.data_type ?? member.output_type;
+          if (!declaredType)
+            diagnostics.push({
+              stage: "model_resolution",
+              code: "source_argument_member_type_required",
+              message: `Member '${member.member_id}' backed by a source argument needs data_type or output_type`,
+              path: objectPath,
+            });
+          else if (
+            matches.length === 1 &&
+            !typesCompatible(declaredType, matches[0].duckdbType)
+          )
+            diagnostics.push({
+              stage: "model_resolution",
+              code: "source_argument_member_type_mismatch",
+              message: `Member '${member.member_id}' type '${declaredType}' is incompatible with function argument '${argumentName}' type '${matches[0].duckdbType}'`,
+              path: objectPath,
+            });
+        }
+        for (const member of members.values()) {
           if (!member.unit_parameter) continue;
           const argumentName = member.unit_parameter.argument;
           const matches = detailedArguments.filter(
@@ -826,9 +965,12 @@ export function buildSemanticEnvironment(
               path: objectPath,
             });
         }
-        const physicalColumns = new Map(columns.map((column) => [column.name, column.duckdbType]));
+        const physicalColumns = new Map(
+          columns.map((column) => [column.name, column.duckdbType]),
+        );
         for (const member of members.values()) {
-          const columnPath = member.column_path ?? (member.column ? [member.column] : []);
+          const columnPath =
+            member.column_path ?? (member.column ? [member.column] : []);
           if (!columnPath.length) continue;
           if (physicalColumns.size && !physicalColumns.has(columnPath[0])) {
             diagnostics.push({
@@ -840,7 +982,10 @@ export function buildSemanticEnvironment(
           } else if (
             columnPath.length > 1 &&
             physicalColumns.get(columnPath[0]) &&
-            !resolveNestedType(physicalColumns.get(columnPath[0])!, columnPath.slice(1))
+            !resolveNestedType(
+              physicalColumns.get(columnPath[0])!,
+              columnPath.slice(1),
+            )
           ) {
             diagnostics.push({
               stage: "model_resolution",
@@ -978,7 +1123,8 @@ export function buildSemanticEnvironment(
         if (
           String(pair.operator ?? "equal").startsWith("spatial_") &&
           types.some(
-            (type) => type != null && !type.toUpperCase().startsWith("GEOMETRY"),
+            (type) =>
+              type != null && !type.toUpperCase().startsWith("GEOMETRY"),
           )
         )
           diagnostics.push({
@@ -1002,8 +1148,7 @@ export function buildSemanticEnvironment(
         }
       }
       for (const condition of asArray(value.conditions)) {
-        const endpoint =
-          endpointEntities[condition.side === "from" ? 0 : 1];
+        const endpoint = endpointEntities[condition.side === "from" ? 0 : 1];
         const member = endpoint.members.get(String(condition.member));
         if (!member)
           diagnostics.push({

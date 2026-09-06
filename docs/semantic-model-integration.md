@@ -20,6 +20,12 @@ validates the full path when detailed type discovery is available, and the compi
 path segment independently (`"bbox"."xmin"`). This also lets a nested member satisfy a matching
 source-local required filter without introducing a raw-SQL expression escape hatch.
 
+Packed member arrays may also contain bounded member templates. A template shallow-merges common
+fields into concrete entries, validates every expansion against the ordinary member schema, and
+exposes only the resulting concrete members to the environment and compiler. Templates do not nest,
+interpolate strings, or execute code, and one packed carrier may expand to at most 500 members.
+Native column tags remain concrete one-member declarations.
+
 Relationship predicates are typed. In addition to backward-compatible equality, the compiler
 supports `spatial_contains`, `spatial_within`, `spatial_intersects`, and repeated-field
 `list_contains` with an explicitly identified collection-side element path. Optional discriminator
@@ -35,6 +41,13 @@ keeps argument rows scoped by function type. Compilation fails when detailed met
 an overload or mapping is ambiguous, the function uses varargs/table input, or supplying a later
 positional value would create an optional hole. The compiler never guesses from DuckDB's flattened
 parameter list.
+
+A dimension or time dimension may use `source_argument` when useful invocation context is not
+returned as a physical result column. The argument must be mapped exactly once and the member must
+declare a compatible type. Scalar compilation projects the explicit semantic parameter or physical
+default as a typed placeholder; correlated compilation projects the actual bound input column or
+driver member. The resulting value can be selected, grouped, filtered, or referenced by typed
+expressions without changing the function's physical result schema.
 
 The catalog loader also retains the function-level `input_from_args` capability repeated by
 `vgi_function_arguments()`. `defineRowTransformFunction()` supplies it through `FunctionInfo`; it is

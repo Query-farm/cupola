@@ -128,6 +128,10 @@ const MAX_INLINE_ROWS = 100,
 const DEFAULT_MAX_INVOCATIONS = 100,
   HARD_MAX_INVOCATIONS = 1000,
   DEFAULT_MAX_STAGE_ROWS = 10_000;
+type SourceArgumentRenderer = (
+  entity: SemanticEntity,
+  member: SemanticMember,
+) => string;
 function safeType(type: string): string {
   if (
     !/^[A-Za-z][A-Za-z0-9_ ]*(?:\([0-9]+(?:,[0-9]+)?\))?(?:\[\])?$/.test(type)
@@ -406,6 +410,31 @@ function memberUnitDefinition(
       );
   }
   return null;
+}
+
+function memberUsesSourceArgument(
+  entity: SemanticEntity,
+  member: SemanticMember,
+  visited = new Set<string>(),
+): boolean {
+  if (visited.has(member.member_id)) return false;
+  if (member.source_argument) return true;
+  const nextVisited = new Set([...visited, member.member_id]);
+  const visitExpression = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(visitExpression);
+    if (!value || typeof value !== "object") return false;
+    const expression = value as Record<string, unknown>;
+    if (expression.op === "member" && typeof expression.member === "string") {
+      const dependency = entity.members.get(expression.member);
+      if (
+        dependency &&
+        memberUsesSourceArgument(entity, dependency, nextVisited)
+      )
+        return true;
+    }
+    return Object.values(expression).some(visitExpression);
+  };
+  return visitExpression(member.expression);
 }
 
 function sourceBindingArgument(
@@ -810,7 +839,7 @@ function correlatedCallSql(
           );
         const path = driverPaths.get(entityMarker(driverEntity!));
         if (!path)
-          fail(
+          return fail(
             "source_binding",
             "driver_not_in_path",
             `Driver '${driverEntity!.entityId}' is not available`,
@@ -1177,6 +1206,7 @@ function memberSql(
   member: SemanticMember,
   alias: string,
   stack: string[] = [],
+  sourceArgumentRenderer?: SourceArgumentRenderer,
 ): string {
   if (stack.includes(member.member_id))
     fail(
@@ -1186,16 +1216,27 @@ function memberSql(
     );
   const sql = memberColumnPath(member).length
     ? memberColumnSql(alias, member)
-    : member.expression
-      ? expressionSql(entity, member.expression, alias, [
-          ...stack,
-          member.member_id,
-        ])
-      : fail(
-          "type_check",
-          "missing_member_source",
-          `Member '${member.member_id}' has no column or expression`,
-        );
+    : member.source_argument
+      ? sourceArgumentRenderer
+        ? sourceArgumentRenderer(entity, member)
+        : fail(
+            "source_binding",
+            "source_argument_value_unavailable",
+            `Source-argument member '${member.member_id}' is unavailable in this query context`,
+          )
+      : member.expression
+        ? expressionSql(
+            entity,
+            member.expression,
+            alias,
+            [...stack, member.member_id],
+            sourceArgumentRenderer,
+          )
+        : fail(
+            "type_check",
+            "missing_member_source",
+            `Member '${member.member_id}' has no column or expression`,
+          );
   return member.output_type
     ? `CAST(${sql} AS ${safeType(member.output_type)})`
     : sql;
@@ -1287,6 +1328,7 @@ function expressionSql(
   expression: SemanticExpression,
   alias: string,
   stack: string[],
+  sourceArgumentRenderer?: SourceArgumentRenderer,
 ): string {
   if (expression.op === "member") {
     const member = entity.members.get(expression.member);
@@ -1296,7 +1338,7 @@ function expressionSql(
         code: "unknown_expression_member",
         message: `Unknown member '${expression.member}'`,
       });
-    return memberSql(entity, member, alias, stack);
+    return memberSql(entity, member, alias, stack, sourceArgumentRenderer);
   }
   if (expression.op === "literal") return literalSql(expression.value);
   if (
@@ -1305,8 +1347,20 @@ function expressionSql(
     )
   ) {
     const binary = expression as any;
-    const left = expressionSql(entity, binary.left, alias, stack);
-    const right = expressionSql(entity, binary.right, alias, stack);
+    const left = expressionSql(
+      entity,
+      binary.left,
+      alias,
+      stack,
+      sourceArgumentRenderer,
+    );
+    const right = expressionSql(
+      entity,
+      binary.right,
+      alias,
+      stack,
+      sourceArgumentRenderer,
+    );
     if (expression.op === "safe_divide")
       return `(${left} / NULLIF(${right}, 0))`;
     const operator = { add: "+", subtract: "-", multiply: "*", divide: "/" }[
@@ -1315,13 +1369,13 @@ function expressionSql(
     return `(${left} ${operator} ${right})`;
   }
   if (expression.op === "coalesce")
-    return `COALESCE(${expression.args.map((arg) => expressionSql(entity, arg, alias, stack)).join(", ")})`;
+    return `COALESCE(${expression.args.map((arg) => expressionSql(entity, arg, alias, stack, sourceArgumentRenderer)).join(", ")})`;
   if (expression.op === "nullif")
-    return `NULLIF(${expressionSql(entity, expression.value, alias, stack)}, ${expressionSql(entity, expression.other ?? { op: "literal", value: 0 }, alias, stack)})`;
+    return `NULLIF(${expressionSql(entity, expression.value, alias, stack, sourceArgumentRenderer)}, ${expressionSql(entity, expression.other ?? { op: "literal", value: 0 }, alias, stack, sourceArgumentRenderer)})`;
   if (expression.op === "cast")
-    return `CAST(${expressionSql(entity, expression.value, alias, stack)} AS ${safeType(expression.type)})`;
+    return `CAST(${expressionSql(entity, expression.value, alias, stack, sourceArgumentRenderer)} AS ${safeType(expression.type)})`;
   if (expression.op === "case")
-    return `CASE WHEN ${expressionSql(entity, expression.when, alias, stack)} THEN ${expressionSql(entity, expression.then, alias, stack)}${expression.else ? ` ELSE ${expressionSql(entity, expression.else, alias, stack)}` : ""} END`;
+    return `CASE WHEN ${expressionSql(entity, expression.when, alias, stack, sourceArgumentRenderer)} THEN ${expressionSql(entity, expression.then, alias, stack, sourceArgumentRenderer)}${expression.else ? ` ELSE ${expressionSql(entity, expression.else, alias, stack, sourceArgumentRenderer)}` : ""} END`;
   return fail(
     "sql_generation",
     "unsupported_expression",
@@ -1334,6 +1388,7 @@ function aggregateSql(
   member: SemanticMember,
   alias: string,
   stack: string[] = [],
+  sourceArgumentRenderer?: SourceArgumentRenderer,
 ): string {
   if (stack.includes(member.member_id))
     fail(
@@ -1342,10 +1397,13 @@ function aggregateSql(
       `Cyclic derived measure at '${member.member_id}'`,
     );
   if (member.expression) {
-    const sql = measureExpressionSql(entity, member.expression, alias, [
-      ...stack,
-      member.member_id,
-    ]);
+    const sql = measureExpressionSql(
+      entity,
+      member.expression,
+      alias,
+      [...stack, member.member_id],
+      sourceArgumentRenderer,
+    );
     return member.output_type
       ? `CAST(${sql} AS ${safeType(member.output_type)})`
       : sql;
@@ -1368,7 +1426,7 @@ function aggregateSql(
       code: "unknown_measure_input",
       message: `Measure '${member.member_id}' has unknown input '${member.member}'`,
     });
-  const sql = memberSql(entity, input, alias);
+  const sql = memberSql(entity, input, alias, [], sourceArgumentRenderer);
   const fn =
     aggregation === "count_distinct"
       ? "COUNT(DISTINCT"
@@ -1385,6 +1443,7 @@ function measureExpressionSql(
   expression: SemanticExpression,
   alias: string,
   stack: string[],
+  sourceArgumentRenderer?: SourceArgumentRenderer,
 ): string {
   if (expression.op === "member") {
     const member = entity.members.get(expression.member);
@@ -1395,8 +1454,8 @@ function measureExpressionSql(
         message: `Unknown member '${expression.member}'`,
       });
     return member.kind === "measure"
-      ? aggregateSql(entity, member, alias, stack)
-      : memberSql(entity, member, alias, stack);
+      ? aggregateSql(entity, member, alias, stack, sourceArgumentRenderer)
+      : memberSql(entity, member, alias, stack, sourceArgumentRenderer);
   }
   if (expression.op === "literal") return literalSql(expression.value);
   if (
@@ -1405,8 +1464,20 @@ function measureExpressionSql(
     )
   ) {
     const binary = expression as any;
-    const left = measureExpressionSql(entity, binary.left, alias, stack);
-    const right = measureExpressionSql(entity, binary.right, alias, stack);
+    const left = measureExpressionSql(
+      entity,
+      binary.left,
+      alias,
+      stack,
+      sourceArgumentRenderer,
+    );
+    const right = measureExpressionSql(
+      entity,
+      binary.right,
+      alias,
+      stack,
+      sourceArgumentRenderer,
+    );
     if (expression.op === "safe_divide")
       return `(${left} / NULLIF(${right}, 0))`;
     const operator = { add: "+", subtract: "-", multiply: "*", divide: "/" }[
@@ -1415,13 +1486,13 @@ function measureExpressionSql(
     return `(${left} ${operator} ${right})`;
   }
   if (expression.op === "coalesce")
-    return `COALESCE(${expression.args.map((arg) => measureExpressionSql(entity, arg, alias, stack)).join(", ")})`;
+    return `COALESCE(${expression.args.map((arg) => measureExpressionSql(entity, arg, alias, stack, sourceArgumentRenderer)).join(", ")})`;
   if (expression.op === "nullif")
-    return `NULLIF(${measureExpressionSql(entity, expression.value, alias, stack)}, ${measureExpressionSql(entity, expression.other ?? { op: "literal", value: 0 }, alias, stack)})`;
+    return `NULLIF(${measureExpressionSql(entity, expression.value, alias, stack, sourceArgumentRenderer)}, ${measureExpressionSql(entity, expression.other ?? { op: "literal", value: 0 }, alias, stack, sourceArgumentRenderer)})`;
   if (expression.op === "cast")
-    return `CAST(${measureExpressionSql(entity, expression.value, alias, stack)} AS ${safeType(expression.type)})`;
+    return `CAST(${measureExpressionSql(entity, expression.value, alias, stack, sourceArgumentRenderer)} AS ${safeType(expression.type)})`;
   if (expression.op === "case")
-    return `CASE WHEN ${measureExpressionSql(entity, expression.when, alias, stack)} THEN ${measureExpressionSql(entity, expression.then, alias, stack)}${expression.else ? ` ELSE ${measureExpressionSql(entity, expression.else, alias, stack)}` : ""} END`;
+    return `CASE WHEN ${measureExpressionSql(entity, expression.when, alias, stack, sourceArgumentRenderer)} THEN ${measureExpressionSql(entity, expression.then, alias, stack, sourceArgumentRenderer)}${expression.else ? ` ELSE ${measureExpressionSql(entity, expression.else, alias, stack, sourceArgumentRenderer)}` : ""} END`;
   return fail(
     "sql_generation",
     "unsupported_expression",
@@ -1527,17 +1598,22 @@ function compileFilter(
     { entity: SemanticEntity; member: SemanticMember; alias: string }
   >,
   parameters: unknown[],
+  sourceArgumentRenderer?: SourceArgumentRenderer,
 ): string | null {
   if (!filter) return null;
   if ("and" in filter) {
     const parts = filter.and
-      .map((part: SemanticFilter) => compileFilter(part, members, parameters))
+      .map((part: SemanticFilter) =>
+        compileFilter(part, members, parameters, sourceArgumentRenderer),
+      )
       .filter(Boolean);
     return `(${parts.join(" AND ")})`;
   }
   if ("or" in filter) {
     const parts = filter.or
-      .map((part: SemanticFilter) => compileFilter(part, members, parameters))
+      .map((part: SemanticFilter) =>
+        compileFilter(part, members, parameters, sourceArgumentRenderer),
+      )
       .filter(Boolean);
     return `(${parts.join(" OR ")})`;
   }
@@ -1550,8 +1626,20 @@ function compileFilter(
     });
   const lhs =
     found.member.kind === "measure"
-      ? aggregateSql(found.entity, found.member, found.alias)
-      : memberSql(found.entity, found.member, found.alias);
+      ? aggregateSql(
+          found.entity,
+          found.member,
+          found.alias,
+          [],
+          sourceArgumentRenderer,
+        )
+      : memberSql(
+          found.entity,
+          found.member,
+          found.alias,
+          [],
+          sourceArgumentRenderer,
+        );
   if (filter.operator === "is_null") return `${lhs} IS NULL`;
   if (filter.operator === "is_not_null") return `${lhs} IS NOT NULL`;
   const values =
@@ -1678,6 +1766,88 @@ export function compileSemanticQuery(
       query,
       parameters,
     );
+    const renderSourceArgumentMember: SourceArgumentRenderer = (
+      entity,
+      member,
+    ) => {
+      const argumentName = member.source_argument ?? "";
+      const physical = entity.functionArguments.filter(
+        (argument) => argument.name === argumentName,
+      );
+      const mappings = entity.sourceArguments.filter(
+        (mapping) => mapping.argument === argumentName,
+      );
+      if (physical.length !== 1 || mappings.length !== 1)
+        fail(
+          "model_resolution",
+          "source_argument_member_unresolved",
+          `Cannot resolve source argument '${argumentName}' for member '${member.member_id}'`,
+        );
+      const argument = physical[0];
+      const mapping = mappings[0];
+      const sourceBinding = query.source_bindings?.find(
+        (binding) => refKey(binding.entity) === entity.key,
+      );
+      const override = sourceBinding?.arguments[argumentName];
+      if (override && "input_column" in override) {
+        const inputId =
+          sourceBinding && "input_id" in sourceBinding.driver
+            ? sourceBinding.driver.input_id
+            : "";
+        const path = invocation?.paths.get(`input:${inputId}`);
+        if (!path)
+          return fail(
+            "source_binding",
+            "source_argument_value_unavailable",
+            `Input driver '${inputId}' is unavailable for member '${member.member_id}'`,
+          );
+        return `${pathAlias("_e0", path)}.${quoteIdent(override.input_column)}`;
+      }
+      if (override && "member" in override) {
+        const driver = resolveEntity(
+          environment,
+          override.member,
+          query.bindings ?? {},
+        );
+        if ("stage" in driver) throw new CompileFailure(driver);
+        const driverMember = driver.members.get(override.member.member_id);
+        const path = invocation?.paths.get(entityMarker(driver));
+        if (!driverMember || !path)
+          return fail(
+            "source_binding",
+            "source_argument_value_unavailable",
+            `Entity driver value is unavailable for member '${member.member_id}'`,
+          );
+        return memberSql(driver, driverMember, pathAlias("_e0", path));
+      }
+      const parameterName =
+        override && "parameter" in override
+          ? override.parameter
+          : mapping.parameter;
+      let value = Object.prototype.hasOwnProperty.call(
+        query.parameters ?? {},
+        parameterName,
+      )
+        ? query.parameters?.[parameterName]
+        : undefined;
+      if (value === undefined) value = argument.defaultValue;
+      if (value === undefined)
+        fail(
+          mapping.required === false ? "source_binding" : "required_filter",
+          mapping.required === false
+            ? "source_argument_value_unavailable"
+            : "missing_source_parameter",
+          `Source argument '${argumentName}' has no effective value for member '${member.member_id}'`,
+        );
+      if (!valueCompatible(value, argument.duckdbType))
+        fail(
+          "type_check",
+          "incompatible_parameter_type",
+          `Parameter '${parameterName}' is incompatible with argument '${argumentName}'`,
+        );
+      parameters.push(value);
+      return `CAST(? AS ${safeType(member.data_type ?? member.output_type!)})`;
+    };
     const aliasByEntity = invocation
       ? new Map(
           [...invocation.paths].flatMap(([marker, path]) =>
@@ -1868,7 +2038,13 @@ export function compileSemanticQuery(
           "not_a_dimension",
           `'${item.member.member_id}' is a measure, not a dimension`,
         );
-      let sql = memberSql(item.entity, item.member, item.alias);
+      let sql = memberSql(
+        item.entity,
+        item.member,
+        item.alias,
+        [],
+        renderSourceArgumentMember,
+      );
       if (item.selection.granularity) {
         if (
           item.member.kind !== "time_dimension" ||
@@ -1890,7 +2066,11 @@ export function compileSemanticQuery(
         );
       outputNames.add(name);
       selects.push(`${sql} AS ${quoteIdent(name)}`);
-      groups.push(sql);
+      groups.push(
+        memberUsesSourceArgument(item.entity, item.member)
+          ? String(selects.length)
+          : sql,
+      );
       resultGrain.push(name);
       recordUnit(item, name);
     }
@@ -1924,7 +2104,7 @@ export function compileSemanticQuery(
         );
       outputNames.add(name);
       selects.push(
-        `${aggregateSql(item.entity, item.member, item.alias)} AS ${quoteIdent(name)}`,
+        `${aggregateSql(item.entity, item.member, item.alias, [], renderSourceArgumentMember)} AS ${quoteIdent(name)}`,
       );
       recordUnit(item, name);
     }
@@ -1953,11 +2133,17 @@ export function compileSemanticQuery(
         return `${cardinality.min === 1 ? "INNER" : "LEFT"} JOIN ${targetSource} AS ${alias} ON ${pairs.join(" AND ")}`;
       })
       .join("\n");
-    const where = compileFilter(query.filters, memberLookup, parameters);
+    const where = compileFilter(
+      query.filters,
+      memberLookup,
+      parameters,
+      renderSourceArgumentMember,
+    );
     const having = compileFilter(
       query.measure_filters,
       memberLookup,
       parameters,
+      renderSourceArgumentMember,
     );
     const whereMembers = filterMembers(query.filters)
       .map((member) => memberLookup.get(filterMemberKey(member)))

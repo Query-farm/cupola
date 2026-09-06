@@ -516,6 +516,24 @@
                     "column",
                     "column_path"
                   ]
+                },
+                {
+                  "required": [
+                    "source_argument",
+                    "column"
+                  ]
+                },
+                {
+                  "required": [
+                    "source_argument",
+                    "column_path"
+                  ]
+                },
+                {
+                  "required": [
+                    "source_argument",
+                    "expression"
+                  ]
                 }
               ]
             },
@@ -546,6 +564,10 @@
                 "$ref": "definitions.json#/$defs/semantic_id"
               },
               "output_type": {
+                "type": "string"
+              },
+              "source_argument": {
+                "minLength": 1,
                 "type": "string"
               },
               "title": {
@@ -722,6 +744,24 @@
                     "column",
                     "column_path"
                   ]
+                },
+                {
+                  "required": [
+                    "source_argument",
+                    "column"
+                  ]
+                },
+                {
+                  "required": [
+                    "source_argument",
+                    "column_path"
+                  ]
+                },
+                {
+                  "required": [
+                    "source_argument",
+                    "expression"
+                  ]
                 }
               ]
             },
@@ -768,6 +808,10 @@
                 "$ref": "definitions.json#/$defs/semantic_id"
               },
               "output_type": {
+                "type": "string"
+              },
+              "source_argument": {
+                "minLength": 1,
                 "type": "string"
               },
               "timezone": {
@@ -841,11 +885,163 @@
       }
     ]
   },
+  "member-template": {
+    "$defs": {
+      "member_patch": {
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "additivity": {
+            "$ref": "definitions.json#/$defs/additivity"
+          },
+          "aggregation": {
+            "enum": [
+              "count_rows",
+              "count",
+              "count_distinct",
+              "sum",
+              "min",
+              "max",
+              "avg"
+            ]
+          },
+          "column": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "column_path": {
+            "$ref": "member.json#/$defs/column_path"
+          },
+          "data_type": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expression": {
+            "$ref": "expression.json"
+          },
+          "granularities": {
+            "items": {
+              "enum": [
+                "minute",
+                "hour",
+                "day",
+                "week",
+                "month",
+                "quarter",
+                "year"
+              ]
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "identifier",
+              "dimension",
+              "time_dimension",
+              "measure"
+            ]
+          },
+          "member": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "member_id": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "output_type": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source_argument": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "timezone": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "unit": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "unit_parameter": {
+            "$ref": "member.json#/$defs/unit_parameter"
+          },
+          "week_start": {
+            "const": "monday"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "$id": "https://query.farm/schema/vgi/semantic/member-template.json",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "members": {
+        "items": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/member_patch"
+            },
+            {
+              "required": [
+                "member_id"
+              ]
+            }
+          ]
+        },
+        "maxItems": 500,
+        "minItems": 1,
+        "type": "array"
+      },
+      "template": {
+        "$ref": "#/$defs/member_patch",
+        "not": {
+          "required": [
+            "member_id"
+          ]
+        }
+      },
+      "template_id": {
+        "$ref": "definitions.json#/$defs/semantic_id"
+      }
+    },
+    "required": [
+      "template_id",
+      "template",
+      "members"
+    ],
+    "type": "object"
+  },
   "members": {
     "$id": "https://query.farm/schema/vgi/semantic/members.json",
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "items": {
-      "$ref": "member.json"
+      "oneOf": [
+        {
+          "$ref": "member.json"
+        },
+        {
+          "$ref": "member-template.json"
+        }
+      ]
     },
     "maxItems": 500,
     "type": "array"

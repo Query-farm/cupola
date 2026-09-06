@@ -244,6 +244,19 @@ function weatherWithUnits(): CatalogData {
         data_type: "TIMESTAMP",
       },
       {
+        member_id: "requested_latitude",
+        kind: "dimension",
+        source_argument: "latitude",
+        data_type: "DOUBLE",
+        unit: "deg",
+      },
+      {
+        member_id: "requested_temperature_unit",
+        kind: "dimension",
+        source_argument: "temperature_unit",
+        data_type: "VARCHAR",
+      },
+      {
         member_id: "temperature",
         kind: "dimension",
         column: "temperature",
@@ -291,6 +304,170 @@ function weatherWithUnits(): CatalogData {
 }
 
 describe("semantic model compiler", () => {
+  test("compiles scalar and correlated source-argument dimensions", () => {
+    const weather = weatherWithUnits();
+    const scalar = compileSemanticQuery([weather], {
+      measures: [
+        {
+          catalog_id: "farm.query.weather",
+          entity_id: "forecast",
+          member_id: "average_temperature",
+        },
+      ],
+      dimensions: [
+        {
+          catalog_id: "farm.query.weather",
+          entity_id: "forecast",
+          member_id: "requested_latitude",
+        },
+        {
+          catalog_id: "farm.query.weather",
+          entity_id: "forecast",
+          member_id: "requested_temperature_unit",
+        },
+      ],
+      filters: {
+        member: "requested_latitude",
+        operator: "eq",
+        value: 52.52,
+      },
+      parameters: { latitude: 52.52, longitude: 13.41 },
+    });
+    expect(scalar.ok).toBe(true);
+    if (!scalar.ok) return;
+    expect(scalar.plan.sql).toContain(
+      'CAST(? AS DOUBLE) AS "requested_latitude"',
+    );
+    expect(scalar.plan.parameters).toEqual([
+      52.52,
+      "celsius",
+      52.52,
+      13.41,
+      52.52,
+      52.52,
+    ]);
+    expect(scalar.plan.sql).toContain("WHERE CAST(? AS DOUBLE) = ?");
+    expect(scalar.plan.sql).toContain("GROUP BY 1, 2");
+    expect(scalar.plan.sql.match(/\?/g)?.length).toBe(
+      scalar.plan.parameters.length,
+    );
+    expect(scalar.plan.output_units).toEqual({
+      requested_latitude: "deg",
+      average_temperature: "Cel",
+    });
+
+    const correlated = compileSemanticQuery([weather], {
+      measures: [
+        {
+          catalog_id: "farm.query.weather",
+          entity_id: "forecast",
+          member_id: "average_temperature",
+        },
+      ],
+      dimensions: [
+        {
+          catalog_id: "farm.query.weather",
+          entity_id: "forecast",
+          member_id: "requested_latitude",
+        },
+      ],
+      inputs: [
+        {
+          input_id: "locations",
+          grain: ["location_id"],
+          columns: [
+            { name: "location_id", type: "VARCHAR" },
+            { name: "latitude", type: "DOUBLE" },
+            { name: "longitude", type: "DOUBLE" },
+          ],
+          rows: [["berlin", 52.52, 13.41]],
+        },
+      ],
+      source_bindings: [
+        {
+          entity: { catalog_id: "farm.query.weather", entity_id: "forecast" },
+          driver: { input_id: "locations" },
+          arguments: {
+            latitude: { input_column: "latitude" },
+            longitude: { input_column: "longitude" },
+          },
+        },
+      ],
+    });
+    expect(correlated.ok).toBe(true);
+    if (correlated.ok) {
+      expect(correlated.plan.sql).toContain(
+        '_e0."driver"."latitude" AS "requested_latitude"',
+      );
+      expect(correlated.plan.fact_branches[0].result_grain).toEqual([
+        "location_id",
+        "requested_latitude",
+      ]);
+    }
+  });
+
+  test("expands packed member templates before compilation", () => {
+    const readings = catalog("weather", "farm.query.weather", [
+      {
+        name: "readings",
+        entityId: "readings",
+        grain: ["reading_id"],
+        columns: ["id", "temperature_gfs", "temperature_ecmwf"],
+        members: [
+          { member_id: "reading_id", kind: "identifier", column: "id" },
+          {
+            template_id: "weather_values",
+            template: {
+              kind: "dimension",
+              data_type: "DOUBLE",
+              unit: "Cel",
+            },
+            members: [
+              { member_id: "temperature_gfs", column: "temperature_gfs" },
+              {
+                member_id: "temperature_ecmwf",
+                column: "temperature_ecmwf",
+              },
+            ],
+          },
+          {
+            member_id: "average_gfs",
+            kind: "measure",
+            aggregation: "avg",
+            member: "temperature_gfs",
+            additivity: "non_additive",
+          },
+        ],
+      },
+    ]);
+    const result = compileSemanticQuery([readings], {
+      measures: [
+        {
+          catalog_id: "farm.query.weather",
+          entity_id: "readings",
+          member_id: "average_gfs",
+        },
+      ],
+      dimensions: [
+        {
+          catalog_id: "farm.query.weather",
+          entity_id: "readings",
+          member_id: "temperature_ecmwf",
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.plan.sql).toContain(
+        '_e0."temperature_ecmwf" AS "temperature_ecmwf"',
+      );
+      expect(result.plan.output_units).toEqual({
+        temperature_ecmwf: "Cel",
+        average_gfs: "Cel",
+      });
+    }
+  });
+
   test("reports static and parameter-selected units without changing SQL semantics", () => {
     const weather = weatherWithUnits();
     const request: SemanticQuery = {
@@ -753,9 +930,7 @@ describe("semantic model compiler", () => {
         from_cardinality: { min: 0, max: "many" },
         to_cardinality: { min: 0, max: 1 },
         predicate: [predicate],
-        conditions: [
-          { side: "to", member: "zone_type", value: "district" },
-        ],
+        conditions: [{ side: "to", member: "zone_type", value: "district" }],
       };
       const geo = catalog(
         "geo_runtime",
@@ -837,9 +1012,7 @@ describe("semantic model compiler", () => {
         'ST_Within(_e0."geometry", _e1."geometry")',
       );
     if (spatial.ok) {
-      expect(spatial.plan.sql).toContain(
-        '_e1."type" IS NOT DISTINCT FROM ?',
-      );
+      expect(spatial.plan.sql).toContain('_e1."type" IS NOT DISTINCT FROM ?');
       expect(spatial.plan.parameters).toEqual(["district"]);
     }
 
