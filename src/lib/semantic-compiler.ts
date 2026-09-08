@@ -18,7 +18,12 @@ export interface SemanticSelection extends SemanticRef {
   member_id: string;
   alias?: string;
   relationship_path?: string[];
+  branch_relationship_paths?: Array<{
+    root: SemanticRef;
+    relationship_path: string[];
+  }>;
   granularity?: string;
+  missing_fact_value?: "null" | "zero";
 }
 export type SemanticFilterMember =
   | string
@@ -87,6 +92,13 @@ export interface SemanticPlan {
     estimated_invocations: number;
     driving_grain_reduced: boolean;
   }>;
+  stitch?: {
+    strategy: "conformed_dimension_spine";
+    result_grain: string[];
+    branch_roots: SemanticRef[];
+    measure_branches: Record<string, SemanticRef>;
+    missing_fact_values: Record<string, "null" | "zero">;
+  };
   sql: string;
   parameters: unknown[];
   validation_scope: "semantic";
@@ -127,7 +139,8 @@ const MAX_INLINE_ROWS = 100,
   MAX_INLINE_BYTES = 1_000_000;
 const DEFAULT_MAX_INVOCATIONS = 100,
   HARD_MAX_INVOCATIONS = 1000,
-  DEFAULT_MAX_STAGE_ROWS = 10_000;
+  DEFAULT_MAX_STAGE_ROWS = 10_000,
+  MAX_FACT_BRANCHES = 10;
 type SourceArgumentRenderer = (
   entity: SemanticEntity,
   member: SemanticMember,
@@ -1693,9 +1706,528 @@ function filterMembers(
   return [filter.member];
 }
 
-export function compileSemanticQuery(
+function orderedMeasureRoots(measures: SemanticSelection[]): SemanticRef[] {
+  const seen = new Set<string>();
+  const roots: SemanticRef[] = [];
+  for (const measure of measures) {
+    const key = refKey(measure);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    roots.push({
+      catalog_id: measure.catalog_id,
+      entity_id: measure.entity_id,
+    });
+  }
+  return roots;
+}
+
+function validateMultiFactOutputNames(query: SemanticQuery): void {
+  const names = new Set<string>();
+  for (const selection of [
+    ...(query.dimensions ?? []),
+    ...(query.measures ?? []),
+  ]) {
+    const name = selection.alias ?? selection.member_id;
+    if (names.has(name))
+      fail(
+        "request_validation",
+        "duplicate_output",
+        `Duplicate output name '${name}'`,
+      );
+    names.add(name);
+  }
+}
+
+function dimensionForBranch(
+  selection: SemanticSelection,
+  root: SemanticRef,
+): SemanticSelection {
+  const override = selection.branch_relationship_paths?.find(
+    (item) => refKey(item.root) === refKey(root),
+  );
+  const { branch_relationship_paths: _ignored, ...dimension } = selection;
+  return {
+    ...dimension,
+    ...(override ? { relationship_path: [...override.relationship_path] } : {}),
+  };
+}
+
+function validateBranchRelationshipPaths(
+  dimensions: SemanticSelection[],
+  roots: SemanticRef[],
+): void {
+  const rootKeys = new Set(roots.map(refKey));
+  for (const dimension of dimensions) {
+    const seen = new Set<string>();
+    for (const item of dimension.branch_relationship_paths ?? []) {
+      const key = refKey(item.root);
+      if (!rootKeys.has(key))
+        fail(
+          "request_validation",
+          "invalid_branch_relationship_root",
+          `Dimension '${dimension.member_id}' specifies a path for non-fact root '${key}'`,
+        );
+      if (seen.has(key))
+        fail(
+          "request_validation",
+          "duplicate_branch_relationship_path",
+          `Dimension '${dimension.member_id}' specifies multiple paths for root '${key}'`,
+        );
+      seen.add(key);
+    }
+  }
+}
+
+function validateMultiFactPopulationFilters(
+  environment: SemanticEnvironment,
+  query: SemanticQuery,
+): void {
+  for (const ref of filterMembers(query.filters)) {
+    let member: SemanticMember | undefined;
+    if (typeof ref === "string") {
+      const logicalMatches = new Set(
+        environment.entities
+          .filter((entity) => entity.members.has(ref))
+          .map((entity) => entity.key),
+      );
+      if (logicalMatches.size !== 1)
+        fail(
+          "request_validation",
+          "multi_fact_filter_ambiguous",
+          `Population filter member '${ref}' must identify one semantic member; use a qualified member reference`,
+        );
+      const key = [...logicalMatches][0];
+      const [catalog_id, entity_id] = key.split("::");
+      member = resolveOrFail(
+        environment,
+        { catalog_id, entity_id },
+        query.bindings ?? {},
+      ).members.get(ref);
+    } else {
+      member = resolveOrFail(
+        environment,
+        ref,
+        query.bindings ?? {},
+      ).members.get(ref.member_id);
+    }
+    if (!member)
+      fail(
+        "model_resolution",
+        "unknown_filter_member",
+        "Unknown population filter member",
+      );
+    if (member?.kind === "measure")
+      fail(
+        "request_validation",
+        "multi_fact_population_filter_measure",
+        "Pre-stitch population filters may not reference measures; use measure_filters for selected measures",
+      );
+  }
+}
+
+function partitionMultiFactSources(
+  query: SemanticQuery,
+  roots: SemanticRef[],
+): Array<{
+  source_bindings: SemanticSourceBinding[];
+  inputs: SemanticInput[];
+}> {
+  const inputs = validateInputs(query);
+  const definitions = query.source_bindings ?? [];
+  const byTarget = new Map<string, number>();
+  definitions.forEach((definition, index) => {
+    const key = refKey(definition.entity);
+    if (byTarget.has(key))
+      fail(
+        "source_binding",
+        "duplicate_source_binding",
+        `Entity '${key}' has multiple source bindings`,
+      );
+    byTarget.set(key, index);
+  });
+  const usedDefinitions = new Set<number>();
+  const usedInputs = new Set<string>();
+  const partitions = roots.map((root) => {
+    const indexes: number[] = [];
+    const inputIds = new Set<string>();
+    const visited = new Set<string>();
+    let current = refKey(root);
+    while (byTarget.has(current)) {
+      const index = byTarget.get(current)!;
+      if (visited.has(current)) break;
+      visited.add(current);
+      indexes.push(index);
+      const driver = definitions[index].driver;
+      if ("input_id" in driver) {
+        inputIds.add(driver.input_id);
+        break;
+      }
+      current = refKey(driver.entity);
+    }
+    indexes.forEach((index) => usedDefinitions.add(index));
+    inputIds.forEach((inputId) => usedInputs.add(inputId));
+    return {
+      source_bindings: [...indexes]
+        .sort((a, b) => a - b)
+        .map((index) => definitions[index]),
+      inputs: (query.inputs ?? []).filter((input) =>
+        inputIds.has(input.input_id),
+      ),
+    };
+  });
+  const unusedDefinitions = definitions.filter(
+    (_definition, index) => !usedDefinitions.has(index),
+  );
+  if (unusedDefinitions.length)
+    fail(
+      "source_binding",
+      "unused_source_binding",
+      "Source bindings are not on any fact invocation path",
+    );
+  const unusedInputs = [...inputs.keys()].filter(
+    (inputId) => !usedInputs.has(inputId),
+  );
+  if (unusedInputs.length)
+    fail(
+      "source_binding",
+      "unused_input",
+      `Inputs are not used by any fact invocation path: ${JSON.stringify(unusedInputs)}`,
+    );
+  return partitions;
+}
+
+function measureZeroType(
+  environment: SemanticEnvironment,
+  selection: SemanticSelection,
+  bindings: Record<string, string>,
+): string {
+  const entity = resolveOrFail(environment, selection, bindings);
+  const member = entity.members.get(selection.member_id);
+  if (!member || member.kind !== "measure")
+    return fail(
+      "type_check",
+      "zero_fill_not_safe",
+      `Output '${selection.member_id}' is not a measure eligible for zero filling`,
+    );
+  if (member.additivity !== "additive")
+    return fail(
+      "type_check",
+      "zero_fill_not_safe",
+      `Measure '${member.member_id}' must be additive to use a zero missing value`,
+    );
+  let resultType = member.output_type ?? "";
+  if (!resultType && ["count_rows", "count"].includes(member.aggregation ?? ""))
+    resultType = "BIGINT";
+  if (!resultType && member.aggregation === "sum" && member.member) {
+    const source = entity.members.get(member.member);
+    if (source) resultType = memberType(entity, source) ?? "";
+  }
+  if (
+    !/^(?:U?(?:TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT)|REAL|FLOAT|DOUBLE|DECIMAL(?:\([0-9]+(?:,[0-9]+)?\))?|NUMERIC(?:\([0-9]+(?:,[0-9]+)?\))?)$/.test(
+      normalizedType(resultType),
+    )
+  )
+    return fail(
+      "type_check",
+      "zero_fill_not_safe",
+      `Measure '${member.member_id}' has no provable numeric result type`,
+    );
+  return safeType(resultType);
+}
+
+function selectedMeasureExpression(
+  ref: SemanticFilterMember,
+  measures: SemanticSelection[],
+  expressions: Map<string, string>,
+): string {
+  const matches = measures.filter((measure) =>
+    typeof ref === "string"
+      ? [measure.member_id, measure.alias].includes(ref)
+      : refKey(measure) === refKey(ref) && measure.member_id === ref.member_id,
+  );
+  if (!matches.length)
+    return fail(
+      "request_validation",
+      "multi_fact_measure_filter_not_selected",
+      "Multi-fact measure filters must reference a selected measure",
+    );
+  if (matches.length !== 1)
+    return fail(
+      "request_validation",
+      "multi_fact_measure_filter_ambiguous",
+      "Multi-fact measure filter reference is ambiguous; use a unique selected alias",
+    );
+  return expressions.get(matches[0].alias ?? matches[0].member_id)!;
+}
+
+function compileStitchedMeasureFilter(
+  filter: SemanticFilter | undefined,
+  measures: SemanticSelection[],
+  expressions: Map<string, string>,
+  parameters: unknown[],
+  depth = 0,
+): string | null {
+  if (!filter) return null;
+  if (depth >= 8)
+    return fail(
+      "request_validation",
+      "filter_depth",
+      "Filter nesting may not exceed 8 levels",
+    );
+  if ("and" in filter)
+    return `(${filter.and.map((item) => compileStitchedMeasureFilter(item, measures, expressions, parameters, depth + 1)).join(" AND ")})`;
+  if ("or" in filter)
+    return `(${filter.or.map((item) => compileStitchedMeasureFilter(item, measures, expressions, parameters, depth + 1)).join(" OR ")})`;
+  const lhs = selectedMeasureExpression(filter.member, measures, expressions);
+  if (filter.operator === "is_null") return `${lhs} IS NULL`;
+  if (filter.operator === "is_not_null") return `${lhs} IS NOT NULL`;
+  const values = filter.values ?? [filter.value];
+  values.forEach((value) => parameters.push(value));
+  if (["in", "not_in"].includes(filter.operator))
+    return `${lhs} ${filter.operator === "in" ? "IN" : "NOT IN"} (${values.map(() => "?").join(", ")})`;
+  if (filter.operator === "between") return `${lhs} BETWEEN ? AND ?`;
+  const operator = {
+    eq: "=",
+    neq: "<>",
+    gt: ">",
+    gte: ">=",
+    lt: "<",
+    lte: "<=",
+  }[filter.operator];
+  if (!operator)
+    return fail(
+      "request_validation",
+      "invalid_filter_operator",
+      `Unknown filter operator '${filter.operator}'`,
+    );
+  return `${lhs} ${operator} ?`;
+}
+
+function compileMultiFactQuery(
+  catalogs: readonly CatalogData[],
+  environment: SemanticEnvironment,
+  query: SemanticQuery,
+  roots: SemanticRef[],
+): SemanticCompileResult {
+  if (roots.length > MAX_FACT_BRANCHES)
+    fail(
+      "request_validation",
+      "fact_branch_limit",
+      `At most ${MAX_FACT_BRANCHES} fact roots may be selected`,
+    );
+  const measures = query.measures ?? [];
+  const dimensions = query.dimensions ?? [];
+  validateMultiFactOutputNames(query);
+  validateBranchRelationshipPaths(dimensions, roots);
+  validateMultiFactPopulationFilters(environment, query);
+  const partitions = partitionMultiFactSources(query, roots);
+  const branchPlans: SemanticPlan[] = [];
+  const branchMeasureNames: string[][] = [];
+  roots.forEach((root, index) => {
+    const branchMeasures = measures
+      .filter((measure) => refKey(measure) === refKey(root))
+      .map(({ missing_fact_value: _ignored, ...measure }) => ({ ...measure }));
+    const branchQuery: SemanticQuery = {
+      ...query,
+      measures: branchMeasures,
+      dimensions: dimensions.map((dimension) =>
+        dimensionForBranch(dimension, root),
+      ),
+      source_bindings: partitions[index].source_bindings,
+      inputs: partitions[index].inputs,
+    };
+    delete branchQuery.measure_filters;
+    delete branchQuery.order;
+    delete branchQuery.limit;
+    const compiled = compileSemanticQueryInternal(catalogs, branchQuery, true);
+    if (!compiled.ok) throw new CompileFailure(compiled.diagnostics[0]);
+    branchPlans.push(compiled.plan);
+    branchMeasureNames.push(
+      branchMeasures.map((measure) => measure.alias ?? measure.member_id),
+    );
+  });
+
+  const commonGrain = [...branchPlans[0].fact_branches[0].result_grain];
+  const explicitGrain = dimensions.map(
+    (dimension) => dimension.alias ?? dimension.member_id,
+  );
+  const implicitGrain = commonGrain.filter(
+    (member) => !explicitGrain.includes(member),
+  );
+  const implicitSources = (plan: SemanticPlan) =>
+    plan.fact_branches[0].effective_source_grain
+      .filter((item) => implicitGrain.includes(item.output_name))
+      .map((item) => [item.output_name, `${item.source}::${item.member}`])
+      .sort(([left], [right]) => left.localeCompare(right));
+  const firstImplicitSources = implicitSources(branchPlans[0]);
+  branchPlans.slice(1).forEach((plan, index) => {
+    const grain = plan.fact_branches[0].result_grain;
+    if (JSON.stringify(grain) !== JSON.stringify(commonGrain))
+      fail(
+        "type_check",
+        "incompatible_branch_grain",
+        `Fact branch ${index + 2} has result grain ${JSON.stringify(grain)}; expected ${JSON.stringify(commonGrain)}`,
+      );
+    if (
+      JSON.stringify(implicitSources(plan)) !==
+      JSON.stringify(firstImplicitSources)
+    )
+      fail(
+        "type_check",
+        "incompatible_branch_grain",
+        "Correlated fact branches must expose the same driving grain members",
+      );
+  });
+
+  const totalInvocations = branchPlans.reduce(
+    (total, plan) =>
+      total +
+      plan.fact_branches.reduce(
+        (branchTotal, branch) =>
+          branchTotal + (branch.estimated_invocations ?? 0),
+        0,
+      ),
+    0,
+  );
+  const maxInvocations = Math.min(
+    HARD_MAX_INVOCATIONS,
+    query.execution_limits?.max_invocations ?? DEFAULT_MAX_INVOCATIONS,
+  );
+  if (totalInvocations > maxInvocations)
+    fail(
+      "execution_limit",
+      "invocation_limit",
+      `Fact branches may execute ${totalInvocations} function rows, above limit ${maxInvocations}`,
+    );
+
+  const measureBranches: Record<string, SemanticRef> = {};
+  const missingFactValues: Record<string, "null" | "zero"> = {};
+  const measureExpressions = new Map<string, string>();
+  let selectItems = commonGrain.map((name) => `"_keys".${quoteIdent(name)}`);
+  roots.forEach((root, branchIndex) => {
+    const selected = measures.filter(
+      (measure) => refKey(measure) === refKey(root),
+    );
+    selected.forEach((selection, measureIndex) => {
+      const name = branchMeasureNames[branchIndex][measureIndex];
+      const policy = selection.missing_fact_value ?? "null";
+      let expression = `"_f${branchIndex}".${quoteIdent(name)}`;
+      if (policy === "zero")
+        expression = `COALESCE(${expression}, CAST(0 AS ${measureZeroType(environment, selection, query.bindings ?? {})}))`;
+      selectItems.push(`${expression} AS ${quoteIdent(name)}`);
+      measureExpressions.set(name, expression);
+      measureBranches[name] = root;
+      missingFactValues[name] = policy;
+    });
+  });
+
+  const ctes = branchPlans.map(
+    (plan, index) => `"_f${index}" AS (\n${plan.sql}\n)`,
+  );
+  let fromLines: string[];
+  if (commonGrain.length) {
+    const keys = branchPlans.map(
+      (_plan, index) =>
+        `SELECT ${commonGrain.map(quoteIdent).join(", ")} FROM "_f${index}"`,
+    );
+    ctes.push(`"_keys" AS (\n${keys.join("\nUNION\n")}\n)`);
+    fromLines = ['FROM "_keys"'];
+    branchPlans.forEach((_plan, index) => {
+      const predicates = commonGrain
+        .map(
+          (name) =>
+            `"_keys".${quoteIdent(name)} IS NOT DISTINCT FROM "_f${index}".${quoteIdent(name)}`,
+        )
+        .join(" AND ");
+      fromLines.push(`LEFT JOIN "_f${index}" ON ${predicates}`);
+    });
+  } else {
+    selectItems = selectItems.slice(commonGrain.length);
+    fromLines = [
+      'FROM "_f0"',
+      ...branchPlans
+        .slice(1)
+        .map((_plan, index) => `CROSS JOIN "_f${index + 1}"`),
+    ];
+  }
+
+  const parameters = branchPlans.flatMap((plan) => plan.parameters);
+  const outerFilter = compileStitchedMeasureFilter(
+    query.measure_filters,
+    measures,
+    measureExpressions,
+    parameters,
+  );
+  const outputNames = new Set([...commonGrain, ...measureExpressions.keys()]);
+  const order = (query.order ?? []).map((item) => {
+    if (!outputNames.has(item.member))
+      return fail(
+        "request_validation",
+        "invalid_order_member",
+        `ORDER BY '${item.member}' is not a selected output`,
+      );
+    return `${quoteIdent(item.member)} ${item.direction.toUpperCase()}`;
+  });
+  const limit = Math.min(10_000, Math.max(1, query.limit ?? 1000));
+  const sql = [
+    `WITH ${ctes.join(",\n")}`,
+    `SELECT ${selectItems.join(", ")}`,
+    ...fromLines,
+    outerFilter ? `WHERE ${outerFilter}` : "",
+    order.length ? `ORDER BY ${order.join(", ")}` : "",
+    `LIMIT ${limit}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const outputUnits: Record<string, string | null> = {};
+  const unitDiagnostics: SemanticDiagnostic[] = [];
+  const warnings: string[] = [];
+  for (const plan of branchPlans) {
+    for (const [name, unit] of Object.entries(plan.output_units ?? {})) {
+      if (name in outputUnits && outputUnits[name] !== unit)
+        fail(
+          "unit_resolution",
+          "incompatible_branch_unit",
+          `Conformed output '${name}' resolves to different units across fact branches`,
+        );
+      outputUnits[name] = unit;
+    }
+    for (const diagnostic of plan.unit_diagnostics ?? [])
+      if (
+        !unitDiagnostics.some(
+          (existing) => JSON.stringify(existing) === JSON.stringify(diagnostic),
+        )
+      )
+        unitDiagnostics.push(diagnostic);
+    for (const warning of plan.warnings)
+      if (!warnings.includes(warning)) warnings.push(warning);
+  }
+  return {
+    ok: true,
+    plan: {
+      fact_branches: branchPlans.flatMap((plan) => plan.fact_branches),
+      stitch: {
+        strategy: "conformed_dimension_spine",
+        result_grain: commonGrain,
+        branch_roots: roots,
+        measure_branches: measureBranches,
+        missing_fact_values: missingFactValues,
+      },
+      sql,
+      parameters,
+      validation_scope: "semantic",
+      warnings,
+      ...(Object.keys(outputUnits).length ? { output_units: outputUnits } : {}),
+      ...(unitDiagnostics.length ? { unit_diagnostics: unitDiagnostics } : {}),
+    },
+  };
+}
+
+function compileSemanticQueryInternal(
   catalogs: readonly CatalogData[],
   query: SemanticQuery,
+  branchMode = false,
 ): SemanticCompileResult {
   try {
     const requestErrors = validateSemanticValue("query", query);
@@ -1738,12 +2270,34 @@ export function compileSemanticQuery(
         "filter_node_limit",
         "At most 100 filter predicates are allowed",
       );
-    const roots = measures.map((selection) => refKey(selection));
-    if (new Set(roots).size > 1)
+    const roots = orderedMeasureRoots(measures);
+    if (roots.length > 1) {
+      if (branchMode)
+        fail(
+          "sql_generation",
+          "nested_multi_fact",
+          "A fact branch must contain measures from exactly one root",
+        );
+      return compileMultiFactQuery(catalogs, environment, query, roots);
+    }
+    if (
+      measures.length &&
+      measures.some((measure) => measure.missing_fact_value !== undefined)
+    )
       fail(
-        "multi_fact_not_supported",
-        "multi_fact_not_supported",
-        "Measures from multiple root entities are not supported yet",
+        "request_validation",
+        "missing_fact_value_requires_multi_fact",
+        "missing_fact_value is only meaningful when stitching multiple fact roots",
+      );
+    if (
+      dimensions.some(
+        (dimension) => (dimension.branch_relationship_paths?.length ?? 0) > 0,
+      )
+    )
+      fail(
+        "request_validation",
+        "branch_relationship_paths_require_multi_fact",
+        "branch_relationship_paths is only meaningful with multiple fact roots",
       );
     const rootRef = measures[0] ?? query.root_entity;
     if (!rootRef)
@@ -2222,8 +2776,8 @@ export function compileSemanticQuery(
       where ? `WHERE ${where}` : "",
       groups.length ? `GROUP BY ${groups.join(", ")}` : "",
       having ? `HAVING ${having}` : "",
-      order.length ? `ORDER BY ${order.join(", ")}` : "",
-      `LIMIT ${limit}`,
+      order.length && !branchMode ? `ORDER BY ${order.join(", ")}` : "",
+      !branchMode ? `LIMIT ${limit}` : "",
     ]
       .filter(Boolean)
       .join("\n");
@@ -2299,6 +2853,13 @@ export function compileSemanticQuery(
       ],
     };
   }
+}
+
+export function compileSemanticQuery(
+  catalogs: readonly CatalogData[],
+  query: SemanticQuery,
+): SemanticCompileResult {
+  return compileSemanticQueryInternal(catalogs, query);
 }
 
 export { buildSemanticEnvironment };

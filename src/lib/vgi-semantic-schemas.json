@@ -1159,6 +1159,51 @@
           "estimated_invocations"
         ],
         "type": "object"
+      },
+      "stitch": {
+        "additionalProperties": false,
+        "properties": {
+          "branch_roots": {
+            "items": {
+              "$ref": "definitions.json#/$defs/entity_ref"
+            },
+            "maxItems": 10,
+            "minItems": 2,
+            "type": "array"
+          },
+          "measure_branches": {
+            "additionalProperties": {
+              "$ref": "definitions.json#/$defs/entity_ref"
+            },
+            "type": "object"
+          },
+          "missing_fact_values": {
+            "additionalProperties": {
+              "enum": [
+                "null",
+                "zero"
+              ]
+            },
+            "type": "object"
+          },
+          "result_grain": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "strategy": {
+            "const": "conformed_dimension_spine"
+          }
+        },
+        "required": [
+          "strategy",
+          "result_grain",
+          "branch_roots",
+          "measure_branches",
+          "missing_fact_values"
+        ],
+        "type": "object"
       }
     },
     "$id": "https://query.farm/schema/vgi/semantic/plan.json",
@@ -1169,7 +1214,7 @@
         "items": {
           "$ref": "#/$defs/fact_branch"
         },
-        "maxItems": 1,
+        "maxItems": 10,
         "minItems": 1,
         "type": "array"
       },
@@ -1187,6 +1232,9 @@
       },
       "sql": {
         "type": "string"
+      },
+      "stitch": {
+        "$ref": "#/$defs/stitch"
       },
       "unit_diagnostics": {
         "items": {
@@ -1214,12 +1262,38 @@
   },
   "query": {
     "$defs": {
+      "branch_relationship_path": {
+        "additionalProperties": false,
+        "properties": {
+          "relationship_path": {
+            "items": {
+              "$ref": "definitions.json#/$defs/semantic_id"
+            },
+            "type": "array"
+          },
+          "root": {
+            "$ref": "definitions.json#/$defs/entity_ref"
+          }
+        },
+        "required": [
+          "root",
+          "relationship_path"
+        ],
+        "type": "object"
+      },
       "dimension_selection": {
         "additionalProperties": false,
         "properties": {
           "alias": {
             "minLength": 1,
             "type": "string"
+          },
+          "branch_relationship_paths": {
+            "items": {
+              "$ref": "#/$defs/branch_relationship_path"
+            },
+            "maxItems": 10,
+            "type": "array"
           },
           "catalog_id": {
             "$ref": "definitions.json#/$defs/catalog_id"
@@ -1565,6 +1639,12 @@
           },
           "member_id": {
             "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "missing_fact_value": {
+            "enum": [
+              "null",
+              "zero"
+            ]
           }
         },
         "required": [

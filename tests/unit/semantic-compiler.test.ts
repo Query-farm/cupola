@@ -213,6 +213,12 @@ const crm = (alias = "crm_runtime", reciprocal = false) =>
       members: [
         { member_id: "customer_id", kind: "identifier", column: "customer_id" },
         { member_id: "country", kind: "dimension", column: "country" },
+        {
+          member_id: "customer_count",
+          kind: "measure",
+          aggregation: "count_rows",
+          additivity: "additive",
+        },
       ],
     },
   ]);
@@ -791,6 +797,112 @@ describe("semantic model compiler", () => {
     ]);
   });
 
+  test("stitches correlated fact branches and applies one invocation limit", () => {
+    const correlatedFact = (
+      alias: string,
+      catalogId: string,
+      entityId: string,
+    ) =>
+      functionCatalog(
+        alias,
+        catalogId,
+        entityId,
+        entityId,
+        [fnArg("latitude", "DOUBLE", 0), fnArg("longitude", "DOUBLE", 1)],
+        [
+          {
+            member_id: "time_key",
+            kind: "identifier",
+            column: "time",
+            data_type: "TIMESTAMP",
+          },
+          {
+            member_id: "temperature",
+            kind: "dimension",
+            column: "temperature",
+            data_type: "DOUBLE",
+          },
+          {
+            member_id: "average_temperature",
+            kind: "measure",
+            aggregation: "avg",
+            member: "temperature",
+            additivity: "non_additive",
+          },
+        ],
+        [
+          ["time", "TIMESTAMP"],
+          ["temperature", "DOUBLE"],
+        ],
+      );
+    const weather = correlatedFact("weather", "farm.query.weather", "forecast");
+    const climate = correlatedFact("climate", "farm.query.climate", "climate");
+    const input = {
+      input_id: "locations",
+      grain: ["location_id"],
+      columns: [
+        { name: "location_id", type: "VARCHAR" },
+        { name: "latitude", type: "DOUBLE" },
+        { name: "longitude", type: "DOUBLE" },
+      ],
+      rows: [
+        ["berlin", 52.52, 13.41],
+        ["tokyo", 35.69, 139.69],
+      ],
+    };
+    const query: SemanticQuery = {
+      measures: [
+        {
+          catalog_id: "farm.query.weather",
+          entity_id: "forecast",
+          member_id: "average_temperature",
+          alias: "weather_temperature",
+        },
+        {
+          catalog_id: "farm.query.climate",
+          entity_id: "climate",
+          member_id: "average_temperature",
+          alias: "climate_temperature",
+        },
+      ],
+      inputs: [input],
+      source_bindings: [
+        ["farm.query.weather", "forecast"],
+        ["farm.query.climate", "climate"],
+      ].map(([catalog_id, entity_id]) => ({
+        entity: { catalog_id, entity_id },
+        driver: { input_id: "locations" },
+        arguments: {
+          latitude: { input_column: "latitude" },
+          longitude: { input_column: "longitude" },
+        },
+      })),
+      execution_limits: { max_invocations: 4 },
+    };
+    const result = compileSemanticQuery([weather, climate], query);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.stitch?.result_grain).toEqual(["location_id"]);
+    expect(result.plan.sql.match(/CROSS JOIN LATERAL/g)).toHaveLength(2);
+    expect(
+      result.plan.fact_branches.reduce(
+        (sum, branch) => sum + branch.estimated_invocations,
+        0,
+      ),
+    ).toBe(4);
+
+    const rejected = compileSemanticQuery([weather, climate], {
+      ...query,
+      execution_limits: { max_invocations: 3 },
+    });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok)
+      expect(rejected.diagnostics[0]).toMatchObject({
+        code: "invocation_limit",
+        message: expect.stringContaining("Fact branches may execute 4"),
+      });
+  });
+
   test("credits required filters applied to a bounded entity driver", () => {
     const sites = catalog("assets", "com.example.assets", [
       {
@@ -1070,7 +1182,7 @@ describe("semantic model compiler", () => {
     expect(result.diagnostics[0].stage).toBe("fanout");
   });
 
-  test("rejects multi-root measures with a stable diagnostic", () => {
+  test("stitches multi-root measures with conformed dimensions", () => {
     const other = catalog("other", "com.example.other", [
       {
         name: "events",
@@ -1088,7 +1200,7 @@ describe("semantic model compiler", () => {
         ],
       },
     ]);
-    const result = compileSemanticQuery([sales(), other], {
+    const independent = compileSemanticQuery([sales(), other], {
       measures: [
         {
           catalog_id: "com.example.sales",
@@ -1102,9 +1214,98 @@ describe("semantic model compiler", () => {
         },
       ],
     });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.diagnostics[0].stage).toBe("multi_fact_not_supported");
+    expect(independent.ok).toBe(true);
+    if (!independent.ok) return;
+    expect(independent.plan.fact_branches).toHaveLength(2);
+    expect(independent.plan.sql).toContain('FROM "_f0"\nCROSS JOIN "_f1"');
+
+    const conformed = compileSemanticQuery([sales(), crm()], {
+      measures: [
+        {
+          catalog_id: "com.example.sales",
+          entity_id: "orders",
+          member_id: "revenue",
+        },
+        {
+          catalog_id: "com.example.crm",
+          entity_id: "customers",
+          member_id: "customer_count",
+          missing_fact_value: "zero",
+        },
+      ],
+      dimensions: [
+        {
+          catalog_id: "com.example.crm",
+          entity_id: "customers",
+          member_id: "country",
+          branch_relationship_paths: [
+            {
+              root: {
+                catalog_id: "com.example.sales",
+                entity_id: "orders",
+              },
+              relationship_path: ["com.example.order_customer"],
+            },
+            {
+              root: {
+                catalog_id: "com.example.crm",
+                entity_id: "customers",
+              },
+              relationship_path: [],
+            },
+          ],
+        },
+      ],
+      filters: { member: "country", operator: "neq", value: "CA" },
+      measure_filters: {
+        member: "customer_count",
+        operator: "gt",
+        value: 0,
+      },
+      order: [{ member: "country", direction: "asc" }],
+    });
+    expect(conformed.ok).toBe(true);
+    if (!conformed.ok) return;
+    expect(conformed.plan.stitch).toEqual({
+      strategy: "conformed_dimension_spine",
+      result_grain: ["country"],
+      branch_roots: [
+        { catalog_id: "com.example.sales", entity_id: "orders" },
+        { catalog_id: "com.example.crm", entity_id: "customers" },
+      ],
+      measure_branches: {
+        revenue: { catalog_id: "com.example.sales", entity_id: "orders" },
+        customer_count: {
+          catalog_id: "com.example.crm",
+          entity_id: "customers",
+        },
+      },
+      missing_fact_values: { revenue: "null", customer_count: "zero" },
+    });
+    expect(conformed.plan.parameters).toEqual(["CA", "CA", 0]);
+    expect(conformed.plan.sql).toContain("IS NOT DISTINCT FROM");
+    expect(conformed.plan.sql).toContain(
+      'COALESCE("_f1"."customer_count", CAST(0 AS BIGINT))',
+    );
+
+    const unsafeZero = compileSemanticQuery([sales(), crm()], {
+      measures: [
+        {
+          catalog_id: "com.example.sales",
+          entity_id: "orders",
+          member_id: "revenue",
+          missing_fact_value: "zero",
+        },
+        {
+          catalog_id: "com.example.crm",
+          entity_id: "customers",
+          member_id: "customer_count",
+        },
+      ],
+    });
+    expect(unsafeZero.ok).toBe(false);
+    if (!unsafeZero.ok)
+      expect(unsafeZero.diagnostics[0].code).toBe("zero_fill_not_safe");
   });
 
   test("requires an explicit binding when a logical catalog is attached twice", () => {

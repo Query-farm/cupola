@@ -8,11 +8,23 @@ Cupola consumes the VGI semantic tag contract vendored from `vgi-lint-check`. Ru
 catalog/entity identities across arbitrary attachment aliases, reconciles reciprocal and third-party
 relationships, and keeps relationship resolution separate from attestation.
 
-`semantic-compiler.ts` is the shared, pure compiler. It accepts one root measure grain, typed
-dimensions/filters, explicit relationship paths, runtime bindings, typed query-local row sets and
-bounded correlated table-function pipelines. It rejects multi-root measures, traversal into a many
-side, unsafe casts, ambiguous bindings and invalid invocation dataflow. Its deterministic plan always
-contains one `fact_branches` element and positional parameters.
+`semantic-compiler.ts` is the shared, pure compiler. It accepts one to ten measure roots, typed
+dimensions/filters, explicit per-root relationship paths, runtime bindings, typed query-local row
+sets and bounded correlated table-function pipelines. It rejects traversal into a many side, unsafe
+casts, ambiguous bindings, invalid invocation dataflow, and incompatible branch grains. Its
+deterministic plan contains one independently aggregated `fact_branches` element per root and
+positional parameters.
+
+Multi-fact requests require every selected dimension to have the same exact stable semantic
+identity and to be safely reachable from every root. A dimension's `branch_relationship_paths` may
+override its ordinary path separately for named roots. After aggregating, the compiler builds the
+distinct union of branch keys and null-safely joins every aggregate to that spine. No-dimension
+branches each produce one aggregate row and are cross-joined. Missing values default to null;
+`missing_fact_value: "zero"` emits a typed `COALESCE` only for a provably numeric additive measure.
+Population filters run in every branch, while selected-measure filters, ordering, and limit run
+after stitching. Cross-fact formulas and branch-specific population filters remain unsupported.
+Multi-fact plans expose the common grain, ordered roots, measure ownership, and missing-value
+policies in `plan.stitch`; single-fact SQL and plans remain unchanged.
 
 `column` is one literal physical column identifier, including when its name contains a dot. Nested
 DuckDB `STRUCT` access uses an explicit `column_path` such as `["bbox", "xmin"]`. The model builder
@@ -88,7 +100,7 @@ and grouped unless `allow_driving_grain_reduction` is true.
 Inline inputs allow at most 100 rows, 32 columns, 3,200 cells and one megabyte of rows. Entity
 drivers require `max_rows`; each stage has `max_output_rows` (default 10,000). The request-level
 `execution_limits.max_invocations` defaults to 100 and cannot exceed 1,000. This bounds correlated
-input rows, not provider HTTP calls.
+input rows, not provider HTTP calls, and applies to the sum across all fact branches.
 
 Entity-driver `filters` and member `order` compile inside the driver subquery before its `max_rows`
 and lateral invocation. Required filters declared by a driver must be satisfied there; a top-level
