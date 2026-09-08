@@ -1063,6 +1063,9 @@
           "column_path": {
             "$ref": "member.json#/$defs/column_path"
           },
+          "conformance_id": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
           "data_type": {
             "maxLength": 100,
             "minLength": 1,
@@ -1075,6 +1078,9 @@
           },
           "expression": {
             "$ref": "expression.json"
+          },
+          "filter": {
+            "$ref": "member.json#/$defs/local_filter"
           },
           "granularities": {
             "items": {
