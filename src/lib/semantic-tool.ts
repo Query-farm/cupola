@@ -1,7 +1,7 @@
 /** One shared tool definition for every AI surface. */
 export const SEMANTIC_QUERY_TOOL = {
   name: "query_semantic_model",
-  description: "Compile and execute a governed measure/dimension query from VGI semantic tags. Prefer this when the requested concepts are modeled. Query-local inputs and source_bindings can safely drive correlated table functions and bounded function pipelines. Measures from up to ten roots can be stitched at an exact shared dimension grain; missing branch values remain null unless an eligible additive numeric measure explicitly requests zero. Set compile_only=true to inspect SQL without executing it; compile-only performs no DuckDB query.",
+  description: "Compile and execute a governed measure/dimension query from VGI semantic tags. Prefer this when the requested concepts are modeled. Query-local inputs and source_bindings can safely drive correlated table functions and bounded function pipelines. Measures from up to ten roots can be stitched with exact or explicitly conformed dimensions; typed derived_measures can calculate across stitched facts when every input has an explicit missing-value policy. Set compile_only=true to inspect SQL without executing it; compile-only performs no DuckDB query.",
   input_schema: {
     type: "object",
     additionalProperties: false,
@@ -10,6 +10,7 @@ export const SEMANTIC_QUERY_TOOL = {
       dimensions: { type: "array", maxItems: 50, items: { $ref: "#/$defs/dimension_selection" } },
       filters: { $ref: "#/$defs/filter" },
       measure_filters: { $ref: "#/$defs/filter" },
+      derived_measures: { type: "array", maxItems: 20, items: { $ref: "#/$defs/derived_measure" } },
       order: { type: "array", maxItems: 50, items: { type: "object", additionalProperties: false, properties: { member: { type: "string" }, direction: { enum: ["asc", "desc"] } }, required: ["member", "direction"] } },
       limit: { type: "integer", minimum: 1, maximum: 10000 },
       compile_only: { type: "boolean" },
@@ -38,7 +39,17 @@ export const SEMANTIC_QUERY_TOOL = {
       source_binding: { type: "object", additionalProperties: false, properties: { entity: { $ref: "#/$defs/entity_ref" }, driver: { $ref: "#/$defs/driver" }, arguments: { type: "object", additionalProperties: { $ref: "#/$defs/source_argument_binding" } }, max_output_rows: { type: "integer", minimum: 1, maximum: 10000 } }, required: ["entity", "driver", "arguments"] },
       measure_selection: { type: "object", additionalProperties: false, properties: { catalog_id: { type: "string" }, entity_id: { type: "string" }, member_id: { type: "string" }, alias: { type: "string" }, missing_fact_value: { enum: ["null", "zero"] } }, required: ["catalog_id", "entity_id", "member_id"] },
       branch_relationship_path: { type: "object", additionalProperties: false, properties: { root: { $ref: "#/$defs/entity_ref" }, relationship_path: { type: "array", items: { type: "string" } } }, required: ["root", "relationship_path"] },
-      dimension_selection: { type: "object", additionalProperties: false, properties: { catalog_id: { type: "string" }, entity_id: { type: "string" }, member_id: { type: "string" }, alias: { type: "string" }, relationship_path: { type: "array", items: { type: "string" } }, branch_relationship_paths: { type: "array", maxItems: 10, items: { $ref: "#/$defs/branch_relationship_path" } }, granularity: { enum: ["minute", "hour", "day", "week", "month", "quarter", "year"] } }, required: ["catalog_id", "entity_id", "member_id"] },
+      branch_member: { type: "object", additionalProperties: false, properties: { root: { $ref: "#/$defs/entity_ref" }, member: { $ref: "#/$defs/member_ref" }, relationship_path: { type: "array", items: { type: "string" } } }, required: ["root", "member"] },
+      dimension_selection: { type: "object", additionalProperties: false, properties: { catalog_id: { type: "string" }, entity_id: { type: "string" }, member_id: { type: "string" }, alias: { type: "string" }, relationship_path: { type: "array", items: { type: "string" } }, branch_relationship_paths: { type: "array", maxItems: 10, items: { $ref: "#/$defs/branch_relationship_path" } }, branch_members: { type: "array", maxItems: 10, items: { $ref: "#/$defs/branch_member" } }, granularity: { enum: ["minute", "hour", "day", "week", "month", "quarter", "year"] } }, required: ["catalog_id", "entity_id", "member_id"] },
+      expression: { oneOf: [
+        { type: "object", additionalProperties: false, properties: { op: { const: "member" }, member: { type: "string" } }, required: ["op", "member"] },
+        { type: "object", additionalProperties: false, properties: { op: { const: "literal" }, value: {} }, required: ["op", "value"] },
+        { type: "object", additionalProperties: false, properties: { op: { enum: ["add", "subtract", "multiply", "divide", "safe_divide"] }, left: { $ref: "#/$defs/expression" }, right: { $ref: "#/$defs/expression" } }, required: ["op", "left", "right"] },
+        { type: "object", additionalProperties: false, properties: { op: { const: "coalesce" }, args: { type: "array", minItems: 1, items: { $ref: "#/$defs/expression" } } }, required: ["op", "args"] },
+        { type: "object", additionalProperties: false, properties: { op: { const: "nullif" }, value: { $ref: "#/$defs/expression" }, other: { $ref: "#/$defs/expression" } }, required: ["op", "value"] },
+        { type: "object", additionalProperties: false, properties: { op: { const: "cast" }, value: { $ref: "#/$defs/expression" }, type: { type: "string" } }, required: ["op", "value", "type"] },
+      ] },
+      derived_measure: { type: "object", additionalProperties: false, properties: { name: { type: "string" }, expression: { $ref: "#/$defs/expression" }, output_type: { type: "string" }, unit: { type: "string" } }, required: ["name", "expression", "output_type"] },
       filter: { oneOf: [
         { type: "object", additionalProperties: false, properties: { and: { type: "array", minItems: 1, maxItems: 100, items: { $ref: "#/$defs/filter" } } }, required: ["and"] },
         { type: "object", additionalProperties: false, properties: { or: { type: "array", minItems: 1, maxItems: 100, items: { $ref: "#/$defs/filter" } } }, required: ["or"] },

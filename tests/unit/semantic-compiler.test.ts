@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   compileSemanticQuery,
+  type SemanticPlan,
   type SemanticQuery,
 } from "@/lib/semantic-compiler";
 import { executeSemanticQuery } from "@/lib/ai-tool-executor";
@@ -9,6 +10,7 @@ import {
   resolveNestedType,
 } from "@/lib/semantic-model";
 import type { CatalogData, ColumnInfo } from "@/lib/service";
+import conformanceVectors from "@/lib/vgi-semantic-conformance.json";
 
 const j = JSON.stringify;
 
@@ -223,6 +225,20 @@ const crm = (alias = "crm_runtime", reciprocal = false) =>
     },
   ]);
 
+function updateMember(
+  worker: CatalogData,
+  memberId: string,
+  patch: Record<string, unknown>,
+): CatalogData {
+  const table = worker.schemas[0].tables[0] as any;
+  const members = JSON.parse(table.tags["vgi.semantic_members"]);
+  const member = members.find((item: any) => item.member_id === memberId);
+  if (!member) throw new Error(`Missing fixture member ${memberId}`);
+  Object.assign(member, patch);
+  table.tags["vgi.semantic_members"] = j(members);
+  return worker;
+}
+
 function weatherWithUnits(): CatalogData {
   const temperatureUnit = {
     ...fnArg("temperature_unit", "VARCHAR", 2),
@@ -310,6 +326,44 @@ function weatherWithUnits(): CatalogData {
 }
 
 describe("semantic model compiler", () => {
+  test("matches the shared Python/TypeScript compiler conformance vectors", () => {
+    const salesWorker = updateMember(sales(), "revenue", {
+      output_type: "DECIMAL(18,2)",
+    });
+    for (const vector of conformanceVectors.cases) {
+      const expected = vector.expected as {
+        ok: boolean;
+        sql?: string;
+        parameters?: unknown[];
+        result_grain?: string[];
+        output_units?: Record<string, string | null>;
+        stitch?: SemanticPlan["stitch"] | null;
+        diagnostic_codes?: string[];
+      };
+      const result = compileSemanticQuery(
+        [salesWorker, crm()],
+        vector.request as SemanticQuery,
+      );
+      expect(result.ok, vector.name).toBe(expected.ok);
+      if (result.ok && expected.ok) {
+        expect(result.plan.sql, vector.name).toBe(expected.sql!);
+        expect(result.plan.parameters, vector.name).toEqual(expected.parameters!);
+        expect(result.plan.fact_branches[0].result_grain, vector.name).toEqual(
+          expected.result_grain!,
+        );
+        expect(result.plan.output_units ?? {}, vector.name).toEqual(
+          expected.output_units!,
+        );
+        expect(result.plan.stitch ?? null, vector.name).toEqual(
+          expected.stitch ?? null,
+        );
+      } else if (!result.ok && !expected.ok) {
+        expect(result.diagnostics.map((item) => item.code), vector.name).toEqual(
+          expected.diagnostic_codes!,
+        );
+      }
+    }
+  });
   test("compiles scalar and correlated source-argument dimensions", () => {
     const weather = weatherWithUnits();
     const scalar = compileSemanticQuery([weather], {
@@ -1306,6 +1360,100 @@ describe("semantic model compiler", () => {
     expect(unsafeZero.ok).toBe(false);
     if (!unsafeZero.ok)
       expect(unsafeZero.diagnostics[0].code).toBe("zero_fill_not_safe");
+  });
+
+  test("compiles model-owned filters, explicit conformance, and cross-fact formulas", () => {
+    const salesWorker = updateMember(
+      updateMember(
+        updateMember(sales(), "customer_id", {
+          conformance_id: "customer",
+          data_type: "VARCHAR",
+        }),
+        "revenue",
+        {
+          output_type: "DECIMAL(18,2)",
+          filter: { member: "customer_id", operator: "neq", value: "c2" },
+        },
+      ),
+      "amount",
+      { data_type: "DECIMAL(18,2)" },
+    );
+    const crmWorker = updateMember(crm(), "customer_id", {
+      conformance_id: "customer",
+      data_type: "VARCHAR",
+    });
+    const request: SemanticQuery = {
+      measures: [
+        {
+          catalog_id: "com.example.sales",
+          entity_id: "orders",
+          member_id: "revenue",
+          missing_fact_value: "null",
+        },
+        {
+          catalog_id: "com.example.crm",
+          entity_id: "customers",
+          member_id: "customer_count",
+          missing_fact_value: "null",
+        },
+      ],
+      dimensions: [
+        {
+          catalog_id: "com.example.crm",
+          entity_id: "customers",
+          member_id: "customer_id",
+          alias: "customer",
+          branch_members: [
+            {
+              root: {
+                catalog_id: "com.example.sales",
+                entity_id: "orders",
+              },
+              member: {
+                catalog_id: "com.example.sales",
+                entity_id: "orders",
+                member_id: "customer_id",
+              },
+            },
+          ],
+        },
+      ],
+      derived_measures: [
+        {
+          name: "revenue_per_customer",
+          expression: {
+            op: "safe_divide",
+            left: { op: "member", member: "revenue" },
+            right: { op: "member", member: "customer_count" },
+          },
+          output_type: "DECIMAL(18,2)",
+          unit: "USD/customer",
+        },
+      ],
+      order: [{ member: "revenue_per_customer", direction: "desc" }],
+    };
+    const result = compileSemanticQuery([salesWorker, crmWorker], request);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.sql).toContain(
+      'SUM(_e0."amount") FILTER (WHERE _e0."customer_id" <> ?)',
+    );
+    expect(result.plan.parameters).toEqual(["c2"]);
+    expect(result.plan.sql).toContain('"_projected" AS (');
+    expect(result.plan.sql).toContain('AS "revenue_per_customer"');
+    expect(result.plan.output_units?.revenue_per_customer).toBe("USD/customer");
+    expect(result.plan.stitch?.derived_measures).toEqual([
+      { name: "revenue_per_customer", output_type: "DECIMAL(18,2)" },
+    ]);
+
+    const missingPolicy = structuredClone(request);
+    delete missingPolicy.measures?.[0].missing_fact_value;
+    const rejected = compileSemanticQuery([salesWorker, crmWorker], missingPolicy);
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok)
+      expect(rejected.diagnostics[0].code).toBe(
+        "derived_measure_missing_value_policy_required",
+      );
   });
 
   test("requires an explicit binding when a logical catalog is attached twice", () => {

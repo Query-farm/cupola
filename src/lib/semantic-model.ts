@@ -59,6 +59,16 @@ export interface SemanticCatalogIdentity {
   default_timezone?: string;
 }
 
+export type SemanticMemberFilter =
+  | { and: SemanticMemberFilter[] }
+  | { or: SemanticMemberFilter[] }
+  | {
+      member: string;
+      operator: string;
+      value?: unknown;
+      values?: unknown[];
+    };
+
 export interface SemanticMember {
   member_id: string;
   kind: SemanticMemberKind;
@@ -70,6 +80,7 @@ export interface SemanticMember {
   expression?: SemanticExpression;
   data_type?: string;
   output_type?: string;
+  conformance_id?: string;
   aggregation?:
     | "count_rows"
     | "count"
@@ -89,6 +100,7 @@ export interface SemanticMember {
   hidden?: boolean;
   unit?: string;
   unit_parameter?: { argument: string; values: Record<string, string> };
+  filter?: SemanticMemberFilter;
 }
 
 export type SemanticExpression =
@@ -330,6 +342,33 @@ function semanticMemberType(
   )?.duckdbType;
   if (!physical || path.length < 2) return physical;
   return resolveNestedType(physical, path.slice(1)) ?? undefined;
+}
+
+function modelFilterLeaves(filter: SemanticMember["filter"]): Array<{
+  member: string;
+  operator: string;
+  value?: unknown;
+  values?: unknown[];
+}> {
+  if (!filter) return [];
+  if ("and" in filter)
+    return filter.and.flatMap((child) => modelFilterLeaves(child));
+  if ("or" in filter)
+    return filter.or.flatMap((child) => modelFilterLeaves(child));
+  return [filter];
+}
+
+function valueCompatible(value: unknown, target?: string): boolean {
+  if (value == null || !target) return true;
+  const normalized = normalizedType(target);
+  if (normalized === "BOOLEAN") return typeof value === "boolean";
+  if (/^(?:U?(?:TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT))/.test(normalized))
+    return typeof value === "number" && Number.isInteger(value);
+  if (/^(?:REAL|FLOAT|DOUBLE|DECIMAL|NUMERIC)/.test(normalized))
+    return typeof value === "number";
+  if (/^(?:VARCHAR|CHAR|TEXT|DATE|TIME|TIMESTAMP|UUID)/.test(normalized))
+    return typeof value === "string";
+  return true;
 }
 
 function listElementType(dataType: string, path: string[]): string | null {
@@ -689,6 +728,46 @@ export function buildSemanticEnvironment(
               message: `Measure '${member.member_id}' must be non_additive for aggregation/expression '${member.aggregation ?? "derived"}'`,
               path: objectPath,
             });
+          if (member.filter && member.expression)
+            diagnostics.push({
+              stage: "model_resolution",
+              code: "derived_measure_filter_unsupported",
+              message: `Derived measure '${member.member_id}' cannot own a filter; put filters on its referenced aggregate measures`,
+              path: objectPath,
+            });
+          for (const predicate of modelFilterLeaves(member.filter)) {
+            const filterMember = members.get(predicate.member);
+            if (!filterMember)
+              diagnostics.push({
+                stage: "model_resolution",
+                code: "unknown_measure_filter_member",
+                message: `Measure '${member.member_id}' filter references unknown local member '${predicate.member}'`,
+                path: objectPath,
+              });
+            else if (filterMember.kind === "measure")
+              diagnostics.push({
+                stage: "model_resolution",
+                code: "measure_filter_requires_dimension",
+                message: `Measure '${member.member_id}' filter member '${predicate.member}' must not be a measure`,
+                path: objectPath,
+              });
+            else {
+              const values = predicate.values ?? ("value" in predicate ? [predicate.value] : []);
+              const columnPath = filterMember.column_path ?? (filterMember.column ? [filterMember.column] : []);
+              const physicalType = columns.find((column) => column.name === columnPath[0])?.duckdbType;
+              const filterType = filterMember.output_type ?? filterMember.data_type ??
+                (physicalType && columnPath.length > 1
+                  ? resolveNestedType(physicalType, columnPath.slice(1)) ?? undefined
+                  : physicalType);
+              if (values.some((value) => !valueCompatible(value, filterType)))
+                diagnostics.push({
+                  stage: "model_resolution",
+                  code: "measure_filter_value_type_mismatch",
+                  message: `Measure '${member.member_id}' filter values are incompatible with member '${predicate.member}'`,
+                  path: objectPath,
+                });
+            }
+          }
         }
         const sourceArguments = asArray(entity.source?.arguments);
         const detailedArguments =

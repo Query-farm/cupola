@@ -8,6 +8,7 @@ import {
   type SemanticEnvironment,
   type SemanticExpression,
   type SemanticMember,
+  type SemanticMemberFilter,
   type SemanticRef,
   type SemanticRelationship,
 } from "./semantic-model";
@@ -21,6 +22,11 @@ export interface SemanticSelection extends SemanticRef {
   branch_relationship_paths?: Array<{
     root: SemanticRef;
     relationship_path: string[];
+  }>;
+  branch_members?: Array<{
+    root: SemanticRef;
+    member: SemanticRef & { member_id: string };
+    relationship_path?: string[];
   }>;
   granularity?: string;
   missing_fact_value?: "null" | "zero";
@@ -65,6 +71,12 @@ export interface SemanticQuery {
   dimensions?: SemanticSelection[];
   filters?: SemanticFilter;
   measure_filters?: SemanticFilter;
+  derived_measures?: Array<{
+    name: string;
+    expression: SemanticExpression;
+    output_type: string;
+    unit?: string;
+  }>;
   order?: Array<{ member: string; direction: "asc" | "desc" }>;
   limit?: number;
   compile_only?: boolean;
@@ -98,6 +110,7 @@ export interface SemanticPlan {
     branch_roots: SemanticRef[];
     measure_branches: Record<string, SemanticRef>;
     missing_fact_values: Record<string, "null" | "zero">;
+    derived_measures?: Array<{ name: string; output_type: string }>;
   };
   sql: string;
   parameters: unknown[];
@@ -1402,6 +1415,7 @@ function aggregateSql(
   alias: string,
   stack: string[] = [],
   sourceArgumentRenderer?: SourceArgumentRenderer,
+  parameters?: unknown[],
 ): string {
   if (stack.includes(member.member_id))
     fail(
@@ -1416,6 +1430,7 @@ function aggregateSql(
       alias,
       [...stack, member.member_id],
       sourceArgumentRenderer,
+      parameters,
     );
     return member.output_type
       ? `CAST(${sql} AS ${safeType(member.output_type)})`
@@ -1428,24 +1443,26 @@ function aggregateSql(
       code: "invalid_measure",
       message: `Measure '${member.member_id}' has no aggregation or expression`,
     });
-  if (aggregation === "count_rows")
-    return member.output_type
-      ? `CAST(COUNT(*) AS ${safeType(member.output_type)})`
-      : "COUNT(*)";
-  const input = entity.members.get(String(member.member));
-  if (!input)
-    throw new CompileFailure({
-      stage: "type_check" as any,
-      code: "unknown_measure_input",
-      message: `Measure '${member.member_id}' has unknown input '${member.member}'`,
-    });
-  const sql = memberSql(entity, input, alias, [], sourceArgumentRenderer);
-  const fn =
-    aggregation === "count_distinct"
-      ? "COUNT(DISTINCT"
-      : aggregation.toUpperCase() + "(";
-  const aggregate =
-    aggregation === "count_distinct" ? `${fn} ${sql})` : `${fn}${sql})`;
+  let aggregate: string;
+  if (aggregation === "count_rows") aggregate = "COUNT(*)";
+  else {
+    const input = entity.members.get(String(member.member));
+    if (!input)
+      throw new CompileFailure({
+        stage: "type_check" as any,
+        code: "unknown_measure_input",
+        message: `Measure '${member.member_id}' has unknown input '${member.member}'`,
+      });
+    const sql = memberSql(entity, input, alias, [], sourceArgumentRenderer);
+    const fn =
+      aggregation === "count_distinct"
+        ? "COUNT(DISTINCT"
+        : aggregation.toUpperCase() + "(";
+    aggregate =
+      aggregation === "count_distinct" ? `${fn} ${sql})` : `${fn}${sql})`;
+  }
+  if (member.filter)
+    aggregate += ` FILTER (WHERE ${compileModelMeasureFilter(entity, member.filter, alias, parameters, sourceArgumentRenderer)})`;
   return member.output_type
     ? `CAST(${aggregate} AS ${safeType(member.output_type)})`
     : aggregate;
@@ -1457,6 +1474,7 @@ function measureExpressionSql(
   alias: string,
   stack: string[],
   sourceArgumentRenderer?: SourceArgumentRenderer,
+  parameters?: unknown[],
 ): string {
   if (expression.op === "member") {
     const member = entity.members.get(expression.member);
@@ -1467,7 +1485,7 @@ function measureExpressionSql(
         message: `Unknown member '${expression.member}'`,
       });
     return member.kind === "measure"
-      ? aggregateSql(entity, member, alias, stack, sourceArgumentRenderer)
+      ? aggregateSql(entity, member, alias, stack, sourceArgumentRenderer, parameters)
       : memberSql(entity, member, alias, stack, sourceArgumentRenderer);
   }
   if (expression.op === "literal") return literalSql(expression.value);
@@ -1483,6 +1501,7 @@ function measureExpressionSql(
       alias,
       stack,
       sourceArgumentRenderer,
+      parameters,
     );
     const right = measureExpressionSql(
       entity,
@@ -1490,6 +1509,7 @@ function measureExpressionSql(
       alias,
       stack,
       sourceArgumentRenderer,
+      parameters,
     );
     if (expression.op === "safe_divide")
       return `(${left} / NULLIF(${right}, 0))`;
@@ -1499,18 +1519,62 @@ function measureExpressionSql(
     return `(${left} ${operator} ${right})`;
   }
   if (expression.op === "coalesce")
-    return `COALESCE(${expression.args.map((arg) => measureExpressionSql(entity, arg, alias, stack, sourceArgumentRenderer)).join(", ")})`;
+    return `COALESCE(${expression.args.map((arg) => measureExpressionSql(entity, arg, alias, stack, sourceArgumentRenderer, parameters)).join(", ")})`;
   if (expression.op === "nullif")
-    return `NULLIF(${measureExpressionSql(entity, expression.value, alias, stack, sourceArgumentRenderer)}, ${measureExpressionSql(entity, expression.other ?? { op: "literal", value: 0 }, alias, stack, sourceArgumentRenderer)})`;
+    return `NULLIF(${measureExpressionSql(entity, expression.value, alias, stack, sourceArgumentRenderer, parameters)}, ${measureExpressionSql(entity, expression.other ?? { op: "literal", value: 0 }, alias, stack, sourceArgumentRenderer, parameters)})`;
   if (expression.op === "cast")
-    return `CAST(${measureExpressionSql(entity, expression.value, alias, stack, sourceArgumentRenderer)} AS ${safeType(expression.type)})`;
+    return `CAST(${measureExpressionSql(entity, expression.value, alias, stack, sourceArgumentRenderer, parameters)} AS ${safeType(expression.type)})`;
   if (expression.op === "case")
-    return `CASE WHEN ${measureExpressionSql(entity, expression.when, alias, stack, sourceArgumentRenderer)} THEN ${measureExpressionSql(entity, expression.then, alias, stack, sourceArgumentRenderer)}${expression.else ? ` ELSE ${measureExpressionSql(entity, expression.else, alias, stack, sourceArgumentRenderer)}` : ""} END`;
+    return `CASE WHEN ${measureExpressionSql(entity, expression.when, alias, stack, sourceArgumentRenderer, parameters)} THEN ${measureExpressionSql(entity, expression.then, alias, stack, sourceArgumentRenderer, parameters)}${expression.else ? ` ELSE ${measureExpressionSql(entity, expression.else, alias, stack, sourceArgumentRenderer, parameters)}` : ""} END`;
   return fail(
     "sql_generation",
     "unsupported_expression",
     "Unsupported derived-measure expression",
   );
+}
+
+function compileModelMeasureFilter(
+  entity: SemanticEntity,
+  filter: SemanticMemberFilter,
+  alias: string,
+  parameters?: unknown[],
+  sourceArgumentRenderer?: SourceArgumentRenderer,
+): string {
+  if (!parameters)
+    return fail(
+      "sql_generation",
+      "measure_filter_parameters_unavailable",
+      "A model-owned measure filter requires a parameter collector",
+    );
+  if ("and" in filter)
+    return `(${filter.and.map((item) => compileModelMeasureFilter(entity, item, alias, parameters, sourceArgumentRenderer)).join(" AND ")})`;
+  if ("or" in filter)
+    return `(${filter.or.map((item) => compileModelMeasureFilter(entity, item, alias, parameters, sourceArgumentRenderer)).join(" OR ")})`;
+  const member = entity.members.get(filter.member);
+  if (!member || member.kind === "measure")
+    return fail(
+      "model_resolution",
+      "invalid_measure_filter_member",
+      `Measure filter member '${filter.member}' must identify a local non-measure member`,
+    );
+  const lhs = memberSql(entity, member, alias, [], sourceArgumentRenderer);
+  if (filter.operator === "is_null") return `${lhs} IS NULL`;
+  if (filter.operator === "is_not_null") return `${lhs} IS NOT NULL`;
+  const values = filter.values ?? [filter.value];
+  values.forEach((value) => parameters.push(value));
+  if (["in", "not_in"].includes(filter.operator))
+    return `${lhs} ${filter.operator === "in" ? "IN" : "NOT IN"} (${values.map(() => "?").join(", ")})`;
+  if (filter.operator === "between") return `${lhs} BETWEEN ? AND ?`;
+  const operator = {
+    eq: "=", neq: "<>", gt: ">", gte: ">=", lt: "<", lte: "<=",
+  }[filter.operator];
+  if (!operator)
+    return fail(
+      "model_resolution",
+      "invalid_measure_filter_operator",
+      `Unknown measure filter operator '${filter.operator}'`,
+    );
+  return `${lhs} ${operator} ?`;
 }
 
 function findPath(
@@ -1645,6 +1709,7 @@ function compileFilter(
           found.alias,
           [],
           sourceArgumentRenderer,
+          parameters,
         )
       : memberSql(
           found.entity,
@@ -1736,6 +1801,15 @@ function validateMultiFactOutputNames(query: SemanticQuery): void {
       );
     names.add(name);
   }
+  for (const derived of query.derived_measures ?? []) {
+    if (names.has(derived.name))
+      fail(
+        "request_validation",
+        "duplicate_output",
+        `Duplicate output name '${derived.name}'`,
+      );
+    names.add(derived.name);
+  }
 }
 
 function dimensionForBranch(
@@ -1745,11 +1819,119 @@ function dimensionForBranch(
   const override = selection.branch_relationship_paths?.find(
     (item) => refKey(item.root) === refKey(root),
   );
-  const { branch_relationship_paths: _ignored, ...dimension } = selection;
+  const memberOverride = selection.branch_members?.find(
+    (item) => refKey(item.root) === refKey(root),
+  );
+  const {
+    branch_relationship_paths: _ignored,
+    branch_members: _ignoredMembers,
+    ...dimension
+  } = selection;
   return {
     ...dimension,
     ...(override ? { relationship_path: [...override.relationship_path] } : {}),
-  };
+    ...(memberOverride
+      ? {
+          ...memberOverride.member,
+          ...(memberOverride.relationship_path
+            ? { relationship_path: [...memberOverride.relationship_path] }
+            : {}),
+        }
+      : {}),
+    };
+}
+
+function validateBranchMembers(
+  environment: SemanticEnvironment,
+  dimensions: SemanticSelection[],
+  roots: SemanticRef[],
+  bindings: Record<string, string>,
+): void {
+  const rootKeys = new Set(roots.map(refKey));
+  for (const dimension of dimensions) {
+    if (!dimension.branch_members?.length) continue;
+    const canonicalEntity = resolveOrFail(environment, dimension, bindings);
+    const canonical = canonicalEntity.members.get(dimension.member_id);
+    if (!canonical || canonical.kind === "measure")
+      fail(
+        "model_resolution",
+        "invalid_conformed_dimension",
+        "The canonical conformed member must identify a non-measure member",
+      );
+    const canonicalMember = canonical!;
+    if (!canonicalMember.conformance_id)
+      fail(
+        "model_resolution",
+        "conformance_id_required",
+        `Canonical member '${canonicalMember.member_id}' needs conformance_id`,
+      );
+    const seen = new Set<string>();
+    for (const override of dimension.branch_members) {
+      const rootKey = refKey(override.root);
+      if (!rootKeys.has(rootKey))
+        fail(
+          "request_validation",
+          "invalid_branch_member_root",
+          `Conformed member override targets non-fact root '${rootKey}'`,
+        );
+      if (seen.has(rootKey))
+        fail(
+          "request_validation",
+          "duplicate_branch_member",
+          `Conformed dimension '${dimension.member_id}' has multiple member overrides for one fact root`,
+        );
+      seen.add(rootKey);
+      const entity = resolveOrFail(environment, override.member, bindings);
+      const member = entity.members.get(override.member.member_id);
+      if (!member || member.kind === "measure")
+        fail(
+          "model_resolution",
+          "invalid_conformed_dimension",
+          "A conformed branch member must identify a non-measure member",
+        );
+      const branchMember = member!;
+      if (branchMember.conformance_id !== canonicalMember.conformance_id)
+        fail(
+          "type_check",
+          "conformance_id_mismatch",
+          `Member '${branchMember.member_id}' does not declare conformance_id '${canonicalMember.conformance_id}'`,
+        );
+      const canonicalType = normalizedType(memberType(canonicalEntity, canonicalMember));
+      const branchType = normalizedType(memberType(entity, branchMember));
+      if (!canonicalType || !branchType)
+        fail(
+          "type_check",
+          "conformed_member_type_unknown",
+          "Conformed members must declare or expose a discoverable type",
+        );
+      if (branchType !== canonicalType)
+        fail(
+          "type_check",
+          "conformed_member_type_mismatch",
+          `Conformed members '${canonicalMember.member_id}' and '${branchMember.member_id}' must have the same type`,
+        );
+      if ((canonicalMember.kind === "time_dimension") !== (branchMember.kind === "time_dimension"))
+        fail(
+          "type_check",
+          "conformed_member_kind_mismatch",
+          "Time dimensions may only be conformed with other time dimensions",
+        );
+      if (canonicalMember.kind === "time_dimension") {
+        if (canonicalMember.timezone !== branchMember.timezone || (canonicalMember.week_start ?? "monday") !== (branchMember.week_start ?? "monday"))
+          fail(
+            "type_check",
+            "conformed_time_semantics_mismatch",
+            "Conformed time dimensions must use the same timezone and week start",
+          );
+        if (dimension.granularity && !branchMember.granularities?.includes(dimension.granularity))
+          fail(
+            "type_check",
+            "conformed_granularity_unsupported",
+            `Branch member '${branchMember.member_id}' does not support granularity '${dimension.granularity}'`,
+          );
+      }
+    }
+  }
 }
 
 function validateBranchRelationshipPaths(
@@ -2003,6 +2185,108 @@ function compileStitchedMeasureFilter(
   return `${lhs} ${operator} ?`;
 }
 
+function derivedMemberRefs(expression: SemanticExpression): Set<string> {
+  if (expression.op === "member") return new Set([expression.member]);
+  const refs = new Set<string>();
+  for (const child of Object.values(expression)) {
+    if (Array.isArray(child))
+      child.forEach((item) => {
+        if (item && typeof item === "object")
+          derivedMemberRefs(item as SemanticExpression).forEach((ref) => refs.add(ref));
+      });
+    else if (child && typeof child === "object")
+      derivedMemberRefs(child as SemanticExpression).forEach((ref) => refs.add(ref));
+  }
+  return refs;
+}
+
+function selectedMeasureType(
+  environment: SemanticEnvironment,
+  selection: SemanticSelection,
+  bindings: Record<string, string>,
+): string | undefined {
+  const entity = resolveOrFail(environment, selection, bindings);
+  const member = entity.members.get(selection.member_id);
+  if (!member || member.kind !== "measure") return undefined;
+  if (member.output_type) return member.output_type;
+  if (["count", "count_rows", "count_distinct"].includes(member.aggregation ?? ""))
+    return "BIGINT";
+  const source = member.member ? entity.members.get(member.member) : undefined;
+  return source ? memberType(entity, source) : undefined;
+}
+
+function compileDerivedExpression(
+  expression: SemanticExpression,
+  selectedTypes: Map<string, string>,
+  parameters: unknown[],
+): { sql: string; type: string } {
+  if (expression.op === "member") {
+    const type = selectedTypes.get(expression.member);
+    if (!type)
+      return fail(
+        "request_validation",
+        "derived_measure_member_not_selected",
+        `Derived measure references unselected or ambiguous output '${expression.member}'`,
+      );
+    return { sql: `"_stitched".${quoteIdent(expression.member)}`, type };
+  }
+  if (expression.op === "literal") {
+    parameters.push(expression.value);
+    return {
+      sql: "?",
+      type:
+        typeof expression.value === "boolean"
+          ? "BOOLEAN"
+          : typeof expression.value === "number"
+            ? Number.isInteger(expression.value)
+              ? "BIGINT"
+              : "DOUBLE"
+            : typeof expression.value === "string"
+              ? "VARCHAR"
+              : "ANY",
+    };
+  }
+  if (["add", "subtract", "multiply", "divide", "safe_divide"].includes(expression.op)) {
+    const binary = expression as Extract<SemanticExpression, { left: SemanticExpression }>;
+    const left = compileDerivedExpression(binary.left, selectedTypes, parameters);
+    const right = compileDerivedExpression(binary.right, selectedTypes, parameters);
+    for (const operand of [left, right])
+      if (!/^(?:U?(?:TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT)|REAL|FLOAT|DOUBLE|DECIMAL(?:\([0-9]+(?:,[0-9]+)?\))?|NUMERIC(?:\([0-9]+(?:,[0-9]+)?\))?)$/.test(normalizedType(operand.type)))
+        return fail(
+          "type_check",
+          "derived_measure_requires_numeric_operand",
+          `Operator '${expression.op}' requires numeric operands`,
+        );
+    const operator = { add: "+", subtract: "-", multiply: "*", divide: "/" } as const;
+    return {
+      sql:
+        expression.op === "safe_divide"
+          ? `(${left.sql} / NULLIF(${right.sql}, 0))`
+          : `(${left.sql} ${operator[expression.op as keyof typeof operator]} ${right.sql})`,
+      type: ["divide", "safe_divide"].includes(expression.op) ? "DOUBLE" : left.type,
+    };
+  }
+  if (expression.op === "coalesce") {
+    const values = expression.args.map((item) => compileDerivedExpression(item, selectedTypes, parameters));
+    return { sql: `COALESCE(${values.map((item) => item.sql).join(", ")})`, type: values[0].type };
+  }
+  if (expression.op === "nullif") {
+    const value = compileDerivedExpression(expression.value, selectedTypes, parameters);
+    const other = compileDerivedExpression(expression.other ?? { op: "literal", value: 0 }, selectedTypes, parameters);
+    return { sql: `NULLIF(${value.sql}, ${other.sql})`, type: value.type };
+  }
+  if (expression.op === "cast") {
+    const value = compileDerivedExpression(expression.value, selectedTypes, parameters);
+    const type = safeType(expression.type);
+    return { sql: `CAST(${value.sql} AS ${type})`, type };
+  }
+  return fail(
+    "type_check",
+    "unsupported_cross_fact_expression",
+    `Expression operator '${expression.op}' is not supported for cross-fact measures`,
+  );
+}
+
 function compileMultiFactQuery(
   catalogs: readonly CatalogData[],
   environment: SemanticEnvironment,
@@ -2019,6 +2303,7 @@ function compileMultiFactQuery(
   const dimensions = query.dimensions ?? [];
   validateMultiFactOutputNames(query);
   validateBranchRelationshipPaths(dimensions, roots);
+  validateBranchMembers(environment, dimensions, roots, query.bindings ?? {});
   validateMultiFactPopulationFilters(environment, query);
   const partitions = partitionMultiFactSources(query, roots);
   const branchPlans: SemanticPlan[] = [];
@@ -2037,6 +2322,7 @@ function compileMultiFactQuery(
       inputs: partitions[index].inputs,
     };
     delete branchQuery.measure_filters;
+    delete branchQuery.derived_measures;
     delete branchQuery.order;
     delete branchQuery.limit;
     const compiled = compileSemanticQueryInternal(catalogs, branchQuery, true);
@@ -2152,13 +2438,86 @@ function compileMultiFactQuery(
   }
 
   const parameters = branchPlans.flatMap((plan) => plan.parameters);
+  const derivedDefinitions = query.derived_measures ?? [];
+  const selectedByName = new Map(
+    measures.map((measure) => [measure.alias ?? measure.member_id, measure]),
+  );
+  const selectedTypes = new Map<string, string>();
+  if (derivedDefinitions.length)
+    for (const [name, selection] of selectedByName) {
+      const type = selectedMeasureType(environment, selection, query.bindings ?? {});
+      if (!type)
+        fail(
+          "type_check",
+          "derived_measure_input_type_unknown",
+          `Selected measure '${name}' has no provable result type`,
+        );
+      selectedTypes.set(name, type!);
+    }
+  const derivedSelects: string[] = [];
+  for (const derived of derivedDefinitions) {
+    const refs = derivedMemberRefs(derived.expression);
+    const unknown = [...refs].filter((ref) => !selectedByName.has(ref)).sort();
+    if (unknown.length)
+      fail(
+        "request_validation",
+        "derived_measure_member_not_selected",
+        `Derived measure '${derived.name}' references unselected outputs ${JSON.stringify(unknown)}`,
+      );
+    const referencedRoots = new Set(
+      [...refs].map((ref) => refKey(selectedByName.get(ref)!)),
+    );
+    if (referencedRoots.size < 2)
+      fail(
+        "request_validation",
+        "derived_measure_requires_multiple_facts",
+        `Derived measure '${derived.name}' must reference measures from at least two facts`,
+      );
+    const unspecified = [...refs]
+      .filter((ref) => selectedByName.get(ref)?.missing_fact_value == null)
+      .sort();
+    if (unspecified.length)
+      fail(
+        "request_validation",
+        "derived_measure_missing_value_policy_required",
+        `Derived measure '${derived.name}' requires explicit missing_fact_value for ${JSON.stringify(unspecified)}`,
+      );
+    const compiled = compileDerivedExpression(
+      derived.expression,
+      selectedTypes,
+      parameters,
+    );
+    const outputType = safeType(derived.output_type);
+    derivedSelects.push(
+      `CAST(${compiled.sql} AS ${outputType}) AS ${quoteIdent(derived.name)}`,
+    );
+    selectedTypes.set(derived.name, outputType);
+  }
+  const filterSelections = [...measures];
+  let filterExpressions = measureExpressions;
+  if (derivedDefinitions.length) {
+    for (const derived of derivedDefinitions)
+      filterSelections.push({
+        catalog_id: "query",
+        entity_id: "derived",
+        member_id: derived.name,
+        alias: derived.name,
+      });
+    filterExpressions = new Map(
+      [...selectedTypes].map(([name]) => [name, `"_projected".${quoteIdent(name)}`]),
+    );
+  }
   const outerFilter = compileStitchedMeasureFilter(
     query.measure_filters,
-    measures,
-    measureExpressions,
+    filterSelections,
+    filterExpressions,
     parameters,
   );
-  const outputNames = new Set([...commonGrain, ...measureExpressions.keys()]);
+  const outputNames = new Set([
+    ...commonGrain,
+    ...measureExpressions.keys(),
+    ...selectedTypes.keys(),
+  ]);
   const order = (query.order ?? []).map((item) => {
     if (!outputNames.has(item.member))
       return fail(
@@ -2169,16 +2528,31 @@ function compileMultiFactQuery(
     return `${quoteIdent(item.member)} ${item.direction.toUpperCase()}`;
   });
   const limit = Math.min(10_000, Math.max(1, query.limit ?? 1000));
-  const sql = [
-    `WITH ${ctes.join(",\n")}`,
-    `SELECT ${selectItems.join(", ")}`,
-    ...fromLines,
-    outerFilter ? `WHERE ${outerFilter}` : "",
-    order.length ? `ORDER BY ${order.join(", ")}` : "",
-    `LIMIT ${limit}`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  let sql: string;
+  if (derivedDefinitions.length) {
+    ctes.push(
+      `"_stitched" AS (\nSELECT ${selectItems.join(", ")}\n${fromLines.join("\n")}\n)`,
+    );
+    ctes.push(
+      `"_projected" AS (\nSELECT "_stitched".*, ${derivedSelects.join(", ")}\nFROM "_stitched"\n)`,
+    );
+    sql = [
+      `WITH ${ctes.join(",\n")}`,
+      'SELECT * FROM "_projected"',
+      outerFilter ? `WHERE ${outerFilter}` : "",
+      order.length ? `ORDER BY ${order.join(", ")}` : "",
+      `LIMIT ${limit}`,
+    ].filter(Boolean).join("\n");
+  } else {
+    sql = [
+      `WITH ${ctes.join(",\n")}`,
+      `SELECT ${selectItems.join(", ")}`,
+      ...fromLines,
+      outerFilter ? `WHERE ${outerFilter}` : "",
+      order.length ? `ORDER BY ${order.join(", ")}` : "",
+      `LIMIT ${limit}`,
+    ].filter(Boolean).join("\n");
+  }
 
   const outputUnits: Record<string, string | null> = {};
   const unitDiagnostics: SemanticDiagnostic[] = [];
@@ -2203,6 +2577,8 @@ function compileMultiFactQuery(
     for (const warning of plan.warnings)
       if (!warnings.includes(warning)) warnings.push(warning);
   }
+  for (const derived of derivedDefinitions)
+    if (derived.unit) outputUnits[derived.name] = derived.unit;
   return {
     ok: true,
     plan: {
@@ -2213,6 +2589,14 @@ function compileMultiFactQuery(
         branch_roots: roots,
         measure_branches: measureBranches,
         missing_fact_values: missingFactValues,
+        ...(derivedDefinitions.length
+          ? {
+              derived_measures: derivedDefinitions.map((item) => ({
+                name: item.name,
+                output_type: item.output_type,
+              })),
+            }
+          : {}),
       },
       sql,
       parameters,
@@ -2298,6 +2682,18 @@ function compileSemanticQueryInternal(
         "request_validation",
         "branch_relationship_paths_require_multi_fact",
         "branch_relationship_paths is only meaningful with multiple fact roots",
+      );
+    if (dimensions.some((dimension) => (dimension.branch_members?.length ?? 0) > 0))
+      fail(
+        "request_validation",
+        "branch_members_require_multi_fact",
+        "branch_members is only meaningful with multiple fact roots",
+      );
+    if (query.derived_measures?.length)
+      fail(
+        "request_validation",
+        "derived_measures_require_multi_fact",
+        "Query-level derived measures require multiple fact roots",
       );
     const rootRef = measures[0] ?? query.root_entity;
     if (!rootRef)
@@ -2658,7 +3054,7 @@ function compileSemanticQueryInternal(
         );
       outputNames.add(name);
       selects.push(
-        `${aggregateSql(item.entity, item.member, item.alias, [], renderSourceArgumentMember)} AS ${quoteIdent(name)}`,
+        `${aggregateSql(item.entity, item.member, item.alias, [], renderSourceArgumentMember, parameters)} AS ${quoteIdent(name)}`,
       );
       recordUnit(item, name);
     }

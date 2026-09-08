@@ -2,7 +2,7 @@
 
 Cupola consumes the VGI semantic tag contract vendored from `vgi-lint-check`. Run
 `VGI_LINT_REPO=../vgi-lint-check bun run tags:sync` after changing the upstream contract;
-`tags:check` verifies both the contract and semantic-schema hashes.
+`tags:check` verifies the contract, semantic-schema, and shared compiler-conformance hashes.
 
 `semantic-model.ts` normalizes packed DuckDB 1.5 members and native column tags, resolves stable
 catalog/entity identities across arbitrary attachment aliases, reconciles reciprocal and third-party
@@ -15,16 +15,21 @@ casts, ambiguous bindings, invalid invocation dataflow, and incompatible branch 
 deterministic plan contains one independently aggregated `fact_branches` element per root and
 positional parameters.
 
-Multi-fact requests require every selected dimension to have the same exact stable semantic
-identity and to be safely reachable from every root. A dimension's `branch_relationship_paths` may
+Multi-fact requests normally use one exact stable dimension identity safely reachable from every
+root. A dimension's `branch_relationship_paths` may
 override its ordinary path separately for named roots. After aggregating, the compiler builds the
 distinct union of branch keys and null-safely joins every aggregate to that spine. No-dimension
 branches each produce one aggregate row and are cross-joined. Missing values default to null;
 `missing_fact_value: "zero"` emits a typed `COALESCE` only for a provably numeric additive measure.
 Population filters run in every branch, while selected-measure filters, ordering, and limit run
-after stitching. Cross-fact formulas and branch-specific population filters remain unsupported.
-Multi-fact plans expose the common grain, ordered roots, measure ownership, and missing-value
-policies in `plan.stitch`; single-fact SQL and plans remain unchanged.
+after stitching. Different equivalent members require the same explicit `conformance_id` and a
+per-root `branch_members` substitution; names are never treated as proof. Query-level
+`derived_measures` provide typed, parameterized post-stitch arithmetic over selected base outputs.
+Every referenced selection must declare its missing-value policy, formulas must span multiple
+roots, and units are explicit rather than inferred. Branch-specific population filters remain
+unsupported. Multi-fact plans expose the common grain, ordered roots, measure ownership,
+missing-value policies, and derived outputs in `plan.stitch`; single-fact SQL and plans remain
+unchanged.
 
 `column` is one literal physical column identifier, including when its name contains a dot. Nested
 DuckDB `STRUCT` access uses an explicit `column_path` such as `["bbox", "xmin"]`. The model builder
@@ -37,6 +42,11 @@ fields into concrete entries, validates every expansion against the ordinary mem
 exposes only the resulting concrete members to the environment and compiler. Templates do not nest,
 interpolate strings, or execute code, and one packed carrier may expand to at most 500 members.
 Native column tags remain concrete one-member declarations.
+
+Base aggregate measures may own a bounded entity-local `filter` over non-measure members. Cupola
+emits SQL aggregate `FILTER (WHERE ...)` and parameterizes its values. This filter defines the
+measure population but does not satisfy source required-filter policy. Derived model measures must
+place such filters on their referenced base aggregates.
 
 Relationship predicates are typed. In addition to backward-compatible equality, the compiler
 supports `spatial_contains`, `spatial_within`, `spatial_intersects`, and repeated-field
@@ -111,6 +121,11 @@ executor compiles first and uses `engine.queryPrepared` plus the normal conversa
 `compile_only` returns before consulting either bridge, which guarantees semantic-only validation
 does not prepare, bind, explain, execute or cache SQL. Failures are returned as structured
 diagnostics; callers must not fall back to `run_sql` automatically.
+
+The Python reference compiler and this TypeScript implementation both consume the golden vectors
+vendored as `vgi-semantic-conformance.json`. The tag sync script copies those vectors from
+`vgi-lint-check`; tests compare SQL, parameter order, result grain, unit metadata, and diagnostic
+codes so compiler drift becomes a deterministic test failure.
 
 Reports remain SQL-backed. A report agent may use compile-only output as a dataset query, but once a
 user edits or persists that SQL it no longer carries compiler provenance.

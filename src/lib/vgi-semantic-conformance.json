@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "scalar_measure",
+      "request": {
+        "measures": [
+          {
+            "catalog_id": "com.example.sales",
+            "entity_id": "orders",
+            "member_id": "revenue"
+          }
+        ]
+      },
+      "expected": {
+        "ok": true,
+        "sql": "SELECT CAST(SUM(_e0.\"amount\") AS DECIMAL(18,2)) AS \"revenue\"\nFROM \"sales_runtime\".\"main\".\"orders\" AS _e0\nLIMIT 1000",
+        "parameters": [],
+        "result_grain": [],
+        "output_units": {},
+        "stitch": null
+      }
+    },
+    {
+      "name": "cross_fact_derived_measure",
+      "request": {
+        "measures": [
+          {
+            "catalog_id": "com.example.sales",
+            "entity_id": "orders",
+            "member_id": "revenue",
+            "missing_fact_value": "null"
+          },
+          {
+            "catalog_id": "com.example.crm",
+            "entity_id": "customers",
+            "member_id": "customer_count",
+            "missing_fact_value": "null"
+          }
+        ],
+        "derived_measures": [
+          {
+            "name": "revenue_per_customer",
+            "expression": {
+              "op": "safe_divide",
+              "left": {
+                "op": "member",
+                "member": "revenue"
+              },
+              "right": {
+                "op": "member",
+                "member": "customer_count"
+              }
+            },
+            "output_type": "DECIMAL(18,2)",
+            "unit": "USD/customer"
+          }
+        ]
+      },
+      "expected": {
+        "ok": true,
+        "sql": "WITH \"_f0\" AS (\nSELECT CAST(SUM(_e0.\"amount\") AS DECIMAL(18,2)) AS \"revenue\"\nFROM \"sales_runtime\".\"main\".\"orders\" AS _e0\n),\n\"_f1\" AS (\nSELECT COUNT(*) AS \"customer_count\"\nFROM \"crm_runtime\".\"main\".\"customers\" AS _e0\n),\n\"_stitched\" AS (\nSELECT \"_f0\".\"revenue\" AS \"revenue\", \"_f1\".\"customer_count\" AS \"customer_count\"\nFROM \"_f0\"\nCROSS JOIN \"_f1\"\n),\n\"_projected\" AS (\nSELECT \"_stitched\".*, CAST((\"_stitched\".\"revenue\" / NULLIF(\"_stitched\".\"customer_count\", 0)) AS DECIMAL(18,2)) AS \"revenue_per_customer\"\nFROM \"_stitched\"\n)\nSELECT * FROM \"_projected\"\nLIMIT 1000",
+        "parameters": [],
+        "result_grain": [],
+        "output_units": {
+          "revenue_per_customer": "USD/customer"
+        },
+        "stitch": {
+          "strategy": "conformed_dimension_spine",
+          "result_grain": [],
+          "branch_roots": [
+            {
+              "catalog_id": "com.example.sales",
+              "entity_id": "orders"
+            },
+            {
+              "catalog_id": "com.example.crm",
+              "entity_id": "customers"
+            }
+          ],
+          "measure_branches": {
+            "revenue": {
+              "catalog_id": "com.example.sales",
+              "entity_id": "orders"
+            },
+            "customer_count": {
+              "catalog_id": "com.example.crm",
+              "entity_id": "customers"
+            }
+          },
+          "missing_fact_values": {
+            "revenue": "null",
+            "customer_count": "null"
+          },
+          "derived_measures": [
+            {
+              "name": "revenue_per_customer",
+              "output_type": "DECIMAL(18,2)"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "cross_fact_missing_policy_diagnostic",
+      "request": {
+        "measures": [
+          {
+            "catalog_id": "com.example.sales",
+            "entity_id": "orders",
+            "member_id": "revenue"
+          },
+          {
+            "catalog_id": "com.example.crm",
+            "entity_id": "customers",
+            "member_id": "customer_count",
+            "missing_fact_value": "null"
+          }
+        ],
+        "derived_measures": [
+          {
+            "name": "revenue_per_customer",
+            "expression": {
+              "op": "safe_divide",
+              "left": {
+                "op": "member",
+                "member": "revenue"
+              },
+              "right": {
+                "op": "member",
+                "member": "customer_count"
+              }
+            },
+            "output_type": "DECIMAL(18,2)"
+          }
+        ]
+      },
+      "expected": {
+        "ok": false,
+        "diagnostic_codes": [
+          "derived_measure_missing_value_policy_required"
+        ]
+      }
+    }
+  ]
+}

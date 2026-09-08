@@ -24,19 +24,28 @@ const semanticSchemas = embeddedSchemas ?? {};
 const payload = `${JSON.stringify(parsed, null, 2)}\n`;
 const schemasPayload = `${JSON.stringify(semanticSchemas, null, 2)}\n`;
 const schemasTarget = resolve(import.meta.dir, "../src/lib/vgi-semantic-schemas.json");
+const conformanceTarget = resolve(import.meta.dir, "../src/lib/vgi-semantic-conformance.json");
+const conformanceSource = repo
+  ? resolve(repo, "examples/semantic/compiler-conformance.json")
+  : null;
+const conformancePayload = conformanceSource
+  ? `${JSON.stringify(JSON.parse(await Bun.file(conformanceSource).text()), null, 2)}\n`
+  : await Bun.file(conformanceTarget).text();
 const lock = `${JSON.stringify({
   contract_revision: parsed.contract_revision,
   sha256: createHash("sha256").update(payload).digest("hex"),
   semantic_schemas_sha256: createHash("sha256").update(schemasPayload).digest("hex"),
+  compiler_conformance_sha256: createHash("sha256").update(conformancePayload).digest("hex"),
 }, null, 2)}\n`;
 
 if (check) {
-  const [current, currentSchemas, currentLock] = await Promise.all([
+  const [current, currentSchemas, currentConformance, currentLock] = await Promise.all([
     Bun.file(target).text().catch(() => ""),
     Bun.file(schemasTarget).text().catch(() => ""),
+    Bun.file(conformanceTarget).text().catch(() => ""),
     Bun.file(lockTarget).text().catch(() => ""),
   ]);
-  if (current !== payload || currentSchemas !== schemasPayload || currentLock !== lock) {
+  if (current !== payload || currentSchemas !== schemasPayload || currentConformance !== conformancePayload || currentLock !== lock) {
     console.error("Vendored VGI tag contract is stale; run `bun run tags:sync`.");
     process.exit(1);
   }
@@ -44,6 +53,7 @@ if (check) {
   await Promise.all([
     Bun.write(target, payload),
     Bun.write(schemasTarget, schemasPayload),
+    Bun.write(conformanceTarget, conformancePayload),
     Bun.write(lockTarget, lock),
   ]);
   console.log(`Vendored VGI tag contract revision ${parsed.contract_revision}.`);

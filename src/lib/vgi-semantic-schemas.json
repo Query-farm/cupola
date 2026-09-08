@@ -445,6 +445,9 @@
     "$defs": {
       "base": {
         "properties": {
+          "conformance_id": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
           "data_type": {
             "maxLength": 100,
             "minLength": 1,
@@ -545,6 +548,9 @@
               "column_path": {
                 "$ref": "#/$defs/column_path"
               },
+              "conformance_id": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
               "data_type": {
                 "type": "string"
               },
@@ -610,6 +616,9 @@
               "column_path": {
                 "$ref": "#/$defs/column_path"
               },
+              "conformance_id": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
               "data_type": {
                 "type": "string"
               },
@@ -635,6 +644,142 @@
             "required": [
               "member_id",
               "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "local_filter": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "and": {
+                "items": {
+                  "$ref": "#/$defs/local_filter"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "and"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "or": {
+                "items": {
+                  "$ref": "#/$defs/local_filter"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "or"
+            ],
+            "type": "object"
+          },
+          {
+            "$ref": "#/$defs/local_filter_predicate"
+          }
+        ]
+      },
+      "local_filter_predicate": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "member": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
+              "operator": {
+                "enum": [
+                  "eq",
+                  "neq",
+                  "gt",
+                  "gte",
+                  "lt",
+                  "lte"
+                ]
+              },
+              "value": {}
+            },
+            "required": [
+              "member",
+              "operator",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "member": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
+              "operator": {
+                "enum": [
+                  "in",
+                  "not_in"
+                ]
+              },
+              "values": {
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "member",
+              "operator",
+              "values"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "member": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
+              "operator": {
+                "const": "between"
+              },
+              "values": {
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              }
+            },
+            "required": [
+              "member",
+              "operator",
+              "values"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "member": {
+                "$ref": "definitions.json#/$defs/semantic_id"
+              },
+              "operator": {
+                "enum": [
+                  "is_null",
+                  "is_not_null"
+                ]
+              }
+            },
+            "required": [
+              "member",
+              "operator"
             ],
             "type": "object"
           }
@@ -688,6 +833,9 @@
               },
               "expression": {
                 "$ref": "expression.json"
+              },
+              "filter": {
+                "$ref": "#/$defs/local_filter"
               },
               "hidden": {
                 "type": "boolean"
@@ -772,6 +920,9 @@
               },
               "column_path": {
                 "$ref": "#/$defs/column_path"
+              },
+              "conformance_id": {
+                "$ref": "definitions.json#/$defs/semantic_id"
               },
               "data_type": {
                 "type": "string"
@@ -1171,6 +1322,25 @@
             "minItems": 2,
             "type": "array"
           },
+          "derived_measures": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "output_type": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "output_type"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "measure_branches": {
             "additionalProperties": {
               "$ref": "definitions.json#/$defs/entity_ref"
@@ -1262,6 +1432,28 @@
   },
   "query": {
     "$defs": {
+      "branch_member": {
+        "additionalProperties": false,
+        "properties": {
+          "member": {
+            "$ref": "#/$defs/member_ref"
+          },
+          "relationship_path": {
+            "items": {
+              "$ref": "definitions.json#/$defs/semantic_id"
+            },
+            "type": "array"
+          },
+          "root": {
+            "$ref": "definitions.json#/$defs/entity_ref"
+          }
+        },
+        "required": [
+          "root",
+          "member"
+        ],
+        "type": "object"
+      },
       "branch_relationship_path": {
         "additionalProperties": false,
         "properties": {
@@ -1281,12 +1473,45 @@
         ],
         "type": "object"
       },
+      "derived_measure": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "$ref": "expression.json"
+          },
+          "name": {
+            "$ref": "definitions.json#/$defs/semantic_id"
+          },
+          "output_type": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "unit": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "expression",
+          "output_type"
+        ],
+        "type": "object"
+      },
       "dimension_selection": {
         "additionalProperties": false,
         "properties": {
           "alias": {
             "minLength": 1,
             "type": "string"
+          },
+          "branch_members": {
+            "items": {
+              "$ref": "#/$defs/branch_member"
+            },
+            "maxItems": 10,
+            "type": "array"
           },
           "branch_relationship_paths": {
             "items": {
@@ -1775,6 +2000,13 @@
       "compile_only": {
         "default": false,
         "type": "boolean"
+      },
+      "derived_measures": {
+        "items": {
+          "$ref": "#/$defs/derived_measure"
+        },
+        "maxItems": 20,
+        "type": "array"
       },
       "dimensions": {
         "items": {
