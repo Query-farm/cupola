@@ -15,6 +15,8 @@ import {
 import type { CatalogData } from "./service";
 import { validateSemanticValue } from "./semantic-validation";
 
+export type { SemanticDiagnostic } from "./semantic-model";
+
 export interface SemanticSelection extends SemanticRef {
   member_id: string;
   alias?: string;
@@ -111,6 +113,19 @@ export interface SemanticPlan {
     measure_branches: Record<string, SemanticRef>;
     missing_fact_values: Record<string, "null" | "zero">;
     derived_measures?: Array<{ name: string; output_type: string }>;
+  };
+  outputs?: Array<{
+    name: string;
+    kind: "dimension" | "measure" | "derived_measure";
+    member?: SemanticRef & { member_id: string };
+    title?: string;
+    description?: string;
+    data_type?: string;
+    unit?: string | null;
+  }>;
+  model_dependencies?: {
+    entities: SemanticRef[];
+    relationships: string[];
   };
   sql: string;
   parameters: unknown[];
@@ -2579,6 +2594,50 @@ function compileMultiFactQuery(
   }
   for (const derived of derivedDefinitions)
     if (derived.unit) outputUnits[derived.name] = derived.unit;
+  const outputByName = new Map<string, NonNullable<SemanticPlan["outputs"]>[number]>();
+  const dependencyEntities = new Map<string, SemanticRef>();
+  const dependencyRelationships = new Set<string>();
+  for (const branchPlan of branchPlans) {
+    for (const output of branchPlan.outputs ?? [])
+      if (!outputByName.has(output.name)) outputByName.set(output.name, output);
+    for (const entity of branchPlan.model_dependencies?.entities ?? [])
+      dependencyEntities.set(refKey(entity), entity);
+    for (const relationship of branchPlan.model_dependencies?.relationships ?? [])
+      dependencyRelationships.add(relationship);
+  }
+  for (const selection of dimensions) {
+    const entity = resolveEntity(environment, selection, query.bindings ?? {});
+    if ("stage" in entity) throw new CompileFailure(entity);
+    const member = entity.members.get(selection.member_id);
+    if (!member) {
+      fail("model_resolution", "unknown_member", `Unknown member '${selection.member_id}' on '${entity.entityId}'`);
+      continue;
+    }
+    const name = selection.alias ?? selection.member_id;
+    outputByName.set(name, {
+      name,
+      kind: "dimension",
+      member: { catalog_id: entity.catalogId, entity_id: entity.entityId, member_id: member.member_id },
+      ...(member.title !== undefined ? { title: member.title } : {}),
+      ...(member.description !== undefined ? { description: member.description } : {}),
+      ...((selection.granularity || member.output_type || member.data_type)
+        ? { data_type: selection.granularity ? "TIMESTAMP" : member.output_type ?? member.data_type }
+        : {}),
+      ...(name in outputUnits ? { unit: outputUnits[name] } : {}),
+    });
+  }
+  for (const derived of derivedDefinitions)
+    outputByName.set(derived.name, {
+      name: derived.name,
+      kind: "derived_measure",
+      data_type: derived.output_type,
+      ...(derived.name in outputUnits ? { unit: outputUnits[derived.name] } : {}),
+    });
+  const orderedOutputNames = [
+    ...commonGrain,
+    ...measures.map((item) => item.alias ?? item.member_id),
+    ...derivedDefinitions.map((item) => item.name),
+  ];
   return {
     ok: true,
     plan: {
@@ -2597,6 +2656,14 @@ function compileMultiFactQuery(
               })),
             }
           : {}),
+      },
+      outputs: orderedOutputNames.flatMap((name) => {
+        const output = outputByName.get(name);
+        return output ? [output] : [];
+      }),
+      model_dependencies: {
+        entities: [...dependencyEntities.values()].sort((left, right) => refKey(left).localeCompare(refKey(right))),
+        relationships: [...dependencyRelationships].sort(),
       },
       sql,
       parameters,
@@ -3194,6 +3261,48 @@ function compileSemanticQueryInternal(
           (marker) => !marker.startsWith("input:"),
         )
       : [];
+    const outputs: NonNullable<SemanticPlan["outputs"]> = [];
+    for (const grain of drivingPlanGrain) {
+      const [catalog_id, entity_id] = grain.source.split("::", 2);
+      outputs.push({
+        name: grain.output_name,
+        kind: "dimension",
+        ...(catalog_id && entity_id
+          ? { member: { catalog_id, entity_id, member_id: grain.member } }
+          : {}),
+      });
+    }
+    for (const item of dimensionSelections) {
+      const name = item.selection.alias ?? item.member.member_id;
+      outputs.push({
+        name,
+        kind: "dimension",
+        member: { catalog_id: item.entity.catalogId, entity_id: item.entity.entityId, member_id: item.member.member_id },
+        ...(item.member.title !== undefined ? { title: item.member.title } : {}),
+        ...(item.member.description !== undefined ? { description: item.member.description } : {}),
+        ...((item.selection.granularity || item.member.output_type || item.member.data_type)
+          ? { data_type: item.selection.granularity ? "TIMESTAMP" : item.member.output_type ?? item.member.data_type }
+          : {}),
+        ...(name in outputUnits ? { unit: outputUnits[name] } : {}),
+      });
+    }
+    for (const item of measureSelections) {
+      const name = item.selection.alias ?? item.member.member_id;
+      outputs.push({
+        name,
+        kind: "measure",
+        member: { catalog_id: item.entity.catalogId, entity_id: item.entity.entityId, member_id: item.member.member_id },
+        ...(item.member.title !== undefined ? { title: item.member.title } : {}),
+        ...(item.member.description !== undefined ? { description: item.member.description } : {}),
+        ...(item.member.output_type || item.member.data_type ? { data_type: item.member.output_type ?? item.member.data_type } : {}),
+        ...(name in outputUnits ? { unit: outputUnits[name] } : {}),
+      });
+    }
+    const dependencyEntities = [...new Map(requiredEntities.map((entity) => [entity.key, {
+      catalog_id: entity.catalogId,
+      entity_id: entity.entityId,
+    }])).values()].sort((left, right) => refKey(left).localeCompare(refKey(right)));
+    const dependencyRelationships = [...new Set(joins.map(({ edge }) => edge.relationship.relationshipId))].sort();
     return {
       ok: true,
       plan: {
@@ -3221,6 +3330,11 @@ function compileSemanticQueryInternal(
             ),
           },
         ],
+        outputs,
+        model_dependencies: {
+          entities: dependencyEntities,
+          relationships: dependencyRelationships,
+        },
         sql,
         parameters,
         validation_scope: "semantic",

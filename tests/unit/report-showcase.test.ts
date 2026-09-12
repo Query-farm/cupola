@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createReportShowcase } from "../../src/lib/reports/showcase";
 import { validateReadOnlySql, validateReport } from "../../src/lib/reports/validation";
+import { isSemanticReportDataset } from "../../src/lib/reports/types";
 
 describe("built-in report block gallery", () => {
   test("is valid, catalog-free, and covers every report block type", () => {
@@ -22,8 +23,8 @@ describe("built-in report block gallery", () => {
       "map",
       "perspective",
     ]));
-    expect(report.datasets.every((dataset) => validateReadOnlySql(dataset.sql).length === 0)).toBe(true);
-    expect(report.datasets.every((dataset) => /\b(?:VALUES|SELECT|WITH)\b/i.test(dataset.sql))).toBe(true);
+    expect(report.datasets.every((dataset) => !isSemanticReportDataset(dataset) && validateReadOnlySql(dataset.sql).length === 0)).toBe(true);
+    expect(report.datasets.every((dataset) => !isSemanticReportDataset(dataset) && /\b(?:VALUES|SELECT|WITH)\b/i.test(dataset.sql))).toBe(true);
     expect(report.blocks.find((block) => block.type === "ai_narrative")).toMatchObject({
       refreshPolicy: "manual",
       snapshot: { model: "example snapshot", rowCount: 1 },

@@ -1,7 +1,8 @@
 import { splitStatements } from "@/lib/editor/sql-statements";
 import { validateChartSpec } from "@/lib/ai-tool-executor";
-import type { ReportBlock, ReportDocumentV1, ReportOption, ReportParameter, ReportParameterRule, ReportParameterValue } from "./types";
+import { isSemanticReportDataset, type ReportBlock, type ReportDocumentV1, type ReportOption, type ReportParameter, type ReportParameterRule, type ReportParameterValue } from "./types";
 import { reportLayoutCollisions } from "./layout";
+import { semanticParameterReferences } from "./semantic";
 
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const FORBIDDEN_SQL = /\b(?:INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE|COPY|ATTACH|DETACH|CALL|PRAGMA|INSTALL|LOAD|EXPORT|IMPORT|VACUUM|CHECKPOINT)\b/i;
@@ -290,7 +291,15 @@ export function validateReportStructure(input: unknown): string[] {
     if (!isRecord(dataset)) { errors.push(`${path} must be an object.`); return; }
     requireString(dataset, "id", path);
     requireString(dataset, "name", path);
-    requireString(dataset, "sql", path);
+    if (dataset.kind === "semantic") {
+      if (!isRecord(dataset.query)) errors.push(`${path}.query must be a semantic query object.`);
+      if (dataset.sql !== undefined) errors.push(`${path}.sql is not allowed for a semantic dataset.`);
+      if (dataset.acceptedModelFingerprint !== undefined && (typeof dataset.acceptedModelFingerprint !== "string" || !/^sha256:[0-9a-f]{64}$/.test(dataset.acceptedModelFingerprint))) errors.push(`${path}.acceptedModelFingerprint must be a SHA-256 fingerprint.`);
+    } else {
+      if (dataset.kind !== undefined && dataset.kind !== "sql") errors.push(`${path}.kind is unsupported.`);
+      requireString(dataset, "sql", path);
+      if (dataset.query !== undefined) errors.push(`${path}.query is only allowed for a semantic dataset.`);
+    }
     if (dataset.role !== undefined && !["data", "parameter_options", "parameter_validation"].includes(dataset.role)) errors.push(`${path}.role is unsupported.`);
   });
   (input.groups ?? []).forEach((group: unknown, index: number) => {
@@ -488,6 +497,20 @@ export function validateReport(input: unknown): string[] {
     const conflictingId = datasetRelationIds.get(relationKey);
     if (conflictingId && conflictingId !== d.id) errors.push(`Dataset IDs ${conflictingId} and ${d.id} conflict as SQL relation names.`);
     else datasetRelationIds.set(relationKey, d.id);
+    if (isSemanticReportDataset(d)) {
+      if (!d.query || typeof d.query !== "object" || Array.isArray(d.query)) {
+        errors.push(`${d.name}: semantic query must be an object.`);
+        continue;
+      }
+      if (!Array.isArray(d.query.measures) && !Array.isArray(d.query.dimensions)) errors.push(`${d.name}: semantic query must select measures or dimensions.`);
+      for (const reference of semanticParameterReferences(d.query)) {
+        const parameter = report.parameters.find((candidate) => candidate.key === reference.report_parameter);
+        if (!parameter) errors.push(`${d.name}: unknown semantic report parameter ${reference.report_parameter}.`);
+        else if (reference.part && parameter.type !== "date_range") errors.push(`${d.name}: semantic parameter ${reference.report_parameter}.${reference.part} requires a date-range report parameter.`);
+        else if (!reference.part && parameter.type === "date_range") errors.push(`${d.name}: date-range semantic parameter ${reference.report_parameter} requires part start or end.`);
+      }
+      continue;
+    }
     errors.push(...validateReadOnlySql(d.sql).map((e) => `${d.name}: ${e}`));
     for (const token of parameterTokens(d.sql)) {
       const rangeBase = token.replace(/_(?:start|end)$/, "");
@@ -549,7 +572,9 @@ export function validateReport(input: unknown): string[] {
     if (options?.kind !== "dataset") continue;
     const source = report.datasets.find((d) => d.id === options.datasetId);
     if (!source) continue;
-    dependencies.set(p.key, new Set(parameterTokens(source.sql).map((token) => token.replace(/_(?:start|end)$/, ""))));
+    dependencies.set(p.key, new Set(isSemanticReportDataset(source)
+      ? semanticParameterReferences(source.query).map((reference) => reference.report_parameter)
+      : parameterTokens(source.sql).map((token) => token.replace(/_(?:start|end)$/, ""))));
   }
   const visiting = new Set<string>(), visited = new Set<string>();
   const hasCycle = (key: string): boolean => {

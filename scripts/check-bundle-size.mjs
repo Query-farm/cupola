@@ -4,7 +4,9 @@ import { join } from "node:path";
 
 const assetDir = fileURLToPath(new URL("../dist/_astro/", import.meta.url));
 const maxChunkBytes = 1_500_000;
-const maxTotalBytes = 4_500_000;
+// Governed report authoring adds the semantic compiler UI and provenance views.
+// Keep the allowance tight to that measured increment (4,491,213 -> 4,527,123).
+const maxTotalBytes = 4_550_000;
 
 const files = (await readdir(assetDir)).filter((name) => name.endsWith(".js"));
 if (files.length === 0) throw new Error("No JavaScript bundles found; run the production build first");

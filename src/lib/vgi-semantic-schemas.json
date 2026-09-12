@@ -1317,6 +1317,87 @@
         ],
         "type": "object"
       },
+      "model_dependencies": {
+        "additionalProperties": false,
+        "properties": {
+          "entities": {
+            "items": {
+              "$ref": "definitions.json#/$defs/entity_ref"
+            },
+            "type": "array"
+          },
+          "relationships": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "entities",
+          "relationships"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "additionalProperties": false,
+        "properties": {
+          "data_type": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "dimension",
+              "measure",
+              "derived_measure"
+            ]
+          },
+          "member": {
+            "additionalProperties": false,
+            "properties": {
+              "catalog_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "entity_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "member_id": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "catalog_id",
+              "entity_id",
+              "member_id"
+            ],
+            "type": "object"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "kind"
+        ],
+        "type": "object"
+      },
       "stitch": {
         "additionalProperties": false,
         "properties": {
@@ -1394,6 +1475,9 @@
         "minItems": 1,
         "type": "array"
       },
+      "model_dependencies": {
+        "$ref": "#/$defs/model_dependencies"
+      },
       "output_units": {
         "additionalProperties": {
           "type": [
@@ -1402,6 +1486,12 @@
           ]
         },
         "type": "object"
+      },
+      "outputs": {
+        "items": {
+          "$ref": "#/$defs/output"
+        },
+        "type": "array"
       },
       "parameters": {
         "type": "array"

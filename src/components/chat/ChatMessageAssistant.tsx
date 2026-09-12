@@ -23,6 +23,15 @@ export interface ToolCallDisplayResult {
   rowCount?: number;
   showing?: number;
   message?: string;
+  semanticPlan?: {
+    sql: string;
+    parameters: unknown[];
+    output_units?: Record<string, string | null>;
+    warnings?: string[];
+    fact_branches?: Array<Record<string, any>>;
+    stitch?: Record<string, any>;
+  };
+  semanticDiagnostics?: Array<{ code: string; message: string; stage?: string }>;
 }
 
 export interface ToolCallEntry {
@@ -215,6 +224,20 @@ export function ChatMessageAssistant({
                   )}
                 </div>
               );
+            }
+            if (tc.name === "query_semantic_model") {
+              const selected = [...(tc.input?.measures ?? []), ...(tc.input?.dimensions ?? [])].map((item: any) => item.alias || item.member_id);
+              const units = tc.displayResult?.semanticPlan?.output_units ?? {};
+              return <div key={block.id} className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 text-sm dark:border-emerald-900 dark:bg-emerald-950/20">
+                <div className="flex items-center gap-2 font-medium"><Sparkles className="h-4 w-4 text-emerald-700" /> Governed query</div>
+                {selected.length > 0 && <p className="mt-1 text-xs text-muted-foreground">{selected.join(", ")}</p>}
+                {tc.isExecuting && <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Validating and querying the semantic model…</div>}
+                {tc.displayResult?.semanticDiagnostics?.length ? <ul className="mt-2 list-disc pl-5 text-xs text-destructive">{tc.displayResult.semanticDiagnostics.map((diagnostic, index) => <li key={`${diagnostic.code}-${index}`}><code>{diagnostic.code}</code>: {diagnostic.message}</li>)}</ul> : null}
+                {tc.displayResult?.rowCount !== undefined && <div className="mt-2 text-xs text-muted-foreground">{tc.displayResult.rowCount.toLocaleString()} rows{Object.keys(units).length ? ` · Units: ${Object.entries(units).map(([name, unit]) => `${name} ${unit ?? "unresolved"}`).join(", ")}` : ""}</div>}
+                {tc.displayResult?.semanticPlan && <details className="mt-2 text-xs"><summary className="cursor-pointer text-muted-foreground">How this was calculated</summary><pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap rounded border bg-background p-2 font-mono text-[10px]">{tc.displayResult.semanticPlan.sql}</pre></details>}
+                {!tc.isExecuting && tc.displayResult?.semanticPlan && !tc.error && <button className="mt-2 inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-primary" onClick={() => promoteToReport({ kind: "semantic", query: tc.input, title: selected.join(" and ") || "Governed query", markdown: narrative || undefined })}><FileChartColumn className="h-3 w-3" /> Add to report</button>}
+                {tc.error && <p className="mt-2 text-xs text-destructive">{tc.error}</p>}
+              </div>;
             }
             // ask_user renders its own block (pushed by the tool itself), so a
             // status row here would just duplicate it. Every OTHER tool gets

@@ -1,6 +1,6 @@
 import type { Tool } from "@/lib/ai-agent";
 import { SEMANTIC_QUERY_TOOL } from "@/lib/semantic-tool";
-import { cloneReport, newReportId, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportGroup, type ReportLayout } from "./types";
+import { cloneReport, isSemanticReportDataset, newReportId, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportGroup, type ReportLayout, type ReportSemanticDataset, type ReportSqlDataset } from "./types";
 
 const stringSchema = { type: "string" };
 const nullableScalarSchema = { type: ["string", "number", "boolean", "null"] };
@@ -121,16 +121,27 @@ const parameterSchema = {
 const datasetProperties = {
   id: { type: "string", description: "Stable SQL relation name. Use a short snake_case identifier when another dataset will query this result." },
   name: stringSchema,
+  kind: { enum: ["sql", "semantic"] },
   sql: stringSchema,
+  query: {
+    type: "object",
+    description: "Governed semantic compiler request. A scalar value may bind a report parameter with {report_parameter: 'key'}; date ranges also require part: 'start' or 'end'.",
+  },
+  acceptedModelFingerprint: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
   description: stringSchema,
   role: { enum: ["data", "parameter_options", "parameter_validation"] },
 };
+
+const { acceptedModelFingerprint: _managedModelFingerprint, ...agentDatasetProperties } = datasetProperties;
 
 const datasetSchema = {
   type: "object",
   additionalProperties: false,
   properties: datasetProperties,
-  required: ["id", "name", "sql"],
+  oneOf: [
+    { required: ["id", "name", "sql"], properties: { kind: { enum: ["sql"] }, query: false, acceptedModelFingerprint: false } },
+    { required: ["id", "name", "kind", "query"], properties: { kind: { const: "semantic" }, sql: false } },
+  ],
 };
 
 const groupProperties = {
@@ -434,7 +445,7 @@ export const REPORT_TOOLS: Tool[] = [
   },
   {
     name: "upsert_report_dataset",
-    description: "Create or update one report dataset, then execute it immediately. Dataset SQL may query another report dataset by its id; Cupola infers that dependency with DuckDB and materializes shared results once per refresh. Use short snake_case ids for referenced datasets. Omit id to derive one from the name, and reuse the returned id for later updates and blocks. Fix any SQL error before adding dependent blocks.",
+    description: "Create or update one report dataset, then execute it immediately. Prefer kind=semantic with query when governed measures and dimensions cover the request; persist the semantic request, never its generated SQL. Use kind=sql with sql only for unmodeled work. SQL may query another report dataset by id. Omit id to derive one from the name and reuse the returned id for updates and blocks.",
     input_schema: {
       type: "object",
       additionalProperties: false,
@@ -442,8 +453,11 @@ export const REPORT_TOOLS: Tool[] = [
         dataset: {
           type: "object",
           additionalProperties: false,
-          properties: datasetProperties,
-          required: ["name", "sql"],
+          properties: agentDatasetProperties,
+          oneOf: [
+            { required: ["name", "sql"], properties: { kind: { enum: ["sql"] }, query: false, acceptedModelFingerprint: false } },
+            { required: ["name", "kind", "query"], properties: { kind: { const: "semantic" }, sql: false } },
+          ],
         },
       },
       required: ["dataset"],
@@ -535,7 +549,9 @@ export function upsertAgentGroup(report: ReportDocumentV1, input: Omit<ReportGro
   return { report: next, group };
 }
 
-export function upsertAgentDataset(report: ReportDocumentV1, input: Omit<ReportDataset, "id"> & { id?: string }): { report: ReportDocumentV1; dataset: ReportDataset } {
+export function upsertAgentDataset(report: ReportDocumentV1, input: Omit<ReportSqlDataset, "id"> & { id?: string }): { report: ReportDocumentV1; dataset: ReportSqlDataset };
+export function upsertAgentDataset(report: ReportDocumentV1, input: Omit<ReportSemanticDataset, "id"> & { id?: string }): { report: ReportDocumentV1; dataset: ReportSemanticDataset };
+export function upsertAgentDataset(report: ReportDocumentV1, input: (Omit<ReportSqlDataset, "id"> | Omit<ReportSemanticDataset, "id">) & { id?: string }): { report: ReportDocumentV1; dataset: ReportDataset } {
   const next = cloneReport(report);
   const existingIndex = input.id
     ? next.datasets.findIndex((dataset) => dataset.id === input.id)
@@ -545,7 +561,13 @@ export function upsertAgentDataset(report: ReportDocumentV1, input: Omit<ReportD
   const sqlSafeBaseId = /^[a-z_]/.test(baseId) ? baseId : `dataset_${baseId}`;
   let generatedId = sqlSafeBaseId;
   for (let suffix = 2; next.datasets.some((candidate) => candidate.id.toLocaleLowerCase("en-US") === generatedId.toLocaleLowerCase("en-US")); suffix++) generatedId = `${sqlSafeBaseId}_${suffix}`;
-  const dataset: ReportDataset = { ...existing, ...input, id: existing?.id ?? input.id ?? generatedId };
+  const { acceptedModelFingerprint: _agentSuppliedFingerprint, ...safeInput } = input as typeof input & { acceptedModelFingerprint?: string };
+  const dataset = { ...existing, ...safeInput, id: existing?.id ?? input.id ?? generatedId } as ReportDataset;
+  if (isSemanticReportDataset(dataset)) delete (dataset as any).sql;
+  else {
+    delete (dataset as any).query;
+    delete (dataset as any).acceptedModelFingerprint;
+  }
   if (existingIndex >= 0) next.datasets[existingIndex] = dataset;
   else next.datasets.push(dataset);
   next.updatedAt = Date.now();

@@ -1,9 +1,19 @@
-export interface ReportPromotion {
+export interface SqlReportPromotion {
+  kind?: "sql";
   sql: string;
   title?: string;
   chartSpec?: Record<string, any>;
   markdown?: string;
 }
+
+export interface SemanticReportPromotion {
+  kind: "semantic";
+  query: Record<string, any>;
+  title?: string;
+  markdown?: string;
+}
+
+export type ReportPromotion = SqlReportPromotion | SemanticReportPromotion;
 
 let pending: ReportPromotion | null = null;
 

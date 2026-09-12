@@ -4,7 +4,7 @@ import { ResponsiveGridLayout, useContainerWidth, type Layout, type ResponsiveLa
 import { noCompactor } from "react-grid-layout/core";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Clock3, Database, Download, FileCode2, FileJson, FilePlus2, GripVertical, History, LayoutGrid, Link2, Loader2, MoreHorizontal, Pencil, Play, Plus, Printer, RefreshCw, Save, Send, Share2, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Clock3, Database, Download, FileCode2, FileJson, FilePlus2, GripVertical, History, LayoutGrid, Link2, Loader2, MoreHorizontal, Pencil, Play, Plus, Printer, RefreshCw, Save, Send, Share2, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import type { CatalogData } from "@/lib/service";
 import { engine, getEngineLifecycleSnapshot, ui, waitForEngineReady } from "@/lib/shell-bridge";
@@ -31,7 +31,7 @@ import { runAgentTurn, executeListCatalogs, executeListTables, executeListCatego
 import { executeRunSql, executeSemanticQuery, validateChartSpec } from "@/lib/ai-tool-executor";
 import { QueryResultCache } from "@/lib/query-results";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
-import { normalizeAIQueryMode } from "@/lib/ai/query-mode";
+import { normalizeAIQueryMode, toolsForAIQueryMode } from "@/lib/ai/query-mode";
 import { toolInputLabel } from "@/lib/ai/tool-labels";
 import { exportResult, safeFileStem, triggerDownload } from "@/lib/editor/result-export";
 import { consumeReportPromotion, type ReportPromotion } from "@/lib/reports/events";
@@ -47,8 +47,11 @@ import { normalizeReportLayout, reflowReportLayout } from "@/lib/reports/layout"
 import { isReportTufteBlock, tufteBlockToVegaSpec } from "@/lib/reports/tufte";
 import { buildShareReportUrl, clearSharedReport, consumeSharedReport } from "@/lib/reports/share";
 import { deleteReport, exportReportJson, getStoredReport, importReportJson, listStoredReports, publishReport, restoreReportRevision, saveReport } from "@/lib/reports/store";
-import { cloneReport, createEmptyReport, newReportId, type ReportAiNarrativeBlock, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportGroup, type ReportOption, type ReportParameter, type ReportParameterValue } from "@/lib/reports/types";
+import { cloneReport, createEmptyReport, isSemanticReportDataset, newReportId, type ReportAiNarrativeBlock, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportGroup, type ReportOption, type ReportParameter, type ReportParameterValue } from "@/lib/reports/types";
 import { parameterTokens, validateReadOnlySql, validateReport, validateReportParameterValues, type ReportParameterIssue } from "@/lib/reports/validation";
+import { prepareSemanticReportDataset, semanticParameterReferences } from "@/lib/reports/semantic";
+import type { SemanticDiagnostic, SemanticPlan } from "@/lib/semantic-compiler";
+import { buildSemanticEnvironment } from "@/lib/semantic-model";
 import { createReportBlock, duplicateReportBlock, REPORT_BLOCK_TYPES } from "@/lib/reports/direct-editor";
 import type { AgentUsage } from "@/lib/ai-usage";
 
@@ -85,6 +88,12 @@ interface DatasetResult {
   runId?: number;
   dependencies?: string[];
   materialized?: boolean;
+  semantic?: {
+    plan: SemanticPlan;
+    fingerprint: string;
+    modelChanged: boolean;
+  };
+  semanticDiagnostics?: SemanticDiagnostic[];
 }
 
 interface ReportRunProgress {
@@ -394,15 +403,18 @@ function reportGroupBoxes(
 
 function applyPromotion(base: ReportDocumentV1, promotion: ReportPromotion): ReportDocumentV1 {
   const report = cloneReport(base);
-  const dataset: ReportDataset = { id: newReportId("dataset"), name: promotion.title || `Dataset ${report.datasets.length + 1}`, sql: promotion.sql };
+  const dataset: ReportDataset = promotion.kind === "semantic"
+    ? { id: newReportId("dataset"), name: promotion.title || `Governed dataset ${report.datasets.length + 1}`, kind: "semantic", query: structuredClone(promotion.query) }
+    : { id: newReportId("dataset"), name: promotion.title || `Dataset ${report.datasets.length + 1}`, sql: promotion.sql };
   report.datasets.push(dataset);
   let y = nextY(report);
   if (promotion.markdown) {
     report.blocks.push({ id: newReportId("block"), type: "markdown", markdown: promotion.markdown, layout: { x: 0, y, w: 12, h: 2 } });
     y += 2;
   }
-  report.blocks.push(promotion.chartSpec
-    ? { id: newReportId("block"), type: "chart", datasetId: dataset.id, title: promotion.title, spec: promotion.chartSpec, layout: { x: 0, y, w: 12, h: 6 } }
+  const chartSpec = promotion.kind !== "semantic" ? promotion.chartSpec : undefined;
+  report.blocks.push(chartSpec
+    ? { id: newReportId("block"), type: "chart", datasetId: dataset.id, title: promotion.title, spec: chartSpec, layout: { x: 0, y, w: 12, h: 6 } }
     : { id: newReportId("block"), type: "table", datasetId: dataset.id, title: promotion.title, pageSize: 50, layout: { x: 0, y, w: 12, h: 5 } });
   report.updatedAt = Date.now();
   return report;
@@ -915,7 +927,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         // unresolved prepared placeholders. Materialize already-validated
         // parameter values as escaped literals for planning only; execution of
         // ordinary datasets continues to use prepared statements below.
-        (dataset) => materializeReportQuery(dataset.sql, report, runValues),
+        (dataset) => isSemanticReportDataset(dataset) ? "SELECT 1" : materializeReportQuery(dataset.sql, report, runValues),
       );
       plan = buildReportDatasetExecutionPlan(report.datasets, dependencies, onlyIds, includeDependents);
       datasets = plan.datasets;
@@ -1021,15 +1033,32 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         let decodeMs = 0;
         let phase: "query" | "materialize" | "decode" = "query";
         let phaseStartedAt = performance.now();
+        let semanticDiagnostics: SemanticDiagnostic[] | undefined;
         try {
-          const readErrors = validateReadOnlySql(dataset.sql);
-          if (readErrors.length) throw new Error(readErrors.join(" "));
+          const catalogs = [catalogData, ...(attachedCatalogs ?? []), ui.memoryCatalog]
+            .filter((value): value is CatalogData => Boolean(value));
+          const semantic = isSemanticReportDataset(dataset)
+            ? await prepareSemanticReportDataset(dataset, report, runValues, catalogs)
+            : null;
+          if (semantic && !semantic.compilation.ok) {
+            semanticDiagnostics = semantic.compilation.diagnostics;
+            throw new Error(semantic.compilation.diagnostics.map((diagnostic) => `${diagnostic.code}: ${diagnostic.message}`).join(" "));
+          }
+          if (!isSemanticReportDataset(dataset)) {
+            const readErrors = validateReadOnlySql(dataset.sql);
+            if (readErrors.length) throw new Error(readErrors.join(" "));
+          }
+          const compiled = semantic?.compilation.ok
+            ? { sql: semantic.compilation.plan.sql, params: semantic.compilation.plan.parameters }
+            : compileReportQuery((dataset as Extract<ReportDataset, { kind?: "sql" }>).sql, report, runValues);
           let response;
           if (plan.materialized.has(dataset.id)) {
             const identifier = quoteReportDatasetIdentifier(dataset.id);
             phase = "materialize";
             phaseStartedAt = performance.now();
-            const create = await query(`CREATE TEMP TABLE ${identifier} AS ${materializeReportQuery(dataset.sql, report, runValues)}`);
+            const create = semantic?.compilation.ok
+              ? await queryPrepared(`CREATE TEMP TABLE ${identifier} AS ${compiled.sql}`, compiled.params)
+              : await query(`CREATE TEMP TABLE ${identifier} AS ${materializeReportQuery((dataset as Extract<ReportDataset, { kind?: "sql" }>).sql, report, runValues)}`);
             materializeMs = Math.round(performance.now() - phaseStartedAt);
             if (!create.ok) throw new Error(create.error || "The shared dataset could not be materialized.");
             createdTempTables.push(dataset.id);
@@ -1037,7 +1066,6 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
             phaseStartedAt = performance.now();
             response = await queryPrepared(`SELECT * FROM temp.main.${identifier}`, []);
           } else {
-            const compiled = compileReportQuery(dataset.sql, report, runValues);
             phase = "query";
             phaseStartedAt = performance.now();
             response = await queryPrepared(compiled.sql, compiled.params);
@@ -1054,7 +1082,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
           const finishedAt = Date.now();
           const durationMs = Math.round(performance.now() - startedAt);
           captureRows?.set(dataset.id, rows);
-          updateDatasetResults((prev) => ({ ...prev, [dataset.id]: { ...(prev[dataset.id] ?? {}), table, rows, status: "success", fetchedAt: finishedAt, durationMs, queryMs, materializeMs, decodeMs, transferBytes, startedAt: startedAtEpoch, finishedAt, waitMs: startedAtEpoch - runQueuedAt, planningMs, queuedAt: runQueuedAt, runId: generation, dependencies: [...(plan.dependencies.get(dataset.id) ?? [])], materialized: plan.materialized.has(dataset.id) } }));
+          updateDatasetResults((prev) => ({ ...prev, [dataset.id]: { ...(prev[dataset.id] ?? {}), table, rows, status: "success", fetchedAt: finishedAt, durationMs, queryMs, materializeMs, decodeMs, transferBytes, startedAt: startedAtEpoch, finishedAt, waitMs: startedAtEpoch - runQueuedAt, planningMs, queuedAt: runQueuedAt, runId: generation, dependencies: [...(plan.dependencies.get(dataset.id) ?? [])], materialized: plan.materialized.has(dataset.id), ...(semantic?.compilation.ok && semantic.fingerprint ? { semantic: { plan: semantic.compilation.plan, fingerprint: semantic.fingerprint, modelChanged: semantic.modelChanged } } : {}) } }));
           summaries.push({ datasetId: dataset.id, name: dataset.name, ok: true, rowCount: table.numRows, columns: table.schema.fields.map((field) => field.name), sample: rows.slice(0, 3) });
         } catch (e) {
           if (generation !== runGeneration.current) return summaries;
@@ -1088,6 +1116,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
               runId: generation,
               dependencies: [...(plan.dependencies.get(dataset.id) ?? [])],
               materialized: plan.materialized.has(dataset.id),
+              semanticDiagnostics,
             },
           }));
           summaries.push({ datasetId: dataset.id, name: dataset.name, ok: false, error: classified.message, errorDetails: classified.technicalDetails, errorCode: classified.code, retryable: classified.retryable, retryAfterSeconds: classified.retryAfterSeconds, stale });
@@ -1135,7 +1164,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       if (publishResults) setRunProgress((progress) => progress?.generation === generation ? null : progress);
     }
     return summaries;
-  }, []);
+  }, [attachedCatalogs, catalogData]);
 
   const runDatasetsAndNarratives = useCallback(async (
     report: ReportDocumentV1,
@@ -1234,7 +1263,9 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const dataDatasets = report.datasets.filter((dataset) => dataset.role !== "parameter_options" && dataset.role !== "parameter_validation");
     const changed = new Set(Object.keys(candidate).filter((key) => JSON.stringify(candidate[key]) !== JSON.stringify(appliedValues[key])));
     const ids = changedOnly && changed.size
-      ? new Set(dataDatasets.filter((dataset) => parameterTokens(dataset.sql).some((token) => changed.has(token) || changed.has(token.replace(/_(?:start|end)$/, "")))).map((dataset) => dataset.id))
+      ? new Set(dataDatasets.filter((dataset) => (isSemanticReportDataset(dataset)
+        ? semanticParameterReferences(dataset.query).some((reference) => changed.has(reference.report_parameter))
+        : parameterTokens(dataset.sql).some((token) => changed.has(token) || changed.has(token.replace(/_(?:start|end)$/, ""))))).map((dataset) => dataset.id))
       : new Set(dataDatasets.map((dataset) => dataset.id));
     const mode = dataDatasets.some((dataset) => ids.has(dataset.id) && Boolean(results[dataset.id]?.table)) ? "refresh" : "load";
     const execution = await runDatasetsAndNarratives(report, candidate, ids, mode, rows, true);
@@ -1311,11 +1342,17 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     if (!activeReport) return;
     if (!ui.openInEditor) { setShareStatus("The SQL editor is not ready yet."); return; }
     try {
-      ui.openInEditor(materializeReportQuery(dataset.sql, activeReport, appliedValues), { autoRun: false });
+      if (isSemanticReportDataset(dataset)) {
+        const plan = results[dataset.id]?.semantic?.plan;
+        if (!plan) { setShareStatus("Run this governed dataset before opening its generated SQL."); return; }
+        ui.openInEditor(`-- Generated from a governed semantic dataset. Bound values: ${JSON.stringify(plan.parameters)}\n${plan.sql}`, { autoRun: false });
+      } else {
+        ui.openInEditor(materializeReportQuery(dataset.sql, activeReport, appliedValues), { autoRun: false });
+      }
     } catch (error) {
       setShareStatus(error instanceof Error ? error.message : String(error));
     }
-  }, [activeReport, appliedValues]);
+  }, [activeReport, appliedValues, results]);
 
   const createNew = useCallback(() => openReport(createEmptyReport("New report", catalogData.catalogName, serviceUrl), undefined, false, false), [catalogData.catalogName, serviceUrl, openReport]);
 
@@ -1328,9 +1365,18 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const publishDraft = useCallback(async () => {
     if (!draft) return;
     setShareStatus("Validating the draft before publishing…");
-    const valid = await validateAndRun(draft, defaultValues(draft), false);
+    const publishValues = defaultValues(draft);
+    const valid = await validateAndRun(draft, publishValues, false);
     if (!valid) return;
-    const stored = await publishReport(draft);
+    const publishable = cloneReport(draft);
+    const catalogs = [catalogData, ...(attachedCatalogs ?? []), ui.memoryCatalog]
+      .filter((value): value is CatalogData => Boolean(value));
+    for (const dataset of publishable.datasets) {
+      if (!isSemanticReportDataset(dataset) || dataset.acceptedModelFingerprint) continue;
+      const prepared = await prepareSemanticReportDataset(dataset, publishable, publishValues, catalogs);
+      if (prepared.compilation.ok && prepared.fingerprint) dataset.acceptedModelFingerprint = prepared.fingerprint;
+    }
+    const stored = await publishReport(publishable);
     const saved = cloneReport(stored.document);
     const snapshot = cloneReport(stored.publishedDocument!);
     setSelected(saved);
@@ -1344,7 +1390,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     setAgentSummary(null);
     setShareStatus(`Published revision ${snapshot.revision}.`);
     await reload();
-  }, [draft, reload, validateAndRun]);
+  }, [attachedCatalogs, catalogData, draft, reload, validateAndRun]);
 
   const switchReportMode = useCallback((mode: "edit" | "reader") => {
     const next = mode === "reader" ? published : draft;
@@ -1526,10 +1572,15 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   }, [appliedValues, reportWithDataset, results, runDatasets]);
 
   const applyReportDataset = useCallback(async (dataset: ReportDataset) => {
-    const candidate = reportWithDataset(dataset);
+    let candidate = reportWithDataset(dataset);
     if (!candidate) return;
     const cached = datasetTestCacheRef.current;
     if (!cached || cached.reportId !== candidate.id || cached.datasetJson !== JSON.stringify(dataset)) return;
+    const semanticResult = cached.results.get(dataset.id)?.semantic;
+    if (isSemanticReportDataset(dataset) && semanticResult && !dataset.acceptedModelFingerprint) {
+      const accepted = { ...dataset, acceptedModelFingerprint: semanticResult.fingerprint };
+      candidate = { ...candidate, datasets: candidate.datasets.map((item) => item.id === dataset.id ? accepted : item) };
+    }
     setDraft(candidate);
     setSourceText(exportReportJson(candidate));
     setResults((previous) => ({ ...previous, ...Object.fromEntries(cached.results) }));
@@ -1576,6 +1627,56 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     setShareStatus(`Deleted dataset “${dataset.name}”.`);
   }, [draft, results]);
 
+  const acceptSemanticModel = useCallback((datasetId: string, fingerprint: string) => {
+    if (!draft) return;
+    const next = cloneReport(draft);
+    const dataset = next.datasets.find((candidate) => candidate.id === datasetId);
+    if (!dataset || !isSemanticReportDataset(dataset)) return;
+    dataset.acceptedModelFingerprint = fingerprint;
+    next.updatedAt = Date.now();
+    setDraft(next);
+    setSourceText(exportReportJson(next));
+    setResults((current) => ({
+      ...current,
+      [datasetId]: current[datasetId]?.semantic
+        ? { ...current[datasetId], semantic: { ...current[datasetId].semantic!, modelChanged: false } }
+        : current[datasetId],
+    }));
+    setShareStatus("Accepted the current governed model for this dataset. Save the report to keep this baseline.");
+  }, [draft]);
+
+  const addReportDataset = useCallback((kind: "semantic" | "sql") => {
+    if (!draft) return;
+    const next = cloneReport(draft);
+    let dataset: ReportDataset;
+    if (kind === "semantic") {
+      const catalogs = [catalogData, ...(attachedCatalogs ?? []), ui.memoryCatalog]
+        .filter((value): value is CatalogData => Boolean(value));
+      const environment = buildSemanticEnvironment(catalogs);
+      const first = environment.entities.flatMap((entity) => [...entity.members.values()]
+        .filter((member) => member.kind === "measure" && !member.hidden)
+        .map((member) => ({ entity, member })))[0];
+      if (!first) {
+        setShareStatus("No governed measures are available in the attached catalogs.");
+        return;
+      }
+      dataset = {
+        id: newReportId("dataset"),
+        name: first.member.title || first.member.member_id.replaceAll("_", " "),
+        kind: "semantic",
+        query: { measures: [{ catalog_id: first.entity.catalogId, entity_id: first.entity.entityId, member_id: first.member.member_id }], limit: 1000 },
+      };
+    } else {
+      dataset = { id: newReportId("dataset"), name: `Dataset ${next.datasets.length + 1}`, sql: "SELECT 1 AS value" };
+    }
+    next.datasets.push(dataset);
+    next.updatedAt = Date.now();
+    setDraft(next);
+    setSourceText(exportReportJson(next));
+    setDatasetEditorRequest(dataset.id);
+    setWorkspaceView("datasets");
+  }, [attachedCatalogs, catalogData, draft]);
+
   const resetAgentConversation = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -1591,22 +1692,6 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const prompt = agentPrompt.trim();
     if (!draft || !prompt || agentBusy || engine.lifecycleStatus !== "ready") return;
     const queryMode = normalizeAIQueryMode(settings.aiQueryMode);
-    if (queryMode === "semantic-only") {
-      setAgentConversation((messages) => [...messages,
-        { id: crypto.randomUUID(), role: "user", content: prompt },
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          blocks: [{
-            type: "text",
-            id: crypto.randomUUID(),
-            content: "AI report authoring is unavailable in **Semantic only** mode because report datasets are currently persisted as editable SQL. Choose **Semantic preferred** or **Unrestricted SQL** for report authoring; manual report editing remains available.",
-          }],
-        },
-      ]);
-      setAgentPrompt("");
-      return;
-    }
     if (!settings.anthropicApiKey) {
       setAgentConversation((messages) => [...messages, {
         id: crypto.randomUUID(),
@@ -1763,14 +1848,16 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         narrativeErrors,
       }, charts.feedback);
     };
-    const semanticPreference = queryMode === "semantic-preferred"
-      ? "When requested measures and dimensions are modeled, call query_semantic_model first to validate the governed query shape. Use SQL-backed report datasets only where persistence requires them or the requested operation is genuinely unmodeled; never silently treat a semantic diagnostic as permission to change the requested meaning.\n\n"
-      : "";
+    const semanticPreference = queryMode === "semantic-only"
+      ? "Semantic-only mode is active. Create only kind=semantic report datasets and persist their governed query object. You may leave existing SQL datasets untouched, but you must not create, revise, preview, or attach new blocks to them. Never fall back to SQL after a semantic diagnostic.\n\n"
+      : queryMode === "semantic-preferred"
+        ? "When requested measures and dimensions are modeled, create a kind=semantic report dataset that persists the governed request. Use a SQL dataset only when the operation is genuinely unmodeled and explain that fallback; never silently treat a semantic diagnostic as permission to change the requested meaning.\n\n"
+        : "Semantic report datasets are available. Prefer them when governed definitions make the result clearer or safer; SQL datasets remain available.\n\n";
     const system: SystemPrompt = [{ text: `You are Cupola's report-authoring agent. Build and revise a declarative, rerunnable report. Never add JavaScript.
 
 ${semanticPreference}
 
-Use a compositional workflow: (1) inspect tables, (2) call plan_report with the concrete work and acceptance criteria for this turn, (3) call configure_report, (4) create any meaningful visual sections with upsert_report_group, (5) call upsert_report_dataset for one dataset and fix its SQL before continuing, (6) call upsert_report_block for one block and fix any compile/render error before continuing, and (7) call finalize_report. Do not mutate the report before plan_report succeeds. Tool results include a checkpoint showing planned versus completed work. Do not finish until finalize_report returns ok=true. Prefer these tools over replace_report_draft.
+Use a compositional workflow: (1) inspect the available business model or tables, (2) call plan_report with the concrete work and acceptance criteria for this turn, (3) call configure_report, (4) create any meaningful visual sections with upsert_report_group, (5) call upsert_report_dataset for one dataset and fix its semantic diagnostic or SQL error before continuing, (6) call upsert_report_block for one block and fix any compile/render error before continuing, and (7) call finalize_report. Do not mutate the report before plan_report succeeds. Tool results include a checkpoint showing planned versus completed work. Do not finish until finalize_report returns ok=true. Prefer these tools over replace_report_draft.
 
 Treat rate limits and temporary service failures as infrastructure conditions, not evidence that SQL or a visualization is wrong. If a tool returns transient=true or reports HTTP 429/rate limiting, do not rewrite the affected dataset or block and do not repeatedly call the service. Keep the composed draft, continue work that does not require another live request, and tell the user that live-data validation is delayed.
 
@@ -1822,6 +1909,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
           return executeSemanticQuery(catalogs, input, { query: engine.query, queryPrepared: engine.queryPrepared ?? undefined, resultCache: resultCache.current });
         }
         if (name === "preview_sql") {
+          if (queryMode === "semantic-only") return toolResult({ ok: false, code: "ai_query_mode_tool_denied", message: "SQL preview is unavailable in semantic-only mode." });
           const errors = validateReadOnlySql(String(input.sql ?? "")); if (errors.length) throw new Error(errors.join(" "));
           if (!engine.query) throw new Error("DuckDB is not ready.");
           return executeRunSql(input.sql, { query: engine.query, resultCache: resultCache.current });
@@ -1864,12 +1952,23 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
           return toolResult({ ok: true, groupId: updated.group.id, message: "Group created. Set this groupId on every related report block.", checkpoint: checkpointReportAgentPlan(agentPlan!, updated.report) });
         }
         if (name === "upsert_report_dataset") {
+          if (queryMode === "semantic-only" && input.dataset?.kind !== "semantic") {
+            return toolResult(reportAgentRepair("dataset", "SQL dataset", ["Semantic-only mode permits only kind=semantic datasets."], "upsert_report_dataset"));
+          }
           const updated = upsertAgentDataset(workingReport, input.dataset ?? {});
           const errors = validateReport(updated.report);
           if (errors.length) return toolResult({ ...reportAgentRepair("dataset", `dataset ${updated.dataset.id}`, errors, "upsert_report_dataset"), datasetId: updated.dataset.id });
           applyWorkingReport(updated.report);
           const execution = await runDatasets(workingReport, defaultValues(workingReport), new Set([updated.dataset.id]), workingRows);
           const result = execution.find((candidate) => candidate.datasetId === updated.dataset.id);
+          const governedDataset = updated.report.datasets.find((candidate) => candidate.id === updated.dataset.id);
+          if (result?.ok && governedDataset && isSemanticReportDataset(governedDataset) && !governedDataset.acceptedModelFingerprint) {
+            const prepared = await prepareSemanticReportDataset(governedDataset, updated.report, defaultValues(updated.report), catalogs);
+            if (prepared.compilation.ok && prepared.fingerprint) {
+              governedDataset.acceptedModelFingerprint = prepared.fingerprint;
+              applyWorkingReport(updated.report);
+            }
+          }
           const transient = Boolean(result?.retryable);
           setAgentSummary(result?.ok ? `${updated.dataset.name} loaded.` : transient ? `${updated.dataset.name} validation was delayed by its data source.` : `${updated.dataset.name} needs correction.`);
           return toolResult({
@@ -1890,6 +1989,11 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
         }
         if (name === "upsert_report_block") {
           const updated = upsertAgentBlock(workingReport, input.block ?? {}, input.width as SemanticBlockWidth | undefined, input.height as SemanticBlockHeight | undefined);
+          const updatedBlockDatasetId = "datasetId" in updated.block ? updated.block.datasetId : undefined;
+          const blockDataset = updatedBlockDatasetId ? updated.report.datasets.find((dataset) => dataset.id === updatedBlockDatasetId) : undefined;
+          if (queryMode === "semantic-only" && blockDataset && !isSemanticReportDataset(blockDataset)) {
+            return toolResult(reportAgentRepair("block", `block ${updated.block.id}`, ["Semantic-only mode cannot attach a new or revised block to an SQL dataset."], "upsert_report_block"));
+          }
           const sanitized = sanitizeReportChartSpecs(updated.report);
           const errors = [...sanitized.errors, ...validateReport(sanitized.report)];
           if (errors.length) return toolResult({ ...reportAgentRepair("block", `block ${updated.block.id}`, errors, "upsert_report_block"), blockId: updated.block.id });
@@ -1985,7 +2089,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
         },
         onRetry: (message) => showThinking(message ? message.replace("...", "") : "Thinking"),
         onError: showError,
-      }, controller.signal, settings.aiMaxToolRounds ?? 20, REPORT_TOOLS, settings.aiMaxTokens ?? DEFAULT_AI_MAX_TOKENS, "usage");
+      }, controller.signal, settings.aiMaxToolRounds ?? 20, toolsForAIQueryMode(REPORT_TOOLS, queryMode), settings.aiMaxTokens ?? DEFAULT_AI_MAX_TOKENS, "usage");
     } catch (e) {
       if ((e as any)?.name !== "AbortError" && !errorShown) showError(e instanceof Error ? e.message : String(e));
       removeThinking();
@@ -2051,6 +2155,8 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
   const groupBoxes = reportGroupBoxes(report.groups ?? [], report.blocks, activeLayout, width, width >= 768 ? 12 : 1);
   const engineReady = engineLifecycle.status === "ready";
   const reportRunning = engineWaiting || Object.values(results).some(isDatasetPending) || Object.values(narrativeStates).some((state) => state.status === "running");
+  const governedDatasetCount = report.datasets.filter(isSemanticReportDataset).length;
+  const changedSemanticDatasets = report.datasets.filter((dataset) => isSemanticReportDataset(dataset) && results[dataset.id]?.semantic?.modelChanged);
   const reportFetchedAt = reportRunning ? 0 : Math.max(0, ...report.datasets.filter((dataset) => dataset.role !== "parameter_options" && dataset.role !== "parameter_validation").map((dataset) => results[dataset.id]?.fetchedAt ?? 0));
   const progressLabel = runProgress
     ? `${runProgress.mode === "refresh" ? "Refreshing" : "Loading"} ${runProgress.completed} of ${runProgress.total} datasets`
@@ -2062,6 +2168,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
         <Input aria-label="Report title" className="h-8 min-w-40 flex-1 font-medium sm:max-w-sm" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
         <span data-testid="report-save-status" className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${dirty ? "bg-amber-500/10 text-amber-800 dark:text-amber-200" : "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200"}`}>{published ? (dirty ? "Unsaved changes" : "Saved") : (dirty ? "Draft · Unsaved" : "Draft · Saved")}</span>
+        {governedDatasetCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-800 dark:text-emerald-200"><ShieldCheck className="h-3 w-3" />{governedDatasetCount} governed</span>}
         {published && <div role="group" aria-label="Report mode" className="inline-flex shrink-0 rounded-md border bg-muted/20 p-0.5 text-[10px]"><span className="rounded bg-background px-2 py-1 font-medium shadow-sm">Draft</span><button type="button" className="rounded px-2 py-1 text-muted-foreground hover:text-foreground" onClick={() => { if (discardBlockEditor() && discardDatasetEditor()) switchReportMode("reader"); }}>Published</button></div>}
         {(reportFetchedAt > 0 || draft.refreshIntervalSeconds) && <span className="hidden shrink-0 items-center gap-1 text-[10px] text-muted-foreground lg:inline-flex" title={reportFetchedAt ? new Date(reportFetchedAt).toLocaleString() : undefined}>{reportFetchedAt > 0 && <><Clock3 className="h-3 w-3" /><span data-testid="report-as-of">{freshnessLabel(reportFetchedAt)}</span></>}{reportFetchedAt > 0 && draft.refreshIntervalSeconds ? <span>·</span> : null}{draft.refreshIntervalSeconds ? <span>Auto · {refreshChoices.find((choice) => choice.value === draft.refreshIntervalSeconds)?.label.replace(/^Every /, "") ?? `${draft.refreshIntervalSeconds}s`}</span> : null}</span>}
       </div>
@@ -2082,7 +2189,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
       </div>
     </div> : <div className="flex flex-wrap items-center gap-3 border-b bg-card px-4 py-3">
       <Button size="sm" variant="ghost" className="shrink-0" onClick={() => { runGeneration.current += 1; setRunProgress(null); setDraft(null); setSelected(null); setPublished(null); setReaderMode(false); setResults({}); }}><ArrowLeft className="h-4 w-4" /> Reports</Button>
-      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h1 className="truncate text-base font-semibold">{report.title}</h1><span className="shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700">Published</span></div><p className="truncate text-[10px] text-muted-foreground" title={reportFetchedAt ? new Date(reportFetchedAt).toLocaleString() : undefined}>{publishedAt ? `Published ${new Date(publishedAt).toLocaleString()}` : "Published report"}{reportFetchedAt > 0 ? ` · ${freshnessLabel(reportFetchedAt)}` : ""}{report.refreshIntervalSeconds ? ` · Auto ${report.refreshIntervalSeconds}s` : ""}</p></div>
+      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h1 className="truncate text-base font-semibold">{report.title}</h1><span className="shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700">Published</span>{governedDatasetCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-800 dark:text-emerald-200"><ShieldCheck className="h-3 w-3" />{governedDatasetCount} governed</span>}</div><p className="truncate text-[10px] text-muted-foreground" title={reportFetchedAt ? new Date(reportFetchedAt).toLocaleString() : undefined}>{publishedAt ? `Published ${new Date(publishedAt).toLocaleString()}` : "Published report"}{reportFetchedAt > 0 ? ` · ${freshnessLabel(reportFetchedAt)}` : ""}{report.refreshIntervalSeconds ? ` · Auto ${report.refreshIntervalSeconds}s` : ""}</p></div>
       <div className="flex w-full items-center justify-end gap-1 sm:gap-2 md:w-auto">
         <ReportRunControl reader running={reportRunning} disabled={reportErrors.length > 0 || reportRunning || !engineReady} label={engineWaiting ? "Preparing…" : progressLabel ?? "Refresh"} interval={report.refreshIntervalSeconds} onRun={runFullReport} onIntervalChange={(seconds) => setPublished((current) => {
           if (!current) return current;
@@ -2125,7 +2232,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
         <div className="h-full bg-primary transition-[width] duration-200" style={{ width: `${(runProgress.completed / runProgress.total) * 100}%` }} />
       </div>
     </div>}
-    {(!isCompatible(report) || reportErrors.length > 0 || shareStatus || (!readerMode && agentSummary)) && <div className="px-4 py-2 border-b text-xs space-y-1">{!isCompatible(report) && <div className="text-amber-700">Missing required catalogs: {report.requiredSources.filter((s) => !compatibleCatalogs.has(s.catalog)).map((s) => s.catalog).join(", ")}</div>}{reportErrors.length > 0 && <div className="text-destructive">{reportErrors.join(" ")}</div>}{shareStatus && <div>{shareStatus}</div>}{!readerMode && agentSummary && <div className="text-primary"><Check className="inline h-3 w-3 mr-1" />Agent draft: {agentSummary}</div>}</div>}
+    {(!isCompatible(report) || reportErrors.length > 0 || changedSemanticDatasets.length > 0 || shareStatus || (!readerMode && agentSummary)) && <div className="px-4 py-2 border-b text-xs space-y-1">{!isCompatible(report) && <div className="text-amber-700">Missing required catalogs: {report.requiredSources.filter((s) => !compatibleCatalogs.has(s.catalog)).map((s) => s.catalog).join(", ")}</div>}{reportErrors.length > 0 && <div className="text-destructive">{reportErrors.join(" ")}</div>}{changedSemanticDatasets.length > 0 && <div data-testid="report-semantic-model-drift" className="text-amber-700 dark:text-amber-300">The governed model changed for {changedSemanticDatasets.map((dataset) => dataset.name).join(", ")}. Current definitions compiled successfully; review and accept them from Datasets.</div>}{shareStatus && <div>{shareStatus}</div>}{!readerMode && agentSummary && <div className="text-primary"><Check className="inline h-3 w-3 mr-1" />Agent draft: {agentSummary}</div>}</div>}
     {runFailureNotice && <div data-testid="report-run-failure" role="alert" className="border-b border-amber-300/70 bg-amber-50/80 px-4 py-3 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
       <div className="font-semibold">{runFailureNotice.title}</div>
       <div className="mt-0.5">{runFailureNotice.message}</div>
@@ -2175,6 +2282,9 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
           onTestDataset={testReportDataset}
           onApplyDataset={applyReportDataset}
           onDeleteDataset={removeReportDataset}
+          onAcceptSemanticModel={acceptSemanticModel}
+          catalogs={[catalogData, ...(attachedCatalogs ?? []), ...(ui.memoryCatalog ? [ui.memoryCatalog] : [])]}
+          onAddDataset={addReportDataset}
           onDirtyChange={setDatasetEditorDirty}
           onRunDataset={(datasetId) => {
             const existing = results[datasetId];
@@ -2329,6 +2439,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
               {!showBlockHeader && resolvedAppearance.label && <div data-testid={`report-block-status-${block.id}`} title={resolvedAppearance.label} className="absolute right-2 top-2 z-10 inline-flex max-w-[60%] items-center gap-1.5 rounded-full border border-current/15 bg-background/75 px-2 py-0.5 text-[10px] font-medium"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${appearanceStyle.dot}`} /><span className="truncate">{resolvedAppearance.label}</span></div>}
               {!readerMode && !showBlockHeader && <div className={`report-authoring-control absolute right-1 top-1 z-20 flex items-center rounded-md border bg-background/90 shadow-sm transition-opacity group-focus-within:opacity-100 ${selectedForEditing ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`} onMouseDown={(event) => event.stopPropagation()}><button type="button" className="rounded px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`Edit ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); openBlockEditor(block); }}>Edit</button><button type="button" className="rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`Ask AI about ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); openTargetedAgent(); }}>AI</button><button type="button" className="rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`Duplicate ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); copyBlock(block); }}>Copy</button><button type="button" className="rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label={`Delete ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); removeBlock(block); }}>×</button><div data-testid={`report-block-drag-${block.id}`} title="Drag text block" className="report-drag-handle cursor-move rounded p-1 text-muted-foreground/50 hover:bg-muted hover:text-foreground"><GripVertical className="h-3.5 w-3.5" /></div></div>}
               <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={interpolateReportText(block.markdown, report, appliedValues)} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className={result.status === "blocked" ? "text-xs text-amber-700 dark:text-amber-300" : "text-xs text-destructive"}>{result.error}</div>{result.errorDetails && <details className="max-w-full text-left text-[10px] text-muted-foreground"><summary className="cursor-pointer text-center">Technical details</summary><div className="mt-1 max-h-20 overflow-auto font-mono">{result.errorDetails}</div></details>}<Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <ReportKpi block={block} row={result.rows[0]} formatValue={formatKpi} /> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart block={visualBlock} rows={result.rows} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} sql={dataset?.sql} config={block.config} onConfig={(config) => { if (!readerMode) setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current); }} /> : null}</div>
+              {result?.semantic && <details data-testid={`report-semantic-provenance-${block.id}`} className="border-t bg-muted/15 px-3 py-1.5 text-[10px] text-muted-foreground"><summary className="cursor-pointer font-medium text-emerald-700 dark:text-emerald-300">How this governed calculation was made{Object.values(result.semantic.plan.output_units ?? {}).some(Boolean) ? ` · ${Object.entries(result.semantic.plan.output_units ?? {}).filter(([, unit]) => unit).map(([name, unit]) => `${name}: ${unit}`).join(", ")}` : ""}</summary><div className="mt-2 space-y-1"><div><span className="font-medium text-foreground">Dataset:</span> {dataset?.name}</div><div><span className="font-medium text-foreground">Grain:</span> {(result.semantic.plan.stitch?.result_grain ?? result.semantic.plan.fact_branches[0]?.result_grain ?? []).join(", ") || "single result"}</div><div><span className="font-medium text-foreground">Sources:</span> {result.semantic.plan.fact_branches.map((branch) => `${branch.root.catalog_id}/${branch.root.entity_id}`).join(", ")}</div>{result.semantic.plan.warnings.length > 0 && <div className="text-amber-700 dark:text-amber-300">{result.semantic.plan.warnings.join(" ")}</div>}<details><summary className="cursor-pointer">Generated SQL</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded border bg-background p-2 font-mono">{result.semantic.plan.sql}</pre></details></div></details>}
               {(block.caption || block.source) && <div data-testid={`report-note-${block.id}`} className="px-3 pb-2 text-[10px] leading-snug text-muted-foreground">
                 {block.caption && <span>{interpolateReportText(block.caption, report, appliedValues)}</span>}{block.caption && block.source && <span> · </span>}{block.source && <span>Source: {interpolateReportText(block.source, report, appliedValues)}</span>}
               </div>}

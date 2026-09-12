@@ -10,7 +10,7 @@ export type AIQueryMode = (typeof AI_QUERY_MODES)[number];
  * explicitly chooses a more restrictive mode. */
 export const DEFAULT_AI_QUERY_MODE: AIQueryMode = "unrestricted-sql";
 
-const RAW_SQL_TOOLS = new Set(["run_sql", "render_chart"]);
+const RAW_SQL_TOOLS = new Set(["run_sql", "render_chart", "preview_sql"]);
 
 export function normalizeAIQueryMode(value: unknown): AIQueryMode {
   return typeof value === "string" && (AI_QUERY_MODES as readonly string[]).includes(value)

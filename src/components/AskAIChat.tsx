@@ -341,7 +341,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
           );
           updateBlocks(blocks);
         };
-        return executeSemanticQuery(catalogs, input, {
+        const output = await executeSemanticQuery(catalogs, input, {
           query: (sql) => withAbort(queryFn(sql), signal),
           queryPrepared: engine.queryPrepared ? (sql, params) => withAbort(engine.queryPrepared!(sql, params), signal) : undefined,
           resultCache: resultCacheRef.current,
@@ -359,6 +359,15 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
             ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: out.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion });
           },
         });
+        try {
+          const parsed = JSON.parse(output);
+          pendingDisplayResult = {
+            ...pendingDisplayResult,
+            semanticPlan: parsed.plan,
+            semanticDiagnostics: parsed.diagnostics,
+          };
+        } catch {}
+        return output;
       }
       if (name === "run_sql") {
         const queryFn = engine.query;

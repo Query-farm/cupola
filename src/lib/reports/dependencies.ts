@@ -1,4 +1,4 @@
-import type { ReportDataset } from "./types";
+import { isSemanticReportDataset, type ReportDataset } from "./types";
 
 export interface ReportDatasetExecutionPlan {
   /** Selected datasets in dependency-first order. */
@@ -30,11 +30,15 @@ function datasetKey(id: string): string {
 export async function inferReportDatasetDependencies(
   datasets: ReportDataset[],
   parseTableNames: ReportTableNameParser,
-  sqlForDataset: (dataset: ReportDataset) => string = (dataset) => dataset.sql,
+  sqlForDataset: (dataset: ReportDataset) => string = (dataset) => isSemanticReportDataset(dataset) ? "SELECT 1" : dataset.sql,
 ): Promise<Map<string, Set<string>>> {
   const byKey = new Map(datasets.map((dataset) => [datasetKey(dataset.id), dataset.id]));
   const dependencies = new Map<string, Set<string>>();
   for (const dataset of datasets) {
+    if (isSemanticReportDataset(dataset)) {
+      dependencies.set(dataset.id, new Set());
+      continue;
+    }
     const refs = await parseTableNames(sqlForDataset(dataset));
     const ownKey = datasetKey(dataset.id);
     const inferred = new Set<string>();

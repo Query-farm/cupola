@@ -3,6 +3,51 @@ import { REPORT_DOCUMENT_SCHEMA, REPORT_TOOLS, upsertAgentBlock, upsertAgentData
 import { createEmptyReport } from "../../src/lib/reports/types";
 
 describe("report agent tools", () => {
+  test("converts datasets between SQL and governed intent without retaining the opposite source", () => {
+    const report = createEmptyReport("Conversion");
+    const sql = upsertAgentDataset(report, { id: "metrics", name: "Metrics", sql: "SELECT 1 AS value" });
+    const semantic = upsertAgentDataset(sql.report, {
+      id: "metrics",
+      name: "Metrics",
+      kind: "semantic",
+      query: { measures: [{ catalog_id: "com.example", entity_id: "facts", member_id: "value" }] },
+    });
+    expect(semantic.dataset.kind).toBe("semantic");
+    expect((semantic.dataset as any).sql).toBeUndefined();
+
+    const converted = upsertAgentDataset(semantic.report, { id: "metrics", name: "Metrics", kind: "sql", sql: "SELECT 2 AS value" });
+    expect(converted.dataset.kind).toBe("sql");
+    expect((converted.dataset as any).query).toBeUndefined();
+  });
+
+  test("keeps the semantic model fingerprint under Cupola control", () => {
+    const report = createEmptyReport("Managed fingerprint");
+    const supplied = `sha256:${"a".repeat(64)}`;
+    const created = upsertAgentDataset(report, {
+      name: "Metrics",
+      kind: "semantic",
+      query: { measures: [{ catalog_id: "com.example", entity_id: "facts", member_id: "value" }] },
+      acceptedModelFingerprint: supplied,
+    });
+    expect((created.dataset as any).acceptedModelFingerprint).toBeUndefined();
+
+    const baseline = `sha256:${"b".repeat(64)}`;
+    const reportWithBaseline = {
+      ...created.report,
+      datasets: [{ ...created.dataset, acceptedModelFingerprint: baseline }],
+    };
+    const updated = upsertAgentDataset(reportWithBaseline, {
+      id: created.dataset.id,
+      name: "Metrics",
+      kind: "semantic",
+      query: { measures: [{ catalog_id: "com.example", entity_id: "facts", member_id: "count" }] },
+      acceptedModelFingerprint: supplied,
+    });
+    expect((updated.dataset as any).acceptedModelFingerprint).toBe(baseline);
+
+    const tool = REPORT_TOOLS.find((candidate) => candidate.name === "upsert_report_dataset")!;
+    expect(tool.input_schema.properties.dataset.properties.acceptedModelFingerprint).toBeUndefined();
+  });
   test("requires a structured plan before compositional authoring", () => {
     const plan = REPORT_TOOLS.find((candidate) => candidate.name === "plan_report")!;
     expect(REPORT_TOOLS[0].name).toBe("plan_report");

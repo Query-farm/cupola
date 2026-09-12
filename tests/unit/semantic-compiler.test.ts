@@ -1085,6 +1085,17 @@ describe("semantic model compiler", () => {
       'INNER JOIN "crm_runtime"."main"."customers" AS _e1',
     );
     expect(result.plan.sql).toContain('SUM(_e0."amount") AS "revenue"');
+    expect(result.plan.outputs?.map((output) => [output.name, output.kind])).toEqual([
+      ["country", "dimension"],
+      ["revenue", "measure"],
+    ]);
+    expect(result.plan.model_dependencies).toEqual({
+      entities: [
+        { catalog_id: "com.example.crm", entity_id: "customers" },
+        { catalog_id: "com.example.sales", entity_id: "orders" },
+      ],
+      relationships: ["com.example.order_customer"],
+    });
   });
 
   test("compiles typed spatial and repeated-field relationship predicates", () => {
@@ -1445,6 +1456,12 @@ describe("semantic model compiler", () => {
     expect(result.plan.stitch?.derived_measures).toEqual([
       { name: "revenue_per_customer", output_type: "DECIMAL(18,2)" },
     ]);
+    expect(result.plan.outputs?.at(-1)).toEqual({
+      name: "revenue_per_customer",
+      kind: "derived_measure",
+      data_type: "DECIMAL(18,2)",
+      unit: "USD/customer",
+    });
 
     const missingPolicy = structuredClone(request);
     delete missingPolicy.measures?.[0].missing_fact_value;

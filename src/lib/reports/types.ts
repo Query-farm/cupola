@@ -72,12 +72,43 @@ export interface ReportParameter {
     | { kind: "dataset"; datasetId: string; valueColumn: string; labelColumn?: string };
 }
 
-export interface ReportDataset {
+export interface ReportDatasetBase {
   id: string;
   name: string;
-  sql: string;
   description?: string;
   role?: "data" | "parameter_options" | "parameter_validation";
+}
+
+/** Existing reports omit kind; that remains the canonical legacy SQL shape. */
+export interface ReportSqlDataset extends ReportDatasetBase {
+  kind?: "sql";
+  sql: string;
+  query?: never;
+  acceptedModelFingerprint?: never;
+}
+
+export interface ReportSemanticParameterRef {
+  report_parameter: string;
+  part?: "start" | "end";
+}
+
+/** A semantic compiler request with tagged report-parameter values. The tags
+ * are resolved before the public compiler sees the request. */
+export type ReportSemanticQueryTemplate = Record<string, any>;
+
+export interface ReportSemanticDataset extends ReportDatasetBase {
+  kind: "semantic";
+  query: ReportSemanticQueryTemplate;
+  sql?: never;
+  /** Fingerprint accepted by the author. A mismatch is visible but does not
+   * suppress a successful refresh. */
+  acceptedModelFingerprint?: string;
+}
+
+export type ReportDataset = ReportSqlDataset | ReportSemanticDataset;
+
+export function isSemanticReportDataset(dataset: ReportDataset): dataset is ReportSemanticDataset {
+  return dataset.kind === "semantic";
 }
 
 export interface ReportLayout {

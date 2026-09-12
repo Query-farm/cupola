@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { tableFromArrays } from "@query-farm/apache-arrow";
 import { ReportDatasetsView } from "../../src/components/reports/ReportDatasetsView";
 import type { ReportDocumentV1 } from "../../src/lib/reports/types";
+import type { CatalogData } from "../../src/lib/service";
 
 beforeAll(() => GlobalRegistrator.register());
 afterEach(cleanup);
@@ -26,6 +27,30 @@ const report: ReportDocumentV1 = {
     { id: "city-kpi", type: "kpi", datasetId: "conditions", title: "Selected city", valueColumn: "city", layout: { x: 0, y: 0, w: 4, h: 2 } },
     { id: "city-table", type: "table", datasetId: "conditions", title: "Conditions", layout: { x: 4, y: 0, w: 8, h: 3 } },
   ],
+};
+
+const governedCatalog: CatalogData = {
+  catalogName: "weather",
+  catalogComment: null,
+  catalogTags: { "vgi.semantic_catalog": JSON.stringify({ catalog_id: "farm.query.weather" }) },
+  defaultSchema: "main",
+  schemas: [{
+    info: { name: "main", comment: null, tags: {} } as any,
+    tables: [], views: [], macros: [],
+    functions: [{
+      name: "forecast",
+      schema_name: "main",
+      function_type: "TABLE",
+      input_from_args: false,
+      _functionArgsDetailed: true,
+      _functionArgs: [{ name: "temperature_unit", arrowType: "VARCHAR", duckdbType: "VARCHAR", nullable: true, named: true, positional: false, fieldIndex: 0, isTableInput: false, isAnyType: false, isVarargs: false, isConst: false, defaultValue: "celsius", choices: ["celsius", "fahrenheit"] }],
+      _functionReturn: { isTable: true, columns: [{ name: "location_id", arrowType: "VARCHAR", duckdbType: "VARCHAR", nullable: false }, { name: "temperature", arrowType: "DOUBLE", duckdbType: "DOUBLE", nullable: false }] },
+      tags: {
+        "vgi.semantic_entity": JSON.stringify({ entity_id: "forecast", grain: ["location_id"], source: { arguments: [{ argument: "temperature_unit", parameter: "temperature_unit" }] } }),
+        "vgi.semantic_members": JSON.stringify([{ member_id: "location_id", kind: "identifier", column: "location_id" }, { member_id: "temperature", kind: "dimension", column: "temperature", data_type: "DOUBLE", hidden: true, unit_parameter: { argument: "temperature_unit", values: { celsius: "Cel", fahrenheit: "[degF]" } } }, { member_id: "average_temperature", kind: "measure", title: "Average temperature", aggregation: "avg", member: "temperature", additivity: "non_additive" }]),
+      },
+    } as any],
+  }],
 };
 
 describe("report dataset browser", () => {
@@ -91,6 +116,82 @@ describe("report dataset browser", () => {
     const humidity = view.getByTestId("report-dataset-schema-row-humidity");
     expect(humidity.textContent).toContain("DOUBLE");
     expect(humidity.textContent).not.toContain("Float64");
+  });
+
+  test("surfaces governed units, generated SQL, and model drift", () => {
+    const semanticReport: ReportDocumentV1 = {
+      ...report,
+      datasets: [{
+        id: "conditions",
+        name: "Average temperature",
+        kind: "semantic",
+        acceptedModelFingerprint: `sha256:${"1".repeat(64)}`,
+        query: { measures: [{ catalog_id: "farm.query.weather", entity_id: "forecast", member_id: "average_temperature" }] },
+      }],
+      blocks: [],
+    };
+    const table = tableFromArrays({ average_temperature: [20] });
+    const accept = mock(() => {});
+    const view = render(<ReportDatasetsView
+      report={semanticReport}
+      results={{ conditions: {
+        table,
+        rows: [{ average_temperature: 20 }],
+        status: "success",
+        semantic: {
+          fingerprint: `sha256:${"2".repeat(64)}`,
+          modelChanged: true,
+          plan: {
+            fact_branches: [{ root: { catalog_id: "farm.query.weather", entity_id: "forecast" }, attachment_alias: "weather", entities: ["farm.query.weather::forecast"], invocations: [], effective_source_grain: [], result_grain: [], estimated_invocations: 1, driving_grain_reduced: false }],
+            sql: "SELECT avg(temperature) AS average_temperature FROM weather.main.forecast",
+            parameters: [],
+            validation_scope: "semantic",
+            warnings: [],
+            output_units: { average_temperature: "Cel" },
+          },
+        },
+      } }}
+      appliedValues={{}}
+      running={false}
+      engineReady
+      canEdit
+      onRunDataset={() => {}}
+      onOpenSql={() => {}}
+      onAcceptSemanticModel={accept}
+    />);
+
+    expect(view.getByTestId("report-semantic-summary").textContent).toContain("average_temperature");
+    expect(view.getByTestId("report-dataset-schema-row-average_temperature").textContent).toContain("Cel");
+    expect(view.getByTestId("report-dataset-sql").textContent).toContain("SELECT avg");
+    expect(view.getByTestId("report-semantic-model-changed")).toBeTruthy();
+    fireEvent.click(view.getByRole("button", { name: "Accept current model" }));
+    expect(accept).toHaveBeenCalledWith("conditions", `sha256:${"2".repeat(64)}`);
+  });
+
+  test("offers guided governed fields, function parameters, and advanced JSON", () => {
+    const semanticReport: ReportDocumentV1 = {
+      ...report,
+      datasets: [{ id: "conditions", name: "Temperature", kind: "semantic", query: { measures: [{ catalog_id: "farm.query.weather", entity_id: "forecast", member_id: "average_temperature" }] } }],
+      blocks: [],
+    };
+    const view = render(<ReportDatasetsView
+      report={semanticReport}
+      results={{}}
+      appliedValues={{}}
+      running={false}
+      engineReady
+      canEdit
+      catalogs={[governedCatalog]}
+      onRunDataset={() => {}}
+      onOpenSql={() => {}}
+    />);
+    fireEvent.click(view.getByTestId("report-edit-dataset"));
+    expect(view.getByTestId("report-semantic-builder").textContent).toContain("Average temperature");
+    expect(view.getByText("Function parameters")).toBeTruthy();
+    expect(view.getByText(/default celsius/)).toBeTruthy();
+    fireEvent.click(view.getByText("Advanced semantic JSON"));
+    const editor = view.getByTestId("report-dataset-semantic-editor") as HTMLTextAreaElement;
+    expect(editor.value).toContain("average_temperature");
   });
 
   test("only enables dataset deletion when no report block uses it", () => {

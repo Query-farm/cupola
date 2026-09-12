@@ -262,7 +262,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
           blocks = blocks.map((b) => (b.type === "tool_call" && b.toolCall.isExecuting ? { ...b, toolCall: { ...b.toolCall, progress: pct } } : b));
           updateBlocks(blocks);
         };
-        return executeSemanticQuery(catalogs, input, {
+        const output = await executeSemanticQuery(catalogs, input, {
           query: (sql) => withAbort(queryFn(sql), signal),
           queryPrepared: engine.queryPrepared ? (sql, params) => withAbort(engine.queryPrepared!(sql, params), signal) : undefined,
           resultCache: c.resultCache,
@@ -282,6 +282,11 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
             setGrid({ running: false, ok: true, error: null, table: out.table, sourceSql: out.sql, rowCount: out.table.numRows, elapsedMs: out.elapsedMs, ran: true });
           },
         });
+        try {
+          const parsed = JSON.parse(output);
+          pendingDisplayResult = { ...pendingDisplayResult, semanticPlan: parsed.plan, semanticDiagnostics: parsed.diagnostics };
+        } catch {}
+        return output;
       }
       if (name === "run_sql") {
         const queryFn = engine.query;

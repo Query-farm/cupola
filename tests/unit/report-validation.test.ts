@@ -48,6 +48,27 @@ describe("report document validation", () => {
     expect(validateReport(report).join(" ")).toContain("unknown parameter $unknown");
   });
 
+  test("accepts semantic datasets and validates their report parameter bindings", () => {
+    const report = createEmptyReport("Governed revenue");
+    report.parameters.push({ id: "period", key: "period", label: "Period", type: "date_range", defaultValue: { start: "2026-01-01", end: "2026-01-31" } });
+    report.datasets.push({
+      id: "revenue",
+      name: "Revenue",
+      kind: "semantic",
+      query: {
+        measures: [{ catalog_id: "com.example.sales", entity_id: "orders", member_id: "revenue" }],
+        filters: { member: { catalog_id: "com.example.sales", entity_id: "orders", member_id: "ordered_at" }, operator: "gte", value: { report_parameter: "period", part: "start" } },
+      },
+    });
+    expect(validateReport(report)).toEqual([]);
+
+    (report.datasets[0] as any).sql = "SELECT 1";
+    expect(validateReport(report).join(" ")).toContain("sql is not allowed");
+    delete (report.datasets[0] as any).sql;
+    (report.datasets[0] as any).query.filters.value = { report_parameter: "period" };
+    expect(validateReport(report).join(" ")).toContain("requires part start or end");
+  });
+
   test("requires validation datasets to use the dedicated role", () => {
     const report = createEmptyReport("Inventory");
     report.parameters.push({ id: "sku", key: "sku", label: "SKU", type: "text", defaultValue: "A1", validationDataset: { datasetId: "validate_sku", validColumn: "valid", messageColumn: "message" } });

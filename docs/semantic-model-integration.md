@@ -15,6 +15,13 @@ casts, ambiguous bindings, invalid invocation dataflow, and incompatible branch 
 deterministic plan contains one independently aggregated `fact_branches` element per root and
 positional parameters.
 
+Plans also expose additive `outputs` metadata in result-column order and stable
+`model_dependencies` for the entities and business relationships actually used. Output entries
+carry the selected member identity, author-facing title/description, known type, and resolved unit;
+derived query measures have no model member identity. Stable dependencies omit runtime attachment
+aliases, allowing reports to explain and fingerprint model intent without parsing generated SQL.
+Both fields are optional for compatibility with plans produced by older compilers.
+
 Multi-fact requests normally use one exact stable dimension identity safely reachable from every
 root. A dimension's `branch_relationship_paths` may
 override its ordinary path separately for named roots. After aggregating, the compiler builds the
@@ -127,8 +134,75 @@ vendored as `vgi-semantic-conformance.json`. The tag sync script copies those ve
 `vgi-lint-check`; tests compare SQL, parameter order, result grain, unit metadata, and diagnostic
 codes so compiler drift becomes a deterministic test failure.
 
-Reports remain SQL-backed. A report agent may use compile-only output as a dataset query, but once a
-user edits or persists that SQL it no longer carries compiler provenance.
+## Governed report datasets
+
+Cupola reports support two dataset kinds without changing report schema version 1. Existing
+datasets that omit `kind` remain editable SQL datasets. A governed dataset persists semantic intent
+instead:
+
+```json
+{
+  "id": "daily-temperature",
+  "name": "Daily average temperature",
+  "kind": "semantic",
+  "query": {
+    "measures": [{
+      "catalog_id": "farm.query.open_meteo",
+      "entity_id": "forecast_hourly",
+      "member_id": "average_temperature_2m"
+    }],
+    "dimensions": [{
+      "catalog_id": "farm.query.open_meteo",
+      "entity_id": "forecast_hourly",
+      "member_id": "time",
+      "granularity": "day"
+    }],
+    "parameters": { "forecast_days": 7 }
+  }
+}
+```
+
+The Datasets view calls these **Governed metrics**. Its guided builder searches modeled measures
+and dimensions, configures time grain, function parameters, report-control bindings, filters,
+sorting, and row limits. Advanced JSON remains available for multi-fact queries, correlated input
+row sets, explicit relationship paths, entity-driven invocations, and derived measures.
+
+Report parameter bindings use a data-only marker anywhere a semantic request accepts a value:
+
+```json
+{ "report_parameter": "temperature_unit" }
+```
+
+Date ranges must select one endpoint with `"part": "start"` or `"part": "end"`. Cupola recursively
+resolves only this closed marker shape, then sends the resulting request through the public semantic
+compiler. The saved query is never rewritten to SQL.
+
+Each refresh recompiles against the currently attached semantic catalogs. Cupola executes only the
+compiler's parameterized SQL through prepared execution; compilation diagnostics stop the dataset
+and never trigger a raw-SQL fallback. A governed dataset used by a downstream SQL dataset is
+materialized with the same prepared values before that consumer runs.
+
+The runtime result retains the complete plan for inspection. Dataset details show generated SQL,
+positional values, result grain, fact branches, warnings, and selected-column physical units.
+Report blocks expose a compact “How this governed calculation was made” disclosure, and units are
+shown beside result columns. The generated SQL is an explanation/debugging artifact, not the saved
+source of truth.
+
+When a governed definition is first tested and applied, or first published, Cupola records a SHA-256
+fingerprint of the normalized entities and relationships actually used by the plan. Attachment
+aliases are excluded so a portable/shared report does not drift merely because a catalog was
+attached under another name. Later successful refreshes continue to use the current model but show
+a visible review warning when that contract fingerprint changes. An author must explicitly accept
+the new baseline. Compiler failures remain failures rather than being mislabeled as model drift.
+
+Ask AI's `query_semantic_model` result can be promoted directly to a report. The promotion persists
+the original semantic request, not the generated SQL. The report agent can also author or revise
+governed datasets. In `semantic-only` mode it may create only governed datasets and cannot preview
+or attach blocks to raw-SQL datasets; the default `unrestricted-sql` mode remains backward
+compatible.
+
+See [Governed report authoring](report-semantic-datasets.md) for the human workflow and document
+contract.
 
 ## AI query access modes
 
@@ -144,7 +218,4 @@ SQL entered manually by a user is never restricted.
   Their dispatchers enforce the same restriction in case stale conversation state requests a tool
   that is no longer advertised. The agent must return the compiler diagnostic or explain the
   missing model concept rather than bypassing the contract.
-
-Report datasets are currently persisted as editable SQL and therefore cannot retain semantic-plan
-provenance. AI report authoring is unavailable in `semantic-only` mode until reports support a
-first-class semantic dataset representation. Manual report editing and execution remain available.
+  Report AI remains available and is restricted to governed datasets under the same policy.
