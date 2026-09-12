@@ -13,6 +13,9 @@ env:
   BUN_VERSION: 1.3.14
   IMAGE_NAME: ghcr.io/query-farm/cupola
   VGI_SERVICE_URL: https://vgi-open-meteo.rusty-bb6.workers.dev
+  # The hosted acceptance worker tracks protocol changes ahead of Cupola's
+  # conservative default extension pin. Exercise the public session override.
+  VGI_VERSION: latest
 
 jobs:
   validate:

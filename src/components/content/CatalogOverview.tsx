@@ -46,7 +46,7 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate
         <Database className="h-8 w-8 text-primary" />
         <div className="mr-auto">
           <h1 className="text-2xl font-bold text-primary">{title || catalog.catalogName}</h1>
-          {title && <p className="text-xs font-mono text-muted-foreground/70">{catalog.catalogName}</p>}
+          {title && <p className="text-xs font-mono text-muted-foreground">{catalog.catalogName}</p>}
           <p className="text-sm text-muted-foreground">
             {catalog.schemas.length} schemas, {totalTables} tables
             {totalViews > 0 && `, ${totalViews} views`}

@@ -13,12 +13,16 @@ export const BASE = `/v${pkg.version}/`;
 // Override with VGI_SERVICE_URL to point the suite at a different VGI server
 // (e.g. a hosted haybarn-backed instance) without editing the suite.
 export const SERVICE_URL = process.env.VGI_SERVICE_URL || "http://localhost:9009";
+// Hosted workers may intentionally move ahead of Cupola's conservative
+// default extension pin. Set this to `latest` (or an exact build) to exercise
+// the same session override supported by public URLs.
+export const VGI_VERSION = process.env.VGI_VERSION;
 // Origin of the app under test. Overridable because astro dev falls back to
 // 4322/4323/... when 4321 is taken; without this the suite would silently aim
 // at whatever else is squatting on 4321 (and playwright's `baseURL` doesn't
 // apply — these specs navigate with absolute URLs).
 export const APP_ORIGIN = process.env.CUPOLA_APP_ORIGIN || "http://localhost:4321";
-export const APP_URL = `${APP_ORIGIN}${BASE}?service=${encodeURIComponent(SERVICE_URL)}`;
+export const APP_URL = `${APP_ORIGIN}${BASE}?service=${encodeURIComponent(SERVICE_URL)}${VGI_VERSION ? `&vgi_version=${encodeURIComponent(VGI_VERSION)}` : ""}`;
 
 // Tight timeouts: prefer fast failure over hanging. The real wait is the very
 // first page load (DuckDB-WASM + catalog fetch) handled in gotoApp().

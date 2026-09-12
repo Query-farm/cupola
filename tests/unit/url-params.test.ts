@@ -42,6 +42,7 @@ const {
   clearSharedSql,
   getServiceUrl,
   getThemeUrl,
+  getVgiExtensionVersionSetting,
 } = await import("../../src/lib/url-params");
 
 beforeEach(() => {
@@ -61,6 +62,39 @@ describe("getters", () => {
     expect(getThemeUrl()).toBe(null);
     currentSearch = "?theme=https%3A%2F%2Fcdn.example.com%2Ft.json";
     expect(getThemeUrl()).toBe("https://cdn.example.com/t.json");
+  });
+
+  test("VGI extension version defaults to Cupola's pin", () => {
+    expect(getVgiExtensionVersionSetting()).toEqual({ value: undefined, source: "default" });
+  });
+
+  test("VGI extension latest and exact choices survive within the tab session", () => {
+    currentSearch = "?vgi_version=latest";
+    expect(getVgiExtensionVersionSetting()).toEqual({ value: null, source: "url" });
+    currentSearch = "";
+    expect(getVgiExtensionVersionSetting()).toEqual({ value: null, source: "session" });
+
+    currentSearch = "?vgi_version=c2f8dbb071";
+    expect(getVgiExtensionVersionSetting()).toEqual({ value: "c2f8dbb071", source: "url" });
+    currentSearch = "";
+    expect(getVgiExtensionVersionSetting()).toEqual({ value: "c2f8dbb071", source: "session" });
+  });
+
+  test("VGI extension default clears the tab override", () => {
+    currentSearch = "?vgi_version=latest";
+    getVgiExtensionVersionSetting();
+    currentSearch = "?vgi_version=default";
+    expect(getVgiExtensionVersionSetting()).toEqual({ value: undefined, source: "url" });
+    currentSearch = "";
+    expect(getVgiExtensionVersionSetting()).toEqual({ value: undefined, source: "default" });
+  });
+
+  test("rejects unsafe VGI extension version tokens", () => {
+    currentSearch = "?vgi_version=bad%27%3BDROP+TABLE+x";
+    const setting = getVgiExtensionVersionSetting();
+    expect(setting.value).toBeUndefined();
+    expect(setting.source).toBe("url");
+    expect(setting.error).toContain("Invalid vgi_version value");
   });
 });
 

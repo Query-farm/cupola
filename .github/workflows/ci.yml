@@ -69,6 +69,7 @@ jobs:
         working-directory: cupola
         env:
           VGI_SERVICE_URL: https://vgi-open-meteo.rusty-bb6.workers.dev
+          VGI_VERSION: latest
         run: bun run test:e2e:smoke
 
       - name: Build self-hosted bundle

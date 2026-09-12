@@ -58,6 +58,27 @@ export const SHELL_EXTENSIONS: readonly DuckDBExtension[] = [
   { name: "autocomplete" },
 ];
 
+/**
+ * Build the startup list for a session-specific VGI version selection.
+ *
+ * `undefined` preserves Cupola's tested default pin, `null` deliberately
+ * omits DuckDB's VERSION clause, and a string selects that exact community
+ * extension build. The immutable exported list remains the default so older
+ * callers and tests keep their existing behavior.
+ */
+export function shellExtensionsForVgiVersion(
+  versionOverride?: string | null,
+): readonly DuckDBExtension[] {
+  const version = versionOverride === undefined
+    ? VGI_EXTENSION_VERSION
+    : versionOverride;
+  return SHELL_EXTENSIONS.map((extension) => {
+    if (extension.name !== "vgi") return extension;
+    const { version: _defaultVersion, ...base } = extension;
+    return version ? { ...base, version } : base;
+  });
+}
+
 /** Build the explicit INSTALL statement used during shell startup. */
 export function extensionInstallSql(extension: DuckDBExtension): string {
   const fromClause = extension.source ? ` FROM ${extension.source}` : "";

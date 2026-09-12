@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { VGI_EXTENSION_VERSION } from "@/lib/duckdb-engine";
+import { extensionInstallSql, shellExtensionsForVgiVersion } from "@/lib/duckdb-engine";
+import { getVgiExtensionVersionSetting } from "@/lib/url-params";
 
 interface Props {
   catalogName: string;
@@ -38,7 +39,10 @@ const LANGS: { id: LangId; label: string }[] = [
  */
 function buildSnippets(catalogName: string, serviceUrl: string, opts: string) {
   const optsFragment = opts ? `, ${opts}` : "";
-  const installVgi = `INSTALL vgi FROM community VERSION '${VGI_EXTENSION_VERSION}'`;
+  const setting = getVgiExtensionVersionSetting();
+  const vgi = shellExtensionsForVgiVersion(setting.error ? undefined : setting.value)
+    .find((extension) => extension.name === "vgi")!;
+  const installVgi = extensionInstallSql(vgi);
   const attach = `ATTACH '${catalogName}' AS ${catalogName} (TYPE vgi, LOCATION '${serviceUrl}'${optsFragment});`;
   // Same statement inside a host-language string literal. The SQL uses single
   // quotes throughout, so double-quoting the host string needs no escaping.

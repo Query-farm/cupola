@@ -15,6 +15,7 @@ import {
   SHELL_EXTENSIONS,
   VGI_EXTENSION_VERSION,
   extensionInstallSql,
+  shellExtensionsForVgiVersion,
   recordExtensionLoaded,
   recordDuckDBVersion,
   getEngineInfo,
@@ -43,6 +44,14 @@ describe("SHELL_EXTENSIONS", () => {
     expect(extensionInstallSql(SHELL_EXTENSIONS.find((e) => e.name === "icu")!)).toBe(
       "INSTALL icu"
     );
+  });
+
+  test("supports a session-specific exact pin or an intentionally unpinned VGI install", () => {
+    const exact = shellExtensionsForVgiVersion("v1.2.3").find((extension) => extension.name === "vgi")!;
+    const latest = shellExtensionsForVgiVersion(null).find((extension) => extension.name === "vgi")!;
+    expect(extensionInstallSql(exact)).toBe("INSTALL vgi FROM community VERSION 'v1.2.3'");
+    expect(extensionInstallSql(latest)).toBe("INSTALL vgi FROM community");
+    expect(SHELL_EXTENSIONS.find((extension) => extension.name === "vgi")?.version).toBe(VGI_EXTENSION_VERSION);
   });
 
   test("includes the extensions other subsystems depend on", () => {

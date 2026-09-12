@@ -20,7 +20,7 @@ import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps }
 import { attachInputHandlers, type CompletionItem } from "./shell-input";
 import { engine, terminal, ui, notifyQueryChange, recordQuery, setBootPhase, setEngineLifecycleError } from "./shell-bridge";
 import { quoteLiteral, quoteIdent } from "./duckdb-query";
-import { SHELL_EXTENSIONS, extensionInstallSql, recordExtensionLoaded } from "./duckdb-engine";
+import { extensionInstallSql, recordExtensionLoaded, shellExtensionsForVgiVersion } from "./duckdb-engine";
 import { QueryResultCache } from "./query-results";
 import { isRecoverableAuthError, isUnrecoverableAuthError } from "./auth-errors";
 import { getOAuthMeta, redirectToAuth } from "./auth";
@@ -28,6 +28,7 @@ import { ensureDuckDB } from "./duckdb-worker-boot";
 import { getTerminalTheme } from "./theme";
 import { type CatalogData } from "./service";
 import { buildTableSelect, isTableRef } from "./sql/table-select";
+import { getVgiExtensionVersionSetting } from "./url-params";
 
 export interface ShellConfig {
   serviceUrl: string;
@@ -419,11 +420,25 @@ export function initShell(
       await engine.query!("SET autoload_known_extensions = false");
       await engine.query!("SET autoinstall_known_extensions = false");
 
+      const vgiVersion = getVgiExtensionVersionSetting();
+      if (vgiVersion.error) {
+        console.error("[shell]", vgiVersion.error);
+        writeln(vgiVersion.error, "31");
+        engine.markAttached?.();
+        setEngineLifecycleError(vgiVersion.error);
+        return;
+      }
+      if (vgiVersion.value === null) {
+        writeln("Using the latest VGI community extension for this session.", "33");
+      } else if (vgiVersion.value !== undefined) {
+        writeln(`Using VGI extension ${vgiVersion.value} for this session.`, "33");
+      }
+
       // Extensions to pre-load at shell startup. Each gets an explicit
       // INSTALL + LOAD pair so no user query triggers a sync autoload.
       // The list lives in ./duckdb-engine because the AI system prompt has to
       // describe it, and a second hardcoded copy there drifted from this one.
-      for (const ext of SHELL_EXTENSIONS) {
+      for (const ext of shellExtensionsForVgiVersion(vgiVersion.value)) {
         writeln(`Loading ${ext.name} extension...`, "33");
         setBootPhase(`Loading ${ext.name} extension`, null, "attaching");
         const install = await engine.query!(extensionInstallSql(ext));

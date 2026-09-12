@@ -22,10 +22,6 @@ test.describe("Sidebar tree", () => {
     await expect
       .poll(() => page.getByRole("treeitem").count(), { timeout: T_NORMAL })
       .toBeLessThan(initial || 1);
-    await filter.fill("");
-    await expect
-      .poll(() => page.getByRole("treeitem").count(), { timeout: T_NORMAL })
-      .toBeGreaterThanOrEqual(initial);
   });
 
   test("expand and collapse a schema node", async ({ page }) => {

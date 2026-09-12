@@ -72,6 +72,8 @@ Without `?service=`, a welcome / connect page is shown.
 |-----------|---------|
 | `?service=<url>` | VGI server base URL to connect to |
 | `?attach_options=<sql>` | Extra options spliced into the DuckDB `ATTACH` statement |
+| `?vgi_version=latest` | Use the community repository's current VGI extension for this tab session (omit the `VERSION` clause) |
+| `?vgi_version=<version>` | Pin an exact VGI extension build for this tab session; use `default` to clear the override |
 | `?theme=<url>` | URL of a theme JSON file (colors, logo, terminal theme) |
 | `?fresh` | Clear any saved DuckDB session snapshot for this service |
 | `#ai_key=<key>` | Anthropic API key for the AI agent (stripped from the URL after use) |

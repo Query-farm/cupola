@@ -18,6 +18,17 @@
 
 import { decodeSqlParams, SQL_PARAM, SQL_Z_PARAM } from "./share-query";
 
+export const VGI_VERSION_PARAM = "vgi_version";
+const VGI_VERSION_SESSION_KEY = "cupola-vgi-extension-version";
+const SAFE_VGI_VERSION = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
+
+export interface VgiExtensionVersionSetting {
+  /** undefined = Cupola's default pin; null = no VERSION clause; string = exact pin. */
+  value: string | null | undefined;
+  source: "default" | "url" | "session";
+  error?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
@@ -112,6 +123,48 @@ export function getThemeUrl(): string | null {
 export function getFreshFlag(): boolean {
   if (!hasWindow()) return false;
   return new URLSearchParams(window.location.search).has("fresh");
+}
+
+/**
+ * Resolve the VGI extension build for this browser tab.
+ *
+ * `?vgi_version=latest` deliberately omits the VERSION clause, an exact safe
+ * token pins that build, and `?vgi_version=default` clears the tab override.
+ * URL choices are retained in sessionStorage so OAuth/reloads in the same tab
+ * keep using the selected extension without changing Cupola's global default.
+ */
+export function getVgiExtensionVersionSetting(): VgiExtensionVersionSetting {
+  if (!hasWindow()) return { value: undefined, source: "default" };
+  const params = new URLSearchParams(window.location.search);
+  if (params.has(VGI_VERSION_PARAM)) {
+    const raw = (params.get(VGI_VERSION_PARAM) ?? "").trim();
+    if (raw === "default") {
+      try { window.sessionStorage.removeItem(VGI_VERSION_SESSION_KEY); } catch {}
+      return { value: undefined, source: "url" };
+    }
+    if (raw === "latest") {
+      try { window.sessionStorage.setItem(VGI_VERSION_SESSION_KEY, raw); } catch {}
+      return { value: null, source: "url" };
+    }
+    if (!SAFE_VGI_VERSION.test(raw)) {
+      return {
+        value: undefined,
+        source: "url",
+        error: `Invalid ${VGI_VERSION_PARAM} value. Use 'latest', 'default', or an exact version containing only letters, numbers, '.', '_', '+', and '-'.`,
+      };
+    }
+    try { window.sessionStorage.setItem(VGI_VERSION_SESSION_KEY, raw); } catch {}
+    return { value: raw, source: "url" };
+  }
+
+  let stored: string | null = null;
+  try { stored = window.sessionStorage.getItem(VGI_VERSION_SESSION_KEY); } catch {}
+  if (stored === "latest") return { value: null, source: "session" };
+  if (stored && SAFE_VGI_VERSION.test(stored)) return { value: stored, source: "session" };
+  if (stored) {
+    try { window.sessionStorage.removeItem(VGI_VERSION_SESSION_KEY); } catch {}
+  }
+  return { value: undefined, source: "default" };
 }
 
 /** `#prefill=<url>` for the Edit connection options flow. Plain getter — does
