@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Publish: commit, push, build, upload versioned assets to R2, deploy Pages.
+# Publish: commit, push, build, upload versioned assets to R2, deploy Worker.
 #
-# URL scheme (all served by the Pages Function from R2):
+# URL scheme (all served by the Worker from R2):
 #   /                → 302 → /latest/
 #   /latest/         → 302 → /v{current}/
 #   /v0.1.0/*        → versioned install from R2
@@ -28,6 +28,9 @@ echo "==> Version: ${VERSION}"
 if [ -z "${SENTRY_AUTH_TOKEN:-}" ] && [ -f ".env" ]; then
   set -a; . ./.env; set +a
 fi
+# Fail before committing, building, or uploading when CI secrets are absent.
+source ./scripts/publish-credentials.sh
+configure_publish_credentials
 if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
   echo "==> SENTRY_AUTH_TOKEN not set — skipping Sentry source map upload."
 fi
@@ -136,13 +139,9 @@ find dist/_astro -name "*.js.map" -delete 2>/dev/null || true
 #
 # Defaults — override via env if needed.
 #   AWS_PROFILE=cupola references the R2 token in ~/.aws/credentials (local
-#   runs). In CI, pass AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY directly —
-#   defaulting AWS_PROFILE there would make the CLI demand a profile that
-#   doesn't exist, so only set it when no explicit credentials are present.
+#   runs). CI requires AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY and a
+#   CLOUDFLARE_API_TOKEN; configure_publish_credentials validates them above.
 #   CF_ACCOUNT_ID is the Cloudflare account ID; not secret.
-if [ -z "${AWS_ACCESS_KEY_ID:-}" ]; then
-  export AWS_PROFILE="${AWS_PROFILE:-cupola}"
-fi
 export CF_ACCOUNT_ID="${CF_ACCOUNT_ID:-bb68a133a66d26a310231495b13479a1}"
 R2_PREFIX="v${VERSION}"
 R2_ENDPOINT="https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com"

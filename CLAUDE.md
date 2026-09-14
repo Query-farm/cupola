@@ -387,6 +387,14 @@ Points worth not re-deriving:
 
 **CI publishing** (`.github/workflows/release.yml`): tag-driven workflow that installs published npm dependencies, runs validation, publishes the multi-architecture container image, deploys Cloudflare, and creates the GitHub release.
 
+The Cloudflare job reads these secrets from the GitHub `production` environment:
+
+- `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`: R2 credentials with write access to `cupola-assets`, passed to the AWS CLI as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+- `CLOUDFLARE_API_TOKEN`: a Worker deployment API token for the account configured in the workflow.
+- `SENTRY_AUTH_TOKEN`: enables source-map uploads; optional for deployment.
+
+`scripts/publish-credentials.sh` validates the required credentials before the deployment job installs dependencies and before `publish.sh` commits or builds. CI requires explicit credentials; a developer's local AWS profile and interactive Wrangler login are unavailable on the runner. Local publishing still defaults to the `cupola` AWS profile and supports Wrangler login. Explicit AWS credentials clear any selected profile so a stale profile cannot break CI.
+
 ## VGI Dependencies
 
 Both VGI clients use exact published npm releases, making local and CI builds
