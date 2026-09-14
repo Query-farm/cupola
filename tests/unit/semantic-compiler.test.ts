@@ -1536,6 +1536,22 @@ describe("semantic model compiler", () => {
     expect(calls).toBe(0);
   });
 
+  test.each<{ query: SemanticQuery; code: string }>([
+    { query: {}, code: "query_schema" },
+    { query: { measures: [] }, code: "empty_selection" },
+    { query: { dimensions: [] }, code: "empty_selection" },
+    { query: { measures: [], dimensions: [] }, code: "empty_selection" },
+  ])("rejects a missing or empty selection: $query", ({ query, code }) => {
+    // The Anthropic tool schema cannot express this top-level either/or rule;
+    // runtime validation must still reject the request before SQL is generated.
+    const result = compileSemanticQuery([sales()], query);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.diagnostics[0].stage).toBe("request_validation");
+      expect(result.diagnostics[0].code).toBe(code);
+    }
+  });
+
   test("rejects requests and metadata that do not match the canonical schemas", () => {
     const badRequest = compileSemanticQuery([sales()], {
       measures: [

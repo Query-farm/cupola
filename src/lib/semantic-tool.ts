@@ -1,7 +1,9 @@
 /** One shared tool definition for every AI surface. */
 export const SEMANTIC_QUERY_TOOL = {
   name: "query_semantic_model",
-  description: "Compile and execute a governed measure/dimension query from VGI semantic tags. Prefer this when the requested concepts are modeled. Query-local inputs and source_bindings can safely drive correlated table functions and bounded function pipelines. Measures from up to ten roots can be stitched with exact or explicitly conformed dimensions; typed derived_measures can calculate across stitched facts when every input has an explicit missing-value policy. Set compile_only=true to inspect SQL without executing it; compile-only performs no DuckDB query.",
+  description: "Compile and execute a governed measure/dimension query from VGI semantic tags. Prefer this when the requested concepts are modeled. Select at least one measure or dimension. Query-local inputs and source_bindings can safely drive correlated table functions and bounded function pipelines. Measures from up to ten roots can be stitched with exact or explicitly conformed dimensions; typed derived_measures can calculate across stitched facts when every input has an explicit missing-value policy. Set compile_only=true to inspect SQL without executing it; compile-only performs no DuckDB query.",
+  // Anthropic rejects top-level oneOf/allOf/anyOf in tool schemas. The semantic
+  // compiler enforces the measure-or-dimension requirement at execution time.
   input_schema: {
     type: "object",
     additionalProperties: false,
@@ -64,6 +66,5 @@ export const SEMANTIC_QUERY_TOOL = {
         { type: "object", additionalProperties: false, properties: { member: { $ref: "#/$defs/filter_member" }, operator: { enum: ["is_null", "is_not_null"] } }, required: ["member", "operator"] },
       ] },
     },
-    anyOf: [{ required: ["measures"] }, { required: ["dimensions"] }],
   },
 } as const;
