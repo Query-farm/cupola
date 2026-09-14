@@ -48,6 +48,10 @@ export function resolveReportSemanticQuery(
 ): SemanticQuery {
   const byKey = new Map(report.parameters.map((parameter) => [parameter.key, parameter]));
   const visit = (value: unknown): unknown => {
+    // Numeric controls retain incomplete text while the user types. Such a
+    // draft must never be bound as a struct, NULL, or an accidental zero.
+    if (isRecord(value) && Object.keys(value).length === 1 && typeof value.report_number_draft === "string")
+      throw new Error("Complete the number entry before testing or applying this query.");
     if (isReportSemanticParameterRef(value)) {
       const parameter = byKey.get(value.report_parameter);
       if (!parameter) throw new Error(`Unknown report parameter '${value.report_parameter}' in semantic query`);

@@ -7,9 +7,10 @@ interface Props {
   rows: Record<string, any>[];
   rowCount: number;
   showing: number;
+  columnLabels?: Record<string, string>;
 }
 
-export function QueryResultTable({ columns, rows, rowCount, showing }: Props) {
+export function QueryResultTable({ columns, rows, rowCount, showing, columnLabels }: Props) {
   if (rows.length === 0) return null;
 
   return (
@@ -19,7 +20,7 @@ export function QueryResultTable({ columns, rows, rowCount, showing }: Props) {
           <TableHeader className="sticky top-0 bg-muted/90 backdrop-blur-sm z-10">
             <TableRow>
               {columns.map((col) => (
-                <TableHead key={col} className="text-xs font-mono whitespace-nowrap">{col}</TableHead>
+                <TableHead key={col} title={columnLabels?.[col] ? col : undefined} className="text-xs font-mono whitespace-nowrap">{columnLabels?.[col] ?? col}</TableHead>
               ))}
             </TableRow>
           </TableHeader>

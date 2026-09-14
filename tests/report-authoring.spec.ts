@@ -15,6 +15,54 @@ async function openCurrentDatasetEditor(page: import("@playwright/test").Page) {
   return page.getByTestId("report-dataset-sql-editor");
 }
 
+test("KPI builder can create its first dataset and resume block setup", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openGuide(page);
+  await page.getByRole("button", { name: "Reports", exact: true }).click();
+  await page.getByRole("button", { name: "New report", exact: true }).click();
+  await page.getByTestId("report-add-block").click();
+  await page.getByTestId("report-add-kpi").click();
+
+  const editor = page.getByTestId("report-block-editor");
+  await expect(editor.getByText("This report has no datasets for blocks yet.")).toBeVisible();
+  await expect(page.getByText(/report\.blocks\[0\]\.(datasetId|valueColumn) must/)).toHaveCount(0);
+  await expect(editor.getByTestId("report-block-apply")).toBeDisabled();
+  await editor.getByLabel("Title", { exact: true }).fill("Answer");
+  await editor.getByRole("button", { name: "Add SQL dataset" }).click();
+
+  await expect(editor).toHaveCount(0);
+  await page.getByTestId("report-dataset-sql-editor").fill("SELECT 42 AS answer");
+  await page.getByRole("button", { name: "Test query", exact: true }).click();
+  await expect(page.getByTestId("report-apply-dataset")).toBeEnabled({ timeout: T_SHELL_BOOT });
+  await page.getByTestId("report-apply-dataset").click();
+
+  await expect(editor).toBeVisible();
+  await expect(editor.getByLabel("Title", { exact: true })).toHaveValue("Answer");
+  await expect(editor.getByLabel("Dataset", { exact: true })).not.toHaveValue("");
+  await editor.getByLabel("Value", { exact: true }).selectOption("answer");
+  await expect(editor.getByTestId("report-block-apply")).toBeEnabled();
+  await editor.getByTestId("report-block-apply").click();
+  await expect(editor).toHaveCount(0);
+  await expect(page.locator('.react-grid-item[data-testid^="report-block-"]')).toContainText("42");
+  await expect(page.getByRole("button", { name: "Save report draft" })).toBeEnabled();
+});
+
+test("KPI builder preserves block edits when returning from its dataset editor", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openGuide(page);
+  await page.getByTestId("report-block-showcase-kpi").hover();
+  await page.getByRole("button", { name: "Edit KPI · Humidity (%)" }).click();
+  const editor = page.getByTestId("report-block-editor");
+  await editor.getByLabel("Title", { exact: true }).fill("Updated humidity");
+  await editor.getByRole("button", { name: "Edit dataset", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  await page.getByRole("button", { name: "Cancel dataset editing" }).click();
+  await page.getByTestId("report-view-tab").click();
+  await expect(editor.getByLabel("Title", { exact: true })).toHaveValue("Updated humidity");
+  await editor.getByTestId("report-block-apply").click();
+  await expect(page.getByTestId("report-block-showcase-kpi")).toContainText("Updated humidity");
+});
+
 test("dataset Test is isolated and Apply reuses the staged result", async ({ page }) => {
   test.setTimeout(60_000);
   await openGuide(page);

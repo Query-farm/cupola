@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { basicChartConfigFromSpec, basicChartSpec, type BasicChartConfig } from "@/lib/reports/direct-editor";
 import type { ReportBlock, ReportDataset, ReportGroup, ReportParameter } from "@/lib/reports/types";
+import { semanticBlockDefaults, semanticOutput, semanticOutputLabel, type SemanticPresentation } from "@/lib/reports/semantic-presentation";
 
 interface Props {
   block: ReportBlock;
@@ -12,6 +13,7 @@ interface Props {
   groups: ReportGroup[];
   parameters: ReportParameter[];
   columnsByDataset: Record<string, string[]>;
+  semanticsByDataset?: Record<string, SemanticPresentation | undefined>;
   errors: string[];
   applying?: boolean;
   onChange: (block: ReportBlock) => void;
@@ -19,6 +21,7 @@ interface Props {
   onCancel: () => void;
   onRunDataset: (datasetId: string) => void;
   onEditDataset: (datasetId: string) => void;
+  onAddDataset: (kind: "semantic" | "sql") => void;
 }
 
 const control = "h-8 w-full rounded-md border bg-background px-2 text-xs";
@@ -54,11 +57,23 @@ function JsonField({ label, value, onChange, onValidityChange }: { label: string
 const formats = ["number", "currency", "percent", "text"].map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) }));
 const valueModes = ["auto", "all", "none"].map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) }));
 
-export function ReportBlockEditor({ block, isNew, datasets, groups, parameters, columnsByDataset, errors, applying = false, onChange, onApply, onCancel, onRunDataset, onEditDataset }: Props) {
+export function ReportBlockEditor({ block, isNew, datasets, groups, parameters, columnsByDataset, semanticsByDataset = {}, errors, applying = false, onChange, onApply, onCancel, onRunDataset, onEditDataset, onAddDataset }: Props) {
   const editorRef = useRef<HTMLDivElement>(null);
   const datasetId = block.type === "markdown" ? "" : block.datasetId;
   const columns = columnsByDataset[datasetId] ?? [];
-  const columnOptions = columns.map((column) => ({ value: column, label: column }));
+  const blockDatasets = datasets.filter((dataset) => !dataset.role || dataset.role === "data");
+  const setupErrors = errors.map((error) => error.replace(
+    /report\.blocks\[\d+\]\.(datasetId|\w+Column) must be a non-empty string\./g,
+    (_match, field: string) => field === "datasetId"
+      ? "Select a dataset for this block."
+      : `Select the ${field.replace(/Column$/, "").replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`)} column.`,
+  ));
+  const semanticPlan = semanticsByDataset[datasetId];
+  const semanticDefaults = semanticBlockDefaults(block, semanticPlan);
+  const columnOptions = columns.map((column) => {
+    const output = semanticOutput(semanticPlan, column);
+    return { value: column, label: output ? `${semanticOutputLabel(output, column)} · ${column}` : column };
+  });
   const patch = (values: Record<string, unknown>) => onChange({ ...block, ...values } as ReportBlock);
   const patchOptional = (key: string, value: string) => {
     const next = { ...block } as Record<string, any>;
@@ -114,16 +129,19 @@ export function ReportBlockEditor({ block, isNew, datasets, groups, parameters, 
     <div className="flex items-center gap-2 border-b px-4 py-3"><div className="min-w-0 flex-1"><div className="text-sm font-semibold">{isNew ? "Add" : "Edit"} {block.type.replaceAll("_", " ")}</div><div className="truncate text-[10px] text-muted-foreground">Changes preview in the report until you apply them.</div></div><Button size="icon-sm" variant="ghost" aria-label="Close block editor" disabled={applying} onClick={onCancel}><X className="h-4 w-4" /></Button></div>
     <div className={`min-h-0 flex-1 space-y-5 overflow-y-auto p-4 ${applying ? "pointer-events-none opacity-70" : ""}`}>
       <section className="space-y-3"><h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Content</h3>
-        <TextField label="Title" value={block.title} placeholder="Optional" onChange={(value) => patchOptional("title", value)} />
+        <TextField label="Title" value={block.title} placeholder={semanticDefaults.title || "Optional"} onChange={(value) => patchOptional("title", value)} />
         <TextField label="Caption" value={block.caption} placeholder="Optional interpretive note" onChange={(value) => patchOptional("caption", value)} />
         <TextField label="Source" value={block.source} placeholder="Optional provenance" onChange={(value) => patchOptional("source", value)} />
         {parameterTokens.length > 0 && <p className="text-[10px] text-muted-foreground">Available text parameters: <code>{parameterTokens.join(", ")}</code></p>}
       </section>
 
       {block.type !== "markdown" && <section className="space-y-3"><h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Data</h3>
-        <SelectField label="Dataset" value={datasetId} options={datasets.filter((dataset) => !dataset.role || dataset.role === "data").map((dataset) => ({ value: dataset.id, label: dataset.name }))} empty="Select a dataset" onChange={changeDataset} />
-        {datasetId && <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={applying} onClick={() => onEditDataset(datasetId)}><Code2 className="h-3.5 w-3.5" /> Edit dataset SQL</Button>{columns.length === 0 && <Button size="sm" variant="outline" disabled={applying} onClick={() => onRunDataset(datasetId)}><Eye className="h-3.5 w-3.5" /> Run for columns</Button>}</div>}
+        {blockDatasets.length === 0 && <p className="text-xs text-muted-foreground">This report has no datasets for blocks yet. <span className="block mt-1">Add a query or governed metrics from your connected data, then choose the columns for this block.</span></p>}
+        <SelectField label="Dataset" value={datasetId} options={blockDatasets.map((dataset) => ({ value: dataset.id, label: dataset.name }))} empty="Select a dataset" onChange={changeDataset} />
+        <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={applying} onClick={() => onAddDataset("sql")}><Plus className="h-3.5 w-3.5" /> Add SQL dataset</Button><Button size="sm" variant="outline" disabled={applying} onClick={() => onAddDataset("semantic")}><Plus className="h-3.5 w-3.5" /> Add governed metrics</Button></div>
+        {datasetId && <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={applying} onClick={() => onEditDataset(datasetId)}><Code2 className="h-3.5 w-3.5" /> Edit dataset</Button>{columns.length === 0 && <Button size="sm" variant="outline" disabled={applying} onClick={() => onRunDataset(datasetId)}><Eye className="h-3.5 w-3.5" /> Run for columns</Button>}</div>}
         {datasetId && columns.length === 0 && <p className="text-[10px] text-muted-foreground">Run this dataset to populate schema-backed column selectors.</p>}
+        {semanticPlan && <div className="rounded-md border bg-muted/20 p-2 text-xs"><p>Automatic titles, chart axes, and value units follow the governed model. Set a title or value format to override them.</p>{semanticPlan.outputs?.filter((output) => columns.includes(output.name) && output.description).map((output) => <p key={output.name} className="mt-1 text-muted-foreground"><strong>{output.title || output.name}:</strong> {output.description}</p>)}</div>}
       </section>}
 
       <section className="space-y-3"><h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Block settings</h3>
@@ -157,7 +175,7 @@ export function ReportBlockEditor({ block, isNew, datasets, groups, parameters, 
         {block.type !== "markdown" && <JsonField label="Conditional appearance rules" value={block.appearance?.rules ?? []} onChange={(rules) => patch({ appearance: { ...block.appearance, rules } })} onValidityChange={jsonValidity("Conditional appearance rules")} />}
       </section>
 
-      {errors.length > 0 && <div role="alert" className="rounded-md border border-destructive/25 bg-destructive/5 p-3 text-xs text-destructive"><div className="flex items-center gap-1.5 font-medium"><AlertCircle className="h-3.5 w-3.5" /> Fix before applying</div><ul className="mt-2 list-disc space-y-1 pl-5">{errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
+      {setupErrors.length > 0 && <div role="alert" className="rounded-md border border-destructive/25 bg-destructive/5 p-3 text-xs text-destructive"><div className="flex items-center gap-1.5 font-medium"><AlertCircle className="h-3.5 w-3.5" /> {isNew ? "Complete block setup" : "Fix before applying"}</div><ul className="mt-2 list-disc space-y-1 pl-5">{setupErrors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
     </div>
     <div className="flex items-center justify-end gap-2 border-t p-3">{invalidJson.size > 0 && <span className="mr-auto text-[10px] text-destructive">Fix invalid JSON before applying.</span>}<Button size="sm" variant="ghost" disabled={applying} onClick={onCancel}>Cancel</Button><Button size="sm" data-testid="report-block-apply" disabled={applying || errors.length > 0 || invalidJson.size > 0} onClick={onApply}>{isNew ? <Plus className="h-4 w-4" /> : null}{applying ? "Checking…" : isNew ? "Add block" : "Apply"}</Button></div>
   </div>;

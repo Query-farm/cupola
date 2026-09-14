@@ -123,13 +123,17 @@ export function basicChartSpec(config: BasicChartConfig): Record<string, any> {
   };
 }
 
-export function createReportBlock(report: ReportDocumentV1, type: ReportBlock["type"], datasetId: string | undefined, columns: string[]): ReportBlock {
+export function createReportBlock(report: ReportDocumentV1, type: ReportBlock["type"], datasetId: string | undefined, columns: string[], semantic?: import("./semantic-presentation").SemanticPresentation): ReportBlock {
   const layout = requestedReportBlockLayout(report.blocks, type);
   const id = newReportId("block");
-  const first = columns[0] ?? "", second = columns[1] ?? first, third = columns[2] ?? second;
+  const outputs = semantic?.outputs?.filter((output) => columns.includes(output.name)) ?? [];
+  const measure = outputs.find((output) => output.kind === "measure" || output.kind === "derived_measure")?.name;
+  const dimension = outputs.find((output) => output.kind === "dimension")?.name;
+  const first = (type === "kpi" || type === "sparkline" ? measure : type === "chart" ? dimension : undefined) ?? columns[0] ?? "";
+  const second = (type === "chart" ? measure : undefined) ?? columns[1] ?? first, third = columns[2] ?? second;
   const base = { id, type, layout } as const;
   if (type === "markdown") return { ...base, type, markdown: "Write report text here." };
-  const data = datasetId ?? report.datasets[0]?.id ?? "";
+  const data = datasetId ?? report.datasets.find((dataset) => !dataset.role || dataset.role === "data")?.id ?? "";
   if (type === "kpi") return { ...base, type, datasetId: data, valueColumn: first };
   if (type === "sparkline") return { ...base, type, datasetId: data, valueColumn: first, showValue: true };
   if (type === "table") return { ...base, type, datasetId: data };

@@ -33,6 +33,15 @@ describe("report direct editor", () => {
     ]));
   });
 
+  test("block defaults only select datasets available in the builder", () => {
+    const report = createEmptyReport("Editor");
+    report.datasets.push({ id: "options", name: "Options", role: "parameter_options", sql: "SELECT 'a' AS option" });
+    expect(createReportBlock(report, "kpi", undefined, [])).toMatchObject({ datasetId: "" });
+
+    report.datasets.push({ id: "metrics", name: "Metrics", role: "data", sql: "SELECT 42 AS value" });
+    expect(createReportBlock(report, "kpi", undefined, ["value"])).toMatchObject({ datasetId: "metrics", valueColumn: "value" });
+  });
+
   test("keeps advanced composed charts in advanced mode", () => {
     expect(basicChartConfigFromSpec({ layer: [{ mark: "line" }] })).toBeNull();
   });

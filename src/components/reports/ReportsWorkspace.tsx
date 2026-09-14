@@ -50,6 +50,7 @@ import { deleteReport, exportReportJson, getStoredReport, importReportJson, list
 import { cloneReport, createEmptyReport, isSemanticReportDataset, newReportId, type ReportAiNarrativeBlock, type ReportBlock, type ReportDataset, type ReportDocumentV1, type ReportGroup, type ReportOption, type ReportParameter, type ReportParameterValue } from "@/lib/reports/types";
 import { parameterTokens, validateReadOnlySql, validateReport, validateReportParameterValues, type ReportParameterIssue } from "@/lib/reports/validation";
 import { prepareSemanticReportDataset, semanticParameterReferences } from "@/lib/reports/semantic";
+import { semanticBlockDefaults, semanticChartSpec, semanticOutput, semanticOutputLabel, formatSemanticValue } from "@/lib/reports/semantic-presentation";
 import type { SemanticDiagnostic, SemanticPlan } from "@/lib/semantic-compiler";
 import { buildSemanticEnvironment } from "@/lib/semantic-model";
 import { createReportBlock, duplicateReportBlock, REPORT_BLOCK_TYPES } from "@/lib/reports/direct-editor";
@@ -1514,7 +1515,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     if (!draft || !discardBlockEditor()) return;
     const datasetId = draft.datasets.find((dataset) => !dataset.role || dataset.role === "data")?.id;
     const columns = datasetId ? results[datasetId]?.table?.schema.fields.map((field) => field.name) ?? [] : [];
-    const block = createReportBlock(draft, type, datasetId, columns);
+    const block = createReportBlock(draft, type, datasetId, columns, datasetId ? results[datasetId]?.semantic?.plan : undefined);
     setSelectedBlockId(block.id);
     setBlockEditor({ block, isNew: true, initialJson: JSON.stringify(block) });
     setBlockEditorErrors([]);
@@ -1541,10 +1542,10 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   }, [blockEditor?.block.id, discardBlockEditor, draft]);
 
   const editBlockDataset = useCallback((datasetId: string) => {
-    if (!discardBlockEditor()) return;
+    if (blockApplyBusyRef.current || !discardDatasetEditor()) return;
     setWorkspaceView("datasets");
     setDatasetEditorRequest(datasetId);
-  }, [discardBlockEditor]);
+  }, [discardDatasetEditor]);
 
   const reportWithDataset = useCallback((dataset: ReportDataset): ReportDocumentV1 | null => {
     if (!draft) return null;
@@ -1586,8 +1587,12 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     setResults((previous) => ({ ...previous, ...Object.fromEntries(cached.results) }));
     datasetTestCacheRef.current = null;
     setDatasetEditorRequest(null);
+    setDatasetEditorDirty(false);
+    if (blockEditor && "datasetId" in blockEditor.block && blockEditor.block.datasetId === dataset.id) {
+      setWorkspaceView("report");
+    }
     setShareStatus("Dataset changes applied using the validated results.");
-  }, [reportWithDataset]);
+  }, [blockEditor, reportWithDataset]);
 
   const removeReportDataset = useCallback((datasetId: string) => {
     if (!draft) return;
@@ -1645,8 +1650,8 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     setShareStatus("Accepted the current governed model for this dataset. Save the report to keep this baseline.");
   }, [draft]);
 
-  const addReportDataset = useCallback((kind: "semantic" | "sql") => {
-    if (!draft) return;
+  const addReportDataset = useCallback((kind: "semantic" | "sql", useForBlock = false) => {
+    if (!draft || !discardDatasetEditor()) return;
     const next = cloneReport(draft);
     let dataset: ReportDataset;
     if (kind === "semantic") {
@@ -1673,9 +1678,15 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     next.updatedAt = Date.now();
     setDraft(next);
     setSourceText(exportReportJson(next));
+    if (useForBlock) {
+      setBlockEditor((editor) => editor && editor.block.type !== "markdown"
+        ? { ...editor, block: { ...editor.block, datasetId: dataset.id } }
+        : editor);
+      setBlockEditorErrors([]);
+    }
     setDatasetEditorRequest(dataset.id);
     setWorkspaceView("datasets");
-  }, [attachedCatalogs, catalogData, draft]);
+  }, [attachedCatalogs, catalogData, discardDatasetEditor, draft]);
 
   const resetAgentConversation = useCallback(() => {
     abortRef.current?.abort();
@@ -2126,11 +2137,12 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
   </div>;
 
   const baseReport = activeReport ?? draft;
-  const report = !readerMode && blockEditor
-    ? candidateReportForBlock(blockEditor) ?? baseReport
-    : baseReport;
-  const reportErrors = validateReport(report);
-  const editorValidationErrors = blockEditor ? [...new Set([...reportErrors, ...blockEditorErrors])] : [];
+  const blockPreview = !readerMode && blockEditor ? candidateReportForBlock(blockEditor) : null;
+  const report = workspaceView === "report" ? blockPreview ?? baseReport : baseReport;
+  // Unapplied block setup belongs to the builder, not the saved report or
+  // dataset validation. In particular, a new block may not have data yet.
+  const reportErrors = validateReport(baseReport);
+  const editorValidationErrors = blockPreview ? [...new Set([...validateReport(blockPreview), ...blockEditorErrors])] : [];
   const dirty = !selected || JSON.stringify(draft) !== JSON.stringify(selected);
   const columnsByDataset = Object.fromEntries(report.datasets.map((dataset) => [dataset.id, results[dataset.id]?.table?.schema.fields.map((field) => field.name) ?? []]));
   const optionValues = (p: ReportParameter) => {
@@ -2203,7 +2215,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
     </div>}
     <div className="report-authoring-control flex h-10 shrink-0 items-end gap-1 border-b bg-card px-3">
       <div role="tablist" aria-label="Report views" className="flex h-10 items-end gap-1">
-      <button type="button" role="tab" id="report-view-tab" aria-selected={workspaceView === "report"} aria-controls="report-view-panel" data-testid="report-view-tab" onClick={() => { if (workspaceView !== "report" && (!discardBlockEditor() || !discardDatasetEditor())) return; setWorkspaceView("report"); }} className={`inline-flex h-10 items-center gap-1.5 border-b-2 px-3 text-sm ${workspaceView === "report" ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}><BarChart3 className="h-3.5 w-3.5" /> Report</button>
+      <button type="button" role="tab" id="report-view-tab" aria-selected={workspaceView === "report"} aria-controls="report-view-panel" data-testid="report-view-tab" onClick={() => { if (workspaceView !== "report" && !discardDatasetEditor()) return; setWorkspaceView("report"); }} className={`inline-flex h-10 items-center gap-1.5 border-b-2 px-3 text-sm ${workspaceView === "report" ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}><BarChart3 className="h-3.5 w-3.5" /> Report</button>
       <button type="button" role="tab" id="report-datasets-tab" aria-selected={workspaceView === "datasets"} aria-controls="report-datasets-panel" data-testid="report-datasets-tab" onClick={() => { if (!discardBlockEditor()) return; setWorkspaceView("datasets"); }} className={`inline-flex h-10 items-center gap-1.5 border-b-2 px-3 text-sm ${workspaceView === "datasets" ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}><Database className="h-3.5 w-3.5" /> Datasets <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none">{report.datasets.length}</span></button>
       </div>
       <div className="flex-1" />
@@ -2325,7 +2337,13 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
           {report.blocks.map((block) => {
             const result = block.type === "markdown" ? null : results[block.datasetId];
             const dataset = block.type === "markdown" ? null : report.datasets.find((candidate) => candidate.id === block.datasetId);
-            const displayBlockTitle = block.title ? interpolateReportText(block.title, report, appliedValues) : undefined;
+            const modelTitle = semanticBlockDefaults(block, result?.semantic?.plan).title;
+            const displayBlockTitle = modelTitle ? interpolateReportText(modelTitle, report, appliedValues) : undefined;
+            const valueColumn = block.type === "sparkline" ? block.headlineValueColumn || block.valueColumn : "valueColumn" in block ? block.valueColumn : undefined;
+            const valueUnit = valueColumn ? semanticOutput(result?.semantic?.plan, valueColumn)?.unit : undefined;
+            const formatBlockValue: typeof formatKpi = (value, format) => format
+              ? formatKpi(value, format)
+              : formatSemanticValue(value, valueUnit, formatKpi);
             const markdownTitle = block.type === "markdown" ? visibleMarkdownTitle(displayBlockTitle) : null;
             const showBlockHeader = block.type !== "markdown" || markdownTitle !== null;
             const pending = isDatasetPending(result ?? undefined);
@@ -2346,9 +2364,9 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
                     ? (hasData ? "Refresh blocked · showing earlier data" : "Refresh blocked")
                   : null;
             const visualBlock = block.type === "chart"
-              ? block
+              ? semanticBlockDefaults(block, result?.semantic?.plan)
               : isReportTufteBlock(block)
-                ? { id: block.id, title: block.title, spec: tufteBlockToVegaSpec(block) }
+                ? { id: block.id, title: block.title, spec: semanticChartSpec(tufteBlockToVegaSpec(block), result?.semantic?.plan) }
                 : null;
             const resolvedAppearance = resolveReportAppearance(block.appearance, result?.rows ?? []);
             const appearanceStyle = REPORT_BLOCK_APPEARANCE[resolvedAppearance.tone];
@@ -2438,7 +2456,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
               </div>}
               {!showBlockHeader && resolvedAppearance.label && <div data-testid={`report-block-status-${block.id}`} title={resolvedAppearance.label} className="absolute right-2 top-2 z-10 inline-flex max-w-[60%] items-center gap-1.5 rounded-full border border-current/15 bg-background/75 px-2 py-0.5 text-[10px] font-medium"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${appearanceStyle.dot}`} /><span className="truncate">{resolvedAppearance.label}</span></div>}
               {!readerMode && !showBlockHeader && <div className={`report-authoring-control absolute right-1 top-1 z-20 flex items-center rounded-md border bg-background/90 shadow-sm transition-opacity group-focus-within:opacity-100 ${selectedForEditing ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`} onMouseDown={(event) => event.stopPropagation()}><button type="button" className="rounded px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`Edit ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); openBlockEditor(block); }}>Edit</button><button type="button" className="rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`Ask AI about ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); openTargetedAgent(); }}>AI</button><button type="button" className="rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`Duplicate ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); copyBlock(block); }}>Copy</button><button type="button" className="rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label={`Delete ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); removeBlock(block); }}>×</button><div data-testid={`report-block-drag-${block.id}`} title="Drag text block" className="report-drag-handle cursor-move rounded p-1 text-muted-foreground/50 hover:bg-muted hover:text-foreground"><GripVertical className="h-3.5 w-3.5" /></div></div>}
-              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={interpolateReportText(block.markdown, report, appliedValues)} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className={result.status === "blocked" ? "text-xs text-amber-700 dark:text-amber-300" : "text-xs text-destructive"}>{result.error}</div>{result.errorDetails && <details className="max-w-full text-left text-[10px] text-muted-foreground"><summary className="cursor-pointer text-center">Technical details</summary><div className="mt-1 max-h-20 overflow-auto font-mono">{result.errorDetails}</div></details>}<Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <ReportKpi block={block} row={result.rows[0]} formatValue={formatKpi} /> : block.type === "sparkline" ? <ReportSparkline block={block} rows={result.rows} formatValue={formatKpi} /> : visualBlock ? <ReportChart block={visualBlock} rows={result.rows} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} sql={dataset?.sql} config={block.config} onConfig={(config) => { if (!readerMode) setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current); }} /> : null}</div>
+              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={interpolateReportText(block.markdown, report, appliedValues)} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className={result.status === "blocked" ? "text-xs text-amber-700 dark:text-amber-300" : "text-xs text-destructive"}>{result.error}</div>{result.errorDetails && <details className="max-w-full text-left text-[10px] text-muted-foreground"><summary className="cursor-pointer text-center">Technical details</summary><div className="mt-1 max-h-20 overflow-auto font-mono">{result.errorDetails}</div></details>}<Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} columnLabels={result.semantic ? Object.fromEntries(columns.map((name) => [name, semanticOutputLabel(semanticOutput(result.semantic?.plan, name), name)])) : undefined} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <ReportKpi block={semanticBlockDefaults(block, result.semantic?.plan)} row={result.rows[0]} formatValue={formatBlockValue} /> : block.type === "sparkline" ? <ReportSparkline block={semanticBlockDefaults(block, result.semantic?.plan)} rows={result.rows} formatValue={formatBlockValue} /> : visualBlock ? <ReportChart block={visualBlock} rows={result.rows} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} sql={dataset?.sql} config={block.config} onConfig={(config) => { if (!readerMode) setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current); }} /> : null}</div>
               {result?.semantic && <details data-testid={`report-semantic-provenance-${block.id}`} className="border-t bg-muted/15 px-3 py-1.5 text-[10px] text-muted-foreground"><summary className="cursor-pointer font-medium text-emerald-700 dark:text-emerald-300">How this governed calculation was made{Object.values(result.semantic.plan.output_units ?? {}).some(Boolean) ? ` · ${Object.entries(result.semantic.plan.output_units ?? {}).filter(([, unit]) => unit).map(([name, unit]) => `${name}: ${unit}`).join(", ")}` : ""}</summary><div className="mt-2 space-y-1"><div><span className="font-medium text-foreground">Dataset:</span> {dataset?.name}</div><div><span className="font-medium text-foreground">Grain:</span> {(result.semantic.plan.stitch?.result_grain ?? result.semantic.plan.fact_branches[0]?.result_grain ?? []).join(", ") || "single result"}</div><div><span className="font-medium text-foreground">Sources:</span> {result.semantic.plan.fact_branches.map((branch) => `${branch.root.catalog_id}/${branch.root.entity_id}`).join(", ")}</div>{result.semantic.plan.warnings.length > 0 && <div className="text-amber-700 dark:text-amber-300">{result.semantic.plan.warnings.join(" ")}</div>}<details><summary className="cursor-pointer">Generated SQL</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded border bg-background p-2 font-mono">{result.semantic.plan.sql}</pre></details></div></details>}
               {(block.caption || block.source) && <div data-testid={`report-note-${block.id}`} className="px-3 pb-2 text-[10px] leading-snug text-muted-foreground">
                 {block.caption && <span>{interpolateReportText(block.caption, report, appliedValues)}</span>}{block.caption && block.source && <span> · </span>}{block.source && <span>Source: {interpolateReportText(block.source, report, appliedValues)}</span>}
@@ -2449,7 +2467,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
         </div>}
         </div>
       </div>}
-      {!readerMode && (blockEditor || agentOpen || inspectorOpen) && <aside className="report-authoring-control relative z-[1000] flex min-h-0 w-[min(42vw,520px)] min-w-[340px] flex-col border-l bg-card max-sm:fixed max-sm:inset-0 max-sm:w-full max-sm:min-w-0">
+      {!readerMode && (blockEditor ? workspaceView === "report" : agentOpen || inspectorOpen) && <aside className="report-authoring-control relative z-[1000] flex min-h-0 w-[min(42vw,520px)] min-w-[340px] flex-col border-l bg-card max-sm:fixed max-sm:inset-0 max-sm:w-full max-sm:min-w-0">
         {blockEditor ? <ReportBlockEditor
           key={blockEditor.block.id}
           block={blockEditor.block}
@@ -2458,6 +2476,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
           groups={draft.groups ?? []}
           parameters={draft.parameters}
           columnsByDataset={columnsByDataset}
+          semanticsByDataset={Object.fromEntries(Object.entries(results).map(([id, result]) => [id, result.semantic?.plan]))}
           errors={editorValidationErrors}
           applying={blockEditorApplying}
           onChange={(nextBlock) => {
@@ -2471,6 +2490,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
           onCancel={() => { discardBlockEditor(); }}
           onRunDataset={(datasetId) => void runDatasets(draft, appliedValues, new Set([datasetId]))}
           onEditDataset={editBlockDataset}
+          onAddDataset={(kind) => addReportDataset(kind, true)}
         /> : <>
           <div className="flex items-center border-b"><button className={`px-4 py-2 text-sm ${agentOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setAgentOpen(true); setInspectorOpen(false); }}>Edit with AI</button><button className={`px-4 py-2 text-sm ${inspectorOpen ? "border-b-2 border-primary" : ""}`} onClick={() => { setInspectorOpen(true); setAgentOpen(false); setSourceText(exportReportJson(draft)); }}>Report JSON</button><div className="flex-1" />{agentOpen && agentConversation.length > 0 && <Button size="sm" variant="ghost" disabled={agentBusy} onClick={resetAgentConversation}>New conversation</Button>}<button className="p-2" onClick={() => { setAgentOpen(false); setInspectorOpen(false); }}><X className="h-4 w-4" /></button></div>
           {agentOpen ? <><div ref={agentThreadRef} data-testid="report-agent-thread" className="flex-1 overflow-y-auto p-4 text-sm"><p className="text-muted-foreground mb-4">{agentTargetBlockId ? `Describe the change to ${draft.blocks.find((block) => block.id === agentTargetBlockId)?.title || "the selected block"}.` : "Describe the report or revision."} The agent edits a draft; nothing is saved until you accept it.</p><div className="space-y-5">{agentConversation.map((message) => <div key={message.id} data-role={message.role}>{message.role === "user" ? <ChatMessageUser content={message.content ?? ""} /> : <ChatMessageAssistant blocks={message.blocks ?? []} isStreaming={message.isStreaming} usage={message.usage} model={settings.aiModel} onCancel={message.isStreaming ? () => abortRef.current?.abort() : undefined} />}</div>)}</div></div><div className="p-3 border-t"><textarea className="w-full min-h-24 rounded-md border bg-background p-2 text-sm" value={agentPrompt} onChange={(e) => setAgentPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void runAgent(); } }} placeholder="Build a monthly sales report with a date range and region filter…" /><div className="flex justify-end mt-2">{agentBusy ? <Button variant="destructive" size="sm" onClick={() => abortRef.current?.abort()}>Stop</Button> : <Button size="sm" disabled={!agentPrompt.trim()} onClick={runAgent}><Sparkles className="h-4 w-4" /> Send</Button>}</div></div></> : <><textarea className="flex-1 min-h-0 resize-none bg-background p-3 font-mono text-xs" spellCheck={false} value={sourceText} onChange={(e) => setSourceText(e.target.value)} />{sourceError && <div className="px-3 py-2 text-xs text-destructive border-t">{sourceError}</div>}<div className="p-3 border-t flex justify-end"><Button size="sm" onClick={() => { try { const parsed = importReportJson(sourceText); setDraft(parsed); setSourceError(null); } catch (e) { setSourceError(e instanceof Error ? e.message : String(e)); } }}>Preview source</Button></div></>}

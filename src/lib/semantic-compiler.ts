@@ -3156,9 +3156,14 @@ function compileSemanticQueryInternal(
       parameters,
       renderSourceArgumentMember,
     );
+    // Post-aggregation filters may address selected output aliases, just as
+    // stitched multi-fact filters do. Keep WHERE resolution source-local.
+    const measureFilterLookup = new Map(memberLookup);
+    for (const item of measureSelections)
+      measureFilterLookup.set(item.selection.alias ?? item.selection.member_id, item);
     const having = compileFilter(
       query.measure_filters,
-      memberLookup,
+      measureFilterLookup,
       parameters,
       renderSourceArgumentMember,
     );
