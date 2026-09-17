@@ -68,6 +68,7 @@ export function SqlEditorTabs({ docs, activeId, busyDocIds, onSelect, onAdd, onC
         return (
           <div
             key={doc.id}
+            data-testid="editor-tab"
             className={cn(
               "relative group flex items-center text-xs rounded-t-md whitespace-nowrap border border-b-0 transition-colors max-w-[200px]",
               active

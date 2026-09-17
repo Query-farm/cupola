@@ -797,6 +797,11 @@ ORDERS_DOC = (
 )
 ORDER_KEYS = {"not_null": ("order_id",), "primary_key": (("order_id",),)}
 
+# Free-form tags. `filterDisplayTags` strips every reserved `vgi.*` key, so a
+# catalog carrying only vgi.* tags renders an empty Tags section — these are
+# what the table detail page's Tags table actually shows.
+ORDER_TAGS = {"domain": "retail", "grain": "order line", "refresh": "nightly", "owner": "analytics"}
+
 SMALL = schema(
     "small",
     comment="Reference tables a report can render in full",
@@ -806,13 +811,13 @@ SMALL = schema(
         Table(name="regions", function=RegionsScan, comment="Sales regions (8 rows)", primary_key=(("region",),),
               tags={"vgi.title": "Regions", "vgi.doc_llm": "The 8 sales regions with a manager and a map center."}),
         Table(name="products", function=ProductsScan, comment="Product catalog (200 rows)", primary_key=(("product_id",),),
-              tags={"vgi.title": "Products", "vgi.doc_llm": "200 products across 12 categories with a list price."}),
+              tags={"domain": "retail", "provider": "merchandising", "vgi.title": "Products", "vgi.doc_llm": "200 products across 12 categories with a list price."}),
         Table(name="stores", function=StoresScan, comment="Stores with point geometry (250 rows)", primary_key=(("store_id",),),
-              tags={"vgi.title": "Stores", "vgi.doc_llm": "250 stores with region, latitude/longitude and a GEOMETRY point. Good for map blocks."}),
+              tags={"domain": "retail", "provider": "facilities", "vgi.title": "Stores", "vgi.doc_llm": "250 stores with region, latitude/longitude and a GEOMETRY point. Good for map blocks."}),
         Table(name="monthly_targets", function=MonthlyTargetsScan, comment="Target vs actual revenue by month and region (288 rows)",
               tags={"vgi.title": "Monthly targets", "vgi.doc_llm": "36 months x 8 regions of target_revenue and actual_revenue. Good for bullet, slopegraph, sparkline and KPI blocks.",
                     "vgi.example_queries": examples(("Attainment by region", "SELECT region, sum(actual_revenue) / sum(target_revenue) AS attainment FROM cupola_test.small.monthly_targets GROUP BY region ORDER BY attainment DESC"))}),
-        sized("orders_1k", GenerateOrders, 1_000, "Orders, 1k", ORDERS_DOC, tags={"vgi.category": "orders"}, **ORDER_KEYS),
+        sized("orders_1k", GenerateOrders, 1_000, "Orders, 1k", ORDERS_DOC, tags={"vgi.category": "orders", **ORDER_TAGS}, **ORDER_KEYS),
     ],
 )
 
@@ -822,13 +827,13 @@ LARGE = schema(
     tags={"vgi.title": "Large stress data"},
     functions=[GenerateOrders, GenerateWide, GenerateEvents, GenerateParcels],
     tables=[
-        sized("orders_100k", GenerateOrders, 100_000, "Orders, 100k", ORDERS_DOC, **ORDER_KEYS),
+        sized("orders_100k", GenerateOrders, 100_000, "Orders, 100k", ORDERS_DOC, tags=ORDER_TAGS, **ORDER_KEYS),
         sized("orders_400k", GenerateOrders, 400_000, "Orders, 400k", ORDERS_DOC + " This size killed the tab in a report Perspective block.", **ORDER_KEYS,
-              tags={"vgi.example_queries": examples(
+              tags={**ORDER_TAGS, "vgi.example_queries": examples(
                   ("Monthly revenue by region", "SELECT date_trunc('month', order_date) AS month, region, sum(revenue) AS revenue FROM cupola_test.large.orders_400k GROUP BY ALL ORDER BY month, region"),
                   ("Everything, for Perspective", "SELECT * FROM cupola_test.large.orders_400k"),
               )}),
-        sized("orders_2m", GenerateOrders, 2_000_000, "Orders, 2M", ORDERS_DOC, **ORDER_KEYS),
+        sized("orders_2m", GenerateOrders, 2_000_000, "Orders, 2M", ORDERS_DOC, tags=ORDER_TAGS, **ORDER_KEYS),
         sized("wide_400k", GenerateWide, 400_000, "Wide, 400k x 60", "400k rows by 60 columns. dimension_00..08 have 2..512 distinct values."),
         sized("events_1m", GenerateEvents, 1_000_000, "Events, 1M", "Clickstream with a ~190 character payload_json, a LIST tags column and a STRUCT client column."),
         sized("parcels_400k", GenerateParcels, 400_000, "Parcels, 400k", "Land parcels with a WKB polygon GEOMETRY per row; latitude/longitude are the polygon center."),

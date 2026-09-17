@@ -16,6 +16,15 @@ const config = {
   timeout: 30_000,
   expect: { timeout: 5_000 },
   retries: 0,
+  // Playwright defaults to half the machine's cores, which made the suite's
+  // result depend on the machine: on a 20-core host that is 10 parallel
+  // browsers, and full-suite runs there failed anywhere from 4 to 26 tests,
+  // almost all of them "the DuckDB bridge never became ready" — each browser
+  // boots its own 44MB DuckDB-WASM and then queries one shared single-process
+  // VGI worker. At 4 and at 2 the same run failed only the genuinely broken
+  // tests, twice each. This is a ceiling, not a target: PLAYWRIGHT_WORKERS
+  // overrides it.
+  workers: Number(process.env.PLAYWRIGHT_WORKERS) || 4,
   use: {
     baseURL: BASE_URL,
     actionTimeout: 10_000,

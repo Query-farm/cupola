@@ -45,9 +45,12 @@ test.describe("Editor Ask AI panel", () => {
     await page.evaluate(() =>
       (window as any).__cupolaEditorAiTest.pushAssistantSql({ sql: "SELECT 'newtab' AS m", columns: ["m"], rows: [{ m: "newtab" }] }),
     );
-    const tabsBefore = await page.getByTestId("editor-tabs").locator("[role=tab]").count();
+    // The strip is a toolbar of toggle buttons (aria-pressed), not a tablist,
+    // so `[role=tab]` matched nothing and this counted 0 both times.
+    const tabs = page.getByTestId("editor-tab");
+    const tabsBefore = await tabs.count();
     await page.getByTestId("ai-apply-open-tab").click();
-    await expect(page.getByTestId("editor-tabs").locator("[role=tab]")).toHaveCount(tabsBefore + 1, { timeout: T_NORMAL });
+    await expect(tabs).toHaveCount(tabsBefore + 1, { timeout: T_NORMAL });
   });
 
   test("keeps a separate conversation per editor tab", async ({ page }) => {

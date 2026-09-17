@@ -4,7 +4,7 @@
 #
 #   ./run.sh                 # :9009 — the suite's default VGI_SERVICE_URL
 #   PORT=9010 ./run.sh       # another port (then set VGI_SERVICE_URL to match)
-#   HTTP_THREADS=8 ./run.sh  # smaller request pool (default 32)
+#   HTTP_THREADS=16 ./run.sh # larger request pool (default 8)
 #   ./run.sh --latest        # newest vgi-python; pair with ?vgi_version=latest
 set -e
 cd "$(dirname "$0")"
@@ -12,12 +12,11 @@ cd "$(dirname "$0")"
 PORT="${PORT:-9009}"
 # waitress defaults to 4 request threads, and a VGI request holds its thread for
 # the whole scan rather than the milliseconds a web request takes — so the fifth
-# concurrent client queues behind a scan instead of overlapping with it. Every
-# Playwright worker is one such client (the default is half the machine's cores,
-# 10 on a 20-core box), and each browser's DuckDB boot has a 20s ATTACH budget.
-# At the stock 4 the suite failed 16 tests on a 20-core host, nearly all of them
-# "bridge never became ready", and flaked intermittently on fewer cores.
-HTTP_THREADS="${HTTP_THREADS:-32}"
+# concurrent client queues behind a scan instead of overlapping with it. One
+# browser is one such client. Raising this is NOT a way to absorb more parallel
+# browsers: the worker is one GIL-bound process, and at 32 threads a 10-worker
+# suite run was no better than at 4. Size it to the browsers you point at it.
+HTTP_THREADS="${HTTP_THREADS:-8}"
 export VGI_SIGNING_KEY=dev
 export VGI_HTTP_PREFIX=
 export VGI_HTTP_CORS_ORIGINS="*"
