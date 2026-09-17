@@ -42,7 +42,12 @@ test("report guide is a runnable in-product gallery backed by canned local data"
     page.getByTestId("report-more-menu"),
   ].map((control) => control.evaluate((element) => element.getBoundingClientRect().height)));
   expect(new Set(reportActionHeights).size).toBe(1);
-  await page.getByRole("button", { name: "Report refresh options" }).click();
+  // The refresh-options trigger is deliberately disabled while a run is in
+  // flight, and the guide starts one on load — so this has to wait for the run
+  // rather than click straight away.
+  const refreshOptions = page.getByRole("button", { name: "Report refresh options" });
+  await expect(refreshOptions).toBeEnabled({ timeout: T_SHELL_BOOT });
+  await refreshOptions.click();
   await expect(page.getByTestId("report-auto-refresh-0")).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "More report actions" }).click();
