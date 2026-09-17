@@ -780,12 +780,47 @@ let perspectiveWorker: any = null;
 let perspectiveClient: any = null;
 /** In-memory cache of Perspective viewer configs keyed by tableId (catalog.schema.table). */
 const perspectiveConfigCache = new Map<string, any>();
-/** The Table most recently loaded by loadPerspective's static-snapshot path,
- *  so it can be `.delete()`d before the next one replaces it — `viewer.load`
- *  no longer takes ownership of a Table the way the deprecated `load(table)`
- *  overload implied, so nothing else frees it. */
-let currentStaticPerspectiveTable: any = null;
+/** Static-snapshot state for one host container. `viewer.load` no longer takes
+ *  ownership of a Table the way the deprecated `load(table)` overload implied,
+ *  so nothing else frees it — and it is tracked PER CONTAINER because the
+ *  shell's Perspective tab and every report Perspective block each host their
+ *  own viewer. A single module-global slot used to be shared by all of them, so
+ *  one block's load dropped the only reference to another's table. */
+interface StaticPerspectiveHost {
+  table: any;
+  /** Bumped per request; a queued load that is no longer the newest is skipped. */
+  generation: number;
+  /** Serializes loads for this container — overlapping loads each hold several
+   *  full copies of the result and raced on `table`. */
+  queue: Promise<void>;
+}
+const staticPerspectiveHosts = new WeakMap<HTMLElement, StaticPerspectiveHost>();
 let staticPerspectiveTableCounter = 0;
+
+function staticPerspectiveHost(container: HTMLElement): StaticPerspectiveHost {
+  let host = staticPerspectiveHosts.get(container);
+  if (!host) {
+    host = { table: null, generation: 0, queue: Promise.resolve() };
+    staticPerspectiveHosts.set(container, host);
+  }
+  return host;
+}
+
+/** Free a host's current Table. The viewer's Views must go first: the server
+ *  aborts an immediate delete of a table that still has views ("Cannot delete
+ *  table with views"), and `Table.delete()` consumes its wasm-bindgen handle
+ *  either way, so a failed delete cannot be retried — the table just leaks in
+ *  the Perspective heap. That is what this used to do on every reload, with the
+ *  failure swallowed as "already gone". `lazy` is the backstop: if a View
+ *  somehow survives, the delete completes when it is released rather than
+ *  failing. */
+async function freeStaticPerspectiveTable(host: StaticPerspectiveHost, releaseViews: () => Promise<void>): Promise<void> {
+  if (!host.table) return;
+  const table = host.table;
+  host.table = null;
+  try { await releaseViews(); } catch { /* fall through to the lazy delete */ }
+  try { await table.delete({ lazy: true }); } catch { /* already gone */ }
+}
 
 /** Load Perspective CSS and scripts (idempotent). */
 async function ensurePerspectiveLoaded(): Promise<void> {
@@ -827,10 +862,46 @@ export interface PerspectiveLoadContext {
   sql?: string;
 }
 
-export async function loadPerspective(
+/** Load a static Arrow snapshot into the container's viewer. Loads for one
+ *  container run one at a time, newest wins: resolves `false` without touching
+ *  the buffer when a newer load (or `releasePerspective`) superseded this one
+ *  while it waited. */
+export function loadPerspective(
   container: HTMLElement,
   arrowBuffer: ArrayBuffer,
   context: PerspectiveLoadContext = { path: "unknown" },
+): Promise<boolean> {
+  const host = staticPerspectiveHost(container);
+  const generation = ++host.generation;
+  const run = host.queue.then(async () => {
+    if (generation !== host.generation) return false;
+    await loadStaticPerspectiveSnapshot(host, container, arrowBuffer, context);
+    return true;
+  });
+  host.queue = run.then(() => {}, () => {});
+  return run;
+}
+
+/** Tear down a container's static snapshot — its viewer and its Table — when
+ *  the host unmounts. Without this a report's Perspective block left its whole
+ *  dataset in the Perspective heap after the block or report was closed. */
+export function releasePerspective(container: HTMLElement): Promise<void> {
+  const host = staticPerspectiveHosts.get(container);
+  if (!host) return Promise.resolve();
+  host.generation += 1;
+  host.queue = host.queue.then(async () => {
+    const viewer = container.querySelector("perspective-viewer") as any;
+    await freeStaticPerspectiveTable(host, async () => { await viewer?.delete(); });
+    viewer?.remove();
+  });
+  return host.queue;
+}
+
+async function loadStaticPerspectiveSnapshot(
+  host: StaticPerspectiveHost,
+  container: HTMLElement,
+  arrowBuffer: ArrayBuffer,
+  context: PerspectiveLoadContext,
 ) {
   // Parse once, dictionary-safely, and share it below with both diagnostics
   // and extension-column coercion — each used to parse the same buffer
@@ -859,6 +930,12 @@ export async function loadPerspective(
       container.appendChild(viewer);
     }
 
+    // Free the previous snapshot BEFORE building the next one, so at most one
+    // copy of a large result lives in the Perspective heap at a time. `eject`
+    // drops the viewer's Views (returning it to its pre-`load` state), which is
+    // what lets the delete actually happen.
+    await freeStaticPerspectiveTable(host, async () => { await viewer.eject(); });
+
     // Load Arrow data. This MUST be a real copy, not a view: perspective's
     // table() may take ownership of (and detach) the buffer it is handed, and
     // the caller's buffer is the shell's cached `lastArrowBuffer`, which
@@ -871,21 +948,22 @@ export async function loadPerspective(
     // static loader aborts on (see perspective-extension-coerce.ts) — neutralize
     // those first. A no-op (same buffer back) for ordinary result sets.
     const coerced = coerceArrowBufferForPerspective(arrowBuffer, parsedTable);
-    const copy = new Uint8Array(coerced.byteLength);
-    copy.set(new Uint8Array(coerced));
+    // A coerced buffer is already private to this call; only the caller's own
+    // buffer needs the defensive copy.
+    let ingest = coerced;
+    if (coerced === arrowBuffer) {
+      const copy = new Uint8Array(coerced.byteLength);
+      copy.set(new Uint8Array(coerced));
+      ingest = copy.buffer;
+    }
 
     // `viewer.load(table)` is deprecated (Perspective now warns on it) in
     // favor of `viewer.load(client)` + `viewer.restore({table: name})`.
-    // Loading a Table directly used to hand the viewer ownership of it, so
-    // nothing here freed the *previous* one on a second `.perspective` /
-    // "Open in Perspective" — under the client+name pattern that's no
-    // longer implicit, so free it ourselves before creating the next.
-    if (currentStaticPerspectiveTable) {
-      try { await currentStaticPerspectiveTable.delete(); } catch { /* already gone */ }
-      currentStaticPerspectiveTable = null;
-    }
+    // Loading a Table directly used to hand the viewer ownership of it; under
+    // the client+name pattern that's no longer implicit, which is why the
+    // previous snapshot is freed explicitly above.
     const tableName = `cupola-static-${++staticPerspectiveTableCounter}`;
-    currentStaticPerspectiveTable = await perspectiveWorker.table(copy.buffer, { name: tableName });
+    host.table = await perspectiveWorker.table(ingest, { name: tableName });
     await viewer.load(perspectiveWorker);
 
     // Perspective defaults to showing every column when no config is

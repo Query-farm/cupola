@@ -16,7 +16,6 @@ import { validateReadOnlySql } from "@/lib/reports/validation";
 
 interface DatasetResult {
   table: ArrowTable | null;
-  rows: Record<string, any>[];
   status: "idle" | "queued" | "running" | "success" | "error" | "blocked";
   error?: string;
   errorDetails?: string;

@@ -37,7 +37,7 @@ import { exportResult, safeFileStem, triggerDownload } from "@/lib/editor/result
 import { consumeReportPromotion, type ReportPromotion } from "@/lib/reports/events";
 import { reportDisplayRows, reportMapRows } from "@/lib/reports/display";
 import { buildReportDatasetExecutionPlan, inferReportDatasetDependencies, quoteReportDatasetIdentifier, type ReportDatasetExecutionPlan } from "@/lib/reports/dependencies";
-import { buildReportRunFailureNotice, classifyReportQueryError, isBlockingVegaWarning, validateReportResultColumns, type ReportQueryErrorCode, type ReportRunFailureNotice } from "@/lib/reports/execution";
+import { buildReportRunFailureNotice, classifyReportQueryError, isBlockingVegaWarning, reportDatasetNeedsRows, validateReportResultColumns, type ReportQueryErrorCode, type ReportRunFailureNotice } from "@/lib/reports/execution";
 import { resolveReportAppearance } from "@/lib/reports/appearance";
 import { REPORT_TOOLS, upsertAgentBlock, upsertAgentDataset, upsertAgentGroup, type SemanticBlockHeight, type SemanticBlockWidth } from "@/lib/reports/agent-tools";
 import { checkpointReportAgentPlan, parseReportAgentPlan, reportAgentRepair, validateReportAgentPlan, type ReportAgentPlan } from "@/lib/reports/agent-reliability";
@@ -67,7 +67,9 @@ interface Props {
 
 interface DatasetResult {
   table: ArrowTable | null;
-  rows: Record<string, any>[];
+  /** The IPC bytes `table` is a zero-copy view over. Perspective blocks ingest
+   *  these directly instead of re-serializing the decoded table. */
+  arrowBuffer?: ArrayBuffer;
   status: "idle" | "queued" | "running" | "success" | "error" | "blocked";
   error?: string;
   errorDetails?: string;
@@ -154,6 +156,23 @@ interface DatasetTestCache {
   reportId: string;
   datasetJson: string;
   results: Map<string, DatasetResult>;
+}
+
+const NO_ROWS: Record<string, any>[] = [];
+const materializedRows = new WeakMap<ArrowTable, Record<string, any>[]>();
+
+/** JS row objects for a decoded result, built on first use and memoized per
+ *  table so consumers see a stable array identity. Results deliberately do not
+ *  carry rows: they are the heaviest form a dataset takes, and a Perspective,
+ *  table or map block never reads them (see `reportDatasetNeedsRows`). */
+function datasetRows(table: ArrowTable | null | undefined): Record<string, any>[] {
+  if (!table) return NO_ROWS;
+  let rows = materializedRows.get(table);
+  if (!rows) {
+    rows = tableToRows(table);
+    materializedRows.set(table, rows);
+  }
+  return rows;
 }
 
 function defaultValues(report: ReportDocumentV1): Record<string, ReportParameterValue> {
@@ -471,37 +490,47 @@ function ReportChart({ block, rows, onViewChange }: {
   </div>;
 }
 
-function ReportPerspective({ table, sql, config, onConfig }: { table: ArrowTable; sql?: string; config?: Record<string, any>; onConfig: (config: Record<string, any>) => void }) {
+function ReportPerspective({ table, arrowBuffer, sql, config, onConfig }: { table: ArrowTable; arrowBuffer?: ArrayBuffer; sql?: string; config?: Record<string, any>; onConfig: (config: Record<string, any>) => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let disposed = false;
     let viewer: any = null;
     let listener: (() => void) | null = null;
     (async () => {
-      const [{ tableToIPC }, { loadPerspective }] = await Promise.all([
-        import("@query-farm/apache-arrow"), import("@/components/DuckDBShell"),
-      ]);
+      const { loadPerspective } = await import("@/components/DuckDBShell");
       if (disposed || !containerRef.current) return;
-      const bytes = tableToIPC(table, "file");
+      // Hand Perspective the bytes DuckDB produced. Re-serializing the decoded
+      // table cost two more full copies of the result per load, and went
+      // through the plain `tableFromIPC` decode, which drops dictionaries.
+      let buffer = arrowBuffer;
+      if (!buffer) {
+        const { tableToIPC } = await import("@query-farm/apache-arrow");
+        const bytes = tableToIPC(table, "file");
+        buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      }
       try {
-        await loadPerspective(
-          containerRef.current,
-          bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
-          { path: "report", sql },
-        );
+        // False when a newer run's load superseded this one while it queued.
+        if (!await loadPerspective(containerRef.current, buffer, { path: "report", sql })) return;
       } catch {
         // loadPerspective already recorded the failure with its SQL and schema.
         return;
       }
+      if (disposed || !containerRef.current) return;
       viewer = containerRef.current.querySelector("perspective-viewer") as any;
       if (config && viewer?.restore) await viewer.restore(config);
+      if (disposed) return;
       listener = async () => {
         try { if (viewer?.save) onConfig(await viewer.save()); } catch {}
       };
       viewer?.addEventListener("perspective-config-update", listener);
     })();
     return () => { disposed = true; if (viewer && listener) viewer.removeEventListener("perspective-config-update", listener); };
-  }, [table, sql]);
+  }, [table, arrowBuffer, sql]);
+  // Free the viewer and its Table with the block; nothing else owns them.
+  useEffect(() => {
+    const container = containerRef.current;
+    return () => { if (container) void import("@/components/DuckDBShell").then(({ releasePerspective }) => releasePerspective(container)); };
+  }, []);
   return <div ref={containerRef} className="h-full min-h-[220px] bg-white" />;
 }
 
@@ -877,7 +906,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         if (isDatasetPending(result)) next[id] = { ...result, status: result.table ? "success" : "idle" };
       }
       for (const dataset of datasets) {
-        const existing = next[dataset.id] ?? { table: null, rows: [], status: "idle" as const };
+        const existing = next[dataset.id] ?? { table: null, status: "idle" as const };
         next[dataset.id] = { ...existing, status: "queued", error: undefined, errorDetails: undefined, errorCode: undefined, retryable: undefined, retryAfterSeconds: undefined, durationMs: undefined, previousDurationMs: existing.durationMs ?? existing.previousDurationMs, planningMs: undefined, waitMs: undefined, queryMs: undefined, materializeMs: undefined, decodeMs: undefined, transferBytes: undefined, queuedAt: runQueuedAt, startedAt: undefined, finishedAt: undefined, runId: generation };
       }
       return next;
@@ -894,7 +923,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       if (generation !== runGeneration.current) return summaries;
       updateDatasetResults((prev) => {
         const next = { ...prev };
-        for (const dataset of datasets) next[dataset.id] = { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "error", error, errorDetails: error, errorCode: "service_unavailable", retryable: true };
+        for (const dataset of datasets) next[dataset.id] = { ...(prev[dataset.id] ?? { table: null }), status: "error", error, errorDetails: error, errorCode: "service_unavailable", retryable: true };
         return next;
       });
       return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error, errorDetails: error, errorCode: "service_unavailable", retryable: true, stale: captureRows?.has(dataset.id) ?? false }));
@@ -912,7 +941,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       const error = "The data engine reported ready before report query planning became available.";
       updateDatasetResults((prev) => {
         const next = { ...prev };
-        for (const dataset of datasets) next[dataset.id] = { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "error", error, errorDetails: error, errorCode: "service_unavailable", retryable: true };
+        for (const dataset of datasets) next[dataset.id] = { ...(prev[dataset.id] ?? { table: null }), status: "error", error, errorDetails: error, errorCode: "service_unavailable", retryable: true };
         return next;
       });
       return datasets.map((dataset) => ({ datasetId: dataset.id, name: dataset.name, ok: false, error, errorDetails: error, errorCode: "service_unavailable", retryable: true }));
@@ -941,7 +970,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       updateDatasetResults((prev) => {
         const next = { ...prev };
         for (const dataset of datasets) next[dataset.id] = {
-          ...(prev[dataset.id] ?? { table: null, rows: [] }),
+          ...(prev[dataset.id] ?? { table: null }),
           status: "error",
           error: classified.message,
           errorDetails: classified.technicalDetails,
@@ -962,7 +991,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     updateDatasetResults((prev) => {
       const next = { ...prev };
       for (const dataset of datasets) {
-        const existing = prev[dataset.id] ?? { table: null, rows: [], status: "idle" as const };
+        const existing = prev[dataset.id] ?? { table: null, status: "idle" as const };
         next[dataset.id] = {
         ...existing,
         status: "queued",
@@ -1004,7 +1033,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
           const blockedAt = Date.now();
           failed.add(dataset.id);
           updateDatasetResults((prev) => ({ ...prev, [dataset.id]: {
-            ...(prev[dataset.id] ?? { table: null, rows: [] }),
+            ...(prev[dataset.id] ?? { table: null }),
             status: "blocked",
             error: blockedMessage,
             errorDetails: `${dataset.name} depends on ${dependencyName}, so its query was not attempted.`,
@@ -1024,7 +1053,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         const startedAt = performance.now();
         updateDatasetResults((prev) => ({
           ...prev,
-          [dataset.id]: { ...(prev[dataset.id] ?? { table: null, rows: [] }), status: "running", error: undefined, errorDetails: undefined, errorCode: undefined, retryable: undefined, retryAfterSeconds: undefined, startedAt: startedAtEpoch, waitMs: startedAtEpoch - runQueuedAt, dependencies: [...(plan.dependencies.get(dataset.id) ?? [])], materialized: plan.materialized.has(dataset.id) },
+          [dataset.id]: { ...(prev[dataset.id] ?? { table: null }), status: "running", error: undefined, errorDetails: undefined, errorCode: undefined, retryable: undefined, retryAfterSeconds: undefined, startedAt: startedAtEpoch, waitMs: startedAtEpoch - runQueuedAt, dependencies: [...(plan.dependencies.get(dataset.id) ?? [])], materialized: plan.materialized.has(dataset.id) },
         }));
         if (publishResults) setRunProgress((progress) => progress?.generation === generation
           ? { ...progress, currentDatasetName: dataset.name }
@@ -1077,14 +1106,18 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
           const transferBytes = response.arrowBuffers.reduce((sum, buffer) => sum + buffer.byteLength, 0);
           phase = "decode";
           phaseStartedAt = performance.now();
-          const table = decodeArrowBuffer(response.arrowBuffers[0]);
-          const rows = tableToRows(table);
+          const arrowBuffer = response.arrowBuffers[0];
+          const table = decodeArrowBuffer(arrowBuffer);
+          // Still timed as decode when a consumer needs rows; skipped entirely
+          // for Perspective/table/map-only datasets, which can be huge.
+          const needsRows = reportDatasetNeedsRows(report, dataset.id);
+          const rows = needsRows ? datasetRows(table) : NO_ROWS;
           decodeMs = Math.round(performance.now() - phaseStartedAt);
           const finishedAt = Date.now();
           const durationMs = Math.round(performance.now() - startedAt);
           captureRows?.set(dataset.id, rows);
-          updateDatasetResults((prev) => ({ ...prev, [dataset.id]: { ...(prev[dataset.id] ?? {}), table, rows, status: "success", fetchedAt: finishedAt, durationMs, queryMs, materializeMs, decodeMs, transferBytes, startedAt: startedAtEpoch, finishedAt, waitMs: startedAtEpoch - runQueuedAt, planningMs, queuedAt: runQueuedAt, runId: generation, dependencies: [...(plan.dependencies.get(dataset.id) ?? [])], materialized: plan.materialized.has(dataset.id), ...(semantic?.compilation.ok && semantic.fingerprint ? { semantic: { plan: semantic.compilation.plan, fingerprint: semantic.fingerprint, modelChanged: semantic.modelChanged } } : {}) } }));
-          summaries.push({ datasetId: dataset.id, name: dataset.name, ok: true, rowCount: table.numRows, columns: table.schema.fields.map((field) => field.name), sample: rows.slice(0, 3) });
+          updateDatasetResults((prev) => ({ ...prev, [dataset.id]: { ...(prev[dataset.id] ?? {}), table, arrowBuffer, status: "success", fetchedAt: finishedAt, durationMs, queryMs, materializeMs, decodeMs, transferBytes, startedAt: startedAtEpoch, finishedAt, waitMs: startedAtEpoch - runQueuedAt, planningMs, queuedAt: runQueuedAt, runId: generation, dependencies: [...(plan.dependencies.get(dataset.id) ?? [])], materialized: plan.materialized.has(dataset.id), ...(semantic?.compilation.ok && semantic.fingerprint ? { semantic: { plan: semantic.compilation.plan, fingerprint: semantic.fingerprint, modelChanged: semantic.modelChanged } } : {}) } }));
+          summaries.push({ datasetId: dataset.id, name: dataset.name, ok: true, rowCount: table.numRows, columns: table.schema.fields.map((field) => field.name), sample: needsRows ? rows.slice(0, 3) : tableToRows(table.slice(0, 3)) });
         } catch (e) {
           if (generation !== runGeneration.current) return summaries;
           failed.add(dataset.id);
@@ -1098,7 +1131,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
           updateDatasetResults((prev) => ({
             ...prev,
             [dataset.id]: {
-              ...(prev[dataset.id] ?? { table: null, rows: [] }),
+              ...(prev[dataset.id] ?? { table: null }),
               status: "error",
               error: classified.message,
               errorDetails: classified.technicalDetails,
@@ -1129,7 +1162,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
               const next = { ...prev };
               for (const blocked of remaining) {
                 next[blocked.id] = {
-                  ...(prev[blocked.id] ?? { table: null, rows: [] }),
+                  ...(prev[blocked.id] ?? { table: null }),
                   status: "blocked",
                   error: blockedMessage,
                   errorDetails: `The refresh stopped before ${blocked.name} was requested, preventing more calls to the rate-limited service.`,
@@ -1192,7 +1225,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
 
   const regenerateNarrative = useCallback(async (block: ReportAiNarrativeBlock) => {
     if (!draft) return;
-    const rows = results[block.datasetId]?.rows;
+    const rows = results[block.datasetId]?.table ? datasetRows(results[block.datasetId].table) : undefined;
     if (!rows) {
       setNarrativeStates((states) => ({ ...states, [block.id]: { status: "error", error: "Run the report data before generating this narrative." } }));
       return;
@@ -1212,7 +1245,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
       return false;
     }
 
-    const rows = new Map(Object.entries(results).filter(([, result]) => Boolean(result.table)).map(([datasetId, result]) => [datasetId, result.rows]));
+    const rows = new Map(Object.entries(results).filter(([, result]) => Boolean(result.table)).map(([datasetId, result]) => [datasetId, reportDatasetNeedsRows(report, datasetId) ? datasetRows(result.table) : NO_ROWS]));
     const auxiliaryIds = new Set<string>();
     for (const parameter of report.parameters) {
       if (parameter.options?.kind === "dataset") auxiliaryIds.add(parameter.options.datasetId);
@@ -1492,8 +1525,9 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         if (revision !== blockEditorRevisionRef.current) return;
         const chartErrors = [compile.error, ...compile.warnings.filter(isBlockingVegaWarning)].filter((error): error is string => Boolean(error));
         if (chartErrors.length) { setBlockEditorErrors(chartErrors); return; }
-        const rows = results[blockEditor.block.datasetId]?.rows;
-        if (rows) {
+        const table = results[blockEditor.block.datasetId]?.table;
+        if (table) {
+          const rows = datasetRows(table);
           const rendered = await renderChartToPng(blockEditor.block.spec, rows);
           if (revision !== blockEditorRevisionRef.current) return;
           if ("error" in rendered) { setBlockEditorErrors([rendered.error]); return; }
@@ -2146,8 +2180,9 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
   const dirty = !selected || JSON.stringify(draft) !== JSON.stringify(selected);
   const columnsByDataset = Object.fromEntries(report.datasets.map((dataset) => [dataset.id, results[dataset.id]?.table?.schema.fields.map((field) => field.name) ?? []]));
   const optionValues = (p: ReportParameter) => {
-    const rows = new Map(Object.entries(results).map(([datasetId, result]) => [datasetId, result.rows]));
-    return parameterOptionsFromRows(p, rows) ?? [];
+    if (p.options?.kind !== "dataset") return parameterOptionsFromRows(p, new Map()) ?? [];
+    const table = results[p.options.datasetId]?.table;
+    return parameterOptionsFromRows(p, table ? new Map([[p.options.datasetId, datasetRows(table)]]) : new Map()) ?? [];
   };
   const parametersDirty = report.parameters.some((parameter) => JSON.stringify(values[parameter.key] ?? parameter.defaultValue) !== JSON.stringify(appliedValues[parameter.key] ?? parameter.defaultValue));
   const desktopLayout = report.blocks.map((block) => ({ i: block.id, ...block.layout }));
@@ -2368,7 +2403,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
               : isReportTufteBlock(block)
                 ? { id: block.id, title: block.title, spec: semanticChartSpec(tufteBlockToVegaSpec(block), result?.semantic?.plan) }
                 : null;
-            const resolvedAppearance = resolveReportAppearance(block.appearance, result?.rows ?? []);
+            const resolvedAppearance = resolveReportAppearance(block.appearance, block.appearance?.rules?.length ? datasetRows(result?.table) : NO_ROWS);
             const appearanceStyle = REPORT_BLOCK_APPEARANCE[resolvedAppearance.tone];
             const gridStyle = {
               "--report-grid-column": block.layout.x + 1,
@@ -2456,7 +2491,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
               </div>}
               {!showBlockHeader && resolvedAppearance.label && <div data-testid={`report-block-status-${block.id}`} title={resolvedAppearance.label} className="absolute right-2 top-2 z-10 inline-flex max-w-[60%] items-center gap-1.5 rounded-full border border-current/15 bg-background/75 px-2 py-0.5 text-[10px] font-medium"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${appearanceStyle.dot}`} /><span className="truncate">{resolvedAppearance.label}</span></div>}
               {!readerMode && !showBlockHeader && <div className={`report-authoring-control absolute right-1 top-1 z-20 flex items-center rounded-md border bg-background/90 shadow-sm transition-opacity group-focus-within:opacity-100 ${selectedForEditing ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`} onMouseDown={(event) => event.stopPropagation()}><button type="button" className="rounded px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`Edit ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); openBlockEditor(block); }}>Edit</button><button type="button" className="rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`Ask AI about ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); openTargetedAgent(); }}>AI</button><button type="button" className="rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`Duplicate ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); copyBlock(block); }}>Copy</button><button type="button" className="rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label={`Delete ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); removeBlock(block); }}>×</button><div data-testid={`report-block-drag-${block.id}`} title="Drag text block" className="report-drag-handle cursor-move rounded p-1 text-muted-foreground/50 hover:bg-muted hover:text-foreground"><GripVertical className="h-3.5 w-3.5" /></div></div>}
-              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={interpolateReportText(block.markdown, report, appliedValues)} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className={result.status === "blocked" ? "text-xs text-amber-700 dark:text-amber-300" : "text-xs text-destructive"}>{result.error}</div>{result.errorDetails && <details className="max-w-full text-left text-[10px] text-muted-foreground"><summary className="cursor-pointer text-center">Technical details</summary><div className="mt-1 max-h-20 overflow-auto font-mono">{result.errorDetails}</div></details>}<Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} columnLabels={result.semantic ? Object.fromEntries(columns.map((name) => [name, semanticOutputLabel(semanticOutput(result.semantic?.plan, name), name)])) : undefined} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.rows.length} showing={Math.min(result.rows.length, pageSize)} />; })() : block.type === "kpi" ? <ReportKpi block={semanticBlockDefaults(block, result.semantic?.plan)} row={result.rows[0]} formatValue={formatBlockValue} /> : block.type === "sparkline" ? <ReportSparkline block={semanticBlockDefaults(block, result.semantic?.plan)} rows={result.rows} formatValue={formatBlockValue} /> : visualBlock ? <ReportChart block={visualBlock} rows={result.rows} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} sql={dataset?.sql} config={block.config} onConfig={(config) => { if (!readerMode) setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current); }} /> : null}</div>
+              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={interpolateReportText(block.markdown, report, appliedValues)} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className={result.status === "blocked" ? "text-xs text-amber-700 dark:text-amber-300" : "text-xs text-destructive"}>{result.error}</div>{result.errorDetails && <details className="max-w-full text-left text-[10px] text-muted-foreground"><summary className="cursor-pointer text-center">Technical details</summary><div className="mt-1 max-h-20 overflow-auto font-mono">{result.errorDetails}</div></details>}<Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} columnLabels={result.semantic ? Object.fromEntries(columns.map((name) => [name, semanticOutputLabel(semanticOutput(result.semantic?.plan, name), name)])) : undefined} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.table.numRows} showing={Math.min(result.table.numRows, pageSize)} />; })() : block.type === "kpi" ? <ReportKpi block={semanticBlockDefaults(block, result.semantic?.plan)} row={datasetRows(result.table)[0]} formatValue={formatBlockValue} /> : block.type === "sparkline" ? <ReportSparkline block={semanticBlockDefaults(block, result.semantic?.plan)} rows={datasetRows(result.table)} formatValue={formatBlockValue} /> : visualBlock ? <ReportChart block={visualBlock} rows={datasetRows(result.table)} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={reportMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} arrowBuffer={result.arrowBuffer} sql={dataset?.sql} config={block.config} onConfig={(config) => { if (!readerMode) setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current); }} /> : null}</div>
               {result?.semantic && <details data-testid={`report-semantic-provenance-${block.id}`} className="border-t bg-muted/15 px-3 py-1.5 text-[10px] text-muted-foreground"><summary className="cursor-pointer font-medium text-emerald-700 dark:text-emerald-300">How this governed calculation was made{Object.values(result.semantic.plan.output_units ?? {}).some(Boolean) ? ` · ${Object.entries(result.semantic.plan.output_units ?? {}).filter(([, unit]) => unit).map(([name, unit]) => `${name}: ${unit}`).join(", ")}` : ""}</summary><div className="mt-2 space-y-1"><div><span className="font-medium text-foreground">Dataset:</span> {dataset?.name}</div><div><span className="font-medium text-foreground">Grain:</span> {(result.semantic.plan.stitch?.result_grain ?? result.semantic.plan.fact_branches[0]?.result_grain ?? []).join(", ") || "single result"}</div><div><span className="font-medium text-foreground">Sources:</span> {result.semantic.plan.fact_branches.map((branch) => `${branch.root.catalog_id}/${branch.root.entity_id}`).join(", ")}</div>{result.semantic.plan.warnings.length > 0 && <div className="text-amber-700 dark:text-amber-300">{result.semantic.plan.warnings.join(" ")}</div>}<details><summary className="cursor-pointer">Generated SQL</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded border bg-background p-2 font-mono">{result.semantic.plan.sql}</pre></details></div></details>}
               {(block.caption || block.source) && <div data-testid={`report-note-${block.id}`} className="px-3 pb-2 text-[10px] leading-snug text-muted-foreground">
                 {block.caption && <span>{interpolateReportText(block.caption, report, appliedValues)}</span>}{block.caption && block.source && <span> · </span>}{block.source && <span>Source: {interpolateReportText(block.source, report, appliedValues)}</span>}

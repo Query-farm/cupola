@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildReportRunFailureNotice, classifyReportQueryError, isBlockingVegaWarning, validateReportResultColumns } from "../../src/lib/reports/execution";
+import { buildReportRunFailureNotice, classifyReportQueryError, isBlockingVegaWarning, reportDatasetNeedsRows, validateReportResultColumns } from "../../src/lib/reports/execution";
 import { createEmptyReport } from "../../src/lib/reports/types";
 
 test("reports missing map columns after dataset execution", () => {
@@ -128,4 +128,33 @@ test("summarizes a rate-limit circuit breaker without treating it as report vali
     "Climate normals: HTTP 429 from Open-Meteo: the request limit was exceeded.",
     "Forecast: Not refreshed because Climate normals hit a data-service rate limit.",
   ]);
+});
+
+test("skips row materialization for datasets only Perspective, table, and map blocks read", () => {
+  const report = createEmptyReport("Parcels");
+  report.datasets.push({ id: "parcels", name: "Parcels", sql: "SELECT * FROM parcels" });
+  // The agent runs a dataset before any block references it.
+  expect(reportDatasetNeedsRows(report, "parcels")).toBe(false);
+
+  report.blocks.push({ id: "pivot", type: "perspective", datasetId: "parcels", layout: { x: 0, y: 0, w: 12, h: 6 } });
+  report.blocks.push({ id: "grid", type: "table", datasetId: "parcels", layout: { x: 0, y: 6, w: 12, h: 6 } });
+  expect(reportDatasetNeedsRows(report, "parcels")).toBe(false);
+
+  // An appearance rule evaluates row values, even on a row-free block type.
+  report.blocks[1].appearance = { rules: [{ column: "acres", operator: "gt", value: 10, tone: "warning" }] } as any;
+  expect(reportDatasetNeedsRows(report, "parcels")).toBe(true);
+  delete report.blocks[1].appearance;
+
+  report.blocks.push({ id: "total", type: "kpi", datasetId: "parcels", valueColumn: "acres", layout: { x: 0, y: 12, w: 3, h: 2 } });
+  expect(reportDatasetNeedsRows(report, "parcels")).toBe(true);
+});
+
+test("keeps rows for datasets that feed parameters", () => {
+  const report = createEmptyReport("Weather");
+  report.datasets.push({ id: "cities", name: "Cities", sql: "SELECT city FROM cities" });
+  report.datasets.push({ id: "lookup", name: "Lookup", sql: "SELECT 1", role: "parameter_validation" });
+  expect(reportDatasetNeedsRows(report, "lookup")).toBe(true);
+  expect(reportDatasetNeedsRows(report, "cities")).toBe(false);
+  report.parameters.push({ key: "city", label: "City", type: "string", defaultValue: "Norfolk", options: { kind: "dataset", datasetId: "cities", valueColumn: "city" } } as any);
+  expect(reportDatasetNeedsRows(report, "cities")).toBe(true);
 });

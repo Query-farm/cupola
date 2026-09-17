@@ -100,7 +100,7 @@ describe("report dataset browser", () => {
     const table = tableFromArrays({ city: ["Norfolk"], humidity: [68] });
     const view = render(<ReportDatasetsView
       report={report}
-      results={{ conditions: { table, rows: [{ city: "Norfolk", humidity: 68 }], status: "success" } }}
+      results={{ conditions: { table, status: "success" } }}
       appliedValues={{ city: "Norfolk" }}
       running={false}
       engineReady
@@ -136,7 +136,6 @@ describe("report dataset browser", () => {
       report={semanticReport}
       results={{ conditions: {
         table,
-        rows: [{ average_temperature: 20 }],
         status: "success",
         semantic: {
           fingerprint: `sha256:${"2".repeat(64)}`,
@@ -249,8 +248,8 @@ describe("report dataset browser", () => {
     const view = render(<ReportDatasetsView
       report={report}
       results={{
-        choices: { table: choicesTable, rows: [{ city: "Glen Allen" }, { city: "Norfolk" }], status: "success", durationMs: 20, previousDurationMs: 24, planningMs: 5, waitMs: 50, queryMs: 18, decodeMs: 2, transferBytes: 512, queuedAt: 1_000, startedAt: 1_050, finishedAt: 1_070, runId: 7, dependencies: [] },
-        conditions: { table: conditionsTable, rows: [{ city: "Norfolk", humidity: 68 }], status: "success", durationMs: 40, previousDurationMs: 30, planningMs: 5, waitMs: 10, queryMs: 35, decodeMs: 5, transferBytes: 1_024, queuedAt: 1_000, startedAt: 1_010, finishedAt: 1_050, runId: 7, dependencies: ["choices"], materialized: true },
+        choices: { table: choicesTable, status: "success", durationMs: 20, previousDurationMs: 24, planningMs: 5, waitMs: 50, queryMs: 18, decodeMs: 2, transferBytes: 512, queuedAt: 1_000, startedAt: 1_050, finishedAt: 1_070, runId: 7, dependencies: [] },
+        conditions: { table: conditionsTable, status: "success", durationMs: 40, previousDurationMs: 30, planningMs: 5, waitMs: 10, queryMs: 35, decodeMs: 5, transferBytes: 1_024, queuedAt: 1_000, startedAt: 1_010, finishedAt: 1_050, runId: 7, dependencies: ["choices"], materialized: true },
       }}
       appliedValues={{ city: "Norfolk" }}
       running={false}

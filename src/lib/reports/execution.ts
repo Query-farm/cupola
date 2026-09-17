@@ -138,6 +138,30 @@ function referencedColumns(block: ReportBlock): string[] {
   return columns.filter((column, index, all) => all.indexOf(column) === index);
 }
 
+/** Blocks that read the decoded Arrow table directly and never touch the
+ *  per-row JS objects, unless an appearance rule makes them. */
+const ROW_FREE_BLOCK_TYPES = new Set<ReportBlock["type"]>(["perspective", "table", "map"]);
+
+/** Whether anything in the report consumes this dataset as JS row objects.
+ *
+ * Row objects are by far the heaviest form a result takes — one object per
+ * row, one property per column — and a Perspective, table or map block never
+ * reads them. Materializing them unconditionally is part of what killed the
+ * tab on a several-hundred-thousand-row Perspective dataset. A dataset no
+ * block references yet (the agent runs a dataset before adding its blocks)
+ * needs none either; the block's own run re-evaluates this. */
+export function reportDatasetNeedsRows(report: ReportDocumentV1, datasetId: string): boolean {
+  const dataset = report.datasets.find((candidate) => candidate.id === datasetId);
+  if (dataset?.role && dataset.role !== "data") return true;
+  for (const parameter of report.parameters) {
+    if (parameter.options?.kind === "dataset" && parameter.options.datasetId === datasetId) return true;
+    if (parameter.validationDataset?.datasetId === datasetId) return true;
+  }
+  return report.blocks.some((block) => block.type !== "markdown"
+    && block.datasetId === datasetId
+    && (!ROW_FREE_BLOCK_TYPES.has(block.type) || Boolean(block.appearance?.rules?.length)));
+}
+
 /** Validate block-level column references after datasets have actually run. */
 export function validateReportResultColumns(report: ReportDocumentV1, datasets: ReportDatasetShape[]): string[] {
   const shapes = new Map(datasets.map((dataset) => [dataset.datasetId, dataset]));
