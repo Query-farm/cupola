@@ -10,6 +10,7 @@
  */
 import { tableFromIPC, RecordBatchFileReader, Table } from "@query-farm/apache-arrow";
 import { engine } from "./shell-bridge";
+import { bignumBytesToBigInt, formatBitString, formatFixedBinaryTimeTz, formatUUID, getDuckDBExtensionType, readInt128 } from "./format";
 
 /** SQL-escape a string for inlining into a literal. DuckDB uses SQL-standard
  *  single-quote doubling. Returns the escaped *body* — callers supply the
@@ -108,16 +109,46 @@ export async function readRowsTyped<T>(sql: string): Promise<T[] | null> {
  *  — returning BigInt would break that contract on every JSON.stringify.
  */
 export function tableToRows(table: Table): Record<string, any>[] {
-  const fields = table.schema.fields.map((f: any) => f.name);
+  const columns = table.schema.fields.map((field: any, index: number) => ({
+    name: field.name as string,
+    vector: table.getChildAt(index),
+    decode: duckdbExtensionDecoder(field),
+  }));
   const rows: Record<string, any>[] = [];
   for (let i = 0; i < table.numRows; i++) {
     const row: Record<string, any> = {};
-    for (const name of fields) {
-      row[name] = coerceArrowValue(table.getChild(name)?.get(i));
+    for (const { name, vector, decode } of columns) {
+      const raw = vector?.get(i);
+      row[name] = coerceArrowValue(decode && raw != null ? decode(raw) : raw);
     }
     rows.push(row);
   }
   return rows;
+}
+
+/** Decoder for a column DuckDB's lossless Arrow export wraps in an extension
+ *  type, or null for an ordinary column.
+ *
+ *  Under `arrowLosslessConversion` HUGEINT/UHUGEINT/BIGNUM/BIT/TIME_TZ/UUID
+ *  arrive as raw `FixedSizeBinary`/`Binary` bytes tagged with
+ *  `ARROW:extension:metadata`, not as the Decimal128 BigNum `coerceArrowValue`
+ *  already handles. Left undecoded, `.get()` hands back a `Uint8Array`, which
+ *  a KPI rendered as "170,215,68,…" and a chart plotted as NaN. The integer
+ *  types decode to a bigint so `coerceArrowValue` applies its usual
+ *  Number-or-exact-string rule; the rest decode to the string the grid shows. */
+function duckdbExtensionDecoder(field: any): ((raw: any) => unknown) | null {
+  const extName: string | undefined = field.metadata?.get?.("ARROW:extension:name");
+  if (!extName) return null;
+  if (extName === "arrow.bool8") return (raw) => typeof raw === "number" ? raw !== 0 : raw;
+  const typeName = getDuckDBExtensionType(field);
+  const bytes = (decode: (raw: Uint8Array) => unknown) => (raw: any) => raw instanceof Uint8Array ? decode(raw) : raw;
+  if (typeName === "hugeint") return bytes((raw) => readInt128(raw, true));
+  if (typeName === "uhugeint") return bytes((raw) => readInt128(raw, false));
+  if (typeName === "bignum" || typeName === "varint") return bytes(bignumBytesToBigInt);
+  if (typeName === "bit") return bytes(formatBitString);
+  if (typeName === "time_tz") return bytes(formatFixedBinaryTimeTz);
+  if (typeName === "uuid" || extName === "arrow.uuid") return bytes(formatUUID);
+  return null;
 }
 
 // Well-known symbol apache-arrow tags its BigNum wrapper prototype with

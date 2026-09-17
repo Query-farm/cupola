@@ -7,13 +7,14 @@
  * serialize a BigInt at runtime, far from the actual coercion site.
  */
 import { test, expect, describe, mock } from "bun:test";
+import { Field, FixedSizeBinary, Int8, RecordBatch, Schema, Struct, Table, Utf8, makeData, vectorFromArray } from "@query-farm/apache-arrow";
 import { BN } from "@query-farm/apache-arrow/util/bn";
 
 // service.ts pulls @query-farm/vgi-rpc/connect which doesn't resolve under bun
 // without an alias; stub before importing duckdb-query (transitive dep).
 mock.module("@query-farm/vgi-rpc/connect", () => ({ httpConnect: () => { throw new Error("stub"); } }));
 
-const { coerceArrowValue } = await import("../../src/lib/duckdb-query");
+const { coerceArrowValue, tableToRows } = await import("../../src/lib/duckdb-query");
 
 /** Build the same BigNum wrapper apache-arrow's Decimal128 visitor returns
  *  from `.get(i)` (visitor/get.mjs: `getDecimal` → `BN.decimal(...)`), for
@@ -104,5 +105,43 @@ describe("coerceArrowValue", () => {
     const parsed = JSON.parse(JSON.stringify(safe));
     expect(parsed.id).toBe(42);
     expect(typeof parsed.nested.count).toBe("string"); // overflow → string
+  });
+});
+
+describe("tableToRows over DuckDB's lossless extension types", () => {
+  function int128Bytes(value: bigint): Uint8Array {
+    const buf = new ArrayBuffer(16);
+    const view = new DataView(buf);
+    view.setBigUint64(0, value & 0xFFFFFFFFFFFFFFFFn, true);
+    view.setBigUint64(8, (value >> 64n) & 0xFFFFFFFFFFFFFFFFn, true);
+    return new Uint8Array(buf);
+  }
+  const opaque = (typeName: string) => new Map([
+    ["ARROW:extension:name", "arrow.opaque"],
+    ["ARROW:extension:metadata", JSON.stringify({ type_name: typeName })],
+  ]);
+
+  test("HUGEINT/UHUGEINT bytes decode to a Number or an exact string, never a Uint8Array", () => {
+    const schema = new Schema([
+      new Field("label", new Utf8(), true),
+      new Field("huge", new FixedSizeBinary(16), true, opaque("hugeint")),
+      new Field("uhuge", new FixedSizeBinary(16), true, opaque("uhugeint")),
+      new Field("flag", new Int8(), true, new Map([["ARROW:extension:name", "arrow.bool8"]])),
+    ]);
+    const vectors = [
+      vectorFromArray(["small", "large", "missing"], new Utf8()),
+      vectorFromArray([int128Bytes(-42n), int128Bytes(2200620179644536746n), null], new FixedSizeBinary(16)),
+      vectorFromArray([int128Bytes(7n), int128Bytes((1n << 128n) - 1n), null], new FixedSizeBinary(16)),
+      vectorFromArray([1, 0, null], new Int8()),
+    ];
+    const data = makeData({ type: new Struct(schema.fields), length: 3, children: vectors.map((v) => v.data[0]) });
+    const rows = tableToRows(new Table(schema, new RecordBatch(schema, data)));
+
+    expect(rows).toEqual([
+      { label: "small", huge: -42, uhuge: 7, flag: true },
+      // Past 2^53: the exact digits as a string, the same rule as BIGINT.
+      { label: "large", huge: "2200620179644536746", uhuge: "340282366920938463463374607431768211455", flag: false },
+      { label: "missing", huge: null, uhuge: null, flag: null },
+    ]);
   });
 });

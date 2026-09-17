@@ -139,7 +139,9 @@ test("browses the shared report datasets without issuing another query", async (
   await expect(page.getByText("Conditions (table)")).toBeVisible();
   await expect(page.getByTestId("report-dataset-sql")).toContainText("SELECT ? AS humidity");
   await expect(page.getByTestId("report-dataset-param-1")).toHaveText("Parameter 1 = 68");
-  await expect(page.getByRole("cell", { name: "68", exact: true })).toBeVisible();
+  // A number parameter binds as DOUBLE, and the grid prints whole doubles the
+  // way the DuckDB CLI does.
+  await expect(page.getByRole("cell", { name: "68.0", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: /Aug.*2026|2026/ })).toBeVisible();
   expect(await page.evaluate(() => (window as any).__datasetBrowserCalls)).toBe(1);
 
@@ -396,11 +398,11 @@ test("promotes the current editor statement into a runnable report table", async
   await expect(page.getByRole("cell", { name: "North & <South>" })).toBeVisible({ timeout: T_NORMAL });
   await expect(page.getByRole("cell", { name: "2021-01-01 00:00:00.123456" })).toBeVisible({ timeout: T_NORMAL });
 
-  await page.getByRole("button", { name: "Accept & save" }).click();
+  await page.getByRole("button", { name: "Save report draft" }).click();
   await page.getByRole("button", { name: "Reports", exact: true }).click();
-  await expect(page.getByRole("button", { name: /^Query 1 Ready/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Query 1 Draft/ })).toBeVisible();
   await page.reload();
-  await expect(page.getByRole("button", { name: /^Query 1 Ready/ })).toBeVisible({ timeout: T_NORMAL });
+  await expect(page.getByRole("button", { name: /^Query 1 Draft/ })).toBeVisible({ timeout: T_NORMAL });
 });
 
 test("fits a chart to its report block without an inner scrollbar", async ({ page }) => {
