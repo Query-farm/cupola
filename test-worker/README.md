@@ -15,6 +15,7 @@ builds only `src/` and `public/`, and the package is `private`. Keep it out of
 ```bash
 ./run.sh                    # http://127.0.0.1:9009, no auth, CORS open
 PORT=9010 ./run.sh          # another port
+HTTP_THREADS=8 ./run.sh     # smaller request pool (default 32)
 ```
 
 Then open `http://localhost:4321/?service=http://localhost:9009`. Port 9009 is the
@@ -27,6 +28,12 @@ From a DuckDB-compatible CLI, without HTTP:
 ```sql
 ATTACH 'cupola_test' (TYPE vgi, LOCATION 'uv run stress_worker.py');
 ```
+
+One request holds one server thread for the length of its scan, so the pool has
+to be at least as large as the number of browsers you point at it — a Playwright
+run uses half the machine's cores by default. Too small a pool does not look
+like queueing: DuckDB's ATTACH exceeds its 20s budget and the spec fails with
+"the DuckDB bridge never became ready".
 
 ### Version pinning
 
