@@ -30,7 +30,11 @@ interface TableRef {
   table_name: string;
 }
 
-/** Find a table in the ATTACHed VGI catalog (not memory/system). */
+/** Find a table in the ATTACHed VGI catalog (not memory/system) that the
+ *  grouping test can pivot: it needs a string column with at least one value.
+ *  "Whatever table comes first" is not that — it picked an empty table, an
+ *  all-NULL one, and an integer-only one depending on the catalog. Candidates
+ *  are probed with LIMIT 1, which stays cheap however large the table is. */
 async function findTable(page: Page): Promise<TableRef | null> {
   const catalogRes = await shellQuery(
     page,
@@ -42,12 +46,20 @@ async function findTable(page: Page): Promise<TableRef | null> {
 
   const res = await shellQuery(
     page,
-    `SELECT table_schema, table_name FROM information_schema.tables
+    `SELECT table_schema, table_name, min(column_name) AS column_name
+       FROM information_schema.columns
       WHERE table_catalog = '${catalog}'
         AND table_schema NOT IN ('information_schema', 'pg_catalog')
-      LIMIT 1`,
+        AND data_type = 'VARCHAR'
+      GROUP BY ALL ORDER BY table_schema, table_name LIMIT 8`,
   );
-  return (res.rows?.[0] as TableRef) ?? null;
+  const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
+  for (const row of res.rows ?? []) {
+    const path = [catalog, row.table_schema, row.table_name].map(quote).join(".");
+    const probe = await shellQuery(page, `SELECT 1 FROM ${path} WHERE ${quote(row.column_name)} IS NOT NULL LIMIT 1`);
+    if (probe.rows?.length) return { table_schema: row.table_schema, table_name: row.table_name };
+  }
+  return null;
 }
 
 test.describe("Perspective virtual server", () => {

@@ -3,7 +3,7 @@
  *
  * Requires:
  *   - Dev server on localhost:4321 (auto-started by playwright config)
- *   - VGI server (vgi-volcanos, no-auth) on localhost:9009
+ *   - VGI server on localhost:9009 — `test-worker/run.sh` serves the cupola_test catalog
  */
 import { expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";

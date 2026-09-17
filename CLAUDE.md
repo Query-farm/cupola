@@ -204,6 +204,9 @@ tests/
   *.spec.ts                  # Playwright e2e tests (bun run test:e2e)
                              #   perspective.spec.ts = static Arrow path
                              #   perspective-virtual-server.spec.ts = DuckDB-backed path
+test-worker/                 # Python VGI worker serving the synthetic `cupola_test` catalog
+                             #   (small/large/edge datasets, fault injection). Dev-only:
+                             #   nothing outside dist/ is ever published. See its README.
 .github/workflows/
   publish.yml                # Manual-dispatch CI publish (inactive until secrets are set)
 ```
@@ -233,6 +236,10 @@ Two build prerequisites fail with errors pointing elsewhere, so `build-perspecti
 **Memory64 server binary.** `build-perspective.sh` sets `PSP_WASM64=1` so `rust/perspective-server/build.mjs` also produces `perspective-server.memory64.wasm` alongside the default wasm32 one (unset builds wasm32 only; `PSP_WASM64=only` would build *only* wasm64, dropping the wasm32 fallback needed for hosts without it — never use `only` here). `perspective.cdn.ts` already registers both and prefers wasm64 whenever `host_supports_memory64()` is true (Chrome 133+, Firefox 134+ by default at time of writing; Safari has no shipped support), raising the heap ceiling from 4GB to 16GB for large result sets with "some engine performance cost" per the fork's own registration doc comment. Before this, cupola never built the memory64 artifact at all, so every browser silently ran wasm32 regardless of what it supported — the failure mode was `Abort(): malloc of size N failed` for N around 2^31 once a result set approached wasm32's ceiling (a much rarer, later-stage cousin of the `arrow::Type::EXTENSION` abort in `perspective-extension-coerce.ts`'s doc comment — same C++ engine, different resource limit). A missing memory64 build isn't an error at either the build or the staging step — `select_server_wasm` falls back to wasm32 with a console warning, which is exactly the 404-then-fallback breadcrumb that looked alarming but was actually expected before this file existed.
 
 **Two Perspective code paths, one container.** `ui.showPerspective(arrowBuffer)` loads a **static Arrow snapshot** (`perspectiveWorker.table()`) — driven by the shell's `.perspective` and the editor's "Open in Perspective". Selecting a table and opening the Perspective tab instead starts the **virtual server** (`VgiDuckDBHandler`), which compiles pivots to SQL against DuckDB-WASM. They share a DOM container and module-global worker but nothing else — the static path renames nothing while the virtual server maps `_`→`-` in column names, and only the virtual server supports grouping. Each has its own spec (`perspective.spec.ts`, `perspective-virtual-server.spec.ts`); the virtual-server one had no coverage until v5 broke it.
+
+**Static Perspective snapshots are owned per container, and freed by ejecting first** (`loadPerspective` / `releasePerspective` in `DuckDBShell.tsx`). `viewer.load(client)` takes no ownership of a Table, so cupola must delete each snapshot itself — and an immediate `table.delete()` while the viewer still holds a View aborts server-side with "Cannot delete table with views". `Table.delete()` consumes its wasm-bindgen handle either way, so a failed delete cannot be retried: the table simply stays in the Perspective heap. That is what every reload used to do, with the error swallowed as "already gone", and the reference lived in one module-global slot shared by the shell tab and every report Perspective block. So: `viewer.eject()` first (drops the Views), then `delete({ lazy: true })` as a backstop, tracked in a `WeakMap` keyed by host container; loads for one container are serialized and a superseded load resolves `false` without touching its buffer; hosts call `releasePerspective` on unmount. The old behaviour is what killed the tab on a 400k-row report Perspective block — each dataset re-run (the AI builder re-runs on every `upsert_report_block`) stacked another full copy in the renderer process. `tests/report-perspective-stress.spec.ts` asserts exactly one `cupola-static-*` table survives each re-run.
+
+**Report results do not carry JS rows** (`ReportsWorkspace.tsx`): a `DatasetResult` holds the decoded Arrow `table` plus the `arrowBuffer` it views over, and row objects come from `datasetRows(table)` — built on first use, memoized per table in a `WeakMap` so consumers keep a stable array identity. Rows are the heaviest form a result takes, and Perspective, table and map blocks never read them; `reportDatasetNeedsRows()` (`reports/execution.ts`) decides whether a run materializes them up front (still timed as decode) or skips them. Perspective blocks ingest `arrowBuffer` directly — re-serializing the decoded table cost two more copies per load and went through plain `tableFromIPC`, which drops dictionaries.
 
 **Lossless Arrow conversion** (`duckdb-worker-boot.ts`): the worker opens the database with `db.open({ arrowLosslessConversion: true })`. Without it DuckDB collapses its own types to lossy primitives — `UHUGEINT` becomes a *signed* `DECIMAL(38,0)` so `2^128-1` reads as `-1`, `BIT` becomes an untagged `BLOB`, `TIME_TZ` becomes a plain `TIME` with its offset thrown away — and none carry `ARROW:extension:metadata`, so the handlers in `format.ts` that key off it silently never fire. That shipped for a long time: the shell rendered BIT columns as hex blobs and UHUGEINT as `-1`.
 
@@ -321,10 +328,10 @@ When a VGI server has OAuth PKCE enabled:
 
 Unit tests are pure-logic bun tests in `tests/unit/` (`bun run test`); the AI agent's helper modules (`ai-fetch`, `ai-history`, `ai-telemetry`, `sentry-scrub`, etc.) are deliberately free of service/VGI imports so they stay unit-testable.
 
-For end-to-end work, test with Playwright (or Playwright MCP) against a running VGI server:
+For end-to-end work, test with Playwright (or Playwright MCP) against a running VGI server. The repo carries its own — `test-worker/` serves the synthetic `cupola_test` catalog on the suite's default port, with small report-friendly tables, 100k–2M-row stress tables (`large.orders_400k` is the size that killed the tab), type/shape edge cases, and slow/failing/rate-limited table functions:
 ```bash
-# Start any VGI server (no auth for testing), e.g.
-cd ~/Development/vgi-albemarle-gis && ./run-local-noauth.sh   # :9003
+# Start the test VGI worker (no auth) — needs only uv
+./test-worker/run.sh                                           # :9009
 
 # Start frontend dev server
 cd ~/Development/vgi-web-frontend && bun run dev
@@ -332,6 +339,8 @@ cd ~/Development/vgi-web-frontend && bun run dev
 # Test in browser
 http://localhost:4321/?service=http://localhost:9009
 ```
+
+**The test worker is pinned to the vgi-python that speaks cupola's pinned extension's wire protocol, not to the newest release.** `VGI_EXTENSION_VERSION` (`duckdb-engine.ts`) is protocol 1.3.0 = vgi-python 0.28.x; a newer worker rejects every request with `ProtocolVersionError: client is too old` (and vgi-rpc 0.46+ additionally demands a `vgi_rpc.protocol` routing key that build never sends). This is also why a sibling worker started with `uv run --reinstall` can suddenly stop working against cupola. Move the pins in `stress_worker.py` together with the extension pin; `./test-worker/run.sh --latest` + `?vgi_version=latest` tests the newest pair.
 
 The suite must not depend on one developer's dataset. Specs discover the attached
 catalog (`information_schema.schemata` minus `memory`/`system`/`temp`) and
