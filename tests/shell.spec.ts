@@ -296,12 +296,15 @@ test.describe("DuckDB WASM Shell", () => {
 
   test.describe("format tests (.test_formats)", () => {
     test("107+ format tests pass", async ({ page }) => {
-      test.setTimeout(90_000);
-      // ~110 comparisons take north of 15s here. At the old default this timed
-      // out before the summary line was logged, turning a legible "N passed, M
-      // failed" into an opaque hang — and `runFormatTests` reports its errors
-      // to the xterm buffer only, so nothing reached the test output either.
-      const consolePromise = waitForConsoleMatch(page, /FORMAT_TEST:/, 60_000);
+      test.setTimeout(180_000);
+      // ~110 comparisons take north of 15s on an idle machine, but they run
+      // sequentially against the same engine the rest of the suite is using, so
+      // beside three other workers this stretches several-fold — 60s was enough
+      // to fail one run in three on a 20-core host. Too short a wait turns a
+      // legible "N passed, M failed" into an opaque hang, because
+      // `runFormatTests` reports its errors to the xterm buffer only and
+      // nothing reaches the test output.
+      const consolePromise = waitForConsoleMatch(page, /FORMAT_TEST:/, 150_000);
       await shellRun(page, ".test_formats");
       const logLine = await consolePromise;
       // Parse "FORMAT_TEST: 107 passed, 3 failed." or "FORMAT_TEST: All 110 tests passed."
