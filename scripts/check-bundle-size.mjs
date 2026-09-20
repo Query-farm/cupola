@@ -4,9 +4,21 @@ import { join } from "node:path";
 
 const assetDir = fileURLToPath(new URL("../dist/_astro/", import.meta.url));
 const maxChunkBytes = 1_500_000;
-// Visual semantic query controls and model-based block presentation add ~32 kB.
-// Measured production payload: 4,559,200 bytes; retain only a small margin.
-const maxTotalBytes = 4_570_000;
+// Measured production payload: 4,773,015 bytes; retain only a small margin.
+//
+// This jumped ~253 kB at 0.4.160, moving to vgi@0.34 / vgi-rpc@0.25, and the
+// jump is structural rather than something Cupola imports. 160 kB of it is a
+// chunk that did not exist before, the vgi-rpc package ROOT: `vgi/client`
+// imports it (it always did), but the root's graph used to tree-shake away.
+// It no longer can, because reflection became an ordinary co-hosted protocol —
+// the client's `introspect.js` imports `reflection.js`, which imports
+// `binding.js` and `protocol.js`, the same machinery the server side uses. So
+// a browser now ships framework code it never calls, including `RpcServer`.
+//
+// Dead weight, not a correctness problem, and not fixable from this side:
+// `vgi/client` would have to import the client submodules rather than the
+// package root. Worth pushing upstream rather than absorbing again.
+const maxTotalBytes = 4_790_000;
 
 const files = (await readdir(assetDir)).filter((name) => name.endsWith(".js"));
 if (files.length === 0) throw new Error("No JavaScript bundles found; run the production build first");
