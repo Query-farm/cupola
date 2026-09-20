@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { FunctionInfo } from "vgi/client";
+import type { FunctionInfo } from "@/lib/vgi-catalog-types";
 import type { Selection } from "@/lib/tree";
 import {
   getFunctionArgs,

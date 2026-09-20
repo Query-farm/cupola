@@ -20,7 +20,7 @@ import type {
   SchemaInfo,
   TableInfo,
   ViewInfo,
-} from "vgi/client";
+} from "./vgi-catalog-types";
 import { normalizeTags, parseRequiredFilters } from "./tags";
 import type { FunctionArg, FunctionReturn } from "./function-info";
 
@@ -360,10 +360,10 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
       check_constraints: metadata.checks,
       primary_key_constraints: metadata.primaryKey,
       foreign_key_constraints: emptyFkBytes,
-      supports_insert: false,
-      supports_update: false,
-      supports_delete: false,
-      supports_returning: false,
+      // An attached DuckDB database is browsed read-only here; VGI 0.29
+      // replaced the supports_insert/update/delete/returning booleans with a
+      // per-operation result-mode map, and empty is the same statement.
+      write_result_modes: {},
       supports_column_statistics: false,
       required_filters: parseRequiredFilters(tags),
       _foreignKeys: metadata.foreignKeys,
@@ -480,10 +480,19 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
         filter_pushdown: null,
         sampling_pushdown: null,
         late_materialization: null,
-        supported_expression_filters: [],
+        // No pushdown of any kind: this is a local DuckDB function, not a VGI
+        // one. VGI 0.29 split the old supported_expression_filters list into
+        // these four capability lists; empty means the same thing it did.
+        filter_semantic_profiles: [],
+        additional_filter_functions: [],
+        runtime_filter_algorithms: [],
+        filter_evaluation_contexts: [],
         order_preservation: null,
         max_workers: null,
         supports_batch_index: false,
+        supports_splits: false,
+        filters_exactly_applied: false,
+        supports_positions: false,
         partition_kind: "NOT_PARTITIONED",
         order_dependent: "NOT_ORDER_DEPENDENT",
         distinct_dependent: "NOT_DISTINCT_DEPENDENT",

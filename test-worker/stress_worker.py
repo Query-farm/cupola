@@ -1,15 +1,23 @@
 # /// script
 # requires-python = ">=3.13"
 # dependencies = [
-#     # Pinned to the VGI wire protocol Cupola's extension build speaks, NOT to
-#     # the newest release. VGI_EXTENSION_VERSION in src/lib/duckdb-engine.ts is
-#     # protocol 1.3.0, which is vgi-python 0.28.x with the vgi-rpc of that era;
-#     # any newer worker rejects every request with ProtocolVersionError
-#     # ("client is too old"), and vgi-rpc 0.46+ additionally demands a routing
-#     # key that build never sends. Move these only together with that pin.
-#     # `./run.sh --latest` lifts them for use with `?vgi_version=latest`.
-#     "vgi-python[http]>=0.28.1,<0.29",
-#     "vgi-rpc>=0.42.2,<0.43",
+#     # Tracks the current releases, because Cupola now installs the VGI DuckDB
+#     # extension UNPINNED (see SHELL_EXTENSIONS in src/lib/duckdb-engine.ts) —
+#     # so the worker has to speak what the current extension build speaks, and
+#     # these move when that build does rather than staying frozen.
+#     #
+#     # Two vgi-rpc changes are why an older worker no longer works at all:
+#     # 0.45.0 began advertising `VGI-Accept-Max-Response-Bytes-Support`, which
+#     # the extension now demands at ATTACH, and 0.46.0 retired the
+#     # `__describe__` method for the co-hosted `vgi_rpc.Reflection.v1`
+#     # protocol, which is how the TypeScript client discovers the server.
+#     #
+#     # Each failure points somewhere other than the version: a worker missing
+#     # the header fails at ATTACH only, so the sidebar tree renders fine from
+#     # the HTTP client and it is the SQL shell that is dead; a worker still on
+#     # `__describe__` 404s the catalog fetch instead, and nothing renders.
+#     "vgi-python[http]>=0.36.1,<0.37",
+#     "vgi-rpc>=0.47.1,<0.48",
 #     "numpy",
 #     "pyarrow",
 # ]

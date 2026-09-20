@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { Copy, Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { ViewInfo } from "vgi/client";
+import type { ViewInfo } from "@/lib/vgi-catalog-types";
 import type { Selection } from "@/lib/tree";
 import { ColumnTypeBadge } from "./ColumnTypeBadge";
 import { Breadcrumb } from "./Breadcrumb";

@@ -1,4 +1,4 @@
-import type { MacroInfo } from "vgi/client";
+import type { MacroInfo } from "@/lib/vgi-catalog-types";
 import type { Selection } from "@/lib/tree";
 import { Breadcrumb } from "./Breadcrumb";
 import { SqlCodeBlock } from "./SqlCodeBlock";

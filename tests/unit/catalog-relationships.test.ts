@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { TableInfo } from "vgi/client";
+import type { TableInfo } from "../../src/lib/vgi-catalog-types";
 import type { CatalogData, ColumnInfo, ForeignKeyInfo } from "../../src/lib/service";
 import {
   buildCatalogRelationshipGraph,
@@ -32,10 +32,7 @@ function table(
     check_constraints: [],
     primary_key_constraints: options.primaryKey ? [options.primaryKey] : [],
     foreign_key_constraints: [],
-    supports_insert: false,
-    supports_update: false,
-    supports_delete: false,
-    supports_returning: false,
+    write_result_modes: {},
     supports_column_statistics: false,
     required_filters: [],
     _columnInfo: columnInfo,

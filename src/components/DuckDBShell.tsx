@@ -25,7 +25,7 @@ import { initShell } from "@/lib/shell-init";
 import { describePerspectiveArrowInput } from "@/lib/perspective-diagnostics";
 
 import type { CatalogData } from "@/lib/service";
-import type { TableInfo, ViewInfo } from "vgi/client";
+import type { TableInfo, ViewInfo } from "@/lib/vgi-catalog-types";
 
 // Imported (not just re-exported) because this module uses the type itself —
 // `export type { X } from "..."` forwards the name without binding it locally,

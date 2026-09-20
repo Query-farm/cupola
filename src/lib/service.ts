@@ -6,14 +6,25 @@
 // astro.config.mjs resolves this to the browser artifact from the npm package.
 import { httpConnect } from "@query-farm/vgi-rpc/connect";
 import { VgiClient, Arguments, deserializeSchema, deserializeBatch, iterRows } from "vgi/client";
+// The catalog types are Cupola's flat ones, not the wire types: a VGI schema
+// is a path now, and it is flattened to a name here at the boundary. See
+// ./vgi-catalog-types.
 import type {
   SchemaInfo,
   TableInfo,
   ViewInfo,
   FunctionInfo,
   MacroInfo,
-} from "vgi/client";
+} from "./vgi-catalog-types";
+import {
+  flattenSchemaInfo,
+  flattenTableInfo,
+  flattenViewInfo,
+  flattenFunctionInfo,
+  flattenMacroInfo,
+} from "./vgi-catalog-types";
 import { getAuthTokenForService } from "./auth";
+import { vgiFetch } from "./vgi-fetch";
 import { arrowFieldToDuckDB } from "./arrow-to-duckdb";
 import { engine } from "./shell-bridge";
 import { readRows, esc } from "./duckdb-query";
@@ -70,6 +81,17 @@ interface TableWithMetadataOverrides extends TableInfo {
 // URL-param accessors moved to lib/url-params.ts. Re-exported here so existing
 // import sites keep working without an immediate sweep.
 export { getServiceUrl, hasExplicitService, getAttachOptionsFromUrl } from "./url-params";
+
+// Cupola's flat catalog types, re-exported for a stable import surface: a
+// component wanting a TableInfo should get the one with `schema_name` on it,
+// without having to know that the wire type spells it `schema_path`.
+export type {
+  SchemaInfo,
+  TableInfo,
+  ViewInfo,
+  FunctionInfo,
+  MacroInfo,
+} from "./vgi-catalog-types";
 
 /** Extract column info from a TableInfo's serialized Arrow schema bytes.
  *  Also supports a pre-built _columnInfo override (used for in-memory tables). */
@@ -135,6 +157,7 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
   console.log("[service] fetchCatalog:", serviceUrl, token ? "with token" : "NO TOKEN");
   const rpc = httpConnect(serviceUrl, {
     authorization: token ? `Bearer ${token}` : undefined,
+    fetch: vgiFetch,
   });
   const client = new VgiClient(rpc);
 
@@ -151,20 +174,27 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
     // Fetch all schemas
     const schemaInfos = await client.schemas(attachId);
 
-    // Fetch contents for each schema in parallel
+    // Fetch contents for each schema in parallel. The RPC calls take the wire
+    // path — flattening is for Cupola's own model, not for the server.
     const schemas = await Promise.all(
-      schemaInfos.map(async (info) => {
+      schemaInfos.map(async (wireInfo) => {
+        const path = wireInfo.path;
         const [tables, views, functions, scalarMacros, tableMacros] = await Promise.all([
-          client.schemaContentsTables(attachId, info.name).catch(() => []),
-          client.schemaContentsViews(attachId, info.name).catch(() => []),
+          client.schemaContentsTables(attachId, path).catch(() => []),
+          client.schemaContentsViews(attachId, path).catch(() => []),
           client
-            .schemaContentsFunctions(attachId, info.name, "TABLE_FUNCTION")
+            .schemaContentsFunctions(attachId, path, "TABLE_FUNCTION")
             .catch(() => []),
-          client.schemaContentsMacros(attachId, info.name, "SCALAR_MACRO").catch(() => []),
-          client.schemaContentsMacros(attachId, info.name, "TABLE_MACRO").catch(() => []),
+          client.schemaContentsMacros(attachId, path, "SCALAR_MACRO").catch(() => []),
+          client.schemaContentsMacros(attachId, path, "TABLE_MACRO").catch(() => []),
         ]);
-        const macros = [...scalarMacros, ...tableMacros];
-        return { info, tables, views, functions, macros } as ResolvedSchema;
+        return {
+          info: flattenSchemaInfo(wireInfo),
+          tables: tables.map(flattenTableInfo),
+          views: views.map(flattenViewInfo),
+          functions: functions.map(flattenFunctionInfo),
+          macros: [...scalarMacros, ...tableMacros].map(flattenMacroInfo),
+        } satisfies ResolvedSchema;
       })
     );
 
@@ -250,6 +280,7 @@ export async function createTableQuery(
   const token = await getAuthTokenForService(serviceUrl);
   const rpc = httpConnect(serviceUrl, {
     authorization: token ? `Bearer ${token}` : undefined,
+    fetch: vgiFetch,
   });
   const client = new VgiClient(rpc);
 

@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
 import { fetchCatalog, type CatalogData, type ColumnInfo, type ResolvedSchema } from "@/lib/service";
-import type { SchemaInfo, TableInfo, ViewInfo } from "vgi/client";
+import type { SchemaInfo, TableInfo, ViewInfo } from "@/lib/vgi-catalog-types";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql, clearSharedSql } from "@/lib/url-params";
 import type { PendingEditorSql } from "./editor/SqlEditorView";
@@ -330,10 +330,8 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
               check_constraints: [],
               not_null_constraints: [],
               foreign_key_constraints: [],
-              supports_insert: false,
-              supports_update: false,
-              supports_delete: false,
-              supports_returning: false,
+              // Read-only in-memory table; see the note in duckdb-catalog.
+              write_result_modes: {},
               supports_column_statistics: false,
               required_filters: [],
               _columnInfo: columnInfo,

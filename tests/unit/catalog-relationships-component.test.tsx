@@ -17,8 +17,8 @@ function testCatalog(): CatalogData {
       name, schema_name: "main", comment: null, tags: {}, columns: new Uint8Array(),
       not_null_constraints: [], unique_constraints: [], check_constraints: [],
       primary_key_constraints: name === "customers" ? [[0]] : [], foreign_key_constraints: [],
-      supports_insert: false, supports_update: false, supports_delete: false,
-      supports_returning: false, supports_column_statistics: false, required_filters: [],
+      write_result_modes: {},
+      supports_column_statistics: false, required_filters: [],
       _columnInfo: info, _cols: info, _foreignKeys: foreignKeys,
     };
   };

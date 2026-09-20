@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { Key, Link2, Network, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import type { TableInfo } from "vgi/client";
+import type { TableInfo } from "@/lib/vgi-catalog-types";
 import { getColumns, getForeignKeys, fetchColumnStats, type ForeignKeyInfo, type ColumnStats } from "@/lib/service";
 import type { Selection } from "@/lib/tree";
 import { Breadcrumb } from "./Breadcrumb";

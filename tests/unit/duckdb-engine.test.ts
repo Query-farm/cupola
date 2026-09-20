@@ -13,7 +13,6 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import {
   SHELL_EXTENSIONS,
-  VGI_EXTENSION_VERSION,
   extensionInstallSql,
   shellExtensionsForVgiVersion,
   recordExtensionLoaded,
@@ -31,13 +30,13 @@ describe("SHELL_EXTENSIONS", () => {
     expect(required).toEqual(["vgi"]);
   });
 
-  test("vgi installs the pinned build from the community repo", () => {
+  test("vgi installs unpinned from the community repo", () => {
+    // No VERSION clause by default: a pin froze both the extension fixes and
+    // the wire protocol, so the servers Cupola could talk to froze with it.
     const vgi = SHELL_EXTENSIONS.find((e) => e.name === "vgi");
-    expect(VGI_EXTENSION_VERSION).toBe("c2f8dbb071");
-    expect(vgi).toMatchObject({ source: "community", version: VGI_EXTENSION_VERSION });
-    expect(extensionInstallSql(vgi!)).toBe(
-      "INSTALL vgi FROM community VERSION 'c2f8dbb071'"
-    );
+    expect(vgi).toMatchObject({ source: "community", required: true });
+    expect(vgi).not.toHaveProperty("version");
+    expect(extensionInstallSql(vgi!)).toBe("INSTALL vgi FROM community");
   });
 
   test("core extensions keep their unversioned INSTALL syntax", () => {
@@ -46,12 +45,21 @@ describe("SHELL_EXTENSIONS", () => {
     );
   });
 
-  test("supports a session-specific exact pin or an intentionally unpinned VGI install", () => {
-    const exact = shellExtensionsForVgiVersion("v1.2.3").find((extension) => extension.name === "vgi")!;
-    const latest = shellExtensionsForVgiVersion(null).find((extension) => extension.name === "vgi")!;
-    expect(extensionInstallSql(exact)).toBe("INSTALL vgi FROM community VERSION 'v1.2.3'");
-    expect(extensionInstallSql(latest)).toBe("INSTALL vgi FROM community");
-    expect(SHELL_EXTENSIONS.find((extension) => extension.name === "vgi")?.version).toBe(VGI_EXTENSION_VERSION);
+  test("supports a session-specific exact pin, and leaves the default unpinned", () => {
+    const vgiOf = (list: readonly { name: string }[]) =>
+      list.find((extension) => extension.name === "vgi")! as Parameters<typeof extensionInstallSql>[0];
+    expect(extensionInstallSql(vgiOf(shellExtensionsForVgiVersion("v1.2.3")))).toBe(
+      "INSTALL vgi FROM community VERSION 'v1.2.3'"
+    );
+    // Both spellings of "latest" — explicit and absent — omit the clause.
+    expect(extensionInstallSql(vgiOf(shellExtensionsForVgiVersion(null)))).toBe(
+      "INSTALL vgi FROM community"
+    );
+    expect(extensionInstallSql(vgiOf(shellExtensionsForVgiVersion(undefined)))).toBe(
+      "INSTALL vgi FROM community"
+    );
+    // An exact pin must not leak into the shared default list.
+    expect(SHELL_EXTENSIONS.find((extension) => extension.name === "vgi")?.version).toBeUndefined();
   });
 
   test("includes the extensions other subsystems depend on", () => {

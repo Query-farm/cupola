@@ -8,7 +8,7 @@
  */
 import { test, expect, describe } from "bun:test";
 import { Schema, Field, Utf8, Int64, Float64, Binary, RecordBatchStreamWriter, type DataType } from "@query-farm/apache-arrow";
-import type { FunctionInfo } from "vgi/client";
+import type { FunctionInfo } from "../../src/lib/vgi-catalog-types";
 import { getFunctionArgs, getFunctionReturn, formatFunctionSignature } from "../../src/lib/function-info";
 
 test("attached-catalog parsed overrides preserve argument constraints and return type", () => {

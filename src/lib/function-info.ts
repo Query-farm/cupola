@@ -6,7 +6,7 @@
  * call signature. Kept free of RPC/transport imports so it stays unit-testable.
  */
 import { deserializeSchema } from "vgi/client";
-import type { FunctionInfo } from "vgi/client";
+import type { FunctionInfo } from "./vgi-catalog-types";
 import { arrowFieldToDuckDB } from "./arrow-to-duckdb";
 import type { ColumnInfo } from "./service";
 

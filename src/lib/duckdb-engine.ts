@@ -28,12 +28,6 @@ export interface DuckDBExtension {
 }
 
 /**
- * VGI build published for Haybarn v1.5.5 on 2026-08-22.
- * Full extension commit: c2f8dbb071f287228581c036f091c320a67c73e0.
- */
-export const VGI_EXTENSION_VERSION = "c2f8dbb071";
-
-/**
  * Extensions the shell installs and loads at startup, in order.
  *
  * Autoload AND autoinstall are disabled at boot (a synchronous extension fetch
@@ -44,12 +38,14 @@ export const SHELL_EXTENSIONS: readonly DuckDBExtension[] = [
   { name: "icu" },
   { name: "json" },
   { name: "httpfs" },
-  {
-    name: "vgi",
-    source: "community",
-    version: VGI_EXTENSION_VERSION,
-    required: true,
-  },
+  // Deliberately unpinned: no VERSION clause, so the community repository
+  // serves its current build for this DuckDB version. Cupola pinned an exact
+  // build for a while (a broken publish had made an unpinned INSTALL fetch
+  // something that would not load); the cost was that every extension fix
+  // needed a Cupola release, and the pinned build's wire protocol froze the
+  // VGI servers it could talk to. `?vgi_version=<build>` pins per tab when a
+  // specific build has to be reproduced — see shellExtensionsForVgiVersion.
+  { name: "vgi", source: "community", required: true },
   { name: "iceberg" },
   { name: "spatial" },
   { name: "ducklake" },
@@ -61,22 +57,19 @@ export const SHELL_EXTENSIONS: readonly DuckDBExtension[] = [
 /**
  * Build the startup list for a session-specific VGI version selection.
  *
- * `undefined` preserves Cupola's tested default pin, `null` deliberately
- * omits DuckDB's VERSION clause, and a string selects that exact community
- * extension build. The immutable exported list remains the default so older
- * callers and tests keep their existing behavior.
+ * `undefined` (no selection) and `null` (`?vgi_version=latest`) both leave the
+ * VERSION clause off, which is the default now that the extension is unpinned;
+ * a string selects that exact community build. The two spellings of "latest"
+ * stay distinct because the URL layer uses the difference — `latest` is a
+ * choice it records in sessionStorage, absent is not.
  */
 export function shellExtensionsForVgiVersion(
   versionOverride?: string | null,
 ): readonly DuckDBExtension[] {
-  const version = versionOverride === undefined
-    ? VGI_EXTENSION_VERSION
-    : versionOverride;
-  return SHELL_EXTENSIONS.map((extension) => {
-    if (extension.name !== "vgi") return extension;
-    const { version: _defaultVersion, ...base } = extension;
-    return version ? { ...base, version } : base;
-  });
+  if (!versionOverride) return SHELL_EXTENSIONS;
+  return SHELL_EXTENSIONS.map((extension) =>
+    extension.name === "vgi" ? { ...extension, version: versionOverride } : extension,
+  );
 }
 
 /** Build the explicit INSTALL statement used during shell startup. */
