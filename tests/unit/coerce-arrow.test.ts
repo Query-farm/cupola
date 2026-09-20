@@ -12,7 +12,12 @@ import { BN } from "@query-farm/apache-arrow/util/bn";
 
 // service.ts pulls @query-farm/vgi-rpc/connect which doesn't resolve under bun
 // without an alias; stub before importing duckdb-query (transitive dep).
-mock.module("@query-farm/vgi-rpc/connect", () => ({ httpConnect: () => { throw new Error("stub"); } }));
+mock.module("@query-farm/vgi-rpc/connect", () => ({
+  httpConnect: () => { throw new Error("stub"); },
+  // `vgi/client` takes RpcError from this subpath rather than the package
+  // root, so a stub without it fails the import before any test runs.
+  RpcError: class RpcError extends Error {},
+}));
 
 const { coerceArrowValue, tableToRows } = await import("../../src/lib/duckdb-query");
 

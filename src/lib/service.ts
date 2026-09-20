@@ -24,7 +24,6 @@ import {
   flattenMacroInfo,
 } from "./vgi-catalog-types";
 import { getAuthTokenForService } from "./auth";
-import { vgiFetch } from "./vgi-fetch";
 import { arrowFieldToDuckDB } from "./arrow-to-duckdb";
 import { engine } from "./shell-bridge";
 import { readRows, esc } from "./duckdb-query";
@@ -157,7 +156,6 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
   console.log("[service] fetchCatalog:", serviceUrl, token ? "with token" : "NO TOKEN");
   const rpc = httpConnect(serviceUrl, {
     authorization: token ? `Bearer ${token}` : undefined,
-    fetch: vgiFetch,
   });
   const client = new VgiClient(rpc);
 
@@ -280,7 +278,6 @@ export async function createTableQuery(
   const token = await getAuthTokenForService(serviceUrl);
   const rpc = httpConnect(serviceUrl, {
     authorization: token ? `Bearer ${token}` : undefined,
-    fetch: vgiFetch,
   });
   const client = new VgiClient(rpc);
 

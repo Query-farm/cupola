@@ -13,7 +13,12 @@
  */
 import { test, expect, describe, mock } from "bun:test";
 
-mock.module("@query-farm/vgi-rpc/connect", () => ({ httpConnect: () => { throw new Error("stub"); } }));
+mock.module("@query-farm/vgi-rpc/connect", () => ({
+  httpConnect: () => { throw new Error("stub"); },
+  // `vgi/client` takes RpcError from this subpath rather than the package
+  // root, so a stub without it fails the import before any test runs.
+  RpcError: class RpcError extends Error {},
+}));
 
 const { validateExtraData } = await import("../../src/lib/ai-tool-executor");
 

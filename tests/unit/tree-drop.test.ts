@@ -4,7 +4,12 @@
 import { test, expect, describe, mock } from "bun:test";
 
 // tree.ts transitively pulls service.ts → the browser RPC connect entry.
-mock.module("@query-farm/vgi-rpc/connect", () => ({ httpConnect: () => { throw new Error("stub"); } }));
+mock.module("@query-farm/vgi-rpc/connect", () => ({
+  httpConnect: () => { throw new Error("stub"); },
+  // `vgi/client` takes RpcError from this subpath rather than the package
+  // root, so a stub without it fails the import before any test runs.
+  RpcError: class RpcError extends Error {},
+}));
 
 const { treeIdToShellText } = await import("../../src/lib/tree");
 

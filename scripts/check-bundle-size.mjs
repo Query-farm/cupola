@@ -4,20 +4,26 @@ import { join } from "node:path";
 
 const assetDir = fileURLToPath(new URL("../dist/_astro/", import.meta.url));
 const maxChunkBytes = 1_500_000;
-// Measured production payload: 4,773,015 bytes; retain only a small margin.
+// Measured production payload: 4,772,574 bytes; retain only a small margin.
 //
 // This jumped ~253 kB at 0.4.160, moving to vgi@0.34 / vgi-rpc@0.25, and the
-// jump is structural rather than something Cupola imports. 160 kB of it is a
-// chunk that did not exist before, the vgi-rpc package ROOT: `vgi/client`
-// imports it (it always did), but the root's graph used to tree-shake away.
-// It no longer can, because reflection became an ordinary co-hosted protocol —
-// the client's `introspect.js` imports `reflection.js`, which imports
-// `binding.js` and `protocol.js`, the same machinery the server side uses. So
-// a browser now ships framework code it never calls, including `RpcServer`.
+// jump is structural rather than something Cupola imports. 160 kB of it is one
+// chunk, the vgi-rpc package ROOT, which re-exports the whole framework —
+// protocol, dispatch, access log, `RpcServer`. It appeared because reflection
+// became an ordinary co-hosted protocol: the client's `introspect.js` imports
+// `reflection.js`, which imports the same `binding`/`protocol` machinery the
+// server uses, so the root's graph stopped tree-shaking away.
 //
-// Dead weight, not a correctness problem, and not fixable from this side:
-// `vgi/client` would have to import the client submodules rather than the
-// package root. Worth pushing upstream rather than absorbing again.
+// **That chunk is lazy, and this budget counts it anyway.** `VgiClient.fromIroh`
+// does `await import("@query-farm/vgi-rpc")` to pick a native iroh:// connector,
+// so Rollup code-splits it and nothing fetches it unless that method is called
+// without a connector — which Cupola never does. This number is every emitted
+// byte, not the startup download, and the two differ by this chunk.
+//
+// vgi@0.35 removed the *static* import of the root (`RpcError` now comes from
+// the `/connect` subpath). That is the right shape and helps consumers whose
+// bundler does not split the same way, but it moved ~400 bytes here, not 160 kB:
+// the dynamic import alone was already enough to create the chunk.
 const maxTotalBytes = 4_790_000;
 
 const files = (await readdir(assetDir)).filter((name) => name.endsWith(".js"));

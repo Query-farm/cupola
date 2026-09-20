@@ -15,7 +15,7 @@
         "@codemirror/view": "^6.43.1",
         "@haybarn/haybarn-wasm": "1.5.5-rc3",
         "@query-farm/apache-arrow": "21.1.1",
-        "@query-farm/vgi-rpc": "0.25.2",
+        "@query-farm/vgi-rpc": "0.25.4",
         "@radix-ui/react-accordion": "^1.2.12",
         "@sentry/astro": "^10.55.0",
         "@sentry/cloudflare": "^10.55.0",
@@ -45,7 +45,7 @@
         "vega": "^5.30.0",
         "vega-embed": "^6.26.0",
         "vega-lite": "^5.21.0",
-        "vgi": "npm:@query-farm/vgi@0.34.0",
+        "vgi": "npm:@query-farm/vgi@0.35.0",
         "xlsx": "^0.18.5",
       },
       "devDependencies": {
@@ -377,7 +377,7 @@
 
     "@query-farm/flechette": ["@query-farm/flechette@2.4.1", "", {}, "sha512-aKrkfJk7bS5fIfICCX9/O92vrTEE7mNFvzODaGXJOJPJbg1nzPUDWiCMNOvbGRX5c88iMWU3VUzMmXW1p8VHow=="],
 
-    "@query-farm/vgi-rpc": ["@query-farm/vgi-rpc@0.25.2", "", { "dependencies": { "@noble/ciphers": "^2.2.0", "@query-farm/apache-arrow": "^21.1.1", "@query-farm/flechette": "^2.4.1", "fzstd": "^0.1.1", "oauth4webapi": "^3.8.6" }, "peerDependencies": { "@aws-sdk/client-s3": ">=3.0.0", "@aws-sdk/s3-request-presigner": ">=3.0.0", "@google-cloud/storage": ">=7.0.0", "@momics/iroh-http-node": ">=0.6.2 <1", "@number0/iroh": ">=1.1.0 <2", "@opentelemetry/api": ">=1.4.0" }, "optionalPeers": ["@aws-sdk/client-s3", "@aws-sdk/s3-request-presigner", "@google-cloud/storage", "@momics/iroh-http-node", "@number0/iroh", "@opentelemetry/api"] }, "sha512-XpbzVEeW0tW3AkFbDEoZLmkLK/CQyTVZXCJbooOvNKnKL19SSVvq4kldrrpVVyJDlR+xmlBEgj/n0vnCLBQ4Fw=="],
+    "@query-farm/vgi-rpc": ["@query-farm/vgi-rpc@0.25.4", "", { "dependencies": { "@noble/ciphers": "^2.2.0", "@query-farm/apache-arrow": "^21.1.1", "@query-farm/flechette": "^2.4.1", "fzstd": "^0.1.1", "oauth4webapi": "^3.8.6" }, "peerDependencies": { "@aws-sdk/client-s3": ">=3.0.0", "@aws-sdk/s3-request-presigner": ">=3.0.0", "@google-cloud/storage": ">=7.0.0", "@momics/iroh-http-node": ">=0.6.2 <1", "@number0/iroh": ">=1.1.0 <2", "@opentelemetry/api": ">=1.4.0" }, "optionalPeers": ["@aws-sdk/client-s3", "@aws-sdk/s3-request-presigner", "@google-cloud/storage", "@momics/iroh-http-node", "@number0/iroh", "@opentelemetry/api"] }, "sha512-fOsk+hGbEG56lK+Bek7Vy5ZovjYuz6N71AlfiIjTQGXysUhWXU3pZHRx2qw6Ms8D2fJ3kI+7ZgCemws21LrN2g=="],
 
     "@radix-ui/primitive": ["@radix-ui/primitive@1.1.3", "", {}, "sha512-JTF99U/6XIjCBo0wqkU5sK10glYe27MRRsfwoiq5zzOEZLHU3A3KCMa5X/azekYRCJ0HlwI0crAXS/5dEHTzDg=="],
 
@@ -1903,7 +1903,7 @@
 
     "vfile-message": ["vfile-message@4.0.3", "", { "dependencies": { "@types/unist": "^3.0.0", "unist-util-stringify-position": "^4.0.0" } }, "sha512-QTHzsGd1EhbZs4AsQ20JX1rC3cOlt/IWJruk893DfLRr57lcnOeMaWG4K0JrRta4mIJZKth2Au3mM3u03/JWKw=="],
 
-    "vgi": ["@query-farm/vgi@0.34.0", "", { "dependencies": { "@noble/ciphers": "^2.3.0", "@query-farm/flechette": "^2.4.1" }, "peerDependencies": { "@query-farm/apache-arrow": "^21.1.1", "@query-farm/vgi-rpc": ">=0.25.2 <0.26.0" } }, "sha512-qUTBZaW1RMj1plcKbN5yBGoUmQSCCmCH7buFwz+hd/mfK8J5OFguKvAKdjx4U+KnEJ2t3aZH+SYxhEP0CYC4CA=="],
+    "vgi": ["@query-farm/vgi@0.35.0", "", { "dependencies": { "@noble/ciphers": "^2.3.0", "@query-farm/flechette": "^2.4.1" }, "peerDependencies": { "@query-farm/apache-arrow": "^21.1.1", "@query-farm/vgi-rpc": ">=0.25.4 <0.26.0" } }, "sha512-QGtZl0+oinFy1a+2xpz4S5+pX2AYvmpbg2QgCzwl7Co4lIgjueX5Q1mIVLb4WiT6FOgcWg7YagfYtiLs1w5XPQ=="],
 
     "vite": ["vite@7.3.3", "", { "dependencies": { "esbuild": "^0.27.0", "fdir": "^6.5.0", "picomatch": "^4.0.3", "postcss": "^8.5.6", "rollup": "^4.43.0", "tinyglobby": "^0.2.15" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^20.19.0 || >=22.12.0", "jiti": ">=1.21.0", "less": "^4.0.0", "lightningcss": "^1.21.0", "sass": "^1.70.0", "sass-embedded": "^1.70.0", "stylus": ">=0.54.8", "sugarss": "^5.0.0", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "jiti", "less", "lightningcss", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-/4XH147Ui7OGTjg3HbdWe5arnZQSbfuRzdr9Ec7TQi5I7R+ir0Rlc9GIvD4v0XZurELqA035KVXJXpR61xhiTA=="],
 

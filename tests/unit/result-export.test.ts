@@ -6,7 +6,12 @@ import { tableFromArrays, tableFromIPC } from "@query-farm/apache-arrow";
 
 // format.ts / arrow-to-duckdb pull the service graph transitively; stub the
 // browser-only RPC connect entry so the import resolves under bun.
-mock.module("@query-farm/vgi-rpc/connect", () => ({ httpConnect: () => { throw new Error("stub"); } }));
+mock.module("@query-farm/vgi-rpc/connect", () => ({
+  httpConnect: () => { throw new Error("stub"); },
+  // `vgi/client` takes RpcError from this subpath rather than the package
+  // root, so a stub without it fails the import before any test runs.
+  RpcError: class RpcError extends Error {},
+}));
 
 const { toCsv, toArrowIpc, toXlsx, safeFileStem } = await import("../../src/lib/editor/result-export");
 
