@@ -38,12 +38,10 @@ function isCapabilityProbe(method: string | undefined, url: string): boolean {
   }
 }
 
-/**
- * `fetch` with the capability probe rewritten from OPTIONS to HEAD.
- *
- * Everything else — every RPC call, every upload — passes through untouched.
- */
-export const vgiFetch: typeof globalThis.fetch = (input, init) => {
+const vgiFetchImpl = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> => {
   const url =
     typeof input === "string"
       ? input
@@ -63,3 +61,15 @@ export const vgiFetch: typeof globalThis.fetch = (input, init) => {
 
   return fetch(input as RequestInfo, init);
 };
+
+/**
+ * `fetch` with the capability probe rewritten from OPTIONS to HEAD.
+ *
+ * Everything else — every RPC call, every upload — passes through untouched.
+ *
+ * The cast is for `preconnect`: this project typechecks with `bun-types`, so
+ * `typeof globalThis.fetch` is Bun's, which carries that extra property, while
+ * `httpConnect` only ever calls the value. Implementing a `preconnect` here
+ * would be inventing a method for nobody.
+ */
+export const vgiFetch = vgiFetchImpl as typeof globalThis.fetch;
