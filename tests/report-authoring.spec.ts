@@ -8,6 +8,15 @@ async function openGuide(page: import("@playwright/test").Page) {
   await expect(page.getByTestId("reports-run")).toHaveText(/Run report/, { timeout: T_SHELL_BOOT });
 }
 
+/** Whether the element is what the pointer would hit at its center — `toBeVisible` passes for an element hidden behind another. */
+async function isTopmost(locator: import("@playwright/test").Locator): Promise<boolean> {
+  return locator.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    return hit !== null && element.contains(hit);
+  });
+}
+
 async function openCurrentDatasetEditor(page: import("@playwright/test").Page) {
   await page.getByTestId("report-datasets-tab").click();
   await page.getByTestId("report-dataset-item-showcase-current").click();
@@ -274,4 +283,73 @@ test("chart export controls do not interfere with plot tooltips or gestures", as
   const map = page.getByTestId("report-block-showcase-map");
   await map.locator(".leaflet-container").dblclick({ position: { x: 100, y: 100 } });
   await expect(page.getByTestId("report-block-editor")).toHaveCount(0);
+});
+
+test("block settings explain themselves on hover, click, and keyboard", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openGuide(page);
+  await page.getByRole("button", { name: "Reports", exact: true }).click();
+  await page.getByRole("button", { name: "New report", exact: true }).click();
+
+  // The picker says what each block type is for, not just its name.
+  await page.getByTestId("report-add-block").click();
+  await expect(page.getByTestId("report-add-range_dot")).toContainText("A low-to-high span per row");
+  await page.getByTestId("report-add-kpi").click();
+
+  const editor = page.getByTestId("report-block-editor");
+  await expect(editor.getByTestId("report-block-editor-description")).toHaveText("One headline number, optionally placed within a range.");
+  const lowBound = editor.locator('[data-report-field="Low bound"]');
+  const help = lowBound.locator("[data-report-help]");
+  const explanation = page.locator('[data-slot="popover-content"]', { hasText: "draws a small bar under the number" });
+
+  await help.hover();
+  await expect(explanation).toBeVisible();
+  // Visible is not enough: this once opened behind the editor panel.
+  expect(await isTopmost(explanation)).toBe(true);
+  await editor.getByLabel("Title", { exact: true }).hover();
+  await expect(explanation).toBeHidden();
+
+  await help.click();
+  await expect(explanation).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(explanation).toBeHidden();
+  // Escape dismissed only the explanation; the editor and its draft remain.
+  await expect(editor).toBeVisible();
+
+  await editor.getByLabel("Title", { exact: true }).focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Enter");
+  await expect(page.locator('[data-slot="popover-content"]', { hasText: "The heading at the top of the block" })).toBeVisible();
+});
+
+test("report menus open above the block editor panel", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openGuide(page);
+  await page.getByTestId("report-block-showcase-kpi").hover();
+  await page.getByRole("button", { name: "Edit KPI · Humidity (%)" }).click();
+  await expect(page.getByTestId("report-block-editor")).toBeVisible();
+
+  // The panel once stacked above every popover, hiding the menu's lower items.
+  await page.getByRole("button", { name: "More" }).click();
+  const items = page.locator('[data-slot="popover-content"] button');
+  await expect(items.last()).toBeVisible();
+  for (const item of await items.all()) expect(await isTopmost(item), await item.innerText()).toBe(true);
+});
+
+test("the mobile block editor covers the app header and maps beneath it", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openGuide(page);
+  const map = page.getByTestId("report-block-showcase-map");
+  await map.scrollIntoViewIfNeeded();
+  await expect(map.locator(".leaflet-container")).toBeVisible();
+  const box = (await map.boundingBox())!;
+  await map.hover();
+  await map.getByRole("button", { name: /^Edit / }).first().click();
+  const editor = page.getByTestId("report-block-editor");
+  await expect(editor).toBeVisible();
+
+  const coveredBy = (x: number, y: number) => page.evaluate(([px, py]) => Boolean(document.elementFromPoint(px, py)?.closest('[data-testid="report-block-editor"]')), [x, y]);
+  expect(await coveredBy(195, 20)).toBe(true);
+  expect(await coveredBy(box.x + box.width / 2, box.y + box.height / 2)).toBe(true);
 });

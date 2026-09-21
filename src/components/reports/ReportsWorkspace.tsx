@@ -2318,7 +2318,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
       <div className="flex-1" />
       {!readerMode && workspaceView === "report" && <div className="mb-1 flex items-center gap-1">
         <Button type="button" variant="ghost" size="sm" data-testid="report-reflow-layout" aria-label="Reflow report layout" disabled={report.blocks.length === 0 || blockEditorDirty || datasetEditorDirty || agentBusy || inspectorOpen} title={inspectorOpen ? "Close the report JSON editor before reflowing" : agentBusy ? "Wait for the report agent to finish" : "Tighten vertical gaps while preserving block sizes and columns"} onClick={reflowLayout}><LayoutGrid className="h-4 w-4" /><span className="hidden sm:inline">Reflow</span></Button>
-        <Popover><PopoverTrigger className={buttonVariants({ variant: "ghost", size: "sm" })} data-testid="report-add-block"><Plus className="h-4 w-4" /> Add block</PopoverTrigger><PopoverContent className="w-64 p-2" align="end"><div className="text-xs font-semibold">Add report block</div><div className="mt-2 space-y-2">{["Text", "Metrics", "Visualizations", "Data"].map((group) => <div key={group}><div className="px-1 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div><div className="grid grid-cols-2 gap-1">{REPORT_BLOCK_TYPES.filter((item) => item.group === group).map((item) => <BaseUIPopover.Close key={item.type} data-testid={`report-add-${item.type}`} className="rounded px-2 py-1.5 text-left text-xs hover:bg-muted" onClick={() => addBlock(item.type)}>{item.label}</BaseUIPopover.Close>)}</div></div>)}</div></PopoverContent></Popover>
+        <Popover><PopoverTrigger className={buttonVariants({ variant: "ghost", size: "sm" })} data-testid="report-add-block"><Plus className="h-4 w-4" /> Add block</PopoverTrigger><PopoverContent className="max-h-[80vh] w-[min(28rem,calc(100vw-2rem))] overflow-y-auto p-2" align="end"><div className="text-xs font-semibold">Add report block</div><p className="text-[10px] text-muted-foreground">Pick what the block shows; you choose its data and settings next.</p><div className="mt-2 space-y-2">{["Text", "Metrics", "Visualizations", "Data"].map((group) => <div key={group}><div className="px-1 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div><div className="grid grid-cols-2 gap-1">{REPORT_BLOCK_TYPES.filter((item) => item.group === group).map((item) => <BaseUIPopover.Close key={item.type} data-testid={`report-add-${item.type}`} className="rounded px-2 py-1.5 text-left hover:bg-muted" onClick={() => addBlock(item.type)}><span className="block text-xs font-medium">{item.label}</span><span className="block text-[10px] leading-snug text-muted-foreground">{item.description}</span></BaseUIPopover.Close>)}</div></div>)}</div></PopoverContent></Popover>
       </div>}
     </div>
     {!engineReady && <div data-testid="report-engine-waiting" role={engineLifecycle.status === "error" ? "alert" : "status"} className={engineLifecycle.status === "error" ? "border-b border-destructive/25 bg-destructive/5 px-4 py-2 text-xs text-destructive" : "border-b border-sky-300/50 bg-sky-50/50 px-4 py-2 text-xs text-sky-950 dark:border-sky-800 dark:bg-sky-950/25 dark:text-sky-100"}>
@@ -2564,7 +2564,12 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
         </div>}
         </div>
       </div>}
-      {!readerMode && (blockEditor ? workspaceView === "report" : agentOpen || inspectorOpen) && <aside className="report-authoring-control relative z-[1000] flex min-h-0 w-[min(42vw,520px)] min-w-[340px] flex-col border-l bg-card max-sm:fixed max-sm:inset-0 max-sm:w-full max-sm:min-w-0">
+      {/* z-[45]: above the sticky app header (z-40), which the full-screen mobile
+          panel must cover, and below popovers (z-50) so a menu or picker opened
+          over the panel stays visible. It was z-[1000], which hid the report's
+          More menu and any popover inside the panel itself. Report blocks, maps
+          included, stack inside the grid's own z-10 context and cannot reach it. */}
+      {!readerMode && (blockEditor ? workspaceView === "report" : agentOpen || inspectorOpen) && <aside className="report-authoring-control relative z-[45] flex min-h-0 w-[min(42vw,520px)] min-w-[340px] flex-col border-l bg-card max-sm:fixed max-sm:inset-0 max-sm:w-full max-sm:min-w-0">
         {blockEditor ? <ReportBlockEditor
           key={blockEditor.block.id}
           block={blockEditor.block}
