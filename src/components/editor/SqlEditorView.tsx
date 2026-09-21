@@ -28,7 +28,7 @@ import { buildTableSelect, isTableRef } from "@/lib/sql/table-select";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { treeIdToShellText } from "@/lib/tree";
 import { exportResult, triggerDownload, safeFileStem, type ExportFormat } from "@/lib/editor/result-export";
-import type { PerspectivePivotMode } from "@/lib/pivot-source";
+import type { PerspectivePivotMode, QueryPivotMode } from "@/lib/pivot-source";
 import { CodeMirrorSql, type CodeMirrorSqlHandle } from "./CodeMirrorSql";
 import { SqlEditorTabs } from "./SqlEditorTabs";
 import { EditorToolbar } from "./EditorToolbar";
@@ -252,16 +252,19 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     }
   }, []);
 
-  const handleRun = useCallback(() => {
-    if (!editorRef.current || !activeId) return;
+  /** What Run executes: the selection if there is one, else the statement at the cursor. */
+  const sqlToRun = useCallback((): string | null => {
+    if (!editorRef.current) return null;
     const selection = editorRef.current.getSelectionText();
-    if (selection.trim()) {
-      runSql(selection, activeId);
-      return;
-    }
-    const stmt = editorRef.current.getStatementAtCursor();
-    if (stmt) runSql(stmt.text, activeId);
-  }, [activeId, runSql]);
+    if (selection.trim()) return selection;
+    return editorRef.current.getStatementAtCursor()?.text ?? null;
+  }, []);
+
+  const handleRun = useCallback(() => {
+    if (!activeId) return;
+    const sql = sqlToRun();
+    if (sql) runSql(sql, activeId);
+  }, [activeId, runSql, sqlToRun]);
 
   const handleRunStatementAtCursor = useCallback(() => {
     if (!editorRef.current || !activeId) return;
@@ -316,6 +319,36 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   // A new result (or another tab's) makes the last pivot error stale.
   useEffect(() => { setPivotError(null); }, [activeResult.table]);
 
+  // Open a query in Perspective as a live view or temp table. Shared by the
+  // results pane's Pivot (the SQL behind the result on screen) and the
+  // toolbar's Run in Perspective (SQL that has not run here at all).
+  const pivotSql = useCallback(async (sql: string, mode: QueryPivotMode) => {
+    setPivotError(null);
+    setPivotBusy(mode);
+    try {
+      await waitForEngineReady();
+      // The Perspective host is a lazily loaded chunk; a click right after
+      // page load can beat it to registering this bridge.
+      let show = ui.showPerspectiveQuery;
+      for (let waited = 0; !show && waited < 5_000; waited += 100) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        show = ui.showPerspectiveQuery;
+      }
+      if (!show) throw new Error("Perspective is still loading. Try again in a moment.");
+      const result = await show(sql, mode);
+      if (!result.ok) setPivotError(result.error);
+    } catch (e) {
+      setPivotError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPivotBusy(null);
+    }
+  }, []);
+
+  const handleRunInPerspective = useCallback((mode: QueryPivotMode) => {
+    const sql = sqlToRun();
+    if (sql?.trim()) void pivotSql(sql, mode);
+  }, [pivotSql, sqlToRun]);
+
   const handleOpenInPerspective = useCallback(async (mode: PerspectivePivotMode) => {
     const table = activeResult.table;
     if (!table) return;
@@ -329,15 +362,8 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       ui.showPerspective(ab, { sql: activeResult.sourceSql, source: "editor" });
       return;
     }
-    if (!activeResult.sourceSql || !ui.showPerspectiveQuery) return;
-    setPivotBusy(mode);
-    try {
-      const result = await ui.showPerspectiveQuery(activeResult.sourceSql, mode);
-      if (!result.ok) setPivotError(result.error);
-    } finally {
-      setPivotBusy(null);
-    }
-  }, [activeResult.table, activeResult.sourceSql]);
+    if (activeResult.sourceSql) await pivotSql(activeResult.sourceSql, mode);
+  }, [activeResult.table, activeResult.sourceSql, pivotSql]);
 
   // Copy a share link for the active tab. The link carries the connection
   // context (service + ATTACH options) so the recipient lands on the same
@@ -526,6 +552,8 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
         bootPhase={bootPhase}
         hasSelection={hasSelection}
         onRun={handleRun}
+        onRunInPerspective={handleRunInPerspective}
+        perspectiveBusy={pivotBusy}
         onStop={handleStop}
         onFormat={handleFormat}
         onAskAI={() => setAiOpen((o) => !o)}

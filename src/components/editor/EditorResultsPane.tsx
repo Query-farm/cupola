@@ -89,7 +89,7 @@ export function EditorResultsPane({ state, onPopout, onExport, onOpenInPerspecti
           </Button>
         </div>
       )}
-      {isGrid && pivotError && (
+      {pivotError && (
         <div role="alert" data-testid="editor-pivot-error" className="flex items-start gap-1.5 border-b border-border bg-destructive/5 px-3 py-1.5 text-xs text-destructive">
           <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
           <span className="whitespace-pre-wrap">{pivotError}</span>

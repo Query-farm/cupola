@@ -121,3 +121,32 @@ test("a statement that cannot be wrapped explains itself and stays in the editor
   await expect(page.getByTestId("tab-editor")).toHaveAttribute("aria-selected", "true");
   expect(await scratchSources(page)).toEqual([]);
 });
+
+test("Run in Perspective opens a query without running it in the editor", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openEditor(page);
+  await typeInEditor(page, QUERY);
+  await page.getByTestId("editor-run-perspective").click();
+  await page.getByTestId("editor-run-perspective-view").click();
+
+  const opened = await viewerState(page);
+  expect(opened.table).toMatch(/^temp\.main\.__cupola_pivot_\d+$/);
+  expect(opened.rows).toBe(10);
+
+  // The editor never executed the query, so it holds no result to buffer.
+  await openEditor(page);
+  await expect(page.getByText("Run a query to see results here.")).toBeVisible();
+  await expect(page.getByTestId("editor-open-perspective")).toHaveCount(0);
+});
+
+test("Run in Perspective explains a statement it cannot wrap", async ({ page }) => {
+  test.setTimeout(60_000);
+  await openEditor(page);
+  await typeInEditor(page, "DESCRIBE memory.main.pivot_probe");
+  await page.getByTestId("editor-run-perspective").click();
+  await page.getByTestId("editor-run-perspective-table").click();
+
+  // No result grid is on screen, and the error still shows.
+  await expect(page.getByTestId("editor-pivot-error")).toContainText("can't be pivoted as a table");
+  await expect(page.getByTestId("tab-editor")).toHaveAttribute("aria-selected", "true");
+});

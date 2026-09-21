@@ -1,6 +1,8 @@
 import { Play, Square, Sparkles, WandSparkles, Loader2, FileChartColumn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScriptMenu } from "./ScriptMenu";
+import { PivotMenu } from "./PivotMenu";
+import type { PerspectivePivotMode, QueryPivotMode } from "@/lib/pivot-source";
 
 interface Props {
   running: boolean;
@@ -11,6 +13,11 @@ interface Props {
   /** True when text is selected in the editor (Run targets the selection). */
   hasSelection: boolean;
   onRun: () => void;
+  /** Send the statement Run would execute straight to Perspective, without
+   *  running it here — its result is never buffered in the editor. */
+  onRunInPerspective: (mode: QueryPivotMode) => void;
+  /** The Perspective mode being prepared, if any. */
+  perspectiveBusy?: PerspectivePivotMode | null;
   onStop: () => void;
   onFormat: () => void;
   onAskAI: () => void;
@@ -37,7 +44,7 @@ interface Props {
  *
  * Layout, left to right:
  *
- *   [▶ Run] [✨ Ask AI]  │  Format   Script ▾
+ *   [▶ Run] [Run in Perspective ▾] [✨ Ask AI]  │  Format   Script ▾
  *
  * Ask AI sits in the execute cluster with a filled background because it is a
  * primary action, not a utility. Its fill is `primary` (brown) rather than the
@@ -50,6 +57,8 @@ export function EditorToolbar({
   bootPhase,
   hasSelection,
   onRun,
+  onRunInPerspective,
+  perspectiveBusy,
   onStop,
   onFormat,
   onAskAI,
@@ -95,6 +104,19 @@ export function EditorToolbar({
           {hasSelection ? "Run selection" : "Run"}
         </Button>
       )}
+
+      <PivotMenu
+        onPivot={(mode) => { if (mode !== "snapshot") onRunInPerspective(mode); }}
+        busy={perspectiveBusy}
+        disabled={!queryReady || running}
+        modes={["view", "table"]}
+        label={hasSelection ? "Run selection in Perspective" : "Run in Perspective"}
+        title="Open this query in Perspective without running it here, so a large result is never buffered in the editor"
+        triggerClassName="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs font-medium shadow-xs hover:bg-muted disabled:opacity-50 disabled:pointer-events-none"
+        testId="editor-run-perspective"
+        itemTestIdPrefix="editor-run-perspective"
+        align="start"
+      />
 
       <Button
         size="sm"
