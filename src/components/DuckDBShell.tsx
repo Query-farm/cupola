@@ -10,7 +10,7 @@ const AskAIChat = lazy(() => import("./AskAIChat").then(m => ({ default: m.AskAI
 import { DataPreview } from "./content/DataPreview";
 import { getColumns } from "@/lib/service";
 import { treeIdToShellText } from "@/lib/tree";
-import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
+import { VgiDuckDBHandler, perspectiveServeMode, runPerspectiveQuery, type PerspectiveServeMode } from "@/lib/perspective-duckdb-handler";
 import { createQueryPivotSource, dropQueryPivotSource, type QueryPivotSource } from "@/lib/pivot-source";
 import { getAuthToken, getAuthTokenForService } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
@@ -234,8 +234,9 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     // created before leaving the editor, so a query that cannot be wrapped
     // (not a single SELECT-like statement) reports its error in place.
     ui.showPerspectiveQuery = async (sql, mode) => {
-      const run = engine.query;
-      if (!run) return { ok: false, error: "The data engine is not ready." };
+      if (!engine.query) return { ok: false, error: "The data engine is not ready." };
+      // Logged with the handler's queries, so the console shows the whole flow.
+      const run = (statement: string) => runPerspectiveQuery(statement, "pivotSource");
       let source: QueryPivotSource;
       try {
         source = await createQueryPivotSource(sql, mode, run);
@@ -251,9 +252,10 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         // paths. Beyond consistency it keeps a live view cheap: with every
         // column shown, each request selected all of them from the source.
         // The name comes from the handler's schema, which is what Perspective
-        // sees (`_` renamed to `-`, unsupported types dropped).
+        // sees (columns of unsupported types are dropped).
         const defaultConfig = async () => {
-          const schema = await perspectiveHandler?.tableSchema(source.tableId);
+          // A Table-mode pivot has a `rowid`, so it is served materialized.
+          const schema = await perspectiveHandlers.get(source.mode === "table" ? "materialized" : "live")?.tableSchema(source.tableId);
           const firstColumn = schema ? Object.keys(schema)[0] : undefined;
           return { table: source.tableId, title, ...(firstColumn ? { columns: [firstColumn] } : {}) };
         };
@@ -435,7 +437,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
               const pkColumns: string[] = [];
               for (const idx of pkIndices) {
                 if (cols[idx]) {
-                  const pspName = cols[idx].name.replace(/_/g, "-");
+                  const pspName = cols[idx].name;
                   aggregates[pspName] = "any_value";
                   pkColumns.push(pspName);
                 }
@@ -444,7 +446,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
               restoreConfig.columns = pkColumns;
             } else if (cols.length > 0) {
               // No primary key — start with just the first column to avoid overwhelming the grid
-              restoreConfig.columns = [cols[0].name.replace(/_/g, "-")];
+              restoreConfig.columns = [cols[0].name];
             }
           }
           return restoreConfig;
@@ -768,10 +770,27 @@ function getPerspectiveCDN() {
 let perspectiveLoaded = false;
 let perspectiveMod: any = null;
 let perspectiveWorker: any = null;
-/** Persistent virtual-server client — reused across table switches so views stay alive. */
-let perspectiveClient: any = null;
-/** The handler behind `perspectiveClient`, kept so a query pivot can release its source. */
-let perspectiveHandler: VgiDuckDBHandler | null = null;
+/**
+ * Persistent virtual-server clients, one per serve mode (see
+ * `PerspectiveServeMode`) — Perspective reads features per client, and the
+ * two modes advertise different ones. Reused across table switches so views
+ * stay alive.
+ */
+const perspectiveClients = new Map<PerspectiveServeMode, any>();
+/** The handlers behind `perspectiveClients`, kept so a query pivot can release its source. */
+const perspectiveHandlers = new Map<PerspectiveServeMode, VgiDuckDBHandler>();
+
+async function perspectiveClientFor(mode: PerspectiveServeMode): Promise<any> {
+  let client = perspectiveClients.get(mode);
+  if (!client) {
+    const handler = new VgiDuckDBHandler(perspectiveMod, mode);
+    const messagePort = await perspectiveMod.createMessageHandler(handler);
+    client = await perspectiveMod.worker(messagePort);
+    perspectiveHandlers.set(mode, handler);
+    perspectiveClients.set(mode, client);
+  }
+  return client;
+}
 /** The scratch view or table behind the query pivot on screen, if any. */
 let queryPivotSource: QueryPivotSource | null = null;
 
@@ -810,12 +829,9 @@ async function mountVirtualPerspective(
     perspectiveWorker = await perspectiveMod.worker();
   }
 
-  // Reuse the persistent virtual-server client so views survive table switches
-  if (!perspectiveClient) {
-    perspectiveHandler = new VgiDuckDBHandler(perspectiveMod);
-    const messagePort = await perspectiveMod.createMessageHandler(perspectiveHandler);
-    perspectiveClient = await perspectiveMod.worker(messagePort);
-  }
+  // DuckDB tables (with a `rowid`) are served materialized; views and VGI
+  // catalog tables live. The client for each mode is reused across tables.
+  const client = await perspectiveClientFor(await perspectiveServeMode(tableId));
 
   if (isCancelled()) return false;
 
@@ -842,7 +858,7 @@ async function mountVirtualPerspective(
   // IntersectionObserver resume which causes "View not found" errors
   await viewer.setAutoPause(false);
 
-  await viewer.load(perspectiveClient);
+  await viewer.load(client);
 
   const cachedConfig = perspectiveConfigCache.get(tableId);
   await viewer.restore(cachedConfig ? { ...cachedConfig, table: tableId } : await defaultConfig());
@@ -860,11 +876,10 @@ async function releaseQueryPivotSource(): Promise<void> {
   if (!source) return;
   queryPivotSource = null;
   perspectiveConfigCache.delete(source.tableId);
-  const run = engine.query;
-  if (!run) return;
+  if (!engine.query) return;
   try {
-    await perspectiveHandler?.releaseTable(source.tableId);
-    await dropQueryPivotSource(source, run);
+    for (const handler of perspectiveHandlers.values()) await handler.releaseTable(source.tableId);
+    await dropQueryPivotSource(source, (statement) => runPerspectiveQuery(statement, "pivotSource"));
   } catch (e) {
     console.warn("[perspective] could not drop query pivot source", source.tableId, e);
   }
@@ -1062,9 +1077,8 @@ async function loadStaticPerspectiveSnapshot(
     // virtual-server path's own no-primary-key default (`DuckDBShell.tsx`'s
     // other Perspective effect: "start with just the first column to avoid
     // overwhelming the grid") so a static snapshot starts minimal too. The
-    // static path renames nothing (unlike the virtual server's `_`->`-`
-    // column mapping), so the raw Arrow field name is also Perspective's
-    // column name here.
+    // raw Arrow field name is Perspective's column name here, as it is on the
+    // virtual-server path.
     //
     // `load(client)` alone renders nothing — unlike the old `load(table)`,
     // which rendered with every column as its fallback — so a `columns`

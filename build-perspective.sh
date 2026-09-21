@@ -24,8 +24,9 @@
 #   --stage-only   Skip the build and just re-copy the existing dist/ output.
 #                  Useful when iterating on the staging layout.
 #
-# The fork lives on branch `duckdb-type-support-v5`, rebased onto upstream
-# v5.1.0. To move to a newer upstream, rebase that branch and re-run this.
+# The fork lives on branch `duckdb-type-support-v5.5`: upstream v5.5.1 plus
+# the coercion and Int64 commits. To move to a newer upstream, cherry-pick
+# those onto the new tag and re-run this.
 #
 set -euo pipefail
 
@@ -139,6 +140,16 @@ fi
 # @perspective-dev/viewer — cdn/ + wasm/ (incl. wasm-bindgen snippets).
 cp "$PSP_SRC/rust/perspective-viewer/dist/cdn/perspective-viewer.js"      "$DEST/viewer/dist/cdn/"
 cp -R "$PSP_SRC/rust/perspective-viewer/dist/wasm"                        "$DEST/viewer/dist/wasm"
+# The fork's build never clears dist/wasm/snippets, so each build leaves the
+# previous build's content-hashed snippet directories behind and a whole-dir
+# copy shipped them all. Keep only the ones the viewer glue actually imports.
+for snippet_dir in "$DEST"/viewer/dist/wasm/snippets/*/; do
+    snippet_name="$(basename "$snippet_dir")"
+    if ! grep -q "$snippet_name" "$DEST/viewer/dist/wasm/perspective-viewer.js"; then
+        echo "    pruning unreferenced snippets/$snippet_name"
+        rm -rf "$snippet_dir"
+    fi
+done
 
 # Plugins. viewer-charts REPLACES viewer-d3fc, which along with
 # viewer-openlayers and workspace was deleted upstream in v5.x — those packages

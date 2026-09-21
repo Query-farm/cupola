@@ -26,6 +26,7 @@ import {
 } from "./helpers";
 
 interface TableRef {
+  catalog: string;
   table_schema: string;
   table_name: string;
 }
@@ -57,7 +58,7 @@ async function findTable(page: Page): Promise<TableRef | null> {
   for (const row of res.rows ?? []) {
     const path = [catalog, row.table_schema, row.table_name].map(quote).join(".");
     const probe = await shellQuery(page, `SELECT 1 FROM ${path} WHERE ${quote(row.column_name)} IS NOT NULL LIMIT 1`);
-    if (probe.rows?.length) return { table_schema: row.table_schema, table_name: row.table_name };
+    if (probe.rows?.length) return { catalog, table_schema: row.table_schema, table_name: row.table_name };
   }
   return null;
 }
@@ -119,6 +120,17 @@ test.describe("Perspective virtual server", () => {
     });
     expect(cols, "virtual server never produced a table schema").not.toBeNull();
     expect(cols!.length).toBeGreaterThan(0);
+
+    // Perspective shows the table's real column names. The handler used to
+    // rename every `_` to `-` (a workaround for a Perspective bug fixed in
+    // 5.0), so `order_id` appeared as `order-id`.
+    const real = await shellQuery(
+      page,
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_catalog = '${target!.catalog}' AND table_schema = '${target!.table_schema}' AND table_name = '${target!.table_name}'`,
+    );
+    const realNames = new Set((real.rows ?? []).map((row) => String(row.column_name)));
+    expect(cols!.filter((name) => !realNames.has(name)), "Perspective columns that are not real column names").toEqual([]);
 
     expect(
       errors.filter((e) => /Missing perspective-client\.wasm|virtual server error/i.test(e)),

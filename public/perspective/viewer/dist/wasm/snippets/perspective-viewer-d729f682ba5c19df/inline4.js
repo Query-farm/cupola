@@ -1,1 +1,0 @@
-export * as psp from '../../perspective-viewer.js'

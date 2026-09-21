@@ -24,7 +24,7 @@ interface TraversalNode {
 
 /**
  * Fully-qualified, quoted name for one of the handler's scratch views: the
- * rename view per hosted table, and one view per Perspective view.
+ * source view per hosted table, and one view per Perspective view.
  *
  * They live in `temp.main` (VGI catalogs are read-only, so they need a
  * writable home). They used to live in `memory.main`, which broke over TEMP
@@ -37,7 +37,11 @@ interface TraversalNode {
  * which lists the memory catalog and showed every one of these views.
  */
 export function scratchView(name: string): string {
-  return `temp.main."${name.replace(/"/g, '""')}"`;
+  return `temp.main.${ident(name)}`;
+}
+
+function ident(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
 }
 
 class ViewTraversal {
@@ -56,7 +60,8 @@ class ViewTraversal {
     // Query just the grouping ID column to determine tree structure
     const qualifiedView = scratchView(viewId);
     const result = await runQuery(
-      `SELECT "__GROUPING_ID__" FROM ${qualifiedView}`
+      `SELECT "__GROUPING_ID__" FROM ${qualifiedView}`,
+      "viewTraversal",
     );
     if (!result.ok || !result.arrowBuffers?.length) return null;
 
@@ -171,10 +176,93 @@ const STRING_AGGS = [
   "count", "any_value", "arbitrary", "first", "countif", "last", "string_agg",
 ];
 
+// Filter operators, aggregates, and window aggregates mirror upstream's own
+// DuckDB handler (`virtual_servers/duckdb.ts`, 5.5.1).
 const FILTER_OPS = [
-  "==", "!=", "LIKE", "IS DISTINCT FROM", "IS NOT DISTINCT FROM",
-  ">=", "<=", ">", "<",
+  "==", "!=", "IS DISTINCT FROM", "IS NOT DISTINCT FROM",
+  ">=", "<=", ">", "<", "is null", "is not null",
 ];
+
+const STRING_FILTER_OPS = [
+  ...FILTER_OPS,
+  "begins with", "not begins with", "contains", "not contains",
+  "ends with", "not ends with", "matches", "not matches", "in", "not in",
+  "LIKE", "NOT LIKE", "ILIKE", "NOT ILIKE",
+];
+
+const FRAMES = ["rows", "range", "cumulative"];
+
+const WINDOW_AGGREGATES = [
+  { name: "sum", frames: FRAMES, result_type: "float" },
+  { name: "avg", frames: FRAMES, result_type: "float" },
+  { name: "count", frames: FRAMES, result_type: "float" },
+  { name: "min", frames: FRAMES },
+  { name: "max", frames: FRAMES },
+  { name: "product", frames: FRAMES, result_type: "float" },
+  { name: "median", frames: FRAMES, result_type: "float" },
+  { name: "stddev_samp", frames: FRAMES, result_type: "float" },
+  { name: "stddev_pop", frames: FRAMES, result_type: "float" },
+  { name: "var_samp", frames: FRAMES, result_type: "float" },
+  { name: "var_pop", frames: FRAMES, result_type: "float" },
+  { name: "first_value", frames: FRAMES },
+  { name: "last_value", frames: FRAMES },
+  { name: "nth_value", frames: FRAMES, offset: true },
+  { name: "lag", offset: true },
+  { name: "lead", offset: true },
+  { name: "row_number", result_type: "float" },
+  { name: "rank", result_type: "float" },
+  { name: "dense_rank", result_type: "float" },
+  { name: "percent_rank", result_type: "float" },
+  { name: "cume_dist", result_type: "float" },
+  { name: "ntile", offset: true, result_type: "float" },
+  { name: "diff", offset: true, result_type: "float" },
+  { name: "rate", frames: ["range"], result_type: "float" },
+];
+
+// Arithmetic is undefined for the non-numeric types; ordering and navigation are not.
+const WINDOW_AGGREGATES_ANY = [
+  { name: "count", frames: FRAMES, result_type: "float" },
+  { name: "min", frames: FRAMES },
+  { name: "max", frames: FRAMES },
+  { name: "first_value", frames: FRAMES },
+  { name: "last_value", frames: FRAMES },
+  { name: "nth_value", frames: FRAMES, offset: true },
+  { name: "lag", offset: true },
+  { name: "lead", offset: true },
+  { name: "row_number", result_type: "float" },
+  { name: "rank", result_type: "float" },
+  { name: "dense_rank", result_type: "float" },
+  { name: "percent_rank", result_type: "float" },
+  { name: "cume_dist", result_type: "float" },
+  { name: "ntile", offset: true, result_type: "float" },
+];
+
+/**
+ * How a hosted table is served, chosen per table by whether it has a `rowid`
+ * (DuckDB tables do; views and VGI catalog tables do not) — see
+ * `perspectiveServeMode`.
+ *
+ * - `materialized`: upstream's DuckDB configuration. Each Perspective layout
+ *   is a TEMP TABLE and `rowid` gives unsorted grids a stable order, so
+ *   split_by (a data-dependent PIVOT) and natural-order windows work.
+ * - `live`: each layout is a TEMP VIEW, so nothing is copied and every page
+ *   is read from the source on demand. With no row identity, unsorted grids
+ *   have no guaranteed order (the `row_id_expr` orders by nothing),
+ *   windows need an explicit order (`unordered`), and split_by is off —
+ *   DuckDB will not store a data-dependent PIVOT in a view. Upstream's
+ *   view-based servers (Postgres, ClickHouse) make the same trade.
+ */
+export type PerspectiveServeMode = "materialized" | "live";
+
+const SQL_MODEL_COMMON = { column_separator: "|", like_escape_clause: "\\", regex_fn: "regexp_matches" };
+// Scratch objects live in `temp.main` (see `scratchView`), and DuckDB only
+// creates there with the TEMP keyword.
+const SQL_MODEL_ARGS: Record<PerspectiveServeMode, Record<string, string>> = {
+  materialized: { ...SQL_MODEL_COMMON, create_entity: "TEMP TABLE", drop_entity: "TABLE" },
+  // A typed NULL orders by nothing. A bare `NULL` is refused by DuckDB
+  // ("ORDER BY non-integer literal has no effect"); a cast is an expression.
+  live: { ...SQL_MODEL_COMMON, create_entity: "TEMP VIEW", drop_entity: "VIEW", row_id_expr: "CAST(NULL AS INTEGER)" },
+};
 
 import { Type as ArrowType } from "@query-farm/apache-arrow";
 
@@ -288,23 +376,59 @@ function arrowTypeToPsp(field: any): ColumnType | null {
 }
 
 /** Get Arrow schema fields for a table by querying LIMIT 0. */
-async function getArrowSchema(tableId: string): Promise<any[]> {
-  const result = await runQuery(`SELECT * FROM ${tableId} LIMIT 0`);
+async function getArrowSchema(tableId: string, step: string): Promise<any[]> {
+  const result = await runQuery(`SELECT * FROM ${tableId} LIMIT 0`, step);
   if (!result.ok || !result.arrowBuffers?.length) return [];
   const table = tableFromIPC(new Uint8Array(result.arrowBuffers[0]));
   return table.schema.fields;
 }
 
-/** Execute a SQL query via the shared DuckDB WASM worker. */
-async function runQuery(sql: string): Promise<{ arrowBuffers?: ArrayBuffer[]; ok: boolean; error?: string }> {
+/**
+ * Execute a SQL query via the shared DuckDB WASM worker, logging it.
+ *
+ * Every query the virtual server runs passes through here, so this is where
+ * Perspective's SQL becomes visible: the builder generates it inside wasm and
+ * nothing else shows it. Each line names the handler step that issued it
+ * (`tableMakeView`, `viewGetData`, …), its time, and its result size or error.
+ * Failures are logged, not warned: the `rowid` probes fail by design on views.
+ */
+async function runQuery(sql: string, step: string): Promise<{ arrowBuffers?: ArrayBuffer[]; ok: boolean; error?: string }> {
   const queryFn = engine.query;
   if (!queryFn) throw new Error("DuckDB shell not initialized");
-  return queryFn(sql);
+  const started = performance.now();
+  const result = await queryFn(sql);
+  const took = `${Math.round(performance.now() - started)} ms`;
+  if (result.ok) {
+    const bytes = result.arrowBuffers?.reduce((sum, buffer) => sum + buffer.byteLength, 0) ?? 0;
+    console.log(`[perspective sql] ${step} · ${took} · ${formatBytes(bytes)}\n${sql}`);
+  } else {
+    console.log(`[perspective sql] ${step} · ${took} · failed: ${result.error}\n${sql}`);
+  }
+  return result;
+}
+
+/** The same logged runner, for cupola's own Perspective SQL (query pivot sources). */
+export const runPerspectiveQuery = runQuery;
+
+/**
+ * Which handler serves a table: `materialized` when it has a `rowid` (DuckDB
+ * tables — Table-mode pivots, `memory` tables), `live` otherwise (views and
+ * VGI catalog tables). The probe binds without scanning.
+ */
+export async function perspectiveServeMode(tableId: string): Promise<PerspectiveServeMode> {
+  const probe = await runQuery(`SELECT rowid FROM ${tableId} LIMIT 0`, "serveMode");
+  return probe.ok ? "materialized" : "live";
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /** Execute SQL and parse Arrow IPC into row objects. */
-async function queryRows(sql: string): Promise<any[]> {
-  const result = await runQuery(sql);
+async function queryRows(sql: string, step: string): Promise<any[]> {
+  const result = await runQuery(sql, step);
   if (!result.ok) throw new Error(result.error || "Query failed");
   if (!result.arrowBuffers?.length) return [];
   const table = tableFromIPC(new Uint8Array(result.arrowBuffers[0]));
@@ -327,39 +451,14 @@ async function queryRows(sql: string): Promise<any[]> {
  */
 export class VgiDuckDBHandler {
   private _sqlBuilder: any = null;
-  private tableOrderingCache = new Map<string, { hasRowid: boolean; primaryKey: string[] | null }>();
   private tableSizeCache = new Map<string, number>();
   private tableSchemaCache = new Map<string, Record<string, ColumnType>>();
   private viewSizeCache = new Map<string, number>();
-  private renameViewCache = new Set<string>();
+  private sourceViewCache = new Set<string>();
   /** Traversals for grouped views — enables collapse/expand. */
   private traversals = new Map<string, ViewTraversal>();
 
-  constructor(_perspectiveMod: any) {
-  }
-
-  /** Detect whether a table has rowid or a primary key for stable ordering. */
-  private async detectTableOrdering(tableId: string): Promise<{ hasRowid: boolean; primaryKey: string[] | null }> {
-    // Test for rowid
-    try {
-      const r = await runQuery(`SELECT rowid FROM ${tableId} LIMIT 0`);
-      if (r.ok) return { hasRowid: true, primaryKey: null };
-    } catch {}
-
-    // Check for primary key via duckdb_constraints()
-    try {
-      const parts = tableId.split(".");
-      if (parts.length === 3) {
-        const rows = await queryRows(
-          `SELECT column_name FROM duckdb_constraints() WHERE database_name='${parts[0]}' AND schema_name='${parts[1]}' AND table_name='${parts[2]}' AND constraint_type='PRIMARY KEY'`
-        );
-        if (rows.length > 0) {
-          return { hasRowid: false, primaryKey: rows.map((r: any) => r.column_name) };
-        }
-      }
-    } catch {}
-
-    return { hasRowid: false, primaryKey: null };
+  constructor(_perspectiveMod: any, readonly mode: PerspectiveServeMode = "live") {
   }
 
   /**
@@ -368,7 +467,7 @@ export class VgiDuckDBHandler {
    * The SQL model's scratch views are created in `temp.main` (see
    * `scratchView`) and every reference to them has to say so. The builder
    * interpolates whatever id it is given verbatim, and *only* ever in a table
-   * position — `CREATE {} AS`, `DROP TABLE IF EXISTS {}`, `FROM {}`,
+   * position — `CREATE {entity} {} AS`, `DROP {entity} IF EXISTS {}`, `FROM {}`,
    * `DESCRIBE {}` — so handing it the qualified name up front produces correct
    * SQL directly.
    *
@@ -388,7 +487,7 @@ export class VgiDuckDBHandler {
       const viewerClass = customElements?.get("perspective-viewer") as any;
       const wasmMod = viewerClass?.__wasm_module__;
       if (wasmMod?.GenericSQLVirtualServerModel) {
-        this._sqlBuilder = new wasmMod.GenericSQLVirtualServerModel();
+        this._sqlBuilder = new wasmMod.GenericSQLVirtualServerModel(SQL_MODEL_ARGS[this.mode]);
       } else {
         throw new Error("Perspective WASM not initialized — call perspective.worker() first");
       }
@@ -397,16 +496,29 @@ export class VgiDuckDBHandler {
   }
 
   getFeatures() {
+    const live = this.mode === "live";
     return {
       group_by: true,
-      split_by: true,
+      split_by: !live,
       sort: true,
       expressions: true,
+      // No row identity: Perspective then rejects a window without an
+      // explicit order_by, rather than the SQL failing on `rowid`.
+      unordered: live,
+      window_aggregates: {
+        integer: WINDOW_AGGREGATES,
+        float: WINDOW_AGGREGATES,
+        string: WINDOW_AGGREGATES_ANY,
+        date: WINDOW_AGGREGATES_ANY,
+        datetime: WINDOW_AGGREGATES_ANY,
+        boolean: WINDOW_AGGREGATES_ANY,
+      },
       group_rollup_mode: ["rollup", "flat", "total"],
+      ...(live ? {} : { split_rollup_mode: ["flat", "rollup"] }),
       filter_ops: {
         integer: FILTER_OPS,
         float: FILTER_OPS,
-        string: FILTER_OPS,
+        string: STRING_FILTER_OPS,
         boolean: FILTER_OPS,
         date: FILTER_OPS,
         datetime: FILTER_OPS,
@@ -432,7 +544,7 @@ export class VgiDuckDBHandler {
       SELECT database_name, schema_name, table_name FROM duckdb_tables()
       UNION ALL
       SELECT database_name, schema_name, view_name FROM duckdb_views()
-       WHERE temporary AND view_name LIKE '${pivotViews}%' ESCAPE '\\'`);
+       WHERE temporary AND view_name LIKE '${pivotViews}%' ESCAPE '\\'`, "getHostedTables");
     return rows.map((row) => `${row.database_name}.${row.schema_name}.${row.table_name}`);
   }
 
@@ -440,14 +552,13 @@ export class VgiDuckDBHandler {
     const cached = this.tableSchemaCache.get(tableId);
     if (cached) return cached;
     const qualifiedId = tableId.includes(".") ? tableId : scratchView(tableId);
-    const fields = await getArrowSchema(qualifiedId);
+    const fields = await getArrowSchema(qualifiedId, "tableSchema");
     const schema: Record<string, ColumnType> = {};
     for (const field of fields) {
       if (field.name.startsWith("__")) continue;
       const pspType = arrowTypeToPsp(field);
       if (pspType === null) continue;
-      const name = field.name.replace(/_/g, "-");
-      schema[name] = pspType;
+      schema[field.name] = pspType;
     }
     this.tableSchemaCache.set(tableId, schema);
     return schema;
@@ -460,41 +571,51 @@ export class VgiDuckDBHandler {
     const sql = this.sqlBuilder.tableSize(
       tableId.includes(".") ? tableId : this.qualifiedView(tableId),
     );
-    const rows = await queryRows(sql);
+    const rows = await queryRows(sql, "tableSize");
     const size = Number(rows[0]?.["count_star()"] ?? 0);
     this.tableSizeCache.set(tableId, size);
     return size;
   }
 
-  private renameViewId(tableId: string): string {
-    return scratchView(`__psp_rename_${tableId.replace(/\./g, "_")}`);
+  private sourceViewId(tableId: string): string {
+    return scratchView(`__psp_source_${tableId.replace(/\./g, "_")}`);
   }
 
   /**
    * Forget a hosted table its owner is about to drop — a query pivot's
-   * scratch view or table. Drops the rename view built over it and every
+   * scratch view or table. Drops the source view built over it and every
    * cache keyed by its name, which would otherwise outlive it.
    */
   async releaseTable(tableId: string): Promise<void> {
-    if (this.renameViewCache.has(tableId)) await runQuery(`DROP VIEW IF EXISTS ${this.renameViewId(tableId)}`);
-    this.renameViewCache.delete(tableId);
-    this.tableOrderingCache.delete(tableId);
+    if (this.sourceViewCache.has(tableId)) await runQuery(`DROP VIEW IF EXISTS ${this.sourceViewId(tableId)}`, "releaseTable");
+    this.sourceViewCache.delete(tableId);
     this.tableSizeCache.delete(tableId);
     this.tableSchemaCache.delete(tableId);
   }
 
-  /** Ensure a rename view exists for a table, mapping underscored column names to hyphenated ones. */
-  private async ensureRenameView(tableId: string): Promise<string> {
-    const renameViewId = this.renameViewId(tableId);
-    if (this.renameViewCache.has(tableId)) return renameViewId;
+  /**
+   * The view Perspective's SQL builder reads a hosted table through: its
+   * displayable columns under their own names, with dates and timestamps
+   * clamped to the range JavaScript can show.
+   *
+   * It used to also rename every `_` to `-`, a workaround for Perspective's
+   * SQL builder building split_by column names from DuckDB's `_`-joined PIVOT
+   * output (perspective-dev/perspective#3187). Upstream fixed that in 5.0 —
+   * the builder now joins with `|` and passes underscores through — so the
+   * rename only changed the user's column names, and collided `a_b` with
+   * `a-b`.
+   */
+  private async ensureSourceView(tableId: string): Promise<string> {
+    const sourceViewId = this.sourceViewId(tableId);
+    if (this.sourceViewCache.has(tableId)) return sourceViewId;
 
     // Get Arrow schema to classify columns by their actual Arrow DataType
-    const fields = await getArrowSchema(tableId);
+    const fields = await getArrowSchema(tableId, "sourceView");
     const aliases = fields
       .filter((f: any) => !f.name.startsWith("__") && arrowTypeToPsp(f) !== null)
       .map((f: any) => {
-        const col = `"${f.name}"`;
-        const alias = `"${f.name.replace(/_/g, "-")}"`;
+        const col = ident(f.name);
+        const alias = col;
         const pspType = arrowTypeToPsp(f);
         const typeStr = f.type?.toString() ?? "";
         const isTz = typeStr.includes(",") && typeStr.includes("Timestamp"); // Timestamp<MICROSECOND, UTC>
@@ -515,51 +636,28 @@ export class VgiDuckDBHandler {
       })
       .join(", ");
 
-    // Include rowid if the source table supports it, so downstream views can ORDER BY rowid
-    let hasRowid = false;
-    try {
-      const r = await runQuery(`SELECT rowid FROM ${tableId} LIMIT 0`);
-      hasRowid = r.ok;
-    } catch {}
-    const selectCols = hasRowid ? `rowid, ${aliases}` : aliases;
+    // A materialized source's `rowid` is re-exported as a column: the builder
+    // orders by `rowid` against this view, and a pseudo-column does not pass
+    // through a view on its own.
+    const selectCols = this.mode === "materialized" ? `rowid, ${aliases}` : aliases;
 
     // Checked: a failure here otherwise surfaced one step later, from the
     // first pivot view, as a misleading "table … does not exist".
-    const created = await runQuery(`CREATE OR REPLACE TEMP VIEW ${renameViewId} AS SELECT ${selectCols} FROM ${tableId}`);
-    if (!created.ok) throw new Error(created.error || `Could not create ${renameViewId}`);
-    this.renameViewCache.add(tableId);
-    return renameViewId;
+    const created = await runQuery(`CREATE OR REPLACE TEMP VIEW ${sourceViewId} AS SELECT ${selectCols} FROM ${tableId}`, "sourceView");
+    if (!created.ok) throw new Error(created.error || `Could not create ${sourceViewId}`);
+    this.sourceViewCache.add(tableId);
+    return sourceViewId;
   }
 
   async tableMakeView(tableId: string, viewId: string, config: any): Promise<void> {
-    // Create a rename view that maps underscored columns to hyphenated names.
-    // The SQL builder uses hyphenated names everywhere, so we point it at the
-    // rename view where those names actually exist.
-    const renameView = await this.ensureRenameView(tableId);
-    let sql = this.sqlBuilder.tableMakeView(renameView, this.qualifiedView(viewId), config);
+    const sourceView = await this.ensureSourceView(tableId);
+    // Window order keys need column types for `range` frame emission.
+    const schema = Object.keys(config.windows ?? {}).length ? await this.tableSchema(tableId) : undefined;
+    // `create_entity` makes this a TEMP TABLE or TEMP VIEW per mode, and
+    // `row_id_expr` gives it the right natural order — no rewriting needed.
+    const sql = this.sqlBuilder.tableMakeView(sourceView, this.qualifiedView(viewId), config, schema);
 
-    // Detect table ordering capability (cached per table)
-    if (!this.tableOrderingCache.has(tableId)) {
-      this.tableOrderingCache.set(tableId, await this.detectTableOrdering(tableId));
-    }
-    const ordering = this.tableOrderingCache.get(tableId)!;
-
-    if (ordering.hasRowid) {
-      // Has rowid — use CREATE VIEW (lazy, no materialization)
-      sql = sql.replace(/CREATE TABLE\s+/i, "CREATE TEMP VIEW ");
-    } else if (ordering.primaryKey) {
-      // Has PK but no rowid — use CREATE VIEW with PK ordering
-      // PK column names need hyphenation to match the rename view
-      const pkCols = ordering.primaryKey.map(c => `"${c.replace(/_/g, "-")}"`).join(", ");
-      sql = sql.replace(/\s+ORDER BY rowid\b/gi, ` ORDER BY ${pkCols}`);
-      sql = sql.replace(/CREATE TABLE\s+/i, "CREATE TEMP VIEW ");
-    } else {
-      // No rowid, no PK — use CREATE VIEW without ordering (avoids materializing the entire dataset)
-      sql = sql.replace(/\s+ORDER BY rowid\b/gi, "");
-      sql = sql.replace(/CREATE TABLE\s+/i, "CREATE TEMP VIEW ");
-    }
-
-    const result = await runQuery(sql);
+    const result = await runQuery(sql, "tableMakeView");
     if (!result.ok) throw new Error(result.error || "Failed to create view");
     this.viewSizeCache.delete(viewId);
 
@@ -580,12 +678,8 @@ export class VgiDuckDBHandler {
   }
 
   async viewDelete(viewId: string): Promise<void> {
-    const sql = this.sqlBuilder.viewDelete(this.qualifiedView(viewId));
-    const result = await runQuery(sql);
-    if (!result.ok) {
-      const viewSql = sql.replace(/DROP TABLE/i, "DROP VIEW");
-      await runQuery(viewSql);
-    }
+    // `drop_entity` matches `create_entity`, so no DROP TABLE-then-VIEW retry.
+    await runQuery(this.sqlBuilder.viewDelete(this.qualifiedView(viewId)), "viewDelete");
     this.traversals.delete(viewId);
   }
 
@@ -625,7 +719,7 @@ export class VgiDuckDBHandler {
         FROM ${qualifiedView}
       ) sub WHERE __db_row_idx__ IN (${dbIndices.join(",")})
       ORDER BY array_position([${dbIndices.join(",")}]::INTEGER[], __db_row_idx__::INTEGER)`;
-      const result = await runQuery(sql);
+      const result = await runQuery(sql, "viewGetData");
       if (!result.ok) throw new Error(result.error || "Query failed");
       if (result.arrowBuffers?.length) {
         // Remove the __db_row_idx__ helper column before passing to Perspective
@@ -637,7 +731,7 @@ export class VgiDuckDBHandler {
       const sql = this.sqlBuilder.viewGetData(
         this.qualifiedView(viewId), config, viewport, schema,
       );
-      const result = await runQuery(sql);
+      const result = await runQuery(sql, "viewGetData");
       if (!result.ok) throw new Error(result.error || "Query failed");
       if (result.arrowBuffers?.length) {
         dataSlice.fromArrowIpc(new Uint8Array(result.arrowBuffers[0]));
@@ -651,14 +745,14 @@ export class VgiDuckDBHandler {
     const cached = this.viewSizeCache.get(viewId);
     if (cached !== undefined) return cached;
     const sql = this.sqlBuilder.viewSize(this.qualifiedView(viewId));
-    const rows = await queryRows(sql);
+    const rows = await queryRows(sql, "viewSize");
     const size = Number(Object.values(rows[0] ?? {})[0] ?? 0);
     this.viewSizeCache.set(viewId, size);
     return size;
   }
 
   async viewSchema(viewId: string): Promise<Record<string, ColumnType>> {
-    const fields = await getArrowSchema(scratchView(viewId));
+    const fields = await getArrowSchema(scratchView(viewId), "viewSchema");
     const schema: Record<string, ColumnType> = {};
     for (const field of fields) {
       if (field.name.startsWith("__")) continue;
@@ -672,7 +766,7 @@ export class VgiDuckDBHandler {
   async tableValidateExpression(tableId: string, expression: string): Promise<ColumnType> {
     // Expression validation still uses DESCRIBE since the SQL builder generates the query
     const sql = this.sqlBuilder.tableValidateExpression(tableId, expression);
-    const result = await runQuery(sql);
+    const result = await runQuery(sql, "validateExpression");
     if (!result.ok || !result.arrowBuffers?.length) return "string";
     const table = tableFromIPC(new Uint8Array(result.arrowBuffers[0]));
     const field = table.schema.fields[0];
@@ -681,7 +775,7 @@ export class VgiDuckDBHandler {
 
   async viewGetMinMax(viewId: string, columnName: string, config: any): Promise<{ min: any; max: any }> {
     const sql = this.sqlBuilder.viewGetMinMax(this.qualifiedView(viewId), columnName, config);
-    const rows = await queryRows(sql);
+    const rows = await queryRows(sql, "viewGetMinMax");
     let [min, max] = Object.values(rows[0] ?? {});
     if (typeof min === "bigint") min = Number(min);
     if (typeof max === "bigint") max = Number(max);
