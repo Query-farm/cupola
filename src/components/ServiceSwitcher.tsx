@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ChevronDownIcon, ExternalLinkIcon, GlobeIcon, LogOutIcon, PlusIcon, XIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CheckIcon, ChevronDownIcon, CircleAlertIcon, CopyIcon, ExternalLinkIcon, GlobeIcon, LogOutIcon, PlusIcon, XIcon } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { getUserInfo, type UserInfo as UserInfoData } from "@/lib/auth";
 import {
@@ -78,6 +78,70 @@ function Avatar({
   );
 }
 
+type CopyState = "idle" | "copied" | "failed";
+
+/** A clipboard write with a brief confirmation state, shared by the header's
+ *  URL and each recent-server row. */
+function useCopyToClipboard(): { state: CopyState; copy: (text: string) => void } {
+  const [state, setState] = useState<CopyState>("idle");
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+  }, []);
+
+  const flash = (next: "copied" | "failed") => {
+    setState(next);
+    // A second click restarts the window rather than letting the first
+    // click's timer cut the new confirmation short.
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setState("idle"), 1500);
+  };
+
+  // writeText rejects outside a secure context and when the document isn't
+  // focused. Report it rather than failing silently — a copy control that does
+  // nothing reads as a copy that worked.
+  const copy = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => flash("copied"), () => flash("failed"));
+  };
+
+  return { state, copy };
+}
+
+/** The current server's URL, shown shortened, copied in full on click.
+ *
+ *  Copies `url` itself — scheme included — not the shortened label: the label
+ *  drops `https://`, and a URL pasted without it isn't one DuckDB's ATTACH or
+ *  a browser will accept. The popover stays open so the confirmation is seen. */
+function CopyServiceUrl({ url }: { url: string }) {
+  const { state, copy } = useCopyToClipboard();
+
+  return (
+    <button
+      type="button"
+      onClick={() => copy(url)}
+      title={`Copy ${url}`}
+      aria-label={`Copy server URL ${url}`}
+      className="group/url -mx-1 px-1 max-w-[calc(100%+0.5rem)] flex items-center gap-1.5 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <span className="truncate">{displayUrl(url)}</span>
+      {state === "idle" && (
+        <CopyIcon className="size-3 shrink-0 opacity-0 group-hover/url:opacity-100 group-focus-visible/url:opacity-100 transition-opacity" aria-hidden />
+      )}
+      {/* aria-live so a screen reader hears the outcome of the click. */}
+      <span aria-live="polite" className="shrink-0 flex items-center gap-1">
+        {state === "copied" && (
+          <>
+            <CheckIcon className="size-3 text-accent" aria-hidden />
+            <span className="text-accent">Copied</span>
+          </>
+        )}
+        {state === "failed" && <span className="text-destructive">Copy failed</span>}
+      </span>
+    </button>
+  );
+}
+
 function ServiceRow({
   service,
   onRemove,
@@ -86,7 +150,14 @@ function ServiceRow({
   onRemove: (url: string) => void;
 }) {
   const href = useMemo(() => buildServiceHref(service.url), [service.url]);
+  const { state: copyState, copy } = useCopyToClipboard();
 
+  const handleCopy = (e: React.MouseEvent) => {
+    // The whole row is the switch-server button; without this the copy would
+    // also navigate away.
+    e.stopPropagation();
+    copy(service.url);
+  };
   const handleSwitch = () => {
     window.location.href = href;
   };
@@ -114,7 +185,38 @@ function ServiceRow({
           <div className="truncate text-sm font-medium text-foreground">{service.catalogName}</div>
           <div className="truncate text-xs text-muted-foreground">{displayUrl(service.url)}</div>
         </div>
-        <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* Visible on hover, while a keyboard user is inside the group (these
+            controls were focusable but stayed invisible when focused), and for
+            the whole confirmation window — so the check doesn't vanish if the
+            pointer drifts off the row right after the click. */}
+        <span
+          className={`flex items-center gap-1 transition-opacity ${
+            copyState === "idle" ? "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" : "opacity-100"
+          }`}
+        >
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={handleCopy}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                handleCopy(e as unknown as React.MouseEvent);
+              }
+            }}
+            title={copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : `Copy ${service.url}`}
+            aria-label={copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : `Copy server URL ${service.url}`}
+            aria-live="polite"
+            className={`p-1 rounded hover:bg-accent/50 ${
+              copyState === "copied" ? "text-accent" : copyState === "failed" ? "text-destructive" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {copyState === "copied"
+              ? <CheckIcon className="size-3.5" />
+              : copyState === "failed"
+                ? <CircleAlertIcon className="size-3.5" />
+                : <CopyIcon className="size-3.5" />}
+          </span>
           <span
             role="button"
             tabIndex={0}
@@ -228,9 +330,7 @@ export function ServiceSwitcher({ currentUrl, currentCatalogName }: Props) {
                 {currentCatalogName}
               </div>
             )}
-            <div className="truncate text-xs text-muted-foreground" title={currentUrl}>
-              {displayUrl(currentUrl)}
-            </div>
+            <CopyServiceUrl url={currentUrl} />
           </div>
         </div>
 
