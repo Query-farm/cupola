@@ -68,11 +68,21 @@ interface MessageParam {
 }
 
 interface ContentBlock {
-  type: "text" | "tool_use";
+  type: "text" | "tool_use" | "thinking" | "redacted_thinking";
   text?: string;
   id?: string;
   name?: string;
   input?: any;
+  /** Extended thinking. Both fields are echoed back to the API VERBATIM on
+   *  every later request in the conversation: the signature authenticates the
+   *  block, and dropping or editing one breaks the turn (the API raises an
+   *  ordering/signature 400 rather than quietly continuing). With the default
+   *  `display: "omitted"` the text is empty and only the signature matters —
+   *  which is exactly why it must not be discarded as an "empty" block. */
+  thinking?: string;
+  signature?: string;
+  /** redacted_thinking payload — opaque, arrives whole, echoed back as-is. */
+  data?: string;
 }
 
 /** Content fragments that may appear inside a multi-part tool_result.
@@ -129,6 +139,10 @@ export interface AgentCallbacks {
    *  surface that clears its indicator on the first text delta would otherwise
    *  show nothing at all for the duration. */
   onToolInputStart?: (name: string) => void;
+  /** Streamed thinking text. Empty under the default `display: "omitted"`,
+   *  so no surface renders it today — the hook exists so opting into
+   *  `display: "summarized"` is a one-line change rather than a parser change. */
+  onThinking?: (chunk: string) => void;
   onToolCall: (name: string, input: any) => void;
   onToolResult: (name: string, summary: string) => void;
   onDone: (usage?: AgentUsage) => void;
@@ -148,6 +162,7 @@ import { pruneCarriedToolImages } from "./query-results";
 import { recordToolCall, repeatedCallMessage } from "./ai-loop-guard";
 import { parseStreamedToolInput } from "./tool-input";
 import { clampMaxTokens, DEFAULT_AI_MAX_TOKENS } from "./ai/model-limits";
+import { DEFAULT_AI_EFFORT, thinkingRequestFields, type AIEffort } from "./ai/model-features";
 import type { AgentUsage } from "./ai-usage";
 
 // ---------------------------------------------------------------------------
@@ -827,10 +842,11 @@ async function streamOneRequest(
   maxTokens: number,
   signal: AbortSignal | undefined,
   telemetryMode: ResolvedTelemetryMode,
+  effort: AIEffort,
   diagnosticPreviousMessageId?: string | null,
 ): Promise<StreamResult> {
   if (telemetryMode === "off") {
-    return streamOneRequestInner(credentials, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, diagnosticPreviousMessageId);
+    return streamOneRequestInner(credentials, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, effort, diagnosticPreviousMessageId);
   }
   return Sentry.startSpan(
     {
@@ -850,7 +866,7 @@ async function streamOneRequest(
     async (span) => {
       try {
         const result = await streamOneRequestInner(
-          credentials, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, diagnosticPreviousMessageId
+          credentials, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, effort, diagnosticPreviousMessageId
         );
         span.setAttributes({
           ...mapUsageAttributes(result),
@@ -876,7 +892,8 @@ async function streamOneRequestInner(
   callbacks: AgentCallbacks,
   tools: Tool[],
   maxTokens: number,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  effort: AIEffort,
   diagnosticPreviousMessageId?: string | null,
 ): Promise<StreamResult> {
   const workspaceId = credentials.workspaceId?.trim();
@@ -917,6 +934,12 @@ async function streamOneRequestInner(
             }
           : {}),
         system: systemPromptBlocks(systemPrompt),
+        // Adaptive thinking + effort, on the models that accept them. Sending
+        // neither on a model that defaults thinking ON would still produce
+        // thinking blocks, so this is explicit rather than omitted — see
+        // ai/model-features. Effort is pinned per turn, never varied per
+        // request: an effort change invalidates the messages cache.
+        ...thinkingRequestFields(model, effort),
         // Clamped per model: over the model's ceiling is a 400. Streaming is
         // on, so the usual non-streaming timeout argument for a small cap
         // doesn't apply — the old hardcoded 4096 truncated long tool_use
@@ -953,6 +976,13 @@ async function streamOneRequestInner(
     } else if (event.type === "content_block_start") {
       if (event.content_block.type === "text") {
         currentBlock = { type: "text", text: "" };
+      } else if (event.content_block.type === "thinking") {
+        // Opened empty; thinking_delta and signature_delta fill it in.
+        currentBlock = { type: "thinking", thinking: "", signature: "" };
+      } else if (event.content_block.type === "redacted_thinking") {
+        // Arrives whole — no deltas follow. Opaque, but still part of the
+        // assistant turn and still echoed back.
+        currentBlock = { type: "redacted_thinking", data: event.content_block.data };
       } else if (event.content_block.type === "tool_use") {
         currentBlock = {
           type: "tool_use",
@@ -967,6 +997,14 @@ async function streamOneRequestInner(
       if (event.delta.type === "text_delta" && currentBlock?.type === "text") {
         currentBlock.text += event.delta.text;
         callbacks.onText(event.delta.text);
+      } else if (event.delta.type === "thinking_delta" && currentBlock?.type === "thinking") {
+        currentBlock.thinking = (currentBlock.thinking ?? "") + (event.delta.thinking ?? "");
+        callbacks.onThinking?.(event.delta.thinking ?? "");
+      } else if (event.delta.type === "signature_delta" && currentBlock?.type === "thinking") {
+        // Sent just before content_block_stop. Concatenated rather than
+        // assigned: the API documents one delta, but appending is correct
+        // either way and an overwrite would silently truncate a split one.
+        currentBlock.signature = (currentBlock.signature ?? "") + (event.delta.signature ?? "");
       } else if (event.delta.type === "input_json_delta") {
         currentToolInput += event.delta.partial_json;
       }
@@ -1019,6 +1057,7 @@ export async function runAgentTurn(
   tools: Tool[] = TOOLS,
   maxTokens: number = DEFAULT_AI_MAX_TOKENS,
   telemetry: AgentTelemetryMode = true,
+  effort: AIEffort = DEFAULT_AI_EFFORT,
 ): Promise<void> {
   const telemetryMode: ResolvedTelemetryMode = telemetry === "usage"
     ? "usage"
@@ -1027,7 +1066,7 @@ export async function runAgentTurn(
       : "off";
   if (telemetryMode === "off") {
     return runAgentTurnInner(
-      credentials, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, null, telemetryMode
+      credentials, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, null, telemetryMode, effort
     );
   }
   // startNewTrace detaches the turn from any active pageload/navigation trace,
@@ -1051,7 +1090,7 @@ export async function runAgentTurn(
       async (span) => {
         try {
           await runAgentTurnInner(
-            credentials, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, span, telemetryMode
+            credentials, model, messages, systemPrompt, executeTool, callbacks, signal, maxToolRounds, tools, maxTokens, span, telemetryMode, effort
           );
         } catch (err) {
           // User cancellations are not internal errors; this status sticks
@@ -1077,6 +1116,7 @@ async function runAgentTurnInner(
   maxTokens: number,
   agentSpan: AgentSpan | null,
   telemetryMode: ResolvedTelemetryMode,
+  effort: AIEffort,
 ): Promise<void> {
   const MAX_TOOL_ROUNDS = maxToolRounds;
   let totalInputTokens = 0;
@@ -1126,7 +1166,7 @@ async function runAgentTurnInner(
     // multiply attempts and resend the full conversation each time.
     const request = await streamOneRequest(
       credentials, model, messages, systemPrompt, callbacks, tools, maxTokens, signal, telemetryMode,
-      diagnosticPreviousMessageId,
+      effort, diagnosticPreviousMessageId,
     );
     const { content, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = request;
     rounds++;
@@ -1187,10 +1227,16 @@ async function runAgentTurnInner(
     // also preserves user/assistant alternation for the next turn.
     const dropToolUseFromLastAssistant = () => {
       const last = messages[messages.length - 1];
-      const textOnly = (last.content as ContentBlock[]).filter(
-        (b) => b.type === "text" && b.text
+      // Drop ONLY the unmatched tool_use. Thinking blocks stay: the API
+      // authenticates them by signature and rejects a turn they were removed
+      // from, so stripping them here would trade a recoverable cancel for a
+      // permanently wedged conversation — the opposite of what this does.
+      const kept = (last.content as ContentBlock[]).filter(
+        (b) => (b.type === "text" && b.text) || b.type === "thinking" || b.type === "redacted_thinking"
       );
-      last.content = textOnly.length ? textOnly : [{ type: "text", text: "(stopped)" }];
+      last.content = kept.some((b) => b.type === "text")
+        ? kept
+        : [...kept, { type: "text", text: "(stopped)" }];
     };
 
     // User cancelled before any tool ran this round.

@@ -31,6 +31,7 @@ import { runAgentTurn, executeListCatalogs, executeListTables, executeListCatego
 import { executeRunSql, executeSemanticQuery, validateChartSpec } from "@/lib/ai-tool-executor";
 import { QueryResultCache } from "@/lib/query-results";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
+import { normalizeEffort } from "@/lib/ai/model-features";
 import { normalizeAIQueryMode, toolsForAIQueryMode } from "@/lib/ai/query-mode";
 import { toolInputLabel } from "@/lib/ai/tool-labels";
 import { exportResult, safeFileStem, triggerDownload } from "@/lib/editor/result-export";
@@ -822,6 +823,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         const snapshot = await generateReportNarrative(
           { apiKey: settings.anthropicApiKey, workspaceId: settings.anthropicWorkspaceId },
           settings.aiModel, block, rows, report, runValues, controller.signal,
+          normalizeEffort(settings.aiEffort),
         );
         if (controller.signal.aborted) return;
         generated.set(block.id, snapshot);
@@ -1775,7 +1777,28 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const modelPrompt = agentTarget
       ? `The user is editing the existing report block ${JSON.stringify({ id: agentTarget.id, type: agentTarget.type, title: agentTarget.title, datasetId: "datasetId" in agentTarget ? agentTarget.datasetId : undefined })}. Keep this block ID when revising it and limit changes to this block unless the request explicitly requires related dataset changes.\n\n${prompt}`
       : prompt;
-    agentMessagesRef.current.push({ role: "user", content: modelPrompt });
+    // The report draft goes in the USER turn, not in `system`.
+    //
+    // It used to be a second system block carrying `cacheControl: true`, which
+    // was the most expensive thing in the agent: `system` renders ahead of
+    // every message, and the agent rewrites this document on every turn, so a
+    // conversation's whole accumulated history fell out of cache each time it
+    // succeeded — while the breakpoint on the volatile block wrote an entry
+    // that could never be read back. Here it sits after the cached prefix and
+    // invalidates nothing.
+    //
+    // Earlier turns keep their own snapshot rather than being rewritten to the
+    // current one: history stays append-only (a rewrite is the same
+    // invalidation in a different place), and "the report as it stood when you
+    // were asked this" is what those turns actually meant. Hence the explicit
+    // "at the start of this turn" label, so a stale copy still reads true.
+    agentMessagesRef.current.push({
+      role: "user",
+      content: [
+        { type: "text", text: `Report at the start of this turn:\n${JSON.stringify(draft)}` },
+        { type: "text", text: modelPrompt },
+      ],
+    });
     setAgentConversation((messages) => [...messages,
       { id: crypto.randomUUID(), role: "user", content: prompt },
       { id: assistantId, role: "assistant", blocks: [seedThinking], isStreaming: true },
@@ -1956,10 +1979,7 @@ Reports may set refreshIntervalSeconds from 5 through 86400 when the user wants 
 
 Parameters are a validated public interface, not merely SQL substitutions. Set required when empty input is invalid. Use validation for type-appropriate declarative constraints: number min/max/exclusiveMin/exclusiveMax/step/integer; text minLength/maxLength/pattern; date min/max; date_range min/max/requireBoth/maxSpanDays; multi_select minSelections/maxSelections. Static and dataset-backed select values are checked for membership when Apply is pressed. Use parameterRules for relationships between values, including date_range paths such as period.start and period.end. A rule has leftKey, operator, exactly one of rightKey or value, and a reader-friendly message. For data-dependent business rules, create a role="parameter_validation" dataset that returns one row with a boolean column and optional message column, then reference it from validationDataset on the parameter. Keep validation SQL read-only and parameterized. Reader text supports $key, $key_label, $key_value, and date-range $key_start/$key_end; use $$ for a literal dollar sign. Do not invent arbitrary JavaScript validation or interpolate raw SQL fragments.
 
-`, cacheControl: true }, {
-      text: `Current report:\n${JSON.stringify(draft)}`,
-      cacheControl: true,
-    }];
+`, cacheControl: true }];
     try {
       await runAgentTurn(
         { apiKey: settings.anthropicApiKey, workspaceId: settings.anthropicWorkspaceId },
@@ -2156,7 +2176,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
         },
         onRetry: (message) => showThinking(message ? message.replace("...", "") : "Thinking"),
         onError: showError,
-      }, controller.signal, settings.aiMaxToolRounds ?? 20, toolsForAIQueryMode(REPORT_TOOLS, queryMode), settings.aiMaxTokens ?? DEFAULT_AI_MAX_TOKENS, "usage");
+      }, controller.signal, settings.aiMaxToolRounds ?? 20, toolsForAIQueryMode(REPORT_TOOLS, queryMode), settings.aiMaxTokens ?? DEFAULT_AI_MAX_TOKENS, "usage", normalizeEffort(settings.aiEffort));
     } catch (e) {
       if ((e as any)?.name !== "AbortError" && !errorShown) showError(e instanceof Error ? e.message : String(e));
       removeThinking();

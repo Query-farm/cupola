@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { runAgentTurn, type AgentCallbacks, type SystemPrompt } from "../../src/lib/ai-agent";
+import { runAgentTurn, type AgentCallbacks, type MessageParam, type SystemPrompt } from "../../src/lib/ai-agent";
 import type { AgentUsage } from "../../src/lib/ai-usage";
 
 const realFetch = globalThis.fetch;
@@ -86,7 +86,7 @@ describe("agent prompt caching and usage", () => {
 
     const system: SystemPrompt = [
       { text: "Stable authoring instructions", cacheControl: true },
-      { text: "Current report: {\"title\":\"Example\"}", cacheControl: true },
+      { text: "Stable tool conventions", cacheControl: true },
     ];
     let completed: AgentUsage | undefined;
     await runAgentTurn(
@@ -108,7 +108,7 @@ describe("agent prompt caching and usage", () => {
     expect(requests[0].tools[0].cache_control).toEqual({ type: "ephemeral" });
     expect(requests[0].system).toEqual([
       { type: "text", text: "Stable authoring instructions", cache_control: { type: "ephemeral" } },
-      { type: "text", text: "Current report: {\"title\":\"Example\"}", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "Stable tool conventions", cache_control: { type: "ephemeral" } },
     ]);
     expect(requests[1].messages.length).toBeGreaterThan(requests[0].messages.length);
     expect(completed).toEqual({
@@ -118,6 +118,50 @@ describe("agent prompt caching and usage", () => {
       outputTokens: 8,
       rounds: 2,
     });
+  });
+
+  // The regression guard the other tests could not give: they assert that
+  // breakpoints are PLACED, which stays true while the bytes behind them churn
+  // and every read silently misses. Reads only land where the previous request
+  // wrote, so what has to hold is that the earlier request's rendered prompt
+  // reappears unchanged as a prefix of the later one. This is the assertion
+  // that would have caught the report draft and the per-turn system prompt.
+  test("a later turn reuses the earlier turn's rendered prefix byte-for-byte", async () => {
+    const requests: any[] = [];
+    const responses = [finalTurn(), finalTurn()];
+    globalThis.fetch = (async (_url, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return responses.shift()!;
+    }) as typeof fetch;
+
+    // cache_control is the one field that legitimately differs between
+    // adjacent requests — the breakpoint advances with the conversation and a
+    // previously-marked block is still a hit. Strip it before diffing.
+    const strip = (value: unknown) =>
+      JSON.parse(JSON.stringify(value, (key, inner) => (key === "cache_control" ? undefined : inner)));
+
+    const system: SystemPrompt = [{ text: "Frozen instructions", cacheControl: true }];
+    const tools = [{ name: "lookup", description: "Look up data", input_schema: { type: "object" } }];
+    const messages: MessageParam[] = [{ role: "user", content: "First question" }];
+    const turn = () => runAgentTurn(
+      { apiKey: "key" }, "claude-sonnet-4-6", messages, system,
+      async () => "ok", callbacks(() => {}), undefined, 20, tools, 8_192, false,
+    );
+
+    await turn();
+    messages.push({ role: "user", content: "Second question" });
+    await turn();
+
+    expect(requests).toHaveLength(2);
+    // tools and system render ahead of every message, so a byte moving here
+    // re-processes the whole conversation at full price.
+    expect(strip(requests[1].tools)).toEqual(strip(requests[0].tools));
+    expect(strip(requests[1].system)).toEqual(strip(requests[0].system));
+    // ...and the earlier messages must come back unedited, not merely present.
+    const before = strip(requests[0].messages);
+    const after = strip(requests[1].messages);
+    expect(after.slice(0, before.length)).toEqual(before);
+    expect(after.length).toBeGreaterThan(before.length);
   });
 
   test("returns accumulated usage when the tool-round limit is reached", async () => {

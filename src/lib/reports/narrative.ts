@@ -1,4 +1,5 @@
 import { runAgentTurn, type AnthropicCredentials, type MessageParam } from "../ai-agent";
+import { DEFAULT_AI_EFFORT, type AIEffort } from "../ai/model-features";
 import { coerceArrowValue } from "../duckdb-query";
 import { interpolateReportText } from "./parameters";
 import type { ReportAiNarrativeBlock, ReportAiNarrativeSnapshot, ReportDocumentV1, ReportParameterValue } from "./types";
@@ -75,6 +76,7 @@ export async function generateReportNarrative(
   report: Pick<ReportDocumentV1, "title" | "parameters">,
   values: Record<string, ReportParameterValue>,
   signal?: AbortSignal,
+  effort: AIEffort = DEFAULT_AI_EFFORT,
 ): Promise<ReportAiNarrativeSnapshot> {
   if (!credentials.apiKey.trim()) throw new Error("Add an Anthropic API key in Settings to generate this narrative.");
   const prepared = prepareNarrativeInput(block, rows, report, values, model);
@@ -101,6 +103,8 @@ export async function generateReportNarrative(
     1,
     [],
     REPORT_NARRATIVE_MAX_TOKENS,
+    true,
+    effort,
   );
   if (generationError) throw new Error(generationError);
   if (!markdown.trim()) throw new Error("The AI returned an empty narrative.");

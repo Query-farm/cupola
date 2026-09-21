@@ -21,6 +21,10 @@
  *  single shared constant would either waste headroom or 400 on Haiku. */
 const MAX_OUTPUT_TOKENS: Record<string, number> = {
   "claude-haiku-4-5-20251001": 64_000,
+  "claude-sonnet-5": 128_000,
+  "claude-opus-5": 128_000,
+  // Superseded in the picker (migrateModel moves persisted settings forward),
+  // kept so a stale value can't silently fall to the conservative 8K ceiling.
   "claude-sonnet-4-6": 128_000,
   "claude-opus-4-8": 128_000,
 };

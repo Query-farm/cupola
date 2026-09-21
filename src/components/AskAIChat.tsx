@@ -8,6 +8,8 @@ import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import { deniedAIQueryToolResult, normalizeAIQueryMode, toolsForAIQueryMode } from "@/lib/ai/query-mode";
 import { toolInputLabel } from "@/lib/ai/tool-labels";
+import { memoryContextNote, memoryObjectNames } from "@/lib/ai/memory-context";
+import { normalizeEffort } from "@/lib/ai/model-features";
 import type { CatalogData } from "@/lib/service";
 import {
   runAgentTurn,
@@ -37,6 +39,21 @@ import {
   type ContentBlock,
   type ToolCallEntry,
 } from "./chat/ChatMessageAssistant";
+
+/** The user's own words from a message that may also carry injected context.
+ *  A user turn is usually a plain string, but memoryContextNote prepends a
+ *  text block to it, so the question is the LAST text block — not the first,
+ *  and no longer necessarily `content` itself. Feeds the query-history entry's
+ *  "asked because" label, which silently went blank for the rest of a
+ *  conversation once anything made the content an array. */
+function userQuestionText(message: MessageParam | undefined): string | undefined {
+  if (!message) return undefined;
+  if (typeof message.content === "string") return message.content;
+  const texts = (message.content as Array<{ type?: string; text?: string }>)
+    .filter((block) => block?.type === "text" && typeof block.text === "string");
+  return texts.length ? texts[texts.length - 1].text : undefined;
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -63,6 +80,19 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const agentMessages = useRef<MessageParam[]>([]);
+  // The system prompt is FROZEN for the life of a conversation. It renders
+  // ahead of every message, so rebuilding it per turn dropped the system cache
+  // and the whole accumulated history with it — and `ui.memoryCatalog` made
+  // that happen on exactly the turns where the agent had just succeeded at
+  // what the prompt told it to do (CREATE TABLE memory.main.…). Memory drift
+  // now rides in the user turn instead, after the cached prefix.
+  const systemPromptRef = useRef<string | null>(null);
+  // Rebuild key for the two inputs that legitimately invalidate everything
+  // anyway: a different catalog, and a query-mode change (which also swaps the
+  // tool set, and tools render at position 0). Deliberately NOT keyed on
+  // ui.memoryCatalog or getEngineInfo() — those are the churn this fixes.
+  const systemPromptKeyRef = useRef<{ catalog: CatalogData; key: string } | null>(null);
+  const memoryObjectsRef = useRef<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Installed by the ask_user tool for the life of one question. Takes the
@@ -252,10 +282,39 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     const catalogs = [catalogData, ...attachedCatalogs, ui.memoryCatalog]
       .filter((value): value is CatalogData => Boolean(value));
     const queryMode = normalizeAIQueryMode(getSetting("aiQueryMode"));
-    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), catalogs.slice(1), true, queryMode);
+
+    // Build the system prompt once per conversation and reuse the exact bytes.
+    // Sorted attached-catalog names rather than the array's identity: a prop
+    // that re-creates the array each render would otherwise rebuild the prompt
+    // every turn, which is the bug this is fixing.
+    const promptKey = `${queryMode}\u0000${attachedCatalogs.map((c) => c.catalogName).sort().join(",")}`;
+    const cachedPrompt = systemPromptKeyRef.current;
+    if (!systemPromptRef.current || cachedPrompt?.catalog !== catalogData || cachedPrompt.key !== promptKey) {
+      systemPromptRef.current = buildSystemPrompt(catalogData, getEngineInfo(), catalogs.slice(1), true, queryMode);
+      systemPromptKeyRef.current = { catalog: catalogData, key: promptKey };
+      memoryObjectsRef.current = memoryObjectNames(ui.memoryCatalog);
+    }
+    const systemPrompt = systemPromptRef.current;
+
+    // Memory tables the agent created on an earlier turn are announced here —
+    // in the user turn, after the cached prefix — instead of by re-rendering
+    // the inventory at the front of the prompt.
+    const memoryObjectsNow = memoryObjectNames(ui.memoryCatalog);
+    const memoryNote = memoryContextNote(memoryObjectsRef.current, memoryObjectsNow);
+    if (memoryNote) {
+      const pendingUserMessage = agentMessages.current[agentMessages.current.length - 1];
+      pendingUserMessage.content = [
+        { type: "text", text: memoryNote },
+        { type: "text", text },
+      ];
+      memoryObjectsRef.current = memoryObjectsNow;
+    }
     const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
     const maxTokens = getSetting("aiMaxTokens") || DEFAULT_AI_MAX_TOKENS;
+    // Read once per turn and held for the whole tool loop: an effort change
+    // between requests would invalidate the messages cache mid-conversation.
+    const effort = normalizeEffort(getSetting("aiEffort"));
 
     // Mutable blocks array — updated in callbacks, then set into state
     let blocks: ContentBlock[] = [seedThinking];
@@ -331,7 +390,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
         const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB shell not initialized — open SQL Shell first");
         const lastUserMsg = agentMessages.current.filter(m => m.role === "user").pop();
-        const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
+        const userQuestion = userQuestionText(lastUserMsg);
         const prevProgress = engine.progress;
         const updateProgress = (pct: number) => {
           blocks = blocks.map(b =>
@@ -373,7 +432,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
         const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB shell not initialized — open SQL Shell first");
         const lastUserMsg = agentMessages.current.filter(m => m.role === "user").pop();
-        const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
+        const userQuestion = userQuestionText(lastUserMsg);
 
         // Subscribe to engine.progress while the query runs so the tool
         // block can render its progress bar. Restored in onEnd.
@@ -711,6 +770,8 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
         // doesn't see render_chart at all.
         toolsForAIQueryMode([...TOOLS, CHART_TOOL], queryMode),
         maxTokens,
+        true,
+        effort,
       );
     } catch (err: any) {
       removeThinking();
@@ -768,6 +829,11 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   const handleNewConversation = () => {
     setMessages([]);
     agentMessages.current = [];
+    // Drop the frozen prompt so the next conversation picks up whatever the
+    // catalog, engine and memory catalog look like now.
+    systemPromptRef.current = null;
+    systemPromptKeyRef.current = null;
+    memoryObjectsRef.current = [];
     conversationIdRef.current = crypto.randomUUID();
     // New conversation → the old result_ids are unreachable; free the rows.
     resultCacheRef.current.clear();
@@ -795,9 +861,14 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
   // Pass hasChartTool=true so the preview shown to the user matches what
   // the agent actually sees at runtime (see line 128).
-  const systemPrompt = useMemo(() => catalogData
+  // Preview of the prompt the agent is ACTUALLY using. Once a conversation has
+  // started that is the frozen copy in systemPromptRef — rebuilding it here
+  // would show the user a prompt that differs from the one on the wire, which
+  // is exactly the drift the freeze exists to prevent. Reading a ref during
+  // render is safe because opening the dialog is itself a state change.
+  const systemPrompt = useMemo(() => systemPromptRef.current ?? (catalogData
     ? buildSystemPrompt(catalogData, getEngineInfo(), [...attachedCatalogs, ...(ui.memoryCatalog ? [ui.memoryCatalog] : [])], true, normalizeAIQueryMode(settings.aiQueryMode))
-    : null, [catalogData, attachedCatalogs, serviceUrl, settings.aiQueryMode]);
+    : null), [catalogData, attachedCatalogs, serviceUrl, settings.aiQueryMode, showSystemPrompt, messages.length]);
 
   return (
     <div className="flex flex-col h-full bg-background">

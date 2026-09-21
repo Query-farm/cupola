@@ -3,6 +3,10 @@ import type { AgentUsage } from "./ai-usage";
 /** Claude model pricing: [input $/M tokens, output $/M tokens] */
 export const MODEL_PRICING: Record<string, [number, number]> = {
   "claude-haiku-4-5-20251001": [1, 5],
+  "claude-sonnet-5": [2, 10],
+  "claude-opus-5": [5, 25],
+  // Superseded in the picker; kept so an unmigrated setting still costs out
+  // against its own rates rather than the fallback's.
   "claude-sonnet-4-6": [3, 15],
   "claude-opus-4-8": [5, 25],
 };

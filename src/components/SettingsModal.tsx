@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
+import { AI_EFFORT_LEVELS, normalizeEffort, supportsEffort, type AIEffort } from "@/lib/ai/model-features";
 import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { AI_QUERY_MODES, normalizeAIQueryMode, type AIQueryMode } from "@/lib/ai/query-mode";
@@ -45,11 +46,23 @@ function SettingLabel({ title, description, htmlFor }: { title: string; descript
   );
 }
 
+/** Offered models, cheapest first. Superseded IDs are deliberately absent —
+ *  migrateModel (settings.tsx) moves a persisted one forward on load, so this
+ *  list and the per-model tables in ai/model-limits, ai/model-features and
+ *  pricing.ts cover the same set. */
 const AI_MODELS: { value: string; label: string }[] = [
-  { value: "claude-haiku-4-5-20251001", label: "Haiku (fast)" },
-  { value: "claude-sonnet-4-6", label: "Sonnet (balanced)" },
-  { value: "claude-opus-4-8", label: "Opus (best)" },
+  { value: "claude-haiku-4-5-20251001", label: "Haiku 4.5 (fast)" },
+  { value: "claude-sonnet-5", label: "Sonnet 5 (balanced)" },
+  { value: "claude-opus-5", label: "Opus 5 (most capable)" },
 ];
+
+const AI_EFFORT_LABELS: Record<AIEffort, string> = {
+  low: "Low (cheapest)",
+  medium: "Medium",
+  high: "High (default)",
+  xhigh: "Extra high",
+  max: "Max (most thorough)",
+};
 
 const AI_QUERY_MODE_LABELS: Record<AIQueryMode, string> = {
   "unrestricted-sql": "Unrestricted SQL",
@@ -328,6 +341,32 @@ export function SettingsModal() {
                   </SelectContent>
                 </Select>
               </SettingRow>
+              {/* Effort is a 400 on models without adaptive thinking (Haiku),
+                  so the row is hidden rather than disabled there — a control
+                  that cannot apply is noise. */}
+              {supportsEffort(settings.aiModel) && (
+                <SettingRow>
+                  <SettingLabel
+                    title="Reasoning effort"
+                    description="How hard the model thinks before answering. Higher is more thorough and costs more; High matches the API default and suits most analysis. Changing this mid-conversation restarts the prompt cache, so the next message re-reads the whole history at full price."
+                  />
+                  <Select
+                    value={settings.aiEffort}
+                    onValueChange={(val) => updateSettings({ aiEffort: normalizeEffort(val) })}
+                  >
+                    <SelectTrigger className="w-44 h-8 text-sm shrink-0">
+                      <span className="truncate">{AI_EFFORT_LABELS[settings.aiEffort]}</span>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {AI_EFFORT_LEVELS.map((level) => (
+                        <SelectItem key={level} value={level} className="text-sm">
+                          {AI_EFFORT_LABELS[level]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </SettingRow>
+              )}
               <SettingRow>
                 <SettingLabel
                   title="AI query access"

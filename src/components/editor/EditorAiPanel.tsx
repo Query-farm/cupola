@@ -19,6 +19,7 @@ import { engine, ui } from "@/lib/shell-bridge";
 import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
+import { normalizeEffort } from "@/lib/ai/model-features";
 import { deniedAIQueryToolResult, normalizeAIQueryMode, toolsForAIQueryMode } from "@/lib/ai/query-mode";
 import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
 import type { CatalogData } from "@/lib/service";
@@ -412,6 +413,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
           },
         },
         c.abort.signal, maxRounds, toolsForAIQueryMode(TOOLS, queryMode), maxTokens,
+        true, normalizeEffort(getSetting("aiEffort")),
       );
     } catch (err: any) {
       removeThinking();

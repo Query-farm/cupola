@@ -118,6 +118,13 @@ function contentBlockToPart(block: ContentBlock): GenAiPart {
   if (block.type === "tool_use") {
     return { type: "tool_call", id: block.id, name: block.name, arguments: block.input };
   }
+  // Thinking blocks carry no `text`, so the text fallback rendered them as
+  // empty parts — indistinguishable in Sentry from a turn that really did say
+  // nothing. Under the default `display: "omitted"` the content is empty by
+  // design and the signature is not ours to publish, so report the shape only.
+  if (block.type === "thinking" || block.type === "redacted_thinking") {
+    return { type: "text", content: `[${block.type}]` };
+  }
   return { type: "text", content: capText(block.text ?? "") };
 }
 

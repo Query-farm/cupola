@@ -20,6 +20,7 @@ import { cacheHitRate, totalInputTokens, type AgentUsage } from "@/lib/ai-usage"
 import { engine, terminal, ui, recordQuery } from "@/lib/shell-bridge";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
+import { DEFAULT_AI_EFFORT, normalizeEffort, type AIEffort } from "@/lib/ai/model-features";
 import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
 import type { CatalogData } from "@/lib/service";
 import * as Sentry from "@sentry/astro";
@@ -68,13 +69,14 @@ export interface AIShellOps {
 }
 
 /** Read fresh AI settings from localStorage (user may change mid-session). */
-function readAISettings(defaults: { apiKey: string; workspaceId: string; model: string }): { apiKey: string; workspaceId: string; model: string; queryMode: AIQueryMode; maxToolRounds: number; maxTokens: number } {
+function readAISettings(defaults: { apiKey: string; workspaceId: string; model: string }): { apiKey: string; workspaceId: string; model: string; queryMode: AIQueryMode; maxToolRounds: number; maxTokens: number; effort: AIEffort } {
   let apiKey = defaults.apiKey;
   let workspaceId = defaults.workspaceId;
   let model = defaults.model;
   let queryMode: AIQueryMode = "unrestricted-sql";
   let maxToolRounds = 20;
   let maxTokens = DEFAULT_AI_MAX_TOKENS;
+  let effort: AIEffort = DEFAULT_AI_EFFORT;
   try {
     const stored = localStorage.getItem("vgi-frontend-settings");
     if (stored) {
@@ -85,9 +87,10 @@ function readAISettings(defaults: { apiKey: string; workspaceId: string; model: 
       queryMode = normalizeAIQueryMode(s.aiQueryMode);
       if (s.aiMaxToolRounds) maxToolRounds = s.aiMaxToolRounds;
       if (s.aiMaxTokens) maxTokens = s.aiMaxTokens;
+      effort = normalizeEffort(s.aiEffort);
     }
   } catch {}
-  return { apiKey, workspaceId, model, queryMode, maxToolRounds, maxTokens };
+  return { apiKey, workspaceId, model, queryMode, maxToolRounds, maxTokens, effort };
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +341,7 @@ export async function runAIMode(
     return;
   }
 
-  const { apiKey, workspaceId, model, queryMode, maxToolRounds, maxTokens } = readAISettings(defaults);
+  const { apiKey, workspaceId, model, queryMode, maxToolRounds, maxTokens, effort } = readAISettings(defaults);
   if (!apiKey) {
     term.writeln("No API key configured. Set your Anthropic API key in Settings.", "31");
     return;
@@ -449,7 +452,7 @@ export async function runAIMode(
       const agent = createAgentCallbacks(term, spinner, model);
 
       try {
-        await runAgentTurn({ apiKey, workspaceId }, model, conv.messages, systemPrompt, executeTool, agent.callbacks, abort.signal, maxToolRounds, toolsForAIQueryMode(TOOLS, queryMode), maxTokens);
+        await runAgentTurn({ apiKey, workspaceId }, model, conv.messages, systemPrompt, executeTool, agent.callbacks, abort.signal, maxToolRounds, toolsForAIQueryMode(TOOLS, queryMode), maxTokens, true, effort);
       } catch (err: any) {
         spinner.stop();
         if (err.name === "AbortError" || err.message === "Cancelled.") {
