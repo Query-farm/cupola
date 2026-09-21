@@ -247,7 +247,17 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
       setPerspectiveLoading(true);
       try {
         const title = mode === "view" ? "Query · live view" : "Query · table";
-        const mounted = await mountVirtualPerspective(() => perspectiveRef.current, source.tableId, perspectiveTableRef.current, () => ({ table: source.tableId, title }));
+        // Start with just the first column, like the sidebar and snapshot
+        // paths. Beyond consistency it keeps a live view cheap: with every
+        // column shown, each request selected all of them from the source.
+        // The name comes from the handler's schema, which is what Perspective
+        // sees (`_` renamed to `-`, unsupported types dropped).
+        const defaultConfig = async () => {
+          const schema = await perspectiveHandler?.tableSchema(source.tableId);
+          const firstColumn = schema ? Object.keys(schema)[0] : undefined;
+          return { table: source.tableId, title, ...(firstColumn ? { columns: [firstColumn] } : {}) };
+        };
+        const mounted = await mountVirtualPerspective(() => perspectiveRef.current, source.tableId, perspectiveTableRef.current, defaultConfig);
         if (!mounted) throw new Error("The Perspective view could not be mounted.");
         perspectiveTableRef.current = source.tableId;
         await releaseQueryPivotSource();
@@ -775,7 +785,7 @@ async function mountVirtualPerspective(
   getContainer: () => HTMLElement | null,
   tableId: string,
   previousTableId: string | null,
-  defaultConfig: () => Record<string, unknown>,
+  defaultConfig: () => Record<string, unknown> | Promise<Record<string, unknown>>,
   isCancelled: () => boolean = () => false,
 ): Promise<boolean> {
   await ensurePerspectiveLoaded();
@@ -835,7 +845,7 @@ async function mountVirtualPerspective(
   await viewer.load(perspectiveClient);
 
   const cachedConfig = perspectiveConfigCache.get(tableId);
-  await viewer.restore(cachedConfig ? { ...cachedConfig, table: tableId } : defaultConfig());
+  await viewer.restore(cachedConfig ? { ...cachedConfig, table: tableId } : await defaultConfig());
   await viewer.toggleConfig(true);
   return true;
 }

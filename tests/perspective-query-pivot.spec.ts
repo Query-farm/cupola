@@ -31,8 +31,8 @@ async function pivot(page: Page, mode: "view" | "table" | "snapshot") {
   await page.getByTestId(`editor-pivot-${mode}`).click();
 }
 
-/** The viewer's hosted table name and row count once its view is ready. */
-async function viewerState(page: Page, config?: Record<string, unknown>): Promise<{ table: string; rows: number }> {
+/** The viewer's hosted table, visible columns, and row count once its view is ready. */
+async function viewerState(page: Page, config?: Record<string, unknown>): Promise<{ table: string; columns: string[]; rows: number }> {
   await expect(page.getByTestId("tab-perspective")).toHaveAttribute("aria-selected", "true", { timeout: T_SHELL_BOOT });
   return page.evaluate(async (restore) => {
     const deadline = Date.now() + 20_000;
@@ -43,7 +43,7 @@ async function viewerState(page: Page, config?: Record<string, unknown>): Promis
         if (restore) await el.restore(restore);
         const saved = await el.save();
         const rows = await (await el.getView()).num_rows();
-        return { table: String(saved.table), rows: Number(rows) };
+        return { table: String(saved.table), columns: (saved.columns ?? []).filter(Boolean).map(String), rows: Number(rows) };
       } catch (error) {
         last = error;
         await new Promise((resolve) => setTimeout(resolve, 250));
@@ -71,6 +71,8 @@ test("a live view pivots with SQL against the query and sees new rows", async ({
   const flat = await viewerState(page);
   expect(flat.table).toMatch(/^temp\.main\.__cupola_pivot_\d+$/);
   expect(flat.rows).toBe(10);
+  // Starts with just the first column, like the sidebar and snapshot paths.
+  expect(flat.columns).toEqual(["id"]);
   expect(await scratchSources(page)).toEqual(["view __cupola_pivot"]);
 
   // Grouping is computed by DuckDB: a rollup total plus one row per parity.
@@ -132,6 +134,7 @@ test("Run in Perspective opens a query without running it in the editor", async 
   const opened = await viewerState(page);
   expect(opened.table).toMatch(/^temp\.main\.__cupola_pivot_\d+$/);
   expect(opened.rows).toBe(10);
+  expect(opened.columns).toEqual(["id"]);
 
   // The editor never executed the query, so it holds no result to buffer.
   await openEditor(page);
