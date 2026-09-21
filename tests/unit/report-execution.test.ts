@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildReportRunFailureNotice, classifyReportQueryError, isBlockingVegaWarning, reportDatasetNeedsRows, validateReportResultColumns } from "../../src/lib/reports/execution";
+import { buildReportRunFailureNotice, classifyReportQueryError, isBlockingVegaWarning, reportDatasetNeedsRows, reportTableWidthWarnings, validateReportResultColumns } from "../../src/lib/reports/execution";
 import { createEmptyReport } from "../../src/lib/reports/types";
 
 test("reports missing map columns after dataset execution", () => {
@@ -157,4 +157,36 @@ test("keeps rows for datasets that feed parameters", () => {
   expect(reportDatasetNeedsRows(report, "cities")).toBe(false);
   report.parameters.push({ key: "city", label: "City", type: "string", defaultValue: "Norfolk", options: { kind: "dataset", datasetId: "cities", valueColumn: "city" } } as any);
   expect(reportDatasetNeedsRows(report, "cities")).toBe(true);
+});
+
+function wideOrdersReport(w: number, columns?: string[]) {
+  const report = createEmptyReport("Orders");
+  report.datasets.push({ id: "orders", name: "Orders", sql: "SELECT * FROM orders" });
+  report.blocks.push({ id: "orders-table", type: "table", datasetId: "orders", title: "Recent orders", columns, layout: { x: 0, y: 0, w, h: 5 } });
+  return report;
+}
+
+const ORDER_COLUMNS = ["order_id", "customer_name", "shipping_address", "order_date", "status", "sales_region", "product_category", "quantity", "unit_price", "discount_amount", "total_amount"];
+const ORDER_SAMPLE = [{
+  order_id: "ORD-2024-000184", customer_name: "Harriet Wellington", shipping_address: "1142 Longmeadow Drive, Charlottesville, VA 22901",
+  order_date: "2024-03-14", status: "shipped", sales_region: "Mid-Atlantic", product_category: "Outdoor Furniture",
+  quantity: 3, unit_price: 249.99, discount_amount: 25, total_amount: 724.97,
+}];
+
+test("warns when a table's columns would need horizontal scrolling", () => {
+  const warnings = reportTableWidthWarnings(wideOrdersReport(6), [{ datasetId: "orders", ok: true, columns: ORDER_COLUMNS, sample: ORDER_SAMPLE }]);
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("Recent orders: its 11 columns need about");
+  expect(warnings[0]).toContain("scroll sideways");
+});
+
+test("does not warn when the displayed columns fit the block", () => {
+  const shape = [{ datasetId: "orders", ok: true, columns: ORDER_COLUMNS, sample: ORDER_SAMPLE }];
+  // Only the displayed columns count, not everything the dataset returns.
+  expect(reportTableWidthWarnings(wideOrdersReport(6, ["order_date", "status", "total_amount"]), shape)).toEqual([]);
+  expect(reportTableWidthWarnings(wideOrdersReport(12, ["order_id", "customer_name", "order_date", "status", "sales_region", "quantity", "total_amount"]), shape)).toEqual([]);
+});
+
+test("skips tables whose dataset did not run", () => {
+  expect(reportTableWidthWarnings(wideOrdersReport(3), [{ datasetId: "orders", ok: false }])).toEqual([]);
 });

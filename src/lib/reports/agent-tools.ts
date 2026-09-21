@@ -286,7 +286,11 @@ const blockProperties = {
   endLabel: stringSchema,
   lowColumn: stringSchema,
   highColumn: stringSchema,
-  columns: { type: "array", items: stringSchema },
+  columns: {
+    type: "array",
+    items: stringSchema,
+    description: "For table: the columns to display, in order. Keep to the fields the reader needs so the table fits its width without horizontal scrolling. For ai_narrative: the columns sent to the model.",
+  },
   pageSize: { type: "number", minimum: 1, maximum: 1000 },
   spec: { type: "object", description: "A Vega-Lite v5 spec without data or datasets." },
   config: { type: "object" },

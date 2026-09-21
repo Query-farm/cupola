@@ -176,3 +176,66 @@ export function validateReportResultColumns(report: ReportDocumentV1, datasets: 
   }
   return errors;
 }
+
+/**
+ * Canvas width the table check assumes: a laptop screen beside the catalog
+ * sidebar. The check is advisory — a wider screen fits more — so it is sized
+ * for the common reader rather than the author's monitor.
+ */
+const TABLE_REFERENCE_CANVAS_PX = 1100;
+// Report grid geometry (ReportsWorkspace): 12 columns, 12px gutters and
+// container padding, and 26px of block padding and borders around the table.
+const GRID_COLUMNS = 12;
+const GRID_GUTTER_PX = 12;
+const BLOCK_CHROME_PX = 26;
+// QueryResultTable: 12px monospace (≈7.2px a character), 8px of padding
+// either side of every cell, and body cells truncated at 200px.
+const TABLE_CHAR_PX = 7.2;
+const TABLE_CELL_PADDING_PX = 16;
+const TABLE_BODY_CELL_MAX_PX = 200;
+
+function tableBlockWidthPx(gridColumns: number): number {
+  const columnPx = (TABLE_REFERENCE_CANVAS_PX - GRID_GUTTER_PX * 2 - GRID_GUTTER_PX * (GRID_COLUMNS - 1)) / GRID_COLUMNS;
+  return gridColumns * columnPx + (gridColumns - 1) * GRID_GUTTER_PX - BLOCK_CHROME_PX;
+}
+
+function sampleText(value: unknown): string {
+  if (value == null) return "NULL";
+  if (typeof value === "object" && !(value instanceof Date)) {
+    try {
+      return JSON.stringify(value, (_key, item) => typeof item === "bigint" ? item.toString() : item) ?? "";
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+/**
+ * Warn when a table block's columns are unlikely to fit its width, since the
+ * reader would have to scroll sideways. Estimated from each column's header
+ * and a few sample rows; advisory, never an error.
+ */
+export function reportTableWidthWarnings(
+  report: ReportDocumentV1,
+  datasets: Array<ReportDatasetShape & { sample?: Record<string, unknown>[] }>,
+): string[] {
+  const shapes = new Map(datasets.map((dataset) => [dataset.datasetId, dataset]));
+  const warnings: string[] = [];
+  for (const block of report.blocks) {
+    if (block.type !== "table") continue;
+    const shape = shapes.get(block.datasetId);
+    if (!shape?.ok || !shape.columns) continue;
+    const columns = block.columns ?? shape.columns;
+    const sample = shape.sample ?? [];
+    const needed = columns.reduce((sum, column) => {
+      const header = column.length * TABLE_CHAR_PX;
+      const body = Math.min(TABLE_BODY_CELL_MAX_PX - TABLE_CELL_PADDING_PX, Math.max(0, ...sample.map((row) => sampleText(row[column]).length * TABLE_CHAR_PX)));
+      return sum + Math.max(header, body) + TABLE_CELL_PADDING_PX;
+    }, 0);
+    const available = tableBlockWidthPx(block.layout.w);
+    if (needed <= available) continue;
+    warnings.push(`${block.title ?? block.id}: its ${columns.length} columns need about ${Math.round(needed)}px, but a ${block.layout.w}/12-width block shows about ${Math.round(available)}px on a typical laptop, so readers would have to scroll sideways. List only the essential fields in columns, shorten long values in SQL, give the table full width, or split it into separate tables.`);
+  }
+  return warnings;
+}

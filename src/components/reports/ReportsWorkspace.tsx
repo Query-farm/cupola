@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Popover as BaseUIPopover } from "@base-ui/react/popover";
 import { ResponsiveGridLayout, useContainerWidth, type Layout, type ResponsiveLayouts } from "react-grid-layout";
-import { noCompactor } from "react-grid-layout/core";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Clock3, Database, Download, FileCode2, FileJson, FilePlus2, GripVertical, History, LayoutGrid, Link2, Loader2, MoreHorizontal, Pencil, Play, Plus, Printer, RefreshCw, Save, Send, Share2, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
@@ -38,13 +37,14 @@ import { exportResult, safeFileStem, triggerDownload } from "@/lib/editor/result
 import { consumeReportPromotion, type ReportPromotion } from "@/lib/reports/events";
 import { reportDisplayRows, reportMapRows } from "@/lib/reports/display";
 import { buildReportDatasetExecutionPlan, inferReportDatasetDependencies, quoteReportDatasetIdentifier, type ReportDatasetExecutionPlan } from "@/lib/reports/dependencies";
-import { buildReportRunFailureNotice, classifyReportQueryError, isBlockingVegaWarning, reportDatasetNeedsRows, validateReportResultColumns, type ReportQueryErrorCode, type ReportRunFailureNotice } from "@/lib/reports/execution";
+import { buildReportRunFailureNotice, classifyReportQueryError, isBlockingVegaWarning, reportDatasetNeedsRows, reportTableWidthWarnings, validateReportResultColumns, type ReportQueryErrorCode, type ReportRunFailureNotice } from "@/lib/reports/execution";
 import { resolveReportAppearance } from "@/lib/reports/appearance";
 import { REPORT_TOOLS, upsertAgentBlock, upsertAgentDataset, upsertAgentGroup, type SemanticBlockHeight, type SemanticBlockWidth } from "@/lib/reports/agent-tools";
 import { checkpointReportAgentPlan, parseReportAgentPlan, reportAgentRepair, validateReportAgentPlan, type ReportAgentPlan } from "@/lib/reports/agent-reliability";
 import { compileReportQuery, interpolateReportText, materializeReportQuery } from "@/lib/reports/parameters";
 import { generateReportNarrative, prepareNarrativeInput } from "@/lib/reports/narrative";
 import { normalizeReportLayout, reflowReportLayout } from "@/lib/reports/layout";
+import { createReportGridCompactor } from "@/lib/reports/grid-compactor";
 import { isReportTufteBlock, tufteBlockToVegaSpec } from "@/lib/reports/tufte";
 import { buildShareReportUrl, clearSharedReport, consumeSharedReport } from "@/lib/reports/share";
 import { deleteReport, exportReportJson, getStoredReport, importReportJson, listStoredReports, publishReport, restoreReportRevision, saveReport } from "@/lib/reports/store";
@@ -762,6 +762,20 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const { width, containerRef, mounted, measureWidth } = useContainerWidth({ initialWidth: 1000, measureBeforeMount: true });
   const engineLifecycle = useEngineLifecycle();
   const activeReport = readerMode && published ? published : draft;
+  // Group membership only matters mid-drag (for heading rows), and a drag
+  // reads it from the committed report, so an effect-maintained lookup keeps
+  // the compactor itself stable across renders.
+  const reportGridGroupOf = useRef<(blockId: string) => string | undefined>(() => undefined);
+  useEffect(() => {
+    const groupIds = new Set((activeReport?.groups ?? []).map((group) => group.id));
+    const membership = new Map<string, string>();
+    for (const block of activeReport?.blocks ?? []) {
+      if (block.groupId && groupIds.has(block.groupId)) membership.set(block.id, block.groupId);
+    }
+    reportGridGroupOf.current = (blockId) => membership.get(blockId);
+  }, [activeReport]);
+  const reportGridGrouped = (activeReport?.groups?.length ?? 0) > 0;
+  const reportGridCompactor = useMemo(() => createReportGridCompactor(reportGridGrouped, (blockId) => reportGridGroupOf.current(blockId)), [reportGridGrouped]);
 
   const clearScheduledRateLimitRetry = useCallback(() => {
     if (rateLimitRetryTimerRef.current !== null) window.clearTimeout(rateLimitRetryTimerRef.current);
@@ -1895,6 +1909,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         ...validationDatasetIssues(workingReport, workingRows, execution).map((issue) => issue.message),
       ];
       const blockErrors = validateReportResultColumns(workingReport, execution);
+      const tableWarnings = reportTableWidthWarnings(workingReport, execution);
       const charts = await preflightReportCharts(workingReport, workingRows, settings.aiChartFeedback !== false);
       const narrativeErrors: string[] = [];
       if (!failures.length && !blockErrors.length && !charts.errors.length) {
@@ -1935,6 +1950,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         blockErrors,
         chartErrors: charts.errors,
         chartWarnings: charts.warnings,
+        ...(tableWarnings.length ? { tableWarnings } : {}),
         narrativeErrors,
       }, charts.feedback);
     };
@@ -1960,6 +1976,8 @@ Blocks may set appearance for semantic backgrounds. Use tone neutral/info/succes
 Inspect every external table before using it. SQL datasets must be one read-only SELECT/VALUES/WITH query. When several datasets need the same expensive source query, create one upstream dataset with a short snake_case id (for example weather_base), then query that id from downstream dataset SQL with FROM weather_base or JOIN weather_base. Cupola uses DuckDB's parser to infer these dependencies, executes them in dependency order, and materializes shared upstream results once for the refresh; never write CREATE/DROP statements or duplicate the source query. A dataset may read an external relation with the same name as its own id, which is treated as a source rather than a self-dependency. Parameter references use $key, date ranges use $key_start/$key_end, and multi-select values appear in IN ($key). Put parameters used by several outputs in the upstream dataset when possible so its downstream datasets refresh together. Do not add a WHERE clause unless the user's request actually requires filtering.
 
 Supported blocks are markdown, ai_narrative, kpi, sparkline, small_multiples, bullet, slopegraph, range_dot, table, chart, perspective, and map. Every block may include a concise caption and source note. Markdown content and reader-facing block and group titles may contain parameter tokens such as $city; Cupola replaces them with the currently applied value at render time. A markdown block may have a meaningful visible title or omit title for a clean content-only card; never title one "Text" or "Markdown", and omit the block title when the markdown already begins with its own heading. Markdown supports safe HTTPS and relative image URLs with ![alt text](url), but Cupola does not upload or persist image files.
+
+A table block must fit its width without horizontal scrolling—readers dislike scrolling sideways, and a table they must scroll is one they will not read. Set columns to only the fields the reader needs (the dataset may keep more for other blocks); as a guide, a full-width table holds about eight compact columns, a half-width one about four, and a third- or quarter-width one two or three. Keep cell values short: aggregate, round, and format in SQL, and leave out long free-text, JSON, and identifier columns unless the reader needs them. Give a table that needs more room full width, and split genuinely wide detail into separate tables or show it as a chart instead. The block tool returns tableWarnings when a table is likely to need horizontal scrolling; resolve them before finalizing.
 
 Use ai_narrative only when data-dependent prose adds real value, such as an executive summary, comparison, anomaly explanation, or changing forecast commentary. Provide one datasetId and a focused instruction, optionally columns, maxRows from 1 to 100, and refreshPolicy manual or when_data_changes. Prefer a compact, aggregated dataset rather than sending raw detail. Manual is the default and avoids surprise cost; choose when_data_changes only when the user wants fresh prose during report refresh. The narrative call has no tools and cannot edit the report. Cupola generates and snapshots it during authoring, so do not also write a static markdown version of the same summary.
 
@@ -2107,6 +2125,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
             });
           }
           const blockErrors = validateReportResultColumns({ ...workingReport, blocks: [block] }, execution);
+          const tableWarnings = reportTableWidthWarnings({ ...workingReport, blocks: [block] }, execution);
           const charts = await preflightReportCharts({ ...workingReport, blocks: [block] }, workingRows, settings.aiChartFeedback !== false, 1);
           const narrativeErrors: string[] = [];
           if (block.type === "ai_narrative" && execution.every((result) => result.ok) && !blockErrors.length) {
@@ -2137,6 +2156,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
             blockErrors,
             chartErrors: charts.errors,
             chartWarnings: charts.warnings,
+            ...(tableWarnings.length ? { tableWarnings } : {}),
             narrativeErrors,
             checkpoint: checkpointReportAgentPlan(agentPlan!, workingReport),
           }, charts.feedback);
@@ -2410,7 +2430,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
               </div>;
             })}
           </div>
-          <ResponsiveGridLayout className="relative z-10" width={width} breakpoints={{ lg: 768, sm: 0 }} cols={{ lg: 12, sm: 1 }} layouts={layouts} rowHeight={REPORT_GRID_ROW_HEIGHT} margin={[REPORT_GRID_MARGIN, REPORT_GRID_MARGIN]} compactor={(report.groups?.length ?? 0) > 0 ? noCompactor : undefined} dragConfig={{ enabled: !readerMode && !blockEditor, handle: ".report-drag-handle" }} resizeConfig={{ enabled: !readerMode && !blockEditor }} onLayoutChange={(layout) => { if (!readerMode && !blockEditor && width >= 768) updateLayout(layout); }}>
+          <ResponsiveGridLayout className="relative z-10" width={width} breakpoints={{ lg: 768, sm: 0 }} cols={{ lg: 12, sm: 1 }} layouts={layouts} rowHeight={REPORT_GRID_ROW_HEIGHT} margin={[REPORT_GRID_MARGIN, REPORT_GRID_MARGIN]} compactor={reportGridCompactor} dragConfig={{ enabled: !readerMode && !blockEditor, handle: ".report-drag-handle" }} onDragStart={(layout, item) => { if (item) reportGridCompactor.startDrag(layout, item.i); }} onDragStop={() => reportGridCompactor.endDrag()} resizeConfig={{ enabled: !readerMode && !blockEditor }} onLayoutChange={(layout) => { if (!readerMode && !blockEditor && width >= 768) updateLayout(layout); }}>
           {report.blocks.map((block) => {
             const result = block.type === "markdown" ? null : results[block.datasetId];
             const dataset = block.type === "markdown" ? null : report.datasets.find((candidate) => candidate.id === block.datasetId);
