@@ -28,6 +28,7 @@ import { buildTableSelect, isTableRef } from "@/lib/sql/table-select";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { treeIdToShellText } from "@/lib/tree";
 import { exportResult, triggerDownload, safeFileStem, type ExportFormat } from "@/lib/editor/result-export";
+import type { PerspectivePivotMode } from "@/lib/pivot-source";
 import { CodeMirrorSql, type CodeMirrorSqlHandle } from "./CodeMirrorSql";
 import { SqlEditorTabs } from "./SqlEditorTabs";
 import { EditorToolbar } from "./EditorToolbar";
@@ -310,14 +311,32 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     await exportResult(table, fmt, activeDoc?.name ?? "query-result");
   }, [activeResult.table, activeResult.sourceSql, activeDoc?.name, settings.aiTelemetry]);
 
-  const handleOpenInPerspective = useCallback(() => {
+  const [pivotBusy, setPivotBusy] = useState<PerspectivePivotMode | null>(null);
+  const [pivotError, setPivotError] = useState<string | null>(null);
+  // A new result (or another tab's) makes the last pivot error stale.
+  useEffect(() => { setPivotError(null); }, [activeResult.table]);
+
+  const handleOpenInPerspective = useCallback(async (mode: PerspectivePivotMode) => {
     const table = activeResult.table;
-    if (!table || !ui.showPerspective) return;
-    // showPerspective wants an Arrow IPC ArrayBuffer; slice to detach a clean
-    // buffer (the Uint8Array view may be a subarray of a larger allocation).
-    const ipc = tableToIPC(table, "file");
-    const ab = ipc.buffer.slice(ipc.byteOffset, ipc.byteOffset + ipc.byteLength) as ArrayBuffer;
-    ui.showPerspective(ab, { sql: activeResult.sourceSql, source: "editor" });
+    if (!table) return;
+    setPivotError(null);
+    if (mode === "snapshot") {
+      if (!ui.showPerspective) return;
+      // showPerspective wants an Arrow IPC ArrayBuffer; slice to detach a clean
+      // buffer (the Uint8Array view may be a subarray of a larger allocation).
+      const ipc = tableToIPC(table, "file");
+      const ab = ipc.buffer.slice(ipc.byteOffset, ipc.byteOffset + ipc.byteLength) as ArrayBuffer;
+      ui.showPerspective(ab, { sql: activeResult.sourceSql, source: "editor" });
+      return;
+    }
+    if (!activeResult.sourceSql || !ui.showPerspectiveQuery) return;
+    setPivotBusy(mode);
+    try {
+      const result = await ui.showPerspectiveQuery(activeResult.sourceSql, mode);
+      if (!result.ok) setPivotError(result.error);
+    } finally {
+      setPivotBusy(null);
+    }
   }, [activeResult.table, activeResult.sourceSql]);
 
   // Copy a share link for the active tab. The link carries the connection
@@ -545,6 +564,8 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
               onPopout={handlePopout}
               onExport={handleExport}
               onOpenInPerspective={handleOpenInPerspective}
+              pivotBusy={pivotBusy}
+              pivotError={pivotError}
             />
           </div>
         </div>

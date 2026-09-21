@@ -11,6 +11,7 @@ import { DataPreview } from "./content/DataPreview";
 import { getColumns } from "@/lib/service";
 import { treeIdToShellText } from "@/lib/tree";
 import { VgiDuckDBHandler } from "@/lib/perspective-duckdb-handler";
+import { createQueryPivotSource, dropQueryPivotSource, type QueryPivotSource } from "@/lib/pivot-source";
 import { getAuthToken, getAuthTokenForService } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
 import { tableFromIPC, Table as ArrowTable } from "@query-farm/apache-arrow";
@@ -218,6 +219,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
           path: context?.source ?? "showPerspective",
           sql: context?.sql,
         });
+        await releaseQueryPivotSource();
       } catch (e: unknown) {
         // loadPerspective logs and captures the failure with the Arrow schema
         // and originating SQL. Keep this boundary from producing a duplicate
@@ -226,8 +228,46 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         setPerspectiveLoading(false);
       }
     };
+
+    // Pivot the editor's query through the virtual server: DuckDB answers each
+    // pivot, so no copy of the result goes to Perspective. The source is
+    // created before leaving the editor, so a query that cannot be wrapped
+    // (not a single SELECT-like statement) reports its error in place.
+    ui.showPerspectiveQuery = async (sql, mode) => {
+      const run = engine.query;
+      if (!run) return { ok: false, error: "The data engine is not ready." };
+      let source: QueryPivotSource;
+      try {
+        source = await createQueryPivotSource(sql, mode, run);
+      } catch (e: unknown) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+      perspectiveSnapshotEntryRef.current = true;
+      setActiveTab("perspective");
+      setPerspectiveLoading(true);
+      try {
+        const title = mode === "view" ? "Query · live view" : "Query · table";
+        const mounted = await mountVirtualPerspective(() => perspectiveRef.current, source.tableId, perspectiveTableRef.current, () => ({ table: source.tableId, title }));
+        if (!mounted) throw new Error("The Perspective view could not be mounted.");
+        perspectiveTableRef.current = source.tableId;
+        await releaseQueryPivotSource();
+        queryPivotSource = source;
+        return { ok: true };
+      } catch (e: unknown) {
+        console.error("Perspective query pivot error:", e);
+        Sentry.captureException(e, {
+          tags: { component: "perspective", path: `query-pivot-${mode}` },
+          extra: { sql },
+        });
+        await dropQueryPivotSource(source, run).catch(() => {});
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      } finally {
+        setPerspectiveLoading(false);
+      }
+    };
     return () => {
       ui.showPerspective = null;
+      ui.showPerspectiveQuery = null;
     };
   }, [setActiveTab]);
 
@@ -372,69 +412,9 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
 
     (async () => {
       try {
-        await ensurePerspectiveLoaded();
-        if (cancelled) return;
-
-        // Wait for DuckDB to be fully ready (ATTACH complete, readLoop started)
-        if (!terminal.runQuery) {
-          await new Promise<void>((resolve) => {
-            const onReady = () => { resolve(); window.removeEventListener("duckdb-ready", onReady); };
-            window.addEventListener("duckdb-ready", onReady);
-            if (terminal.runQuery) onReady();
-          });
-        }
-        if (cancelled) return;
-
-        const container = perspectiveRef.current;
-        if (!container || cancelled) return;
-
-        // Ensure WASM is initialized by creating a throwaway worker first
-        // (perspectiveMod.worker() triggers WASM init internally)
-        if (!perspectiveWorker) {
-          perspectiveWorker = await perspectiveMod.worker();
-        }
-
-        // Reuse the persistent virtual-server client so views survive table switches
-        if (!perspectiveClient) {
-          const handler = new VgiDuckDBHandler(perspectiveMod);
-          const messagePort = await perspectiveMod.createMessageHandler(handler);
-          perspectiveClient = await perspectiveMod.worker(messagePort);
-        }
-
-        if (cancelled) return;
-
-        // Clean up stale viewer — must call delete() to release WASM virtual server views
-        const oldViewer = container.querySelector("perspective-viewer") as any;
-        if (oldViewer) {
-          // Save the current config before tearing down, keyed by previous tableId
-          if (perspectiveTableRef.current) {
-            try {
-              const savedConfig = await oldViewer.save();
-              perspectiveConfigCache.set(perspectiveTableRef.current, savedConfig);
-            } catch { /* ignore save errors — worst case we lose the config */ }
-          }
-          try { await oldViewer.delete(); } catch { /* ignore cleanup errors */ }
-          oldViewer.remove();
-        }
-
-        const viewer = document.createElement("perspective-viewer") as any;
-        viewer.setAttribute("theme", "Pro Light");
-        viewer.style.width = "100%";
-        viewer.style.height = "100%";
-        container.appendChild(viewer);
-        // Disable auto-pause so hiding the container doesn't trigger
-        // IntersectionObserver resume which causes "View not found" errors
-        await viewer.setAutoPause(false);
-
-        await viewer.load(perspectiveClient);
-
-        // Restore config from cache, or build a default
-        let restoreConfig: any;
-        const cachedConfig = perspectiveConfigCache.get(tableId);
-        if (cachedConfig) {
-          restoreConfig = { ...cachedConfig, table: tableId };
-        } else {
-          restoreConfig = { table: tableId, title: tableId };
+        // The first time this table is shown; later visits restore its saved config.
+        const defaultConfig = () => {
+          const restoreConfig: any = { table: tableId, title: tableId };
           if (selectedTable) {
             const cols = getColumns(selectedTable);
             const pkIndices = new Set<number>((selectedTable.primary_key_constraints ?? []).flatMap((pk: number[]) => pk));
@@ -457,11 +437,13 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
               restoreConfig.columns = [cols[0].name.replace(/_/g, "-")];
             }
           }
-        }
+          return restoreConfig;
+        };
 
-        await viewer.restore(restoreConfig);
-        await viewer.toggleConfig(true);
+        const mounted = await mountVirtualPerspective(() => perspectiveRef.current, tableId, perspectiveTableRef.current, defaultConfig, () => cancelled);
+        if (!mounted) return;
         perspectiveTableRef.current = tableId;
+        await releaseQueryPivotSource();
       } catch (e: unknown) {
         console.error("Perspective virtual server error:", e);
         Sentry.captureException(e, {
@@ -778,6 +760,105 @@ let perspectiveMod: any = null;
 let perspectiveWorker: any = null;
 /** Persistent virtual-server client — reused across table switches so views stay alive. */
 let perspectiveClient: any = null;
+/** The handler behind `perspectiveClient`, kept so a query pivot can release its source. */
+let perspectiveHandler: VgiDuckDBHandler | null = null;
+/** The scratch view or table behind the query pivot on screen, if any. */
+let queryPivotSource: QueryPivotSource | null = null;
+
+/**
+ * Mount a <perspective-viewer> backed by the virtual server on `tableId`,
+ * replacing whatever viewer the container holds (and saving that one's config
+ * under `previousTableId`, so returning to it restores the layout). Shared by
+ * the sidebar-selection path and editor query pivots. False if cancelled.
+ */
+async function mountVirtualPerspective(
+  getContainer: () => HTMLElement | null,
+  tableId: string,
+  previousTableId: string | null,
+  defaultConfig: () => Record<string, unknown>,
+  isCancelled: () => boolean = () => false,
+): Promise<boolean> {
+  await ensurePerspectiveLoaded();
+  if (isCancelled()) return false;
+
+  // Wait for DuckDB to be fully ready (ATTACH complete, readLoop started)
+  if (!terminal.runQuery) {
+    await new Promise<void>((resolve) => {
+      const onReady = () => { resolve(); window.removeEventListener("duckdb-ready", onReady); };
+      window.addEventListener("duckdb-ready", onReady);
+      if (terminal.runQuery) onReady();
+    });
+  }
+  if (isCancelled()) return false;
+
+  const container = getContainer();
+  if (!container || isCancelled()) return false;
+
+  // Ensure WASM is initialized by creating a throwaway worker first
+  // (perspectiveMod.worker() triggers WASM init internally)
+  if (!perspectiveWorker) {
+    perspectiveWorker = await perspectiveMod.worker();
+  }
+
+  // Reuse the persistent virtual-server client so views survive table switches
+  if (!perspectiveClient) {
+    perspectiveHandler = new VgiDuckDBHandler(perspectiveMod);
+    const messagePort = await perspectiveMod.createMessageHandler(perspectiveHandler);
+    perspectiveClient = await perspectiveMod.worker(messagePort);
+  }
+
+  if (isCancelled()) return false;
+
+  // Clean up stale viewer — must call delete() to release WASM virtual server views
+  const oldViewer = container.querySelector("perspective-viewer") as any;
+  if (oldViewer) {
+    // Save the current config before tearing down, keyed by previous tableId
+    if (previousTableId) {
+      try {
+        const savedConfig = await oldViewer.save();
+        perspectiveConfigCache.set(previousTableId, savedConfig);
+      } catch { /* ignore save errors — worst case we lose the config */ }
+    }
+    try { await oldViewer.delete(); } catch { /* ignore cleanup errors */ }
+    oldViewer.remove();
+  }
+
+  const viewer = document.createElement("perspective-viewer") as any;
+  viewer.setAttribute("theme", "Pro Light");
+  viewer.style.width = "100%";
+  viewer.style.height = "100%";
+  container.appendChild(viewer);
+  // Disable auto-pause so hiding the container doesn't trigger
+  // IntersectionObserver resume which causes "View not found" errors
+  await viewer.setAutoPause(false);
+
+  await viewer.load(perspectiveClient);
+
+  const cachedConfig = perspectiveConfigCache.get(tableId);
+  await viewer.restore(cachedConfig ? { ...cachedConfig, table: tableId } : defaultConfig());
+  await viewer.toggleConfig(true);
+  return true;
+}
+
+/**
+ * Drop the current query pivot's scratch view or table once nothing shows it:
+ * a view is free to keep, but a table holds the whole result in DuckDB.
+ * Best effort — a failed drop only leaves a TEMP object until reload.
+ */
+async function releaseQueryPivotSource(): Promise<void> {
+  const source = queryPivotSource;
+  if (!source) return;
+  queryPivotSource = null;
+  perspectiveConfigCache.delete(source.tableId);
+  const run = engine.query;
+  if (!run) return;
+  try {
+    await perspectiveHandler?.releaseTable(source.tableId);
+    await dropQueryPivotSource(source, run);
+  } catch (e) {
+    console.warn("[perspective] could not drop query pivot source", source.tableId, e);
+  }
+}
 /** In-memory cache of Perspective viewer configs keyed by tableId (catalog.schema.table). */
 const perspectiveConfigCache = new Map<string, any>();
 /** Static-snapshot state for one host container. `viewer.load` no longer takes

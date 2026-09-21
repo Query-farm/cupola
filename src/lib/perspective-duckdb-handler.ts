@@ -9,6 +9,7 @@
 
 import { tableFromIPC } from "@query-farm/apache-arrow";
 import { engine } from "@/lib/shell-bridge";
+import { QUERY_PIVOT_PREFIX } from "@/lib/pivot-source";
 
 // ---------------------------------------------------------------------------
 // Traversal — tracks visible rows for collapse/expand in grouped views
@@ -19,6 +20,24 @@ interface TraversalNode {
   depth: number;          // Tree depth (0 = total, 1 = first group level, etc.)
   expanded: boolean;      // Whether children are visible in the traversal
   childCount: number;     // Number of direct children in the full tree
+}
+
+/**
+ * Fully-qualified, quoted name for one of the handler's scratch views: the
+ * rename view per hosted table, and one view per Perspective view.
+ *
+ * They live in `temp.main` (VGI catalogs are read-only, so they need a
+ * writable home). They used to live in `memory.main`, which broke over TEMP
+ * sources: DuckDB binds the names inside a view in its own database's context,
+ * so a memory.main view over an editor live-view pivot — a TEMP view of, say,
+ * `SELECT * FROM large.orders_2m` — resolved `large` against the memory catalog
+ * and failed ("schema large does not exist"). TEMP views keep the connection's
+ * search path. DuckDB only creates in `temp` with the TEMP keyword, so every
+ * CREATE of one says `CREATE TEMP VIEW`. They also stay out of the sidebar,
+ * which lists the memory catalog and showed every one of these views.
+ */
+export function scratchView(name: string): string {
+  return `temp.main."${name.replace(/"/g, '""')}"`;
 }
 
 class ViewTraversal {
@@ -35,7 +54,7 @@ class ViewTraversal {
     if (groupByLen === 0) return null;
 
     // Query just the grouping ID column to determine tree structure
-    const qualifiedView = `memory.main."${viewId}"`;
+    const qualifiedView = scratchView(viewId);
     const result = await runQuery(
       `SELECT "__GROUPING_ID__" FROM ${qualifiedView}`
     );
@@ -346,8 +365,8 @@ export class VgiDuckDBHandler {
   /**
    * Fully-qualified, quoted name for a Perspective-generated view id.
    *
-   * VGI catalogs are read-only, so the SQL model's scratch views are created in
-   * `memory.main` and every reference to them has to say so. The builder
+   * The SQL model's scratch views are created in `temp.main` (see
+   * `scratchView`) and every reference to them has to say so. The builder
    * interpolates whatever id it is given verbatim, and *only* ever in a table
    * position — `CREATE {} AS`, `DROP TABLE IF EXISTS {}`, `FROM {}`,
    * `DESCRIBE {}` — so handing it the qualified name up front produces correct
@@ -359,7 +378,7 @@ export class VgiDuckDBHandler {
    * filter on the right value could corrupt the query.
    */
   private qualifiedView(viewId: string): string {
-    return `memory.main."${viewId.replace(/"/g, '""')}"`;
+    return scratchView(viewId);
   }
 
   private get sqlBuilder() {
@@ -404,16 +423,23 @@ export class VgiDuckDBHandler {
   }
 
   async getHostedTables(): Promise<string[]> {
-    const rows = await queryRows(
-      "SELECT database_name, schema_name, table_name FROM duckdb_tables()"
-    );
+    // Perspective refuses to open a table missing from this list ("No table
+    // set"), and duckdb_tables() has no views. The editor's live-view pivots
+    // are TEMP views, so they are listed too — only those, not every view, or
+    // the handler's own scratch views would appear wherever the list shows.
+    const pivotViews = QUERY_PIVOT_PREFIX.replace(/_/g, "\\_");
+    const rows = await queryRows(`
+      SELECT database_name, schema_name, table_name FROM duckdb_tables()
+      UNION ALL
+      SELECT database_name, schema_name, view_name FROM duckdb_views()
+       WHERE temporary AND view_name LIKE '${pivotViews}%' ESCAPE '\\'`);
     return rows.map((row) => `${row.database_name}.${row.schema_name}.${row.table_name}`);
   }
 
   async tableSchema(tableId: string): Promise<Record<string, ColumnType>> {
     const cached = this.tableSchemaCache.get(tableId);
     if (cached) return cached;
-    const qualifiedId = tableId.includes(".") ? tableId : `memory.main."${tableId}"`;
+    const qualifiedId = tableId.includes(".") ? tableId : scratchView(tableId);
     const fields = await getArrowSchema(qualifiedId);
     const schema: Record<string, ColumnType> = {};
     for (const field of fields) {
@@ -440,9 +466,26 @@ export class VgiDuckDBHandler {
     return size;
   }
 
+  private renameViewId(tableId: string): string {
+    return scratchView(`__psp_rename_${tableId.replace(/\./g, "_")}`);
+  }
+
+  /**
+   * Forget a hosted table its owner is about to drop — a query pivot's
+   * scratch view or table. Drops the rename view built over it and every
+   * cache keyed by its name, which would otherwise outlive it.
+   */
+  async releaseTable(tableId: string): Promise<void> {
+    if (this.renameViewCache.has(tableId)) await runQuery(`DROP VIEW IF EXISTS ${this.renameViewId(tableId)}`);
+    this.renameViewCache.delete(tableId);
+    this.tableOrderingCache.delete(tableId);
+    this.tableSizeCache.delete(tableId);
+    this.tableSchemaCache.delete(tableId);
+  }
+
   /** Ensure a rename view exists for a table, mapping underscored column names to hyphenated ones. */
   private async ensureRenameView(tableId: string): Promise<string> {
-    const renameViewId = `memory.main."__psp_rename_${tableId.replace(/\./g, "_")}"`;
+    const renameViewId = this.renameViewId(tableId);
     if (this.renameViewCache.has(tableId)) return renameViewId;
 
     // Get Arrow schema to classify columns by their actual Arrow DataType
@@ -480,7 +523,10 @@ export class VgiDuckDBHandler {
     } catch {}
     const selectCols = hasRowid ? `rowid, ${aliases}` : aliases;
 
-    await runQuery(`CREATE OR REPLACE VIEW ${renameViewId} AS SELECT ${selectCols} FROM ${tableId}`);
+    // Checked: a failure here otherwise surfaced one step later, from the
+    // first pivot view, as a misleading "table … does not exist".
+    const created = await runQuery(`CREATE OR REPLACE TEMP VIEW ${renameViewId} AS SELECT ${selectCols} FROM ${tableId}`);
+    if (!created.ok) throw new Error(created.error || `Could not create ${renameViewId}`);
     this.renameViewCache.add(tableId);
     return renameViewId;
   }
@@ -500,17 +546,17 @@ export class VgiDuckDBHandler {
 
     if (ordering.hasRowid) {
       // Has rowid — use CREATE VIEW (lazy, no materialization)
-      sql = sql.replace(/CREATE TABLE\s+/i, "CREATE VIEW ");
+      sql = sql.replace(/CREATE TABLE\s+/i, "CREATE TEMP VIEW ");
     } else if (ordering.primaryKey) {
       // Has PK but no rowid — use CREATE VIEW with PK ordering
       // PK column names need hyphenation to match the rename view
       const pkCols = ordering.primaryKey.map(c => `"${c.replace(/_/g, "-")}"`).join(", ");
       sql = sql.replace(/\s+ORDER BY rowid\b/gi, ` ORDER BY ${pkCols}`);
-      sql = sql.replace(/CREATE TABLE\s+/i, "CREATE VIEW ");
+      sql = sql.replace(/CREATE TABLE\s+/i, "CREATE TEMP VIEW ");
     } else {
       // No rowid, no PK — use CREATE VIEW without ordering (avoids materializing the entire dataset)
       sql = sql.replace(/\s+ORDER BY rowid\b/gi, "");
-      sql = sql.replace(/CREATE TABLE\s+/i, "CREATE VIEW ");
+      sql = sql.replace(/CREATE TABLE\s+/i, "CREATE TEMP VIEW ");
     }
 
     const result = await runQuery(sql);
@@ -573,7 +619,7 @@ export class VgiDuckDBHandler {
       if (dbIndices.length === 0) return;
 
       // Query specific rows by their DuckDB row index
-      const qualifiedView = `memory.main."${viewId}"`;
+      const qualifiedView = scratchView(viewId);
       const sql = `SELECT * FROM (
         SELECT *, ROW_NUMBER() OVER () - 1 as __db_row_idx__
         FROM ${qualifiedView}
@@ -612,7 +658,7 @@ export class VgiDuckDBHandler {
   }
 
   async viewSchema(viewId: string): Promise<Record<string, ColumnType>> {
-    const fields = await getArrowSchema(`memory.main."${viewId}"`);
+    const fields = await getArrowSchema(scratchView(viewId));
     const schema: Record<string, ColumnType> = {};
     for (const field of fields) {
       if (field.name.startsWith("__")) continue;

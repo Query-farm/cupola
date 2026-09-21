@@ -23,6 +23,7 @@
  */
 import type { Selection } from "./tree";
 import type { CatalogData } from "./service";
+import type { QueryPivotMode } from "./pivot-source";
 
 export interface QueryResult {
   ok: boolean;
@@ -158,6 +159,10 @@ export const ui = {
   navigateToSelection: null as ((sel: Selection) => void) | null,
 
   showPerspective: null as ((arrowBuf: ArrayBuffer, context?: { sql?: string; source?: string }) => void) | null,
+  /** Pivot a query through Perspective's virtual server over a TEMP view or
+   *  table (see `pivot-source.ts`). Resolves with an error, rather than
+   *  switching tabs, when the query cannot be wrapped. */
+  showPerspectiveQuery: null as ((sql: string, mode: QueryPivotMode) => Promise<{ ok: true } | { ok: false; error: string }>) | null,
   /** Open the last shell result (Arrow IPC) in the Data Viewer tab. Invoked by
    *  the `.preview` dot-command. */
   showPreview: null as ((arrowBuf: ArrayBuffer) => void) | null,
@@ -300,6 +305,7 @@ if (typeof window !== "undefined") {
     get memoryCatalog() { return ui.memoryCatalog; },
     get refreshMemoryTables() { return ui.refreshMemoryTables; },
     get showPerspective() { return ui.showPerspective; },
+    get showPerspectiveQuery() { return ui.showPerspectiveQuery; },
     get showPreview() { return ui.showPreview; },
     get addQueryHistoryEntry() { return ui.addQueryHistoryEntry; },
   };

@@ -1,10 +1,12 @@
 import { useState } from "react";
-import { Loader2, AlertCircle, TableProperties, CheckCircle2, Maximize2, SquareArrowOutUpRight, BarChart3 } from "lucide-react";
+import { Loader2, AlertCircle, TableProperties, CheckCircle2, Maximize2, SquareArrowOutUpRight } from "lucide-react";
 import { DataPreview } from "@/components/content/DataPreview";
 import { ExplainView } from "@/components/editor/ExplainView";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { SaveResultsMenu } from "./SaveResultsMenu";
+import { PivotMenu } from "./PivotMenu";
+import type { PerspectivePivotMode } from "@/lib/pivot-source";
 import type { ExportFormat } from "@/lib/editor/result-export";
 
 export interface ResultState {
@@ -39,11 +41,15 @@ interface Props {
   /** Write these results to a file. Lives here rather than in the editor
    *  toolbar so the control sits next to the grid it acts on. */
   onExport?: (format: ExportFormat) => void | Promise<void>;
-  /** Hand this result set to the Perspective pivot surface. */
-  onOpenInPerspective?: () => void;
+  /** Open this result in the Perspective pivot, as a live view, table, or snapshot. */
+  onOpenInPerspective?: (mode: PerspectivePivotMode) => void;
+  /** The pivot mode being prepared, if any. */
+  pivotBusy?: PerspectivePivotMode | null;
+  /** Why the last pivot could not open. */
+  pivotError?: string | null;
 }
 
-export function EditorResultsPane({ state, onPopout, onExport, onOpenInPerspective }: Props) {
+export function EditorResultsPane({ state, onPopout, onExport, onOpenInPerspective, pivotBusy, pivotError }: Props) {
   const [maximized, setMaximized] = useState(false);
   // The header + maximize/pop-out only apply to an actual data grid, not to
   // error / running / EXPLAIN / DDL-success states.
@@ -55,18 +61,10 @@ export function EditorResultsPane({ state, onPopout, onExport, onOpenInPerspecti
         <div className="flex items-center justify-end gap-1 px-2 py-1 border-b border-border bg-muted/20 shrink-0">
           {onExport && <SaveResultsMenu onExport={onExport} />}
           {onOpenInPerspective && (
-            /* Its own button, not an item inside Save Results: it opens a view,
-               it does not write a file, and under that menu's name it read as
-               another export format. */
-            <button
-              onClick={onOpenInPerspective}
-              title="Open these results in the Perspective pivot"
-              data-testid="editor-open-perspective"
-              className="flex items-center gap-1.5 px-2 py-1 text-xs rounded border border-border hover:bg-foreground/5 transition-colors"
-            >
-              <BarChart3 className="h-3.5 w-3.5" />
-              <span>Pivot</span>
-            </button>
+            /* Its own control, not an item inside Save Results: it opens a
+               view, it does not write a file, and under that menu's name it
+               read as another export format. */
+            <PivotMenu onPivot={onOpenInPerspective} busy={pivotBusy} />
           )}
           <span className="h-4 w-px bg-border mx-0.5" aria-hidden="true" />
           {onPopout && (
@@ -89,6 +87,12 @@ export function EditorResultsPane({ state, onPopout, onExport, onOpenInPerspecti
           >
             <Maximize2 className="h-3.5 w-3.5" />
           </Button>
+        </div>
+      )}
+      {isGrid && pivotError && (
+        <div role="alert" data-testid="editor-pivot-error" className="flex items-start gap-1.5 border-b border-border bg-destructive/5 px-3 py-1.5 text-xs text-destructive">
+          <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+          <span className="whitespace-pre-wrap">{pivotError}</span>
         </div>
       )}
       <div className="flex-1 min-h-0">
