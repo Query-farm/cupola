@@ -248,17 +248,32 @@ function isToolResult(value: unknown): value is PrunableToolResult {
  * Drop chart images (render_chart tool_results) from every message except the
  * last one. An image is only sent back so the model can SEE the chart it just
  * drew and revise it — that evaluation happens in the single request right
- * after the render, which is always the final message. Once anything follows
- * it (the model's revision, or a new user turn) the PNG has served its purpose
- * and is pure bloat: each costs ~1.5k input tokens and is re-sent on every
- * later request, which is what pushes a chart-heavy conversation past the
- * model's input limit.
+ * after the render, which is always the final message. After that the PNG has
+ * served its purpose.
+ *
+ * **This rewrites history, so it is a last resort — call it only when
+ * shouldPruneCarriedImages says so.** Converting an earlier tool_result from a
+ * part array to a string changes bytes inside the cached prefix: the request
+ * that follows reads the cache only up to that tool_result and re-writes
+ * everything after it at the write premium, while the image itself was
+ * written to cache on the previous request and never read back. It used to
+ * run unconditionally on every round, so every chart paid that. A chart is
+ * cheap to KEEP — the agent's feedback PNGs are 800×500, roughly 530 tokens
+ * (the older "~1.5k" figure here was a guess), which at the cache-read rate is
+ * about 53 token-equivalents per request — so shedding it only pays when the
+ * alternative is overflowing the context window.
+ *
+ * It also keeps history append-only, which matters more now that thinking is
+ * on for Opus 5 / Sonnet 5: newer models reject edited history that carries
+ * signed thinking blocks.
  *
  * Mutates `messages` in place. runAgentTurn passes the caller's own array
  * (e.g. AskAIChat's persistent agentMessages ref), so images are shed from
  * stored history too and don't re-accumulate across turns. The tool_result's
  * text part is preserved so the model still knows the chart rendered
- * (row count, columns, warnings).
+ * (row count, columns, warnings). Idempotent: a pruned tool_result's content
+ * is a string, which the loop skips — so once the valve fires, every carried
+ * image goes in ONE prefix break rather than one per chart.
  */
 export function pruneCarriedToolImages(messages: PrunableMessage[]): void {
   const PLACEHOLDER = "[chart image removed from history to save context]";
@@ -275,4 +290,56 @@ export function pruneCarriedToolImages(messages: PrunableMessage[]): void {
       block.content = text ? `${text}\n${PLACEHOLDER}` : PLACEHOLDER;
     }
   }
+}
+
+/** Rough per-image cost for the estimate. The agent's feedback PNGs are
+ *  800×500 (~530 tokens), but facet/repeat/concat specs skip that sizing and
+ *  can render larger; 1,600 was the standard-resolution per-image cap and
+ *  keeps the estimate on the high side, which is the safe direction for a
+ *  threshold that decides when to prune. */
+const IMAGE_TOKEN_ESTIMATE = 1_600;
+
+/** English-ish text and JSON average about four characters per token. */
+const CHARS_PER_TOKEN = 4;
+
+/** Fraction of the context window the carried conversation may reach before
+ *  images are shed. Leaves the other half for the system prompt (whose catalog
+ *  inventory alone can be ~15k tokens), tool definitions, and the response. */
+const PRUNE_AT_FRACTION = 0.5;
+
+function estimateValueTokens(value: unknown): number {
+  if (typeof value === "string") return Math.ceil(value.length / CHARS_PER_TOKEN);
+  if (Array.isArray(value)) return value.reduce((n, part) => n + estimateValueTokens(part), 0);
+  if (typeof value !== "object" || value === null) return 0;
+  const block = value as Record<string, unknown>;
+  // Priced by the model as an image, not by the length of its base64 payload —
+  // counting the payload as text would overstate one chart by ~50x.
+  if (block.type === "image") return IMAGE_TOKEN_ESTIMATE;
+  if (block.type === "tool_result") return estimateValueTokens(block.content);
+  if (block.type === "tool_use") return estimateValueTokens(JSON.stringify(block.input ?? {}));
+  if (block.type === "thinking") return estimateValueTokens(block.thinking);
+  if (block.type === "redacted_thinking") return estimateValueTokens(block.data);
+  return estimateValueTokens(block.text);
+}
+
+/**
+ * Rough token count of a conversation's messages. Deliberately approximate —
+ * the only consumer is a threshold that is nowhere near its boundary in a
+ * normal conversation, so an exact count (count_tokens is a network round
+ * trip) would buy nothing.
+ */
+export function estimateConversationTokens(messages: PrunableMessage[]): number {
+  return messages.reduce((n, message) => n + estimateValueTokens(message.content), 0);
+}
+
+/**
+ * Whether carried chart images should be shed before the next request.
+ *
+ * True only when the conversation is genuinely pressing on the context window.
+ * In the common case that is never: with a 1M-token window a conversation would
+ * need well over a thousand charts before images mattered, so history stays
+ * append-only and every earlier turn remains a cache read.
+ */
+export function shouldPruneCarriedImages(messages: PrunableMessage[], contextWindowTokens: number): boolean {
+  return estimateConversationTokens(messages) > contextWindowTokens * PRUNE_AT_FRACTION;
 }

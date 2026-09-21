@@ -158,10 +158,10 @@ export interface AgentCallbacks {
 // ./format helpers, so it stays unit-testable without the VGI/service import graph).
 // Re-exported here so existing `from "./ai-agent"` import sites keep working.
 export { formatArrowTableAsJson, executeReadQueryResults } from "./query-results";
-import { pruneCarriedToolImages } from "./query-results";
+import { pruneCarriedToolImages, shouldPruneCarriedImages } from "./query-results";
 import { recordToolCall, repeatedCallMessage } from "./ai-loop-guard";
 import { parseStreamedToolInput } from "./tool-input";
-import { clampMaxTokens, DEFAULT_AI_MAX_TOKENS } from "./ai/model-limits";
+import { clampMaxTokens, DEFAULT_AI_MAX_TOKENS, modelContextWindow } from "./ai/model-limits";
 import { DEFAULT_AI_EFFORT, thinkingRequestFields, type AIEffort } from "./ai/model-features";
 import type { AgentUsage } from "./ai-usage";
 
@@ -1156,9 +1156,14 @@ async function runAgentTurnInner(
     // folds the next user question into it to preserve role alternation.
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-    // Shed chart PNGs from earlier in the conversation — only the most recent
-    // render needs to ride along for the model to evaluate (see helper doc).
-    pruneCarriedToolImages(messages);
+    // Shed carried chart PNGs only under real context pressure. Pruning edits
+    // an earlier turn, so it breaks the cached prefix at that point; keeping a
+    // ~530-token image is far cheaper than that, and the history stays
+    // append-only (see pruneCarriedToolImages). The estimate excludes system
+    // and tools, which the threshold leaves room for.
+    if (shouldPruneCarriedImages(messages, modelContextWindow(model))) {
+      pruneCarriedToolImages(messages);
+    }
 
     // Single retry policy: fetchWithRetry handles 429/529 (retry-after), network
     // errors (exponential backoff with jitter), and abort-signal short-circuiting.

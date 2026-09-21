@@ -21,6 +21,16 @@ function toolTurn() {
   ]);
 }
 
+function toolUseTurn(id: string, name: string) {
+  return sseStream([
+    { type: "message_start", message: { usage: { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 100 } } },
+    { type: "content_block_start", content_block: { type: "tool_use", id, name } },
+    { type: "content_block_delta", delta: { type: "input_json_delta", partial_json: "{}" } },
+    { type: "content_block_stop" },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 5 } },
+  ]);
+}
+
 function finalTurn() {
   return sseStream([
     { type: "message_start", message: { usage: { input_tokens: 20, cache_read_input_tokens: 1_200, cache_creation_input_tokens: 50 } } },
@@ -162,6 +172,67 @@ describe("agent prompt caching and usage", () => {
     const after = strip(requests[1].messages);
     expect(after.slice(0, before.length)).toEqual(before);
     expect(after.length).toBeGreaterThan(before.length);
+  });
+
+  // The chart case the generic prefix test can't reach: a render_chart result
+  // carries an image, and the agent used to shed it from history two rounds
+  // later — converting that tool_result to a string rewrote bytes inside the
+  // cached prefix on every chart. It now happens only under context pressure.
+  test("a chart's image stays in history, so the next round's prefix is unedited", async () => {
+    const requests: any[] = [];
+    const responses = [toolUseTurn("toolu_chart", "render_chart"), toolUseTurn("toolu_next", "lookup"), finalTurn()];
+    globalThis.fetch = (async (_url, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return responses.shift()!;
+    }) as typeof fetch;
+    const strip = (value: unknown) =>
+      JSON.parse(JSON.stringify(value, (key, inner) => (key === "cache_control" ? undefined : inner)));
+
+    await runAgentTurn(
+      { apiKey: "key" }, "claude-opus-5", [{ role: "user", content: "Chart it" }], "System",
+      async (name) => name === "render_chart"
+        ? [{ type: "text", text: '{"ok":true}' }, { type: "image", source: { type: "base64", media_type: "image/png", data: "PNG" } }]
+        : "ok",
+      callbacks(() => {}), undefined, 20,
+      [{ name: "render_chart", description: "Chart", input_schema: { type: "object" } },
+       { name: "lookup", description: "Look up data", input_schema: { type: "object" } }],
+      8_192, false,
+    );
+
+    expect(requests).toHaveLength(3);
+    // requests[2] is the round the old code pruned before sending.
+    const before = strip(requests[1].messages);
+    const after = strip(requests[2].messages);
+    expect(after.slice(0, before.length)).toEqual(before);
+    const chartResult = after.find((m: any) => m.content?.[0]?.tool_use_id === "toolu_chart").content[0];
+    expect(chartResult.content.some((part: any) => part.type === "image")).toBe(true);
+  });
+
+  test("the valve still sheds carried images when the conversation nears the window", async () => {
+    const requests: any[] = [];
+    const responses = [toolUseTurn("toolu_chart", "render_chart"), toolUseTurn("toolu_next", "lookup"), finalTurn()];
+    globalThis.fetch = (async (_url, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return responses.shift()!;
+    }) as typeof fetch;
+
+    // An unrecognised model gets the conservative 200k window (threshold
+    // 100k); ~110k tokens of earlier context puts it over.
+    await runAgentTurn(
+      { apiKey: "key" }, "claude-unknown-model",
+      [{ role: "user", content: "x".repeat(4 * 110_000) }], "System",
+      async (name) => name === "render_chart"
+        ? [{ type: "text", text: '{"ok":true}' }, { type: "image", source: { type: "base64", media_type: "image/png", data: "PNG" } }]
+        : "ok",
+      callbacks(() => {}), undefined, 20,
+      [{ name: "render_chart", description: "Chart", input_schema: { type: "object" } },
+       { name: "lookup", description: "Look up data", input_schema: { type: "object" } }],
+      8_192, false,
+    );
+
+    const chartResult = requests[2].messages.find((m: any) => m.content?.[0]?.tool_use_id === "toolu_chart").content[0];
+    expect(typeof chartResult.content).toBe("string");
+    expect(chartResult.content).toContain("removed from history");
   });
 
   test("returns accumulated usage when the tool-round limit is reached", async () => {

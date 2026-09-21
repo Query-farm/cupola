@@ -29,6 +29,26 @@ const MAX_OUTPUT_TOKENS: Record<string, number> = {
   "claude-opus-4-8": 128_000,
 };
 
+/** Input context window per model, in tokens. Used only to decide when the
+ *  conversation is close enough to the limit that shedding carried chart
+ *  images is worth a one-time prefix break (see shouldPruneCarriedImages). */
+const CONTEXT_WINDOW_TOKENS: Record<string, number> = {
+  "claude-haiku-4-5-20251001": 200_000,
+  "claude-sonnet-5": 1_000_000,
+  "claude-opus-5": 1_000_000,
+  "claude-sonnet-4-6": 1_000_000,
+  "claude-opus-4-8": 1_000_000,
+};
+
+/** Window assumed for an unknown model: the smallest a current model has, so
+ *  an unrecognised ID prunes too early rather than too late. */
+export const CONSERVATIVE_CONTEXT_WINDOW_TOKENS = 200_000;
+
+/** The input context window this model accepts. */
+export function modelContextWindow(model: string): number {
+  return CONTEXT_WINDOW_TOKENS[model] ?? CONSERVATIVE_CONTEXT_WINDOW_TOKENS;
+}
+
 /** Ceiling assumed for a model we don't have an entry for (e.g. one a user
  *  typed in, or a new ID added to settings without updating this table).
  *  Deliberately conservative: every current Claude model accepts at least

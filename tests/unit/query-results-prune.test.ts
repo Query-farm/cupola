@@ -7,7 +7,7 @@
  * keeps its image, the text part survives, and non-chart history is untouched.
  */
 import { test, expect, describe } from "bun:test";
-import { pruneCarriedToolImages } from "../../src/lib/query-results";
+import { estimateConversationTokens, pruneCarriedToolImages, shouldPruneCarriedImages } from "../../src/lib/query-results";
 
 const img = (data = "BASE64") => ({
   type: "image" as const,
@@ -68,5 +68,40 @@ describe("pruneCarriedToolImages", () => {
     ];
     pruneCarriedToolImages(messages);
     expect(messages[0].content[0].content).toBe("[chart image removed from history to save context]");
+  });
+});
+
+describe("shouldPruneCarriedImages", () => {
+  test("prices an image as an image, not by the length of its base64", () => {
+    // A real feedback PNG is tens of KB of base64. Counted as text that would
+    // be ~25k tokens; the model bills it at a few hundred to ~1.6k.
+    const bigPayload = "A".repeat(100_000);
+    const tokens = estimateConversationTokens([imageToolResult("a", "ok")].map((m) => ({
+      ...m,
+      content: [{ ...m.content[0], content: [{ type: "text", text: "ok" }, img(bigPayload)] }],
+    })));
+    expect(tokens).toBeLessThan(2_000);
+  });
+
+  test("counts text, tool inputs and thinking at roughly four characters a token", () => {
+    const tokens = estimateConversationTokens([
+      { content: "x".repeat(400) },
+      { content: [{ type: "tool_use", id: "t", name: "run_sql", input: { sql: "y".repeat(400) } }] },
+      { content: [{ type: "thinking", thinking: "z".repeat(400), signature: "sig" }] },
+    ]);
+    expect(tokens).toBeGreaterThan(290);
+    expect(tokens).toBeLessThan(320);
+  });
+
+  test("an ordinary chart conversation is nowhere near the threshold on a 1M model", () => {
+    const messages: any[] = [{ role: "user", content: "chart it" }];
+    for (let i = 0; i < 40; i++) messages.push(imageToolResult(`c${i}`, '{"ok":true}'));
+    expect(shouldPruneCarriedImages(messages, 1_000_000)).toBe(false);
+  });
+
+  test("fires once the conversation passes half the window", () => {
+    const messages = [{ content: "x".repeat(4 * 60_000) }]; // ~60k tokens
+    expect(shouldPruneCarriedImages(messages, 200_000)).toBe(false); // threshold 100k
+    expect(shouldPruneCarriedImages(messages, 100_000)).toBe(true);  // threshold 50k
   });
 });
