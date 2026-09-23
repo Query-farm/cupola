@@ -2,7 +2,7 @@
   "name": "@query-farm/cupola",
   "private": true,
   "type": "module",
-  "version": "0.4.167",
+  "version": "0.4.168",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.12.0"
@@ -35,7 +35,7 @@
     "@codemirror/language": "^6.12.3",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.43.1",
-    "@haybarn/haybarn-wasm": "1.5.5-rc3",
+    "@haybarn/haybarn-wasm": "1.5.5-rc6",
     "@query-farm/apache-arrow": "21.1.1",
     "@query-farm/vgi-rpc": "0.25.4",
     "@radix-ui/react-accordion": "^1.2.12",
