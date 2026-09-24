@@ -126,13 +126,13 @@ test('live Evidence report reuses the shell worker across refresh, editing and t
   await panel.getByRole('button', { name: 'View report', exact: true }).click();
   await page.screenshot({ path: '/tmp/cupola-evidence-chrome.png' });
   const originalClass = await page.evaluate(() => document.documentElement.className);
+  const surface = panel.getByTestId('evidence-report-surface');
+  await page.evaluate(() => document.documentElement.classList.remove('dark'));
+  await expect(surface).toHaveAttribute('data-report-mode', 'light');
+  const lightBackground = await surface.evaluate(el => getComputedStyle(el).backgroundColor);
   await page.evaluate(() => document.documentElement.classList.add('dark'));
-  expect(await page.evaluate(() => {
-    const root = getComputedStyle(document.documentElement);
-    const preview = getComputedStyle(document.querySelector('[data-testid=evidence-preview]')!);
-    return preview.getPropertyValue('--card').trim() === root.getPropertyValue('--card').trim()
-      && preview.getPropertyValue('--foreground').trim() === root.getPropertyValue('--foreground').trim();
-  })).toBe(true);
+  await expect(surface).toHaveAttribute('data-report-mode', 'dark');
+  await expect.poll(() => surface.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(lightBackground);
   await page.screenshot({ path: '/tmp/cupola-evidence-dark.png' });
   await page.evaluate(value => { document.documentElement.className = value; }, originalClass);
   expect(errors).toEqual([]);
@@ -145,7 +145,7 @@ test('saved report library restores typed parameters, source and selected values
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('evidence/reports');
   const panel = page.getByTestId('evidence-panel');
-  await expect(panel.getByRole('heading', { name: 'Saved Evidence reports' })).toBeVisible({ timeout: 90_000 });
+  await expect(panel.getByRole('heading', { name: 'Saved reports', exact: true })).toBeVisible({ timeout: 90_000 });
   await expect(panel.getByText('No saved reports yet')).toBeVisible();
   await panel.getByRole('button', { name: 'New report', exact: true }).click();
   await panel.getByRole('textbox', { name: 'Report title', exact: true }).fill('Parameter round trip');
@@ -179,7 +179,7 @@ test('saved report library restores typed parameters, source and selected values
   await expect(panel.getByText('Saved in this browser.', { exact: true })).toHaveCount(0);
   await page.evaluate(() => { (window as any).__savedReportWorker = (window as any).__bridge.worker; });
   await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
-  await expect(page).toHaveURL(/evidence\/reports/);
+  await expect(page).toHaveURL(/reports\/saved/);
   await expect(panel.getByRole('row').filter({ hasText: 'Parameter round trip' })).toContainText('City, Amount, As of, Include');
   await panel.getByRole('button', { name: 'Open report', exact: true }).click();
   expect(await page.evaluate(() => (window as any).__savedReportWorker === (window as any).__bridge.worker)).toBe(true);
@@ -198,7 +198,7 @@ test('saved report library restores typed parameters, source and selected values
   await expect(panel.getByRole('alert')).toHaveCount(0);
   await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
   await panel.getByRole('button', { name: 'Copy Parameter round trip', exact: true }).click();
-  await expect(page).toHaveURL(/evidence\/reports/);
+  await expect(page).toHaveURL(/reports\/saved/);
   await expect(panel.getByRole('row').filter({ hasText: 'Parameter round trip' })).toHaveCount(2);
   page.once('dialog', dialog => dialog.accept());
   await panel.getByRole('button', { name: 'Delete Parameter round trip (copy)', exact: true }).click();
