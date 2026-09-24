@@ -600,6 +600,11 @@ export function validateReport(input: unknown): string[] {
     const { x, y, w, h } = b.layout;
     if (![x, y, w, h].every(Number.isFinite) || x < 0 || y < 0 || w < 1 || h < 1 || x + w > 12) errors.push(`${b.title ?? b.id}: invalid layout.`);
     if (b.type === "chart") errors.push(...validateChartSpec(b.spec).errors.map((e) => `${b.title ?? b.id}: ${e}`));
+    if (b.type === "chart" && b.filter !== undefined) {
+      if (!b.filter || typeof b.filter !== "object" || typeof b.filter.column !== "string" || !b.filter.column.trim()) errors.push(`${b.title ?? b.id}: chart filter requires a column.`);
+      const parameter = report.parameters.find(p => p.key === b.filter?.parameterKey);
+      if (!parameter || parameter.type === "date_range") errors.push(`${b.title ?? b.id}: chart filter requires a scalar or multi-select parameter.`);
+    }
     if (b.type === "map") {
       const hasGeometry = typeof b.geometryColumn === "string" && Boolean(b.geometryColumn.trim());
       const hasLatitude = typeof b.latitudeColumn === "string" && Boolean(b.latitudeColumn.trim());

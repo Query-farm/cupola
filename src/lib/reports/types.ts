@@ -329,7 +329,7 @@ export type ReportBlock =
   | ReportSlopegraphBlock
   | ReportRangeDotBlock
   | (ReportBlockBase & { type: "table"; datasetId: string; columns?: string[]; pageSize?: number })
-  | (ReportBlockBase & { type: "chart"; datasetId: string; spec: Record<string, any> })
+  | (ReportBlockBase & { type: "chart"; datasetId: string; spec: Record<string, any>; filter?: { parameterKey: string; column: string } })
   | (ReportBlockBase & { type: "perspective"; datasetId: string; config?: Record<string, any> })
   | ReportAiNarrativeBlock
   | ReportMapBlock;

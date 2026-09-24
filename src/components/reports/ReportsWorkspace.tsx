@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from "react";
 import { Popover as BaseUIPopover } from "@base-ui/react/popover";
 import { ResponsiveGridLayout, useContainerWidth, type Layout, type ResponsiveLayouts } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-import { ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Clock3, Database, Download, FileCode2, FileJson, FilePlus2, GripVertical, History, LayoutGrid, Link2, Loader2, MoreHorizontal, Pencil, Play, Plus, Printer, RefreshCw, Save, Send, Share2, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
+import { Eye, Undo2, Redo2, ArrowLeft, BarChart3, BookOpen, Bot, Check, ChevronDown, ChevronUp, Clock3, Database, Download, FileCode2, FileJson, FilePlus2, GripVertical, History, LayoutGrid, Link2, Loader2, MoreHorizontal, Pencil, Play, Plus, Printer, RefreshCw, Save, Send, Share2, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, X } from "lucide-react";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import type { CatalogData } from "@/lib/service";
 import { engine, getEngineLifecycleSnapshot, ui, waitForEngineReady } from "@/lib/shell-bridge";
@@ -21,6 +21,7 @@ import { ReportDatasetsView } from "@/components/reports/ReportDatasetsView";
 import { ReportBlockEditor } from "@/components/reports/ReportBlockEditor";
 import { compileChartSpec, embedChart, downloadPNG, downloadSVG, renderChartToPng, type VegaView } from "@/components/chat/chart-embed";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -56,6 +57,9 @@ import type { SemanticDiagnostic, SemanticPlan } from "@/lib/semantic-compiler";
 import { buildSemanticEnvironment } from "@/lib/semantic-model";
 import { createReportBlock, duplicateReportBlock, REPORT_BLOCK_TYPES } from "@/lib/reports/direct-editor";
 import type { AgentUsage } from "@/lib/ai-usage";
+
+import { draftHistory, readRecoveredDrafts, storeRecoveredDraft, datePreset, reportFreshness, REPORT_STARTERS, createStarter, chartFilterValue, type RecoveredDraft } from "@/lib/reports/workflow";
+import { buildSnapshotHtml, type SnapshotBlock } from "@/lib/reports/snapshot";
 
 interface Props {
   catalogData: CatalogData;
@@ -458,13 +462,16 @@ function applyPromotion(base: ReportDocumentV1, promotion: ReportPromotion): Rep
   return report;
 }
 
-function ReportChart({ block, rows, onViewChange }: {
+function ReportChart({ block, rows, onViewChange, onSelect }: {
   block: { id: string; spec: Record<string, any> };
   rows: Record<string, any>[];
   onViewChange: (blockId: string, view: VegaView | null) => void;
+  onSelect: (blockId: string, datum: Record<string, unknown>) => void;
 }) {
   const elRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<VegaView | null>(null);
+  const selectRef = useRef(onSelect);
+  selectRef.current = onSelect;
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let disposed = false;
@@ -489,6 +496,7 @@ function ReportChart({ block, rows, onViewChange }: {
         if (disposed || version !== renderVersion) view.finalize();
         else {
           viewRef.current = view;
+          view.addEventListener("click", (_event, item) => { if (item?.datum) selectRef.current(block.id, item.datum); });
           onViewChange(block.id, view);
         }
       } catch (e) {
@@ -584,7 +592,7 @@ function ParameterInput({ parameter, value, options, errors, onChange }: { param
     const range = value && typeof value === "object" && !Array.isArray(value) ? value as { start: string | null; end: string | null } : { start: null, end: null };
     const min = typeof parameter.validation?.min === "string" ? parameter.validation.min : undefined;
     const max = typeof parameter.validation?.max === "string" ? parameter.validation.max : undefined;
-    return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><div className="flex gap-1"><Input className="h-8" type="date" value={range.start ?? ""} min={min} max={max} required={parameter.required || parameter.validation?.requireBoth} {...accessibility} onChange={(e) => onChange({ ...range, start: e.target.value || null })} /><Input className="h-8" type="date" value={range.end ?? ""} min={min} max={max} required={parameter.required || parameter.validation?.requireBoth} {...accessibility} onChange={(e) => onChange({ ...range, end: e.target.value || null })} /></div>{feedback}</div>;
+    return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><div className="flex gap-1"><Input aria-label={`${parameter.label} start`} className="h-8" type="date" value={range.start ?? ""} min={min} max={max} required={parameter.required || parameter.validation?.requireBoth} {...accessibility} onChange={(e) => onChange({ ...range, start: e.target.value || null })} /><Input aria-label={`${parameter.label} end`} className="h-8" type="date" value={range.end ?? ""} min={min} max={max} required={parameter.required || parameter.validation?.requireBoth} {...accessibility} onChange={(e) => onChange({ ...range, end: e.target.value || null })} /></div><select aria-label={`${parameter.label} date preset`} className="h-8 rounded border bg-background px-2 text-xs" value="" onChange={(e) => { if (e.target.value) onChange(datePreset(e.target.value)); }}><option value="">Choose date range…</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="month">This month</option><option value="previous_month">Previous month</option></select>{feedback}</div>;
   }
   const validation = parameter.validation;
   return <div className="space-y-1"><Label className="text-xs">{parameter.label}</Label><Input className="h-8 min-w-36" type={parameter.type === "number" ? "number" : parameter.type === "date" ? "date" : "text"} value={value == null ? "" : String(value)} required={parameter.required} min={validation?.min} max={validation?.max} step={parameter.type === "number" ? (validation?.step ?? (validation?.integer ? 1 : "any")) : undefined} minLength={validation?.minLength} maxLength={validation?.maxLength} pattern={validation?.pattern} {...accessibility} onChange={(e) => onChange(parameter.type === "number" ? (e.target.value === "" ? null : Number(e.target.value)) : e.target.value)} />{feedback}</div>;
@@ -668,7 +676,7 @@ function ReportMoreMenu({ reader, revisions, onRestoreRevision, onShareDraft, on
           <span className="text-[10px] text-muted-foreground">{new Date(revision.updatedAt).toLocaleDateString()}</span>
         </BaseUIPopover.Close>)}
       </div>}
-      {!reader && onShareDraft && <BaseUIPopover.Close className={reportMenuItemClass} onClick={onShareDraft} data-testid="report-copy-draft-link"><Link2 className="h-4 w-4" /><span>Copy draft review link</span></BaseUIPopover.Close>}
+      {!reader && onShareDraft && <BaseUIPopover.Close className={reportMenuItemClass} onClick={onShareDraft} data-testid="report-copy-draft-link"><Link2 className="h-4 w-4" /><span>Share draft…</span></BaseUIPopover.Close>}
       <BaseUIPopover.Close className={reportMenuItemClass} onClick={onPrint}><Printer className="h-4 w-4" /><span>Print / Save as PDF</span></BaseUIPopover.Close>
       <BaseUIPopover.Close className={reportMenuItemClass} onClick={onDownload}><Download className="h-4 w-4" /><span>Download report definition</span><span className="ml-auto text-[10px] text-muted-foreground">.json</span></BaseUIPopover.Close>
       {!reader && onEditSource && <div className="mt-1 border-t pt-1">
@@ -696,7 +704,18 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const [publishedReports, setPublishedReports] = useState<Record<string, ReportDocumentV1>>({});
   const [publishedTimes, setPublishedTimes] = useState<Record<string, number>>({});
   const [selected, setSelected] = useState<ReportDocumentV1 | null>(null);
-  const [draft, setDraft] = useState<ReportDocumentV1 | null>(null);
+  const [history, dispatchDraft] = useReducer(draftHistory, { present: null, past: [], future: [] });
+  const draft = history.present;
+  const setDraft = useCallback((value: ReportDocumentV1 | null | ((current: ReportDocumentV1 | null) => ReportDocumentV1 | null)) => dispatchDraft({ type: "set", value }), []);
+  const [recoveredDrafts, setRecoveredDrafts] = useState<RecoveredDraft[]>([]);
+  const [pendingDatasetDraft, setPendingDatasetDraft] = useState<ReportDataset | null>(null);
+  const [recoveredDatasetDraft, setRecoveredDatasetDraft] = useState<ReportDataset | null>(null);
+  const recoveryStarted = useRef(false);
+  const reportOpenGeneration = useRef(0);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [previewMode, setPreviewMode] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [snapshotBusy, setSnapshotBusy] = useState(false);
   const [published, setPublished] = useState<ReportDocumentV1 | null>(null);
   const [publishedAt, setPublishedAt] = useState<number | null>(null);
   const [readerMode, setReaderMode] = useState(false);
@@ -761,7 +780,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   // group for the length of the transition.
   const { width, containerRef, mounted, measureWidth } = useContainerWidth({ initialWidth: 1000, measureBeforeMount: true });
   const engineLifecycle = useEngineLifecycle();
-  const activeReport = readerMode && published ? published : draft;
+  const activeReport = readerMode && !previewMode && published ? published : draft;
   // Group membership only matters mid-drag (for heading rows), and a drag
   // reads it from the committed report, so an effect-maintained lookup keeps
   // the compactor itself stable across renders.
@@ -776,6 +795,18 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   }, [activeReport]);
   const reportGridGrouped = (activeReport?.groups?.length ?? 0) > 0;
   const reportGridCompactor = useMemo(() => createReportGridCompactor(reportGridGrouped, (blockId) => reportGridGroupOf.current(blockId)), [reportGridGrouped]);
+
+  useEffect(() => { setRecoveredDrafts(readRecoveredDrafts(localStorage, serviceUrl)); }, [serviceUrl]);
+  useEffect(() => {
+    const pendingBlock = blockEditor && (blockEditor.isNew || JSON.stringify(blockEditor.block) !== blockEditor.initialJson) ? blockEditor : undefined;
+    if (!draft || readerMode || (!recoveryStarted.current && !history.past.length && !pendingBlock && !pendingDatasetDraft)) return;
+    recoveryStarted.current = true;
+    try {
+      storeRecoveredDraft(localStorage, serviceUrl, { ...draft, recoveryEditors: { block: pendingBlock, dataset: pendingDatasetDraft ?? undefined } }, !pendingBlock && !pendingDatasetDraft && JSON.stringify(draft) === JSON.stringify(selected));
+      setRecoveredDrafts(readRecoveredDrafts(localStorage, serviceUrl));
+      setRecoveryError(null);
+    } catch { setRecoveryError("Draft recovery is unavailable. Save or download your report to keep these changes."); }
+  }, [draft, selected, serviceUrl, readerMode, history.past.length, blockEditor, pendingDatasetDraft]);
 
   const clearScheduledRateLimitRetry = useCallback(() => {
     if (rateLimitRetryTimerRef.current !== null) window.clearTimeout(rateLimitRetryTimerRef.current);
@@ -868,6 +899,9 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     narrativeAbortRef.current = null;
     clearScheduledRateLimitRetry();
     const generation = ++runGeneration.current;
+    const opened = ++reportOpenGeneration.current;
+    recoveryStarted.current = false;
+    setPendingDatasetDraft(null); setRecoveredDatasetDraft(null);
     agentMessagesRef.current = [];
     resultCache.current = new QueryResultCache();
     reportChartViews.current.clear();
@@ -875,8 +909,9 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const publishedCopy = publishedSnapshot ? normalizeReportLayout(cloneReport(publishedSnapshot)) : null;
     const viewed = mode === "reader" && publishedCopy ? publishedCopy : copy;
     const defaults = { ...defaultValues(viewed), ...initialValues };
-    setSelected(persisted ? copy : null); setDraft(copy); setPublished(publishedCopy); setPublishedAt(publicationTime ?? null); setReaderMode(mode === "reader" && Boolean(publishedCopy)); setValues(defaults); setAppliedValues(defaults); setParameterIssues([]); setParametersExpanded(false); setWorkspaceView("report"); setResults({}); setNarrativeStates({}); setRunProgress(null); setRunFailureNotice(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false); setSelectedBlockId(null); setBlockEditor(null); setBlockEditorErrors([]); setAgentTargetBlockId(null); setDatasetEditorRequest(null);
+    setPreviewMode(false); setShareOpen(false); setSelected(persisted ? copy : null); dispatchDraft({ type: "reset", value: copy }); setPublished(publishedCopy); setPublishedAt(publicationTime ?? null); setReaderMode(mode === "reader" && Boolean(publishedCopy)); setValues(defaults); setAppliedValues(defaults); setParameterIssues([]); setParametersExpanded(false); setWorkspaceView("report"); setResults({}); setNarrativeStates({}); setRunProgress(null); setRunFailureNotice(null); setSourceText(exportReportJson(copy)); setSourceError(null); setAgentSummary(null); setAgentConversation([]); setAgentPrompt(""); setAgentBusy(false); setSelectedBlockId(null); setBlockEditor(null); setBlockEditorErrors([]); setAgentTargetBlockId(null); setDatasetEditorRequest(null);
     void getStoredReport(copy.id).then((stored) => {
+      if (reportOpenGeneration.current !== opened) return;
       setRevisionOptions(stored?.revisions ?? []);
       if (!publishedSnapshot && stored?.publishedDocument) {
         setPublished(normalizeReportLayout(cloneReport(stored.publishedDocument)));
@@ -1255,11 +1290,11 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     for (const summary of summaries) if (!summary.ok) narrativeRows.delete(summary.datasetId);
     const generated = await generateNarratives(report, runValues, narrativeRows);
     if (generated !== report) {
-      if (readerMode && published?.id === report.id) setPublished((current) => current?.id === report.id ? withNarrativeSnapshots(current, generated) : current);
+      if (readerMode && !previewMode && published?.id === report.id) setPublished((current) => current?.id === report.id ? withNarrativeSnapshots(current, generated) : current);
       else setDraft((current) => current?.id === report.id ? withNarrativeSnapshots(current, generated) : current);
     }
     return summaries;
-  }, [generateNarratives, published?.id, readerMode, runDatasets]);
+  }, [generateNarratives, published?.id, readerMode, previewMode, runDatasets]);
 
   const regenerateNarrative = useCallback(async (block: ReportAiNarrativeBlock) => {
     if (!draft) return;
@@ -1431,8 +1466,9 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
   const acceptDraft = useCallback(async () => {
     if (!draft) return;
     const saved = await saveReport(draft);
+    try { storeRecoveredDraft(localStorage, serviceUrl, saved, true); setRecoveredDrafts(readRecoveredDrafts(localStorage, serviceUrl)); } catch {}
     setSelected(saved); setDraft(cloneReport(saved)); setSourceText(exportReportJson(saved)); setAgentSummary(null); await reload();
-  }, [draft, reload]);
+  }, [draft, reload, serviceUrl]);
 
   const publishDraft = useCallback(async () => {
     if (!draft) return;
@@ -1450,11 +1486,13 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     }
     const stored = await publishReport(publishable);
     const saved = cloneReport(stored.document);
+    try { storeRecoveredDraft(localStorage, serviceUrl, saved, true); setRecoveredDrafts(readRecoveredDrafts(localStorage, serviceUrl)); } catch {}
     const snapshot = cloneReport(stored.publishedDocument!);
     setSelected(saved);
     setDraft(saved);
     setPublished(snapshot);
     setPublishedAt(stored.publishedAt ?? null);
+    setPreviewMode(false);
     setReaderMode(true);
     setAgentOpen(false);
     setInspectorOpen(false);
@@ -1462,9 +1500,11 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     setAgentSummary(null);
     setShareStatus(`Published revision ${snapshot.revision}.`);
     await reload();
-  }, [attachedCatalogs, catalogData, draft, reload, validateAndRun]);
+  }, [attachedCatalogs, catalogData, draft, reload, serviceUrl, validateAndRun]);
 
   const switchReportMode = useCallback((mode: "edit" | "reader") => {
+    if (previewMode && mode === "edit") { setPreviewMode(false); setReaderMode(false); return; }
+    setPreviewMode(false);
     const next = mode === "reader" ? published : draft;
     if (!next) return;
     clearScheduledRateLimitRetry();
@@ -1482,17 +1522,96 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     setRunProgress(null);
     setRunFailureNotice(null);
     setTimeout(() => void validateAndRunRef.current?.(next, defaults, false), 0);
-  }, [clearScheduledRateLimitRetry, draft, published]);
+  }, [clearScheduledRateLimitRetry, draft, published, previewMode]);
+
+  const restoreHistory = useCallback((direction: "undo" | "redo") => {
+    const next = direction === "undo" ? history.past.at(-1) : history.future[0];
+    if (!next || !draft) return;
+    dispatchDraft({ type: direction });
+    setBlockEditor(null); setSelectedBlockId(null); setInspectorOpen(false); setSourceText(exportReportJson(next));
+    if (JSON.stringify(next.datasets) !== JSON.stringify(draft.datasets) || JSON.stringify(next.parameters) !== JSON.stringify(draft.parameters)) {
+      runGeneration.current += 1;
+      setResults({}); setRunProgress(null); setRunFailureNotice(null);
+      const nextValues = { ...defaultValues(next), ...Object.fromEntries(next.parameters.filter(p => p.key in appliedValues).map(p => [p.key, appliedValues[p.key]])) };
+      setValues(nextValues); setAppliedValues(nextValues);
+      void validateAndRun(next, nextValues, false);
+    }
+  }, [history, draft, appliedValues, validateAndRun]);
+
+  const handleChartSelection = useCallback((blockId: string, datum: Record<string, unknown>) => {
+    const block = activeReport?.blocks.find(b => b.id === blockId);
+    if (!activeReport || block?.type !== "chart" || !block.filter || agentBusy || Object.values(results).some(isDatasetPending)) return;
+    const parameter = activeReport.parameters.find(p => p.key === block.filter!.parameterKey);
+    if (!parameter) return;
+    const value = chartFilterValue(datum[block.filter.column], parameter.type);
+    if (value === undefined) return;
+    const next = { ...appliedValues, [parameter.key]: value };
+    setValues(next);
+    void validateAndRun(activeReport, next, true);
+  }, [activeReport, appliedValues, agentBusy, results, validateAndRun]);
+
+  const snapshotHasUnappliedEdits = datasetEditorDirty || Boolean(blockEditor && (blockEditor.isNew || JSON.stringify(blockEditor.block) !== blockEditor.initialJson));
+  const downloadSnapshot = async () => {
+    // Rendered blocks preview unapplied edits, whereas activeReport contains
+    // the applied definition. Never combine those two versions in an export.
+    if (!activeReport || snapshotHasUnappliedEdits) return;
+    setSnapshotBusy(true);
+    try {
+      const blocks: SnapshotBlock[] = [];
+      for (const block of activeReport.blocks) {
+        const result = block.type === "markdown" ? undefined : results[block.datasetId];
+        const captured: SnapshotBlock = { id: block.id, title: interpolateReportText(block.title || reportBlockLabel(block.type), activeReport, appliedValues), fetchedAt: result?.fetchedAt, status: result?.status };
+        const view = reportChartViews.current.get(block.id);
+        if (view) captured.image = await view.toImageURL("png", 2);
+        if (block.type === "markdown") captured.text = interpolateReportText(block.markdown, activeReport, appliedValues);
+        else if (block.type === "ai_narrative" && block.snapshot) captured.text = block.snapshot.markdown;
+        else if (!captured.image && result?.table) {
+          const columns = block.type === "table" && block.columns ? block.columns : result.table.schema.fields.map(field => field.name);
+          captured.columns = columns;
+          captured.rows = reportDisplayRows(result.table, columns, 10000).map(row => columns.map(column => row[column]));
+          captured.totalRows = result.table.numRows;
+          if (block.type === "map" || block.type === "perspective") captured.text = "Underlying data captured below; interactive views are not available in this offline snapshot.";
+        } else if (!captured.image) captured.text = result?.error || "Data was not loaded when this snapshot was captured.";
+        if (["markdown", "ai_narrative", "kpi", "sparkline"].includes(block.type)) {
+          const body = document.querySelector<HTMLElement>(`[data-report-block-body="${CSS.escape(block.id)}"]`);
+          if (body) { const copy = body.cloneNode(true) as HTMLElement; copy.querySelectorAll("button, svg").forEach(node => node.remove()); captured.text = copy.textContent || captured.text; }
+          if (block.type === "kpi") { delete captured.rows; delete captured.columns; }
+        }
+        if (block.caption || block.source) captured.text = [
+          captured.text,
+          block.caption ? interpolateReportText(block.caption, activeReport, appliedValues) : undefined,
+          block.source ? `Source: ${interpolateReportText(block.source, activeReport, appliedValues)}` : undefined,
+        ].filter(Boolean).join("\n");
+        blocks.push(captured);
+      }
+      triggerDownload(new Blob([buildSnapshotHtml(activeReport, appliedValues, blocks)], { type: "text/html" }), `${safeFileStem(activeReport.title)}-${new Date().toISOString().slice(0, 10)}.html`);
+      setShareStatus("Offline snapshot downloaded.");
+    } catch (error) { setShareStatus(`Could not create snapshot: ${error instanceof Error ? error.message : String(error)}`); }
+    finally { setSnapshotBusy(false); }
+  };
 
   const updateLayout = useCallback((layout: Layout) => {
     setDraft((current) => current ? normalizeReportLayout({ ...current, blocks: current.blocks.map((b) => { const item = layout.find((l) => l.i === b.id); return item ? { ...b, layout: { x: item.x, y: item.y, w: item.w, h: item.h } } : b; }) }) : current);
   }, []);
 
   const blockEditorDirty = Boolean(blockEditor && (blockEditor.isNew || JSON.stringify(blockEditor.block) !== blockEditor.initialJson));
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if (readerMode || !draft || agentBusy || blockEditorDirty || datasetEditorDirty || !(event.metaKey || event.ctrlKey) || event.altKey) return;
+      if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]')) return;
+      if (event.key.toLowerCase() === "z" || event.key.toLowerCase() === "y") {
+        event.preventDefault(); restoreHistory(event.shiftKey || event.key.toLowerCase() === "y" ? "redo" : "undo");
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [readerMode, draft, agentBusy, blockEditorDirty, datasetEditorDirty, restoreHistory]);
+
   const discardDatasetEditor = useCallback(() => {
     if (!datasetEditorDirty) return true;
     if (!window.confirm("Discard unapplied dataset changes?")) return false;
     setDatasetEditorDirty(false);
+    setPendingDatasetDraft(null);
     setDatasetEditorResetKey((key) => key + 1);
     return true;
   }, [datasetEditorDirty]);
@@ -1660,6 +1779,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     datasetTestCacheRef.current = null;
     setDatasetEditorRequest(null);
     setDatasetEditorDirty(false);
+    setPendingDatasetDraft(null);
     if (blockEditor && "datasetId" in blockEditor.block && blockEditor.block.datasetId === dataset.id) {
       setWorkspaceView("report");
     }
@@ -1701,6 +1821,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     datasetTestCacheRef.current = null;
     setDatasetEditorRequest(null);
     setDatasetEditorDirty(false);
+    setPendingDatasetDraft(null);
     setShareStatus(`Deleted dataset “${dataset.name}”.`);
   }, [draft, results]);
 
@@ -2222,6 +2343,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
 
   if (!draft) return <div className="h-full overflow-y-auto bg-background p-4 sm:p-6" data-testid="reports-workspace">
     <div className="max-w-6xl mx-auto">
+      {recoveredDrafts.length > 0 && <section className="mb-5 rounded-lg border border-amber-300 bg-amber-50/30 p-4" aria-label="Recoverable drafts"><h2 className="font-medium">Continue an unsaved draft</h2><p className="mb-2 text-xs text-muted-foreground">Recovered on this browser. Published reports are unchanged.</p>{recoveredDrafts.map(recovered => <div key={recovered.id} className="flex items-center gap-2"><Button variant="ghost" onClick={async () => { const saved = await getStoredReport(recovered.id); const { recoveryEditors, ...document } = recovered; openReport(document, undefined, false, false, "edit", saved?.publishedDocument, saved?.publishedAt); recoveryStarted.current = true; setSelected(saved?.document ?? null); if (recoveryEditors?.block) setBlockEditor(recoveryEditors.block); if (recoveryEditors?.dataset) { setRecoveredDatasetDraft(recoveryEditors.dataset); setWorkspaceView("datasets"); } setShareStatus("Recovered your unsaved draft."); }}>{recovered.title.trim() || "Untitled report"}</Button><Button variant="ghost" size="sm" aria-label={`Discard recovered ${recovered.title.trim() || "Untitled report"}`} onClick={() => { storeRecoveredDraft(localStorage, serviceUrl, recovered, true); setRecoveredDrafts(readRecoveredDrafts(localStorage, serviceUrl)); }}>Discard</Button></div>)}</section>}
       <div className="flex items-center justify-between gap-4 mb-5"><div><h1 className="text-xl font-semibold">Reports</h1><p className="text-sm text-muted-foreground">Reusable, agent-authored analysis against your attached data.</p></div><div className="flex flex-wrap justify-end gap-2"><a href={`${import.meta.env.BASE_URL}report-guide/`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm hover:bg-muted"><BookOpen className="h-4 w-4" /> Visualization guide</a><label className="inline-flex"><input type="file" accept="application/json,.json" className="sr-only" onChange={async (e) => { const file = e.target.files?.[0]; if (!file) return; try { openReport(importReportJson(await file.text()), undefined, false, false); setShareStatus("Imported report opened for review."); } catch (err) { setShareStatus(err instanceof Error ? err.message : String(err)); } }} /><span className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm cursor-pointer hover:bg-muted"><FileJson className="h-4 w-4" /> Import</span></label><Button onClick={createNew}><Plus className="h-4 w-4" /> New report</Button></div></div>
       {shareStatus && <div className="mb-4 rounded-md border bg-muted/40 p-3 text-sm">{shareStatus}</div>}
       {libraryReports.length === 0 ? <div className="border border-dashed rounded-xl p-12 text-center"><BarChart3 className="h-10 w-10 mx-auto text-muted-foreground/40 mb-3" /><p className="font-medium">No saved reports yet</p><p className="text-sm text-muted-foreground mb-4">Ask the report agent to build one, or add a query from the editor.</p><Button onClick={createNew}><Sparkles className="h-4 w-4" /> Create with AI</Button></div> : <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">{libraryReports.map((report) => {
@@ -2266,12 +2388,14 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
   const reportRunning = engineWaiting || Object.values(results).some(isDatasetPending) || Object.values(narrativeStates).some((state) => state.status === "running");
   const governedDatasetCount = report.datasets.filter(isSemanticReportDataset).length;
   const changedSemanticDatasets = report.datasets.filter((dataset) => isSemanticReportDataset(dataset) && results[dataset.id]?.semantic?.modelChanged);
-  const reportFetchedAt = reportRunning ? 0 : Math.max(0, ...report.datasets.filter((dataset) => dataset.role !== "parameter_options" && dataset.role !== "parameter_validation").map((dataset) => results[dataset.id]?.fetchedAt ?? 0));
+  const freshness = reportFreshness(report, results);
+  const reportFetchedAt = reportRunning ? 0 : freshness.oldest;
   const progressLabel = runProgress
     ? `${runProgress.mode === "refresh" ? "Refreshing" : "Loading"} ${runProgress.completed} of ${runProgress.total} datasets`
     : null;
 
   return <div className="h-full flex flex-col bg-background" data-testid="reports-workspace" data-report-mode={readerMode ? "reader" : "edit"} aria-busy={reportRunning}>
+    <Dialog open={shareOpen} onOpenChange={setShareOpen}><DialogContent className="sm:max-w-lg"><DialogTitle>Share {report.title}</DialogTitle><DialogDescription>Choose whether recipients rerun the report or read captured results.</DialogDescription><div className="space-y-4"><section className="rounded-lg border p-3"><h3 className="font-medium">Live data link</h3><p className="mb-3 text-xs text-muted-foreground">Includes this report definition and applied filters. Recipients need access to the data source. Reader links refresh when opened; draft links open for review. Later edits to your report do not update this link.</p><Button size="sm" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(report, { serviceUrl, values: appliedValues, mode: readerMode ? "reader" : "edit" })); setShareStatus(readerMode ? "Reader link copied." : "Draft review link copied."); setShareOpen(false); } catch (error) { setShareStatus(String(error)); } }}>Copy {readerMode ? "reader" : "draft review"} link</Button></section><section className="rounded-lg border p-3"><h3 className="font-medium">Frozen snapshot</h3><p className="mb-3 text-xs text-muted-foreground">A dated HTML file with captured results and chart images, readable offline. Tables include up to 10,000 loaded rows per block. Maps and pivot views are included as data tables.</p><Button size="sm" variant="outline" disabled={snapshotBusy || reportRunning || snapshotHasUnappliedEdits || workspaceView !== "report"} onClick={() => void downloadSnapshot()}>{snapshotBusy ? "Capturing…" : "Download offline snapshot"}</Button>{snapshotHasUnappliedEdits && <p role="status" className="mt-2 text-xs">Apply or discard your block and dataset edits before downloading a snapshot.</p>}{workspaceView !== "report" && <p className="mt-2 text-xs">Open the Report tab to capture charts.</p>}</section></div></DialogContent></Dialog>
     {!readerMode ? <div className="report-authoring-control flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2">
       <Button size="sm" variant="ghost" className="shrink-0" onClick={() => { if (!discardBlockEditor() || !discardDatasetEditor()) return; runGeneration.current += 1; setRunProgress(null); setDraft(null); setSelected(null); setResults({}); }}><ArrowLeft className="h-4 w-4" /> Reports</Button>
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
@@ -2279,10 +2403,10 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
         <span data-testid="report-save-status" className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${dirty ? "bg-amber-500/10 text-amber-800 dark:text-amber-200" : "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200"}`}>{published ? (dirty ? "Unsaved changes" : "Saved") : (dirty ? "Draft · Unsaved" : "Draft · Saved")}</span>
         {governedDatasetCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-800 dark:text-emerald-200"><ShieldCheck className="h-3 w-3" />{governedDatasetCount} governed</span>}
         {published && <div role="group" aria-label="Report mode" className="inline-flex shrink-0 rounded-md border bg-muted/20 p-0.5 text-[10px]"><span className="rounded bg-background px-2 py-1 font-medium shadow-sm">Draft</span><button type="button" className="rounded px-2 py-1 text-muted-foreground hover:text-foreground" onClick={() => { if (discardBlockEditor() && discardDatasetEditor()) switchReportMode("reader"); }}>Published</button></div>}
-        {(reportFetchedAt > 0 || draft.refreshIntervalSeconds) && <span className="hidden shrink-0 items-center gap-1 text-[10px] text-muted-foreground lg:inline-flex" title={reportFetchedAt ? new Date(reportFetchedAt).toLocaleString() : undefined}>{reportFetchedAt > 0 && <><Clock3 className="h-3 w-3" /><span data-testid="report-as-of">{freshnessLabel(reportFetchedAt)}</span></>}{reportFetchedAt > 0 && draft.refreshIntervalSeconds ? <span>·</span> : null}{draft.refreshIntervalSeconds ? <span>Auto · {refreshChoices.find((choice) => choice.value === draft.refreshIntervalSeconds)?.label.replace(/^Every /, "") ?? `${draft.refreshIntervalSeconds}s`}</span> : null}</span>}
+        {(reportFetchedAt > 0 || draft.refreshIntervalSeconds) && <span className="hidden shrink-0 items-center gap-1 text-[10px] text-muted-foreground lg:inline-flex" title={reportFetchedAt ? new Date(reportFetchedAt).toLocaleString() : undefined}>{reportFetchedAt > 0 && <><Clock3 className="h-3 w-3" /><span data-testid="report-as-of">{freshness.partial ? "Partially refreshed" : freshnessLabel(reportFetchedAt)}</span></>}{reportFetchedAt > 0 && draft.refreshIntervalSeconds ? <span>·</span> : null}{draft.refreshIntervalSeconds ? <span>Auto · {refreshChoices.find((choice) => choice.value === draft.refreshIntervalSeconds)?.label.replace(/^Every /, "") ?? `${draft.refreshIntervalSeconds}s`}</span> : null}</span>}
       </div>
       <div className="flex w-full items-center justify-end gap-1 sm:gap-2 md:w-auto">
-        <Button size="sm" variant="outline" aria-label="Edit with AI" title="Edit with AI" onClick={() => { if (!discardBlockEditor() || !discardDatasetEditor()) return; if (agentTargetBlockId) resetAgentConversation(); setAgentTargetBlockId(null); setInspectorOpen(false); setAgentOpen((v) => !v); }}><Bot className="h-4 w-4" /><span className="hidden sm:inline">Edit with AI</span></Button>
+        <Button size="sm" variant="outline" disabled={blockEditorDirty || datasetEditorDirty || agentBusy} onClick={() => { setPreviewMode(true); setReaderMode(true); setWorkspaceView("report"); setAgentOpen(false); setInspectorOpen(false); }}><Eye className="h-4 w-4" /> Preview</Button>
         <ReportRunControl reader={false} running={reportRunning} disabled={blockEditorDirty || datasetEditorDirty || reportErrors.length > 0 || reportRunning || !engineReady} label={engineWaiting ? "Preparing…" : progressLabel ?? "Run report"} interval={draft.refreshIntervalSeconds} onRun={runFullReport} onIntervalChange={updateAutoRefresh} />
         <Button size="sm" variant="outline" aria-label="Save report draft" title={datasetEditorDirty ? "Apply or discard the dataset edit before saving" : "Save report draft"} disabled={blockEditorDirty || datasetEditorDirty || !dirty || reportErrors.length > 0} onClick={acceptDraft}><Save className="h-4 w-4" /><span className="hidden sm:inline">Save</span></Button>
         <Button size="sm" disabled={blockEditorDirty || datasetEditorDirty || reportErrors.length > 0 || reportRunning || !engineReady || !isCompatible(draft)} onClick={publishDraft}><Send className="h-4 w-4" /> Publish{published ? <span className="hidden sm:inline"> changes</span> : null}</Button>
@@ -2290,7 +2414,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
           reader={false}
           revisions={revisionOptions}
           onRestoreRevision={async (revision) => { const restored = await restoreReportRevision(draft.id, revision); openReport(restored, undefined, false); }}
-          onShareDraft={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(draft, { serviceUrl, values: appliedValues })); setShareStatus("Draft review link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}
+          onShareDraft={() => setShareOpen(true)}
           onPrint={() => window.print()}
           onEditSource={() => { if (!discardBlockEditor() || !discardDatasetEditor()) return; setAgentOpen(false); setInspectorOpen(true); setSourceText(exportReportJson(draft)); }}
           onDownload={() => triggerDownload(new Blob([exportReportJson(draft)], { type: "application/json" }), `${safeFileStem(draft.title)}.cupola-report.json`)}
@@ -2298,25 +2422,28 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
       </div>
     </div> : <div className="flex flex-wrap items-center gap-3 border-b bg-card px-4 py-3">
       <Button size="sm" variant="ghost" className="shrink-0" onClick={() => { runGeneration.current += 1; setRunProgress(null); setDraft(null); setSelected(null); setPublished(null); setReaderMode(false); setResults({}); }}><ArrowLeft className="h-4 w-4" /> Reports</Button>
-      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h1 className="truncate text-base font-semibold">{report.title}</h1><span className="shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700">Published</span>{governedDatasetCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-800 dark:text-emerald-200"><ShieldCheck className="h-3 w-3" />{governedDatasetCount} governed</span>}</div><p className="truncate text-[10px] text-muted-foreground" title={reportFetchedAt ? new Date(reportFetchedAt).toLocaleString() : undefined}>{publishedAt ? `Published ${new Date(publishedAt).toLocaleString()}` : "Published report"}{reportFetchedAt > 0 ? ` · ${freshnessLabel(reportFetchedAt)}` : ""}{report.refreshIntervalSeconds ? ` · Auto ${report.refreshIntervalSeconds}s` : ""}</p></div>
+      <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h1 className="truncate text-base font-semibold">{report.title}</h1><span className="shrink-0 rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-700">{previewMode ? "Draft preview" : "Published"}</span>{governedDatasetCount > 0 && <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-800 dark:text-emerald-200"><ShieldCheck className="h-3 w-3" />{governedDatasetCount} governed</span>}</div><p className="truncate text-[10px] text-muted-foreground" title={reportFetchedAt ? new Date(reportFetchedAt).toLocaleString() : undefined}>{previewMode ? "Preview of your current draft" : publishedAt ? `Published ${new Date(publishedAt).toLocaleString()}` : "Published report"}{reportFetchedAt > 0 ? ` · ${freshness.partial ? "Partially refreshed" : freshnessLabel(reportFetchedAt)}` : ""}{report.refreshIntervalSeconds ? ` · Auto ${report.refreshIntervalSeconds}s` : ""}</p></div>
       <div className="flex w-full items-center justify-end gap-1 sm:gap-2 md:w-auto">
-        <ReportRunControl reader running={reportRunning} disabled={reportErrors.length > 0 || reportRunning || !engineReady} label={engineWaiting ? "Preparing…" : progressLabel ?? "Refresh"} interval={report.refreshIntervalSeconds} onRun={runFullReport} onIntervalChange={(seconds) => setPublished((current) => {
+        <ReportRunControl reader running={reportRunning} disabled={reportErrors.length > 0 || reportRunning || !engineReady} label={engineWaiting ? "Preparing…" : progressLabel ?? "Refresh"} interval={report.refreshIntervalSeconds} onRun={runFullReport} onIntervalChange={(seconds) => (previewMode ? setDraft : setPublished)((current) => {
           if (!current) return current;
           const { refreshIntervalSeconds: _interval, ...withoutInterval } = current;
           return seconds ? { ...withoutInterval, refreshIntervalSeconds: seconds } : withoutInterval;
         })} />
-        <Button size="sm" variant="outline" aria-label="Share" title="Share" onClick={async () => { try { await navigator.clipboard.writeText(await buildShareReportUrl(report, { serviceUrl, values: appliedValues, mode: "reader" })); setShareStatus("Reader link copied."); } catch (e) { setShareStatus(e instanceof Error ? e.message : String(e)); } }}><Share2 className="h-4 w-4" /><span className="hidden sm:inline">Share</span></Button>
-        <Button size="sm" variant="outline" aria-label="Edit report" title="Edit report" onClick={() => switchReportMode("edit")}><Pencil className="h-4 w-4" /><span className="hidden sm:inline">Edit report</span></Button>
+        <Button size="sm" variant="outline" aria-label="Share" title="Share" onClick={() => setShareOpen(true)}><Share2 className="h-4 w-4" /><span className="hidden sm:inline">Share</span></Button>
+        <Button size="sm" variant="outline" aria-label="Edit report" title="Edit report" onClick={() => switchReportMode("edit")}><Pencil className="h-4 w-4" /><span>{previewMode ? "Back to editing" : "Edit report"}</span></Button>
         <ReportMoreMenu reader revisions={[]} onPrint={() => window.print()} onDownload={() => triggerDownload(new Blob([exportReportJson(report)], { type: "application/json" }), `${safeFileStem(report.title)}.cupola-report.json`)} />
       </div>
     </div>}
-    <div className="report-authoring-control flex h-10 shrink-0 items-end gap-1 border-b bg-card px-3">
+    <div className="report-authoring-control flex min-h-10 shrink-0 flex-wrap items-end gap-1 border-b bg-card px-3">
       <div role="tablist" aria-label="Report views" className="flex h-10 items-end gap-1">
       <button type="button" role="tab" id="report-view-tab" aria-selected={workspaceView === "report"} aria-controls="report-view-panel" data-testid="report-view-tab" onClick={() => { if (workspaceView !== "report" && !discardDatasetEditor()) return; setWorkspaceView("report"); }} className={`inline-flex h-10 items-center gap-1.5 border-b-2 px-3 text-sm ${workspaceView === "report" ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}><BarChart3 className="h-3.5 w-3.5" /> Report</button>
       <button type="button" role="tab" id="report-datasets-tab" aria-selected={workspaceView === "datasets"} aria-controls="report-datasets-panel" data-testid="report-datasets-tab" onClick={() => { if (!discardBlockEditor()) return; setWorkspaceView("datasets"); }} className={`inline-flex h-10 items-center gap-1.5 border-b-2 px-3 text-sm ${workspaceView === "datasets" ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}><Database className="h-3.5 w-3.5" /> Datasets <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none">{report.datasets.length}</span></button>
       </div>
       <div className="flex-1" />
-      {!readerMode && workspaceView === "report" && <div className="mb-1 flex items-center gap-1">
+      {!readerMode && workspaceView === "report" && <div className="mb-1 flex w-full flex-wrap items-center justify-end gap-1 lg:w-auto">
+        <Button size="sm" variant="ghost" aria-label="Undo report change" disabled={!history.past.length || blockEditorDirty || datasetEditorDirty || agentBusy} onClick={() => restoreHistory("undo")}><Undo2 className="h-4 w-4" /></Button>
+        <Button size="sm" variant="ghost" aria-label="Redo report change" disabled={!history.future.length || blockEditorDirty || datasetEditorDirty || agentBusy} onClick={() => restoreHistory("redo")}><Redo2 className="h-4 w-4" /></Button>
+        <Button size="sm" variant="outline" aria-label="Edit with AI" title="Edit with AI" onClick={() => { if (!discardBlockEditor() || !discardDatasetEditor()) return; if (agentTargetBlockId) resetAgentConversation(); setAgentTargetBlockId(null); setInspectorOpen(false); setAgentOpen((v) => !v); }}><Bot className="h-4 w-4" /><span className="hidden sm:inline">Edit with AI</span></Button>
         <Button type="button" variant="ghost" size="sm" data-testid="report-reflow-layout" aria-label="Reflow report layout" disabled={report.blocks.length === 0 || blockEditorDirty || datasetEditorDirty || agentBusy || inspectorOpen} title={inspectorOpen ? "Close the report JSON editor before reflowing" : agentBusy ? "Wait for the report agent to finish" : "Tighten vertical gaps while preserving block sizes and columns"} onClick={reflowLayout}><LayoutGrid className="h-4 w-4" /><span className="hidden sm:inline">Reflow</span></Button>
         <Popover><PopoverTrigger className={buttonVariants({ variant: "ghost", size: "sm" })} data-testid="report-add-block"><Plus className="h-4 w-4" /> Add block</PopoverTrigger><PopoverContent className="max-h-[80vh] w-[min(28rem,calc(100vw-2rem))] overflow-y-auto p-2" align="end"><div className="text-xs font-semibold">Add report block</div><p className="text-[10px] text-muted-foreground">Pick what the block shows; you choose its data and settings next.</p><div className="mt-2 space-y-2">{["Text", "Metrics", "Visualizations", "Data"].map((group) => <div key={group}><div className="px-1 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div><div className="grid grid-cols-2 gap-1">{REPORT_BLOCK_TYPES.filter((item) => item.group === group).map((item) => <BaseUIPopover.Close key={item.type} data-testid={`report-add-${item.type}`} className="rounded px-2 py-1.5 text-left hover:bg-muted" onClick={() => addBlock(item.type)}><span className="block text-xs font-medium">{item.label}</span><span className="block text-[10px] leading-snug text-muted-foreground">{item.description}</span></BaseUIPopover.Close>)}</div></div>)}</div></PopoverContent></Popover>
       </div>}
@@ -2342,6 +2469,8 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
       </div>
     </div>}
     {(!isCompatible(report) || reportErrors.length > 0 || changedSemanticDatasets.length > 0 || shareStatus || (!readerMode && agentSummary)) && <div className="px-4 py-2 border-b text-xs space-y-1">{!isCompatible(report) && <div className="text-amber-700">Missing required catalogs: {report.requiredSources.filter((s) => !compatibleCatalogs.has(s.catalog)).map((s) => s.catalog).join(", ")}</div>}{reportErrors.length > 0 && <div className="text-destructive">{reportErrors.join(" ")}</div>}{changedSemanticDatasets.length > 0 && <div data-testid="report-semantic-model-drift" className="text-amber-700 dark:text-amber-300">The governed model changed for {changedSemanticDatasets.map((dataset) => dataset.name).join(", ")}. Current definitions compiled successfully; review and accept them from Datasets.</div>}{shareStatus && <div>{shareStatus}</div>}{!readerMode && agentSummary && <div className="text-primary"><Check className="inline h-3 w-3 mr-1" />Agent draft: {agentSummary}</div>}</div>}
+    {recoveryError && <div role="alert" className="border-b px-4 py-2 text-xs text-destructive">{recoveryError}</div>}
+    {freshness.partial && !reportRunning && <div role="status" data-testid="report-partial-refresh" className="border-b bg-amber-500/10 px-4 py-2 text-xs">Partially refreshed · Older or unavailable data: {freshness.older.map(dataset => dataset.name).join(", ")}. Each block shows its own update time.</div>}
     {runFailureNotice && <div data-testid="report-run-failure" role="alert" className="border-b border-amber-300/70 bg-amber-50/80 px-4 py-3 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
       <div className="font-semibold">{runFailureNotice.title}</div>
       <div className="mt-0.5">{runFailureNotice.message}</div>
@@ -2370,6 +2499,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
         {parametersDirty && <span className="shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700">Unapplied changes</span>}
         {parametersExpanded ? <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />}
       </button>
+      <div className="flex justify-end px-4 pb-2"><Button size="sm" variant="ghost" disabled={reportRunning || !engineReady} onClick={() => { const defaults = defaultValues(report); setValues(defaults); void validateAndRun(report, defaults, true); }}>Reset filters</Button></div>
       {parametersExpanded && <div id="report-parameter-controls" className="flex flex-wrap items-end gap-3 border-t px-4 py-3">{report.parameters.map((p) => <ParameterInput key={p.id} parameter={p} value={values[p.key] ?? p.defaultValue} options={optionValues(p)} errors={parameterIssues.filter((issue) => issue.parameterKey === p.key).map((issue) => issue.message)} onChange={(value) => setValues((current) => {
         const next = { ...current, [p.key]: value };
         setParameterIssues(validateReportParameterValues(report, next));
@@ -2395,6 +2525,9 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
           catalogs={[catalogData, ...(attachedCatalogs ?? []), ...(ui.memoryCatalog ? [ui.memoryCatalog] : [])]}
           onAddDataset={addReportDataset}
           onDirtyChange={setDatasetEditorDirty}
+          recoveredDraft={recoveredDatasetDraft}
+          onRecoveredDraftHandled={() => setRecoveredDatasetDraft(null)}
+          onDraftChange={setPendingDatasetDraft}
           onRunDataset={(datasetId) => {
             const existing = results[datasetId];
             setRunFailureNotice(null);
@@ -2408,7 +2541,7 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
       </div> : <div id="report-view-panel" role="tabpanel" aria-labelledby="report-view-tab" className="flex-1 min-w-0 overflow-y-auto report-canvas p-3">
         <div ref={containerRef} className="min-h-full min-w-0">
         <div className="print-only hidden mb-4"><h1 className="text-2xl font-bold">{report.title}</h1><p className="text-sm text-muted-foreground">{report.description}</p></div>
-        {report.blocks.length === 0 ? <div className="h-full flex items-center justify-center"><div className="text-center"><FilePlus2 className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" /><p className="font-medium">Start with a request</p><p className="text-sm text-muted-foreground mb-4">Open the agent and describe the report you need.</p>{!readerMode && <Button onClick={() => setAgentOpen(true)}><Sparkles className="h-4 w-4" /> Open report agent</Button>}</div></div> : mounted && <div className="report-grid-stack relative" style={{ paddingTop: REPORT_GRID_TOP_PADDING }}>
+        {report.blocks.length === 0 ? <div className="h-full flex items-center justify-center"><div className="text-center"><FilePlus2 className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" /><p className="font-medium">Start with a request</p><p className="text-sm text-muted-foreground mb-4">Describe the report you need, or choose a layout with clearly labeled sample data.</p>{!readerMode && <Button onClick={() => setAgentOpen(true)}><Sparkles className="h-4 w-4" /> Open report agent</Button>}{!readerMode && <div className="mt-6 grid max-w-3xl gap-3 sm:grid-cols-3">{REPORT_STARTERS.map(starter => <button key={starter.id} className="rounded-lg border bg-card p-4 text-left hover:border-primary" onClick={() => { const next = { ...createStarter(starter.id), id: draft.id }; setDraft(next); void validateAndRun(next, {}, false); }}><div aria-hidden="true" className="mb-3 grid h-16 grid-cols-3 gap-1 rounded bg-muted p-2"><span className="col-span-3 rounded bg-primary/20" /><span className="rounded bg-primary/30" /><span className={`${starter.id === "executive" ? "" : "col-span-2"} rounded bg-primary/20`} /><span className="col-span-3 rounded bg-primary/10" /></div><strong className="text-sm">{starter.title}</strong><p className="mt-1 text-xs text-muted-foreground">{starter.description}</p></button>)}</div>}</div></div> : mounted && <div className="report-grid-stack relative" style={{ paddingTop: REPORT_GRID_TOP_PADDING }}>
           <div className="report-group-layer report-authoring-group-layer pointer-events-none absolute inset-0 z-0" aria-hidden="true">
             {groupBoxes.map((box) => {
               const tone = REPORT_GROUP_TONES[box.group.tone ?? "neutral"];
@@ -2553,7 +2686,9 @@ Parameters are a validated public interface, not merely SQL substitutions. Set r
               </div>}
               {!showBlockHeader && resolvedAppearance.label && <div data-testid={`report-block-status-${block.id}`} title={resolvedAppearance.label} className="absolute right-2 top-2 z-10 inline-flex max-w-[60%] items-center gap-1.5 rounded-full border border-current/15 bg-background/75 px-2 py-0.5 text-[10px] font-medium"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${appearanceStyle.dot}`} /><span className="truncate">{resolvedAppearance.label}</span></div>}
               {!readerMode && !showBlockHeader && <div className={`report-authoring-control absolute right-1 top-1 z-20 flex items-center rounded-md border bg-background/90 shadow-sm transition-opacity group-focus-within:opacity-100 ${selectedForEditing ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`} onMouseDown={(event) => event.stopPropagation()}><button type="button" className="rounded px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`Edit ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); openBlockEditor(block); }}>Edit</button><button type="button" className="rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`Ask AI about ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); openTargetedAgent(); }}>AI</button><button type="button" className="rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={`Duplicate ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); copyBlock(block); }}>Copy</button><button type="button" className="rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label={`Delete ${displayBlockTitle || "text block"}`} onClick={(event) => { event.stopPropagation(); removeBlock(block); }}>×</button><div data-testid={`report-block-drag-${block.id}`} title="Drag text block" className="report-drag-handle cursor-move rounded p-1 text-muted-foreground/50 hover:bg-muted hover:text-foreground"><GripVertical className="h-3.5 w-3.5" /></div></div>}
-              <div className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={interpolateReportText(block.markdown, report, appliedValues)} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className={result.status === "blocked" ? "text-xs text-amber-700 dark:text-amber-300" : "text-xs text-destructive"}>{result.error}</div>{result.errorDetails && <details className="max-w-full text-left text-[10px] text-muted-foreground"><summary className="cursor-pointer text-center">Technical details</summary><div className="mt-1 max-h-20 overflow-auto font-mono">{result.errorDetails}</div></details>}<Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} columnLabels={result.semantic ? Object.fromEntries(columns.map((name) => [name, semanticOutputLabel(semanticOutput(result.semantic?.plan, name), name)])) : undefined} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.table.numRows} showing={Math.min(result.table.numRows, pageSize)} />; })() : block.type === "kpi" ? <ReportKpi block={semanticBlockDefaults(block, result.semantic?.plan)} row={datasetRows(result.table)[0]} formatValue={formatBlockValue} /> : block.type === "sparkline" ? <ReportSparkline block={semanticBlockDefaults(block, result.semantic?.plan)} rows={datasetRows(result.table)} formatValue={formatBlockValue} /> : visualBlock ? <ReportChart block={visualBlock} rows={datasetRows(result.table)} onViewChange={setReportChartView} /> : block.type === "map" ? <ReportMap block={block} rows={datasetMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} arrowBuffer={result.arrowBuffer} sql={dataset?.sql} config={block.config} onConfig={(config) => { if (!readerMode) setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current); }} /> : null}</div>
+              <div data-report-block-body={block.id} className={`relative flex-1 min-h-0 ${block.type === "sparkline" ? "p-2" : !showBlockHeader && block.type === "markdown" ? "p-3 pr-8" : "p-3"} ${visualBlock || block.type === "sparkline" || block.type === "perspective" || block.type === "map" ? "overflow-hidden" : "overflow-auto"}`}>{block.type === "markdown" ? <ChatMarkdown content={interpolateReportText(block.markdown, report, appliedValues)} /> : block.type === "ai_narrative" && block.snapshot ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : result?.error && !result.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><div className={result.status === "blocked" ? "text-xs text-amber-700 dark:text-amber-300" : "text-xs text-destructive"}>{result.error}</div>{result.errorDetails && <details className="max-w-full text-left text-[10px] text-muted-foreground"><summary className="cursor-pointer text-center">Technical details</summary><div className="mt-1 max-h-20 overflow-auto font-mono">{result.errorDetails}</div></details>}<Button size="sm" variant="outline" onClick={runFullReport}><Play className="h-3.5 w-3.5" /> Run report again</Button></div> : !result?.table && pending ? <div data-testid={`report-dataset-loading-${block.id}`} className="h-full flex flex-col items-center justify-center gap-2 text-center"><Loader2 className={`h-5 w-5 text-primary ${result?.status === "running" ? "animate-spin" : "opacity-50"}`} /><p className="text-xs text-muted-foreground">{result?.status === "queued" ? "Waiting to load data…" : "Loading data…"}</p></div> : !result?.table ? <div className="h-full flex flex-col items-center justify-center gap-3 text-center"><p className="text-xs text-muted-foreground">This report has not loaded its data yet.</p><Button size="sm" onClick={runFullReport}><Play className="h-4 w-4" /> Run report</Button></div> : block.type === "ai_narrative" ? <ReportAiNarrative block={block} state={narrativeState} onGenerate={() => void regenerateNarrative(block)} /> : block.type === "table" ? (() => { const columns = block.columns ?? result.table.schema.fields.map((field: any) => field.name); const pageSize = block.pageSize ?? 50; return <QueryResultTable columns={columns} columnLabels={result.semantic ? Object.fromEntries(columns.map((name) => [name, semanticOutputLabel(semanticOutput(result.semantic?.plan, name), name)])) : undefined} rows={reportDisplayRows(result.table, columns, pageSize)} rowCount={result.table.numRows} showing={Math.min(result.table.numRows, pageSize)} />; })() : block.type === "kpi" ? <ReportKpi block={semanticBlockDefaults(block, result.semantic?.plan)} row={datasetRows(result.table)[0]} formatValue={formatBlockValue} /> : block.type === "sparkline" ? <ReportSparkline block={semanticBlockDefaults(block, result.semantic?.plan)} rows={datasetRows(result.table)} formatValue={formatBlockValue} /> : visualBlock ? <ReportChart block={visualBlock} rows={datasetRows(result.table)} onViewChange={setReportChartView} onSelect={handleChartSelection} /> : block.type === "map" ? <ReportMap block={block} rows={datasetMapRows(result.table, block.geometryColumn)} /> : block.type === "perspective" ? <ReportPerspective table={result.table} arrowBuffer={result.arrowBuffer} sql={dataset?.sql} config={block.config} onConfig={(config) => { if (!readerMode) setDraft((current) => current ? { ...current, blocks: current.blocks.map((b) => b.id === block.id && b.type === "perspective" ? { ...b, config } : b) } : current); }} /> : null}</div>
+              {block.type === "chart" && block.filter && <div className="border-t px-3 py-1 text-[11px] text-muted-foreground">Select a chart mark to filter {report.parameters.find(p => p.key === block.filter!.parameterKey)?.label}. Use Reset filters to clear.</div>}
+              {result?.fetchedAt && <div className={`border-t px-3 py-1 text-[10px] ${freshness.older.some(d => d.id === dataset?.id) ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"}`} title={new Date(result.fetchedAt).toLocaleString()}>{freshness.older.some(d => d.id === dataset?.id) ? "Earlier data · " : ""}{freshnessLabel(result.fetchedAt)}</div>}
               {result?.semantic && <details data-testid={`report-semantic-provenance-${block.id}`} className="border-t bg-muted/15 px-3 py-1.5 text-[10px] text-muted-foreground"><summary className="cursor-pointer font-medium text-emerald-700 dark:text-emerald-300">How this governed calculation was made{Object.values(result.semantic.plan.output_units ?? {}).some(Boolean) ? ` · ${Object.entries(result.semantic.plan.output_units ?? {}).filter(([, unit]) => unit).map(([name, unit]) => `${name}: ${unit}`).join(", ")}` : ""}</summary><div className="mt-2 space-y-1"><div><span className="font-medium text-foreground">Dataset:</span> {dataset?.name}</div><div><span className="font-medium text-foreground">Grain:</span> {(result.semantic.plan.stitch?.result_grain ?? result.semantic.plan.fact_branches[0]?.result_grain ?? []).join(", ") || "single result"}</div><div><span className="font-medium text-foreground">Sources:</span> {result.semantic.plan.fact_branches.map((branch) => `${branch.root.catalog_id}/${branch.root.entity_id}`).join(", ")}</div>{result.semantic.plan.warnings.length > 0 && <div className="text-amber-700 dark:text-amber-300">{result.semantic.plan.warnings.join(" ")}</div>}<details><summary className="cursor-pointer">Generated SQL</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded border bg-background p-2 font-mono">{result.semantic.plan.sql}</pre></details></div></details>}
               {(block.caption || block.source) && <div data-testid={`report-note-${block.id}`} className="px-3 pb-2 text-[10px] leading-snug text-muted-foreground">
                 {block.caption && <span>{interpolateReportText(block.caption, report, appliedValues)}</span>}{block.caption && block.source && <span> · </span>}{block.source && <span>Source: {interpolateReportText(block.source, report, appliedValues)}</span>}
