@@ -1,3 +1,5 @@
+import { manageReportChartTooltips } from '../../lib/evidence/chart-tooltips';
+import type { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { useEffect, useRef, useState } from 'react';
 import { writable, type Readable } from 'svelte/store';
 import type { ThemeConfig } from '@evidence/core/types/theme';
@@ -10,7 +12,7 @@ import type { EvidenceDataContext } from '../../lib/evidence/data-browser';
 import styles from '../../styles/evidence.css?inline';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
 
-export interface ReportRun { report: EvidenceReport; values: ParameterValues; semanticQueries: Record<string, string>; semanticStates: SemanticDatasetState[]; revision: number }
+export interface ReportRun { execution: EvidenceQueryRun; report: EvidenceReport; values: ParameterValues; semanticQueries: Record<string, string>; semanticStates: SemanticDatasetState[]; revision: number }
 export function EvidencePreview({ run, onQuery, onError, onIssues, onData, reportTheme }: { reportTheme: ReportTheme; run: ReportRun; onQuery: (entry: QueryLogEntry) => void; onError: (message: string) => void; onIssues: (issues: EvidenceIssue[]) => void; onData: (context: EvidenceDataContext) => void }) {
   const [themeConfig] = useState(() => writable(reportTheme.config));
   const themeStyle = useRef<HTMLStyleElement | null>(null);
@@ -33,13 +35,14 @@ export function EvidencePreview({ run, onQuery, onError, onIssues, onData, repor
     target.classList.toggle('dark', latestTheme.current.mode === 'dark');
     themeStyle.current = appearanceStyle; themeTarget.current = target;
     root.replaceChildren(style, appearanceStyle, target);
+    const cleanupTooltips = manageReportChartTooltips(host.current!, root);
     void (async () => {
       try {
         const [{ mount, unmount }, { default: Component }, { HaybarnQueryService }] = await Promise.all([
           import('svelte'), import('./EvidenceDocument.svelte'), import('../../lib/evidence/haybarn-query-service'),
         ]);
         if (disposed) return;
-        const service = new HaybarnQueryService(entry => { if (!disposed) callbacks.current.onQuery(entry); }, run.report.parameters, run.values);
+        const service = new HaybarnQueryService(entry => { if (!disposed) callbacks.current.onQuery(entry); }, run.report.parameters, run.values, run.execution);
         const renderer = Component as unknown as SvelteComponent<{ semanticQueries: Record<string, string>; semanticStates: SemanticDatasetState[]; themeConfig: Readable<ThemeConfig>; markdown: string; service: HaybarnQueryService; onIssues: (issues: EvidenceIssue[]) => void; onData: (context: EvidenceDataContext) => void; onError: (message: string) => void }>;
         const instance = mount(renderer, { target, props: { semanticQueries: run.semanticQueries, semanticStates: run.semanticStates, themeConfig, markdown: run.report.source, service,
           onData: context => { if (!disposed) callbacks.current.onData(context); },
@@ -49,7 +52,7 @@ export function EvidencePreview({ run, onQuery, onError, onIssues, onData, repor
         cleanup = () => { void unmount(instance); };
       } catch (error) { if (!disposed) callbacks.current.onError(error instanceof Error ? error.message : String(error)); }
     })();
-    return () => { disposed = true; cleanup?.(); };
+    return () => { disposed = true; cleanupTooltips(); run.execution.stop(); cleanup?.(); };
   }, [run]);
   useEffect(() => {
     themeConfig.set(reportTheme.config);

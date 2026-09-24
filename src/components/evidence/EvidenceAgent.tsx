@@ -7,15 +7,18 @@ import { ChatMessageUser } from '../chat/ChatMessageUser';
 import { ThinkingIndicator } from '../chat/ThinkingIndicator';
 import { toolActivityLabel, toolInputLabel } from '../../lib/ai/tool-labels';
 import { useSettings, DEFAULT_AI_MODEL } from '../../lib/settings';
-import { executeListCatalogs, executeListTables, executeDescribeTable, executeDescribeFunction, runAgentTurn, type MessageParam } from '../../lib/ai-agent';
+import { runAgentTurn, type MessageParam } from '../../lib/ai-agent';
 import { normalizeEffort } from '../../lib/ai/model-features';
 import { DEFAULT_AI_MAX_TOKENS } from '../../lib/ai/model-limits';
 import { EVIDENCE_AGENT_PROMPT, EVIDENCE_AGENT_TOOLS, createReportProposal, applyReportProposal, reportFingerprint, type ReportProposal } from '../../lib/evidence/agent';
 import { componentReference } from '../../lib/evidence/agent-reference';
 import type { CatalogData } from '../../lib/service';
 import { sourceQueries } from '../../lib/evidence/source-queries';
-import { normalizeAIQueryMode } from '../../lib/ai/query-mode';
-import { compileSemanticQuery } from '../../lib/semantic-compiler';
+import { normalizeAIQueryMode, toolsForAIQueryMode, aiQueryModePrompt } from '../../lib/ai/query-mode';
+import { executeReportDataTool } from '../../lib/evidence/agent-data-tools';
+import { QueryResultCache } from '../../lib/query-results';
+import { EvidenceQueryRun } from '../../lib/evidence/query-run';
+import { waitForEngineReady, ui } from '../../lib/shell-bridge';
 import type { EvidenceReport } from '../../lib/evidence/reports';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
 
@@ -43,6 +46,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
   const [undo, setUndo] = useState<{ id: string; proposal: ReportProposal } | null>(null);
   const [applying, setApplying] = useState(false);
   const history = useRef<MessageParam[]>([]);
+  const resultCache = useRef(new QueryResultCache());
   const abort = useRef<AbortController | null>(null);
   const activeMessage = useRef<string | null>(null);
   const latest = useRef(report); latest.current = report;
@@ -66,6 +70,14 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
     try { config = { ...settings, ...JSON.parse(localStorage.getItem('vgi-frontend-settings') || '{}') }; } catch { /* use loaded settings */ }
     if (!config.anthropicApiKey) { retryHistory.current = structuredClone(history.current); setRetryRequest(text); setError('Add your Anthropic API key in Cupola Settings to use the report agent.'); return; }
     const controller = new AbortController(); abort.current = controller;
+    const queryMode = normalizeAIQueryMode(config.aiQueryMode);
+    const queryRun = new EvidenceQueryRun();
+    const stopQueries = () => queryRun.stop();
+    controller.signal.addEventListener('abort', stopQueries, { once: true });
+    const query = async (sql: string, params: unknown[] = []) => {
+      await queryRun.wait(waitForEngineReady());
+      return queryRun.query(sql, params);
+    };
     const snapshot = structuredClone(latest.current);
     const context = { report: snapshot, diagnostics: { fromPreviousDraft: stale, issues }, recentProposals: messages.filter(m => m.proposal).map(m => ({ summary: m.proposal!.summary, status: m.state })) };
     const assistantId = uid(); activeMessage.current = assistantId;
@@ -92,15 +104,14 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
     try {
       await runAgentTurn(
         { apiKey: config.anthropicApiKey, workspaceId: config.anthropicWorkspaceId || '' },
-        config.aiModel || DEFAULT_AI_MODEL, history.current, EVIDENCE_AGENT_PROMPT + (normalizeAIQueryMode(config.aiQueryMode) === "semantic-only" ? "\nSemantic-only mode: create or change datasets through semanticDatasets. Do not create or modify raw SQL in setupSql or source fences." : ""),
+        config.aiModel || DEFAULT_AI_MODEL, history.current, EVIDENCE_AGENT_PROMPT + '\n' + aiQueryModePrompt(queryMode) + (normalizeAIQueryMode(config.aiQueryMode) === "semantic-only" ? "\nSemantic-only mode: create or change datasets through semanticDatasets. Do not create or modify raw SQL in setupSql or source fences." : ""),
         async (name, input) => {
           if (!active()) throw new DOMException('Aborted', 'AbortError');
           try {
-            if (name === 'list_catalogs') return executeListCatalogs(catalogs, input);
-            if (name === 'list_tables') return executeListTables(catalogs, input);
-            if (name === 'describe_table') return executeDescribeTable(catalogs, input.schema, input.table, input.catalog);
-            if (name === 'describe_function') return executeDescribeFunction(catalogs, input);
-            if (name === 'compile_semantic_query') return JSON.stringify(compileSemanticQuery(catalogs, { ...input, compile_only: true }));
+            const liveCatalogs = ui.memoryCatalog && !catalogs.some(catalog => catalog.catalogName === ui.memoryCatalog!.catalogName)
+              ? [...catalogs, ui.memoryCatalog] : catalogs;
+            const dataResult = await executeReportDataTool(name, input, liveCatalogs, { query, queryPrepared: query, resultCache: resultCache.current }, queryMode);
+            if (dataResult !== undefined) return dataResult;
             if (name === 'get_report') return JSON.stringify(context);
             if (name === 'list_components') return JSON.stringify(await componentReference());
             if (name === 'get_component') {
@@ -117,7 +128,10 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
               return 'Proposal staged for review. It has NOT been applied, executed, validated by the renderer, or saved.';
             }
             return 'Error: Unknown report tool';
-          } catch (e) { return `Error: ${e instanceof Error ? e.message : String(e)}`; }
+          } catch (e) {
+            if (controller.signal.aborted || (e as { fatal?: boolean })?.fatal) throw e;
+            return `Error: ${e instanceof Error ? e.message : String(e)}`;
+          }
         },
         {
           onProgress: event => {
@@ -132,7 +146,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
             if (event.stage === 'writing') { setReceived(0); progress('Writing a response…'); }
             if (event.stage === 'tool_input') {
               setReceived(event.characters || 0);
-              progress(event.tool === 'propose_report_edit' ? 'Receiving proposed report changes…' : 'Receiving a reference lookup…');
+              progress(event.tool === 'propose_report_edit' ? 'Receiving proposed report changes…' : 'Receiving tool input…');
             }
           },
           onText: chunk => { if (active()) setMessages(previous => previous.map(m => {
@@ -151,18 +165,20 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
           },
           onToolResult: (name, result) => {
             if (!active()) return;
-            progress(result.startsWith('Error:') ? 'Tool reported a problem · preparing another attempt…' : name === 'propose_report_edit' ? 'Proposal ready · finishing the response…' : 'Reference loaded · preparing the next step…');
+            progress(result.startsWith('Error:') ? 'Tool reported a problem · preparing another attempt…' : name === 'propose_report_edit' ? 'Proposal ready · finishing the response…' : 'Tool completed · preparing the next step…');
             setMessages(previous => previous.map(m => m.id === assistantId ? { ...m, blocks: m.blocks?.map(block => block.type === 'tool_call' && block.toolCall.isExecuting ? { ...block, toolCall: { ...block.toolCall, isExecuting: false, result, error: result.startsWith('Error:') ? result.slice(6) : undefined } } : block) } : m));
           },
           onDone: () => {},
           onError: failed,
           onRetry: message => { if (active()) { setRetrying(Boolean(message)); progress(message || 'Reconnecting to the AI service…'); } },
-        }, controller.signal, config.aiMaxToolRounds || 20, EVIDENCE_AGENT_TOOLS,
+        }, controller.signal, config.aiMaxToolRounds || 20, toolsForAIQueryMode(EVIDENCE_AGENT_TOOLS, queryMode),
         config.aiMaxTokens || DEFAULT_AI_MAX_TOKENS, true, normalizeEffort(config.aiEffort),
       );
     } catch (e) {
       failed(e instanceof Error ? e.message : String(e));
     } finally {
+      controller.signal.removeEventListener('abort', stopQueries);
+      queryRun.stop();
       if (abort.current === controller) {
         abort.current = null; setBusy(false); setActivity('');
         setMessages(previous => previous.map(m => m.id === assistantId ? { ...m, blocks: m.blocks?.map(block => block.type === 'tool_call' && block.toolCall.isExecuting ? { ...block, toolCall: { ...block.toolCall, isExecuting: false, error: 'Interrupted' } } : block) } : m));
@@ -216,7 +232,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
   return <div className="flex h-full min-h-0 flex-col" aria-label="Evidence report agent">
     <div className="flex shrink-0 items-center justify-between gap-2 border-b px-4 pb-3 text-xs text-muted-foreground">
       <span className="flex items-center gap-2 font-medium text-foreground"><Sparkles className="size-4" />Report assistant</span>
-      <button type="button" className="underline disabled:opacity-50" disabled={locked} onClick={() => { history.current = []; setMessages([]); setError(''); setRetryRequest(null); setUndo(null); }}>New conversation</button>
+      <button type="button" className="underline disabled:opacity-50" disabled={locked} onClick={() => { history.current = []; resultCache.current.clear(); setMessages([]); setError(''); setRetryRequest(null); setUndo(null); }}>New conversation</button>
     </div>
     <div ref={scroller} onScroll={() => { const el = scroller.current!; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }} className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
       <div role="log" aria-label="Report agent conversation" className="space-y-5">

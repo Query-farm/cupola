@@ -2,7 +2,7 @@ import { DataType, type Table } from '@query-farm/apache-arrow';
 import { normalizeSparklineRows } from '@evidence/core/connectors/normalize-sparkline-rows';
 import { MotherDuckDialect } from '@evidence/core/sql-dialect/motherduck';
 import type { QueryService, QueryOpts, QueryResult, AnyRowType, Column } from '@evidence/core/user-components/interfaces/query-service';
-import { engine } from '../shell-bridge';
+import { EvidenceQueryRun } from './query-run';
 import { decodeArrowBuffer } from '../duckdb-query';
 import { compileReportQuery } from '../reports/parameters';
 import type { ReportParameter, ReportParameterValue } from '../reports/types';
@@ -66,39 +66,38 @@ export class HaybarnQueryService implements QueryService {
     private onQuery?: (entry: QueryLogEntry) => void,
     private parameters: ReportParameter[] = [],
     private values: Record<string, ReportParameterValue> = {},
+    private run = new EvidenceQueryRun(),
   ) {}
 
   async query<RowType extends AnyRowType = AnyRowType>(sql: string, opts?: QueryOpts): Promise<QueryResult<RowType>> {
     if (opts?.signal?.aborted) throw new DOMException('Query cancelled', 'AbortError');
-    let pending = opts?.noCache ? undefined : this.cache.get(sql);
+    this.run.signal.throwIfAborted();
+    let pending = opts?.noCache || opts?.signal ? undefined : this.cache.get(sql);
     if (!pending) {
-      pending = this.execute(sql);
-      this.cache.set(sql, pending);
-      void pending.then(result => { if (result.error) this.cache.delete(sql); });
+      pending = this.execute(sql, opts?.signal);
+      if (!opts?.signal) {
+        this.cache.set(sql, pending);
+        const cached = pending;
+        void pending.then(result => { if (result.error && this.cache.get(sql) === cached) this.cache.delete(sql); });
+      }
     }
     const result = await pending;
     if (opts?.signal?.aborted) throw new DOMException('Query cancelled', 'AbortError');
     return result as QueryResult<RowType>;
   }
   async queryArrow(sql: string): Promise<ArrayBuffer> {
-    if (!engine.query) throw new Error('Haybarn is not ready');
     const compiled = compileReportQuery(sql, { parameters: this.parameters.map(parameter => ({ ...parameter, defaultValue: Object.hasOwn(this.values, parameter.key) ? this.values[parameter.key] : parameter.defaultValue })) }, this.values);
-    if (compiled.params.length && !engine.queryPrepared) throw new Error('Prepared queries are unavailable');
-    const response = compiled.params.length ? await engine.queryPrepared!(compiled.sql, compiled.params) : await engine.query(compiled.sql);
+    const response = await this.run.query(compiled.sql, compiled.params);
     if (!response.ok) throw new Error(response.error || 'Query failed');
     if (!response.arrowBuffers?.length) throw new Error('Query returned no tabular result.');
     return response.arrowBuffers[0];
   }
-  private async execute(sql: string): Promise<QueryResult> {
+  private async execute(sql: string, signal?: AbortSignal): Promise<QueryResult> {
     const start = performance.now();
     let result: QueryResult;
     try {
-      if (!engine.query) throw new Error('Haybarn is not ready');
       const compiled = compileReportQuery(sql, { parameters: this.parameters.map(parameter => ({ ...parameter, defaultValue: Object.hasOwn(this.values, parameter.key) ? this.values[parameter.key] : parameter.defaultValue })) }, this.values);
-      if (compiled.params.length && !engine.queryPrepared) throw new Error('Prepared queries are unavailable');
-      const response = compiled.params.length
-        ? await engine.queryPrepared!(compiled.sql, compiled.params)
-        : await engine.query(compiled.sql);
+      const response = await this.run.query(compiled.sql, compiled.params, signal);
       if (!response.ok) throw new Error(response.error || 'Query failed');
       result = { ...(response.arrowBuffers?.length ? evidenceResult(decodeArrowBuffer(response.arrowBuffers[0])) : { rows: [], columns: [] }), error: null };
     } catch (error) {

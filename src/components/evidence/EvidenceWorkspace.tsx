@@ -1,5 +1,6 @@
+import { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2 } from 'lucide-react';
+import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { engine, waitForEngineReady } from '../../lib/shell-bridge';
@@ -29,9 +30,9 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
     try { reports = listEvidenceReports(serviceUrl); } catch (e) { error = `Could not read saved reports: ${message(e)}`; }
     const id = new URLSearchParams(window.location.search).get('evidence_report');
     const found = reports.find(report => report.id === id);
-    if (id && !found) error = 'This saved report was not found for this worker in this browser.';
+    const missingReport = Boolean(id && !found && !error);
     const report = found ?? newEvidenceReport(serviceUrl, catalogName, serviceUrl === WEATHER_SERVICE);
-    return { reports, report, error, saved: found ? JSON.stringify(found) : '', library: isLibraryUrl() || Boolean(id && !found) };
+    return { reports, report, error, missingReport, saved: found ? JSON.stringify(found) : '', library: isLibraryUrl() || Boolean(id && !found) };
   });
   const [promotion, setPromotion] = useState(consumeReportPromotion);
   const [report, setReport] = useState(initial.report);
@@ -63,6 +64,14 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
   const [notice, setNotice] = useState('');
   const [status, setStatus] = useState('Ready to run');
   const [busy, setBusy] = useState(false);
+  const execution = useRef<EvidenceQueryRun | null>(null);
+  const [pendingQueries, setPendingQueries] = useState(0);
+  const refreshing = busy || pendingQueries > 0;
+  function stopRefresh() {
+    execution.current?.stop();
+    setStatus('Refresh stopped');
+    setNotice('Report refresh stopped. Refresh again to reload the report.');
+  }
   const semanticTables = useRef(new Set<string>());
   const [semanticStates, setSemanticStates] = useState<SemanticDatasetState[]>([]);
   const [dataContext, setDataContext] = useState<EvidenceDataContext | null>(null);
@@ -108,58 +117,71 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
     window.history[replace ? 'replaceState' : 'pushState']({}, '', url);
     setLibrary(showLibrary);
     if (showLibrary) setFocused(false);
-    if (showLibrary) reloadList();
+    if (showLibrary) { setRun(null); reloadList(); }
   }
   async function refresh(next = report) {
     if (busyRef.current) return;
+    execution.current?.stop();
+    const current = new EvidenceQueryRun(count => { if (execution.current === current) setPendingQueries(count); });
+    execution.current = current;
+    setPendingQueries(0);
     busyRef.current = true;
     setBusy(true); setSemanticStates([]); setDataContext(null); setError(''); setNotice(''); setLogs([]); setSpecIssues([]);
     try {
       if (next.serviceUrl !== serviceUrl) throw new Error('Open this report using its saved service connection.');
       const values = resolveParameters(next);
       setStatus('Waiting for engine…');
-      await waitForEngineReady();
+      await current.wait(waitForEngineReady());
+      current.signal.throwIfAborted();
       if (!engine.queryPrepared || engine.bootError) throw new Error(engine.bootError || 'Haybarn is not ready');
       // Unmount the old document before replacing its temporary datasets.
       setRun(null);
       setStatus('Refreshing report…');
       for (const name of semanticTables.current) {
-        const dropped = await engine.query!(`DROP TABLE IF EXISTS temp.main.${quoteIdentifier(name)}`);
+        const dropped = await current.query(`DROP TABLE IF EXISTS temp.main.${quoteIdentifier(name)}`);
         if (!dropped.ok) throw new Error(dropped.error || 'Could not replace semantic dataset');
         semanticTables.current.delete(name);
       }
       if (next.setupSql.trim()) {
         const compiled = compileReportQuery(next.setupSql, compilerParameters(next, values), values);
         const start = performance.now();
-        const response = compiled.params.length ? await engine.queryPrepared(compiled.sql, compiled.params) : await engine.query!(compiled.sql);
+        const response = await current.query(compiled.sql, compiled.params);
         setLogs([{ sql: next.setupSql, rows: 0, durationMs: performance.now() - start, error: response.ok ? null : response.error || 'Dataset setup failed' }]);
         if (!response.ok) throw new Error(response.error || 'Dataset setup failed');
       }
-      const semantic = await prepareEvidenceSemanticDatasets(next, values, catalogs, name => semanticTables.current.add(name));
+      const semantic = await prepareEvidenceSemanticDatasets(next, values, catalogs, name => semanticTables.current.add(name), current);
+      current.signal.throwIfAborted();
       setSemanticStates(semantic.states);
-      setRun({ report: structuredClone(next), values, semanticQueries: semantic.queries, semanticStates: semantic.states, revision: ++revision.current });
+      setRun({ execution: current, report: structuredClone(next), values, semanticQueries: semantic.queries, semanticStates: semantic.states, revision: ++revision.current });
       setUpdated(new Date().toLocaleTimeString());
       setStatus('Connected');
-    } catch (e) { setError(message(e)); setStatus('Refresh failed'); }
+    } catch (e) {
+      if (current.signal.aborted) setStatus('Refresh stopped');
+      else { setError(message(e)); setStatus('Refresh failed'); }
+    }
     finally { busyRef.current = false; setBusy(false); }
   }
   useEffect(() => {
-    if (!booted.current) { booted.current = true; if (!initial.library && !initial.error) void refresh(initial.report); }
+    if (!booted.current) {
+      booted.current = true;
+      if (initial.missingReport) navigate(true, undefined, true);
+      else if (!initial.library && !initial.error) void refresh(initial.report);
+    }
     const changed = (event: StorageEvent) => { if (event.key === null || event.key.startsWith(STORAGE_PREFIX) || event.key.startsWith(LEGACY_STORAGE_PREFIX)) reloadList(); };
     const unload = (event: BeforeUnloadEvent) => { if (dirtyRef.current) { event.preventDefault(); event.returnValue = ''; } };
     const pop = () => {
-      if (isLibraryUrl()) { setLibrary(true); reloadList(); return; }
+      if (isLibraryUrl()) { setRun(null); setLibrary(true); reloadList(); return; }
       const id = new URLSearchParams(window.location.search).get('evidence_report');
-      if (!id || id === reportRef.current.id) { setLibrary(false); return; }
+      if (!id || id === reportRef.current.id) { setLibrary(false); void refresh(reportRef.current); return; }
       try {
         const found = listEvidenceReports(serviceUrl).find(item => item.id === id);
-        if (found) openReport(found, false); else { setLibrary(true); setError('Saved report not found.'); }
+        if (found) openReport(found, false); else { setError(''); navigate(true, undefined, true); }
       } catch (e) { setError(message(e)); }
     };
     window.addEventListener('storage', changed);
     window.addEventListener('beforeunload', unload);
     window.addEventListener('popstate', pop);
-    return () => { window.removeEventListener('storage', changed); window.removeEventListener('beforeunload', unload); window.removeEventListener('popstate', pop); };
+    return () => { execution.current?.stop(); window.removeEventListener('storage', changed); window.removeEventListener('beforeunload', unload); window.removeEventListener('popstate', pop); };
   }, []);
 
   useEffect(() => {
@@ -238,7 +260,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
             </div>
             <Button variant="outline" disabled={busy} onClick={() => save()} title="Save in this browser · ⌘ / Ctrl + S"><Save />Save report</Button>
             <Button variant="ghost" size="icon" disabled={busy} onClick={() => save(true)} aria-label="Save a copy" title="Save a copy"><Copy /></Button>
-            <Button variant="field" disabled={busy} onClick={() => void refresh()} title="⌘ / Ctrl + Enter"><RefreshCw className={busy ? 'animate-spin' : ''} />{busy ? 'Refreshing…' : editing ? 'Update preview' : 'Refresh report'}</Button>
+            <Button variant="field" disabled={refreshing} onClick={() => void refresh()} title="⌘ / Ctrl + Enter"><RefreshCw className={refreshing ? 'animate-spin' : ''} />{refreshing ? 'Refreshing…' : editing ? 'Update preview' : 'Refresh report'}</Button>
+            {refreshing && <Button variant="outline" onClick={stopRefresh}><Square />Stop refresh</Button>}
             {editing && <Button variant="outline" onClick={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }}>{focused && editorOnly ? <Minimize2 /> : <Maximize2 />}{focused && editorOnly ? 'Exit full-screen editor' : 'Full-screen editor'}</Button>}
             <Button variant="ghost" size="icon" aria-label={focused ? 'Exit focus mode' : 'Focus report'} title={focused ? 'Exit focus mode · Esc' : 'Focus report'} aria-pressed={focused} onClick={() => { if (focused) setEditorOnly(false); setFocused(!focused); }}>{focused ? <Minimize2 /> : <Maximize2 />}</Button>
           </div></>}
@@ -260,7 +283,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
         <section style={{ display: editing && editorOnly ? 'none' : undefined }} aria-label={editing ? 'Report preview' : 'Report viewer'} className="flex min-h-0 min-w-0 flex-col">
           <div className="flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-5 py-2">
             <span className="text-xs font-semibold">{editing ? 'Preview' : 'Report'}</span>
-            <div className="ml-auto text-xs text-muted-foreground" role="status" aria-label="Report refresh status">{status}{updated && <span className="ml-2">· Updated {updated}</span>}</div>
+            <div className="ml-auto text-xs text-muted-foreground" role="status" aria-label="Report refresh status">{pendingQueries > 0 ? 'Refreshing report…' : status}{updated && <span className="ml-2">· Updated {updated}</span>}</div>
             {errorCount > 0 && <button type="button" className="text-xs text-destructive underline" onClick={() => setEditing(true)}>{errorCount} report problems</button>}
             {pending && <span className="rounded bg-accent px-2 py-1 text-xs text-accent-foreground" role="status">Changes not applied · {editing ? 'Update preview' : 'Refresh to apply'}</span>}
           </div>

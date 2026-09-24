@@ -1,3 +1,6 @@
+import { decodeArrowBuffer } from './duckdb-query';
+import { pendingQuery, parameterVariableSql } from './pending-query';
+import { createQueryExecutor, type QueryExecutionOptions } from './query-execution';
 // Boot DuckDB on the main thread via @haybarn/haybarn-wasm's AsyncDuckDB.
 //
 // AsyncDuckDB runs its own sub-worker (COI/EH/MVP variant selected by
@@ -200,11 +203,12 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // crossOriginIsolated has no SharedArrayBuffer at all; non-SAB contexts can
   // still cancel via the message-based connection.cancelSent() path.
   if (cancelSAB) db.registerCancelSAB(cancelSAB);
+  else engine.cancelQuery = () => { void conn.cancelSent().catch(error => console.warn('Query cancellation failed', error)); };
 
   // Preserve the existing { ok, arrowBuffers, error } contract. AsyncDuckDB's
   // runQuery returns a single Uint8Array of File-format Arrow IPC bytes —
   // exactly what every consumer's tableFromIPC() call expects.
-  const runQueryWrapped = async (sql: string): Promise<QueryResult> => {
+  const runQueryWrapped = async (sql: string, signal?: AbortSignal): Promise<QueryResult> => {
     // Clear any stale cancel flag from a prior query that was cancelled
     // cross-surface (e.g. AskAIChat cancel hit before the shell readLoop's
     // post-query reset ran). Without this, a fresh query would be cancelled
@@ -212,7 +216,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
     // own post-query reset in DuckDBShell.tsx.
     if (cancelInt32) Atomics.store(cancelInt32, 0, 0);
     try {
-      const bytes = await db.runQuery(connId, sql);
+      const bytes = signal ? await pendingQuery(db, connId, sql, signal) : await db.runQuery(connId, sql);
       // Copy out of wasm memory so tableFromIPC's view is safe even if
       // runQuery returned a subarray of a larger arena.
       //
@@ -231,12 +235,29 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
       return { ok: false, error: msg };
     }
   };
-  engine.query = runQueryWrapped;
-  engine.queryPrepared = async (sql: string, params: unknown[]): Promise<QueryResult> => {
+  const execute = createQueryExecutor(() => engine.cancelQuery?.());
+  // rc6 CancelPendingQuery releases the pending result but does not interrupt
+  // parallel background tasks. Run interruptible work on the polling thread;
+  // restore the shared setting before releasing connection ownership.
+  const interruptible = async <T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> => {
+    signal.throwIfAborted();
+    const setting = await db.runQuery(connId, "SELECT current_setting('threads')");
+    const threads = Number(decodeArrowBuffer(new Uint8Array(setting).buffer).getChildAt(0)?.get(0));
+    if (!Number.isSafeInteger(threads) || threads < 1) throw new Error('Could not read the engine thread setting.');
+    signal.throwIfAborted();
+    await db.runQuery(connId, 'SET threads = 1');
+    try { signal.throwIfAborted(); return await work(); }
+    finally { await db.runQuery(connId, `SET threads = ${threads}`); }
+  };
+  engine.query = (sql, options) => execute(signal => options
+    ? interruptible(signal, () => runQueryWrapped(sql, signal))
+    : runQueryWrapped(sql), options);
+  const runPrepared = async (sql: string, params: unknown[], options?: QueryExecutionOptions): Promise<QueryResult> => {
     if (cancelInt32) Atomics.store(cancelInt32, 0, 0);
     let statementId: number | null = null;
     try {
       statementId = await db.createPrepared(connId, sql);
+      options?.signal?.throwIfAborted();
       const bytes = await db.runPrepared(connId, statementId, params);
       const copy = new Uint8Array(bytes.byteLength);
       copy.set(bytes);
@@ -249,10 +270,34 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
       }
     }
   };
-  engine.getTableNames = (sql: string) => conn.getTableNames(sql);
-  // Pending vs non-streaming distinction (today's `query-sync`) is moot under
-  // AsyncDuckDB.runQuery, which always returns a single File-format buffer.
-  engine.querySync = runQueryWrapped;
+  const parameterPrefix = `__cupola_params_${crypto.randomUUID().replaceAll('-', '')}_`;
+  let parameterRun = 0;
+  engine.queryPrepared = (sql, params, options) => execute(async signal => {
+    if (!options) return runPrepared(sql, params);
+    // WASM has no pending prepared-statement API. Bind values through its
+    // prepared API into private variables, then execute foldable references
+    // using the pending API. Never interpolate parameter values into SQL.
+    return interruptible(signal, async () => {
+      const prefix = `${parameterPrefix}${++parameterRun}_`;
+      const names = params.map((_, index) => `${prefix}${index}`);
+      const query = parameterVariableSql(sql, await db.tokenize(sql), names);
+      try {
+        for (let index = 0; index < params.length; index++) {
+          signal.throwIfAborted();
+          const integer = typeof params[index] === 'number' && Number.isSafeInteger(params[index]);
+          const bound = await runPrepared(`SET VARIABLE "${names[index]}" = ?${integer ? '::BIGINT' : ''}`, [params[index]], { signal });
+          if (!bound.ok) return bound;
+        }
+        signal.throwIfAborted();
+        return await runQueryWrapped(query, signal);
+      } finally {
+        for (const name of names) await db.runQuery(connId, `RESET VARIABLE "${name}"`);
+      }
+    });
+  }, options);
+  engine.getTableNames = (sql: string) => execute(() => conn.getTableNames(sql));
+  // Keep the shell alias on the same connection queue.
+  engine.querySync = engine.query;
   notifyQueryChange();
 
   const version = await db.getVersion();

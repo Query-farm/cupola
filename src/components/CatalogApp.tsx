@@ -848,6 +848,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
               aria-label={isNarrow ? "Catalog sidebar" : undefined}
             >
               <Sidebar
+                serviceUrl={serviceUrl}
                 catalog={data}
                 memoryCatalog={memoryCatalog}
                 attachedCatalogs={attachedCatalogs}

@@ -22,7 +22,7 @@ test('rejects protected fields, malformed parameters and empty edits', () => {
   expect(() => createReportProposal(report, { summary: 'Bad', changes: { parameters: [p, p] } })).toThrow('Duplicate');
   expect(() => createReportProposal(report, { summary: 'Bad', changes: { parameters: [p], values: { n: 'wrong' } } })).toThrow('must be a number');
 });
-test('agent tools expose reference and proposal capabilities without SQL execution or save', () => {
+test('agent tools expose reference and proposal capabilities alongside shared data tools', () => {
   expect(EVIDENCE_AGENT_TOOLS.map(tool => tool.name)).toEqual(expect.arrayContaining(['get_report', 'list_components', 'get_component', 'propose_report_edit', 'compile_semantic_query', 'list_catalogs', 'describe_table']));
-  expect(EVIDENCE_AGENT_TOOLS.some(tool => tool.name === 'run_sql')).toBe(false);
+  expect(EVIDENCE_AGENT_TOOLS.map(tool => tool.name)).toEqual(expect.arrayContaining(['run_sql', 'read_query_results', 'query_semantic_model', 'list_categories']));
 });

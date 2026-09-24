@@ -69,3 +69,57 @@ test('normalizes DuckDB JSON sparkline tuples using the Evidence row contract', 
   const table = tableFromArrays({ __ev_sparkline_high: ['[["2026-09-23 23:00:00",72.5]]'], ordinary_json: ['[1,2]'] });
   expect(evidenceResult(table).rows as unknown).toEqual([{ __ev_sparkline_high: [['2026-09-23 23:00:00', 72.5]], ordinary_json: '[1,2]' }]);
 });
+
+test('report scope applies the 60-second limit to prepared, regular and Arrow queries', async () => {
+  const { EvidenceQueryRun, REPORT_QUERY_TIMEOUT_MS } = await import('../../src/lib/evidence/query-run');
+  const calls: any[] = [];
+  const bytes = tableToIPC(tableFromArrays({ value: [1] }));
+  engine.query = async (_sql, opts) => { calls.push(opts); return { ok: true, arrowBuffers: [bytes.slice().buffer] }; };
+  engine.queryPrepared = async (_sql, _params, opts) => { calls.push(opts); return { ok: true }; };
+  const activity: number[] = [];
+  const run = new EvidenceQueryRun(count => activity.push(count));
+  const service = new HaybarnQueryService(undefined, [], {}, run);
+  await run.query('select ?', [1]);
+  await service.query('select 1');
+  await service.queryArrow('select 2');
+  expect(calls).toHaveLength(3);
+  expect(calls.every(call => call.timeoutMs === 60_000 && call.signal === run.signal)).toBe(true);
+  expect(REPORT_QUERY_TIMEOUT_MS).toBe(60_000);
+  expect(activity).toEqual([1, 0, 1, 0, 1, 0]);
+  run.stop();
+  await expect(service.query('select 1')).rejects.toThrow('Report refresh stopped');
+  await expect(service.queryArrow('select 2')).rejects.toThrow('Report refresh stopped');
+  expect(calls).toHaveLength(3);
+});
+
+test('stopping a report cancels readiness without waiting for the engine', async () => {
+  const { EvidenceQueryRun } = await import('../../src/lib/evidence/query-run');
+  const run = new EvidenceQueryRun();
+  const pending = run.wait(new Promise(() => {}));
+  run.stop();
+  await expect(pending).rejects.toThrow('Report refresh stopped');
+});
+
+test('stopping a run interrupts its active query, skips queued SQL and allows a new run', async () => {
+  const { EvidenceQueryRun } = await import('../../src/lib/evidence/query-run');
+  const { createQueryExecutor } = await import('../../src/lib/query-execution');
+  let release!: (result: { ok: boolean }) => void;
+  let interrupts = 0;
+  const calls: string[] = [];
+  const execute = createQueryExecutor(() => { interrupts++; release({ ok: false }); });
+  engine.query = (sql, opts) => execute(() => {
+    calls.push(sql);
+    return sql === 'slow' ? new Promise(resolve => { release = resolve; }) : Promise.resolve({ ok: true });
+  }, opts);
+  const run = new EvidenceQueryRun();
+  const service = new HaybarnQueryService(undefined, [], {}, run);
+  const first = service.query('slow');
+  const second = service.query('queued');
+  await Promise.resolve();
+  run.stop();
+  expect((await first).error).toBe('Report refresh stopped.');
+  expect((await second).error).toBe('Report refresh stopped.');
+  expect(interrupts).toBe(1);
+  expect(calls).toEqual(['slow']);
+  expect((await new HaybarnQueryService().query('recovered')).error).toBeNull();
+});

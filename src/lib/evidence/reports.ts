@@ -22,6 +22,7 @@ const reportSchema = z.object({
 export type EvidenceReport = z.infer<typeof reportSchema>;
 export type EvidenceParameter = EvidenceReport['parameters'][number];
 export type ParameterValues = EvidenceReport['values'];
+export const EVIDENCE_REPORTS_CHANGED = 'cupola:evidence-reports-changed';
 export const LEGACY_STORAGE_PREFIX = 'cupola.evidence.report.v1:';
 export const STORAGE_PREFIX = 'cupola.evidence.report.v2:';
 export function evidenceReportStorageKey(serviceUrl: string, id: string) {
@@ -107,10 +108,12 @@ export function saveEvidenceReport(input: EvidenceReport, storage: Storage = loc
   const legacy = matchingLegacyKey(report.serviceUrl, report.id, storage);
   storage.setItem(evidenceReportStorageKey(report.serviceUrl, report.id), JSON.stringify(report));
   if (legacy) storage.removeItem(legacy);
+  if (typeof window !== 'undefined' && storage === window.localStorage) window.dispatchEvent(new Event(EVIDENCE_REPORTS_CHANGED));
   return report;
 }
 export function deleteEvidenceReport(serviceUrl: string, id: string, storage: Storage = localStorage) {
   const legacy = matchingLegacyKey(serviceUrl, id, storage);
   storage.removeItem(evidenceReportStorageKey(serviceUrl, id));
   if (legacy) storage.removeItem(legacy);
+  if (typeof window !== 'undefined' && storage === window.localStorage) window.dispatchEvent(new Event(EVIDENCE_REPORTS_CHANGED));
 }

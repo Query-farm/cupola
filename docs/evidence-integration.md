@@ -166,8 +166,11 @@ opening another report resets the agent and aborts its request. Conversations ar
 session-only and are not included in saved report documents.
 
 The agent receives the current report (including SQL and input values) and last
-preview diagnostics, flagged when stale. Its four tools read the report, list
-installed components, describe a component, and stage an edit. Component reference
+preview diagnostics, flagged when stale. Its report tools read the report, list
+installed components, describe a component, and stage an edit. Shared Ask AI tools
+execute SQL, page cached query results, discover catalogs/tables/categories and
+describe tables/functions. Governed queries support both compile-only inspection
+and live execution. Component reference
 comes from the pinned Core registry, including examples, attribute types/defaults,
 Zod constraints, child/parent restrictions, and data-source requirements. This
 avoids relying on model memory of Evidence's older Svelte syntax. Evidence also
@@ -184,10 +187,14 @@ does not invalidate it. Applying changes updates the draft, not storage or previ
 Apply and preview runs the normal compiler/render validation and Haybarn queries;
 Save persists the result. Subsequent agent turns receive updated errors.
 
-The agent has no query execution, arbitrary code execution, save or publication
-tools. It can revise existing SQL but cannot discover new connector schemas or
-sample data autonomously yet. It should ask for missing data information. Stop
-aborts only the agent request, never the shared engine's unrelated queries.
+SQL tools use the existing shared engine, with a result cache scoped to the report
+conversation. New conversation clears that cache. Standalone SQL does not expand
+report parameters or named-query references. Queries have a 60-second timeout; Stop
+aborts the agent request and its active query, not unrelated engine queries.
+Semantic-only mode hides and rejects raw SQL execution. The agent has no arbitrary
+JavaScript execution, save or publication tools; report edits remain proposals.
+Compared with main Ask AI, interactive ask_user buttons and standalone render_chart
+are not exposed; reports use conversational questions and Evidence chart components.
 
 Validation: `tests/unit/evidence-agent.test.ts` covers proposal scoping, typed
 validation and stale-write protection; `tests/evidence-agent.spec.ts` uses Chrome
@@ -327,3 +334,31 @@ and focus mode while preserving report styles. Closing or pressing Escape restor
 focus to the expand control; Escape leaves report focus mode active. Theme tokens
 also apply to the inner renderer root so Core's default dark colors cannot override
 a report's chosen palette.
+
+### Stopping refreshes and query deadlines
+
+Stop refresh is available during dataset setup and while the renderer is querying.
+It cancels the current report run, skips its queued queries, and ignores late
+results. Refresh again starts a fresh run and query cache. Leaving the preview
+also cancels its queries.
+
+Every Evidence query has a 60-second execution limit, including dataset setup,
+semantic materialization, component queries, Browse data, and pivots. Queue wait
+is excluded. Timeout errors are displayed in the report or setup error panel.
+The shared connection serializes queries so cancelling a queued report request
+cannot interrupt another surface's active query. After interruption, the queue
+waits for the engine to settle before starting subsequent work. Cancellation is
+cooperative through Haybarn; it does not destroy or restart the worker.
+
+`tests/unit/query-execution.test.ts` checks cancellation ownership, deadlines,
+queue draining and recovery. `tests/evidence-refresh.spec.ts` exercises Stop,
+timeouts and recovery with actual long-running SQL on the shared worker.
+
+Haybarn rc6's pending cancellation does not interrupt parallel background tasks.
+Interruptible report queries temporarily use one execution thread; the prior
+thread setting is restored before other queued work runs. Parameter values are
+still bound through prepared statements into private, per-query session variables
+and removed afterward. DuckDB's tokenizer substitutes only parameter tokens with
+constant variable references for pending execution. Safe integer inputs are bound
+as BIGINT. This workaround can reduce parallel report throughput; a native Haybarn
+interrupt fix would allow removing the thread restriction.

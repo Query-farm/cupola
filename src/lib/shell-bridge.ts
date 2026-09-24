@@ -1,3 +1,4 @@
+import type { QueryExecutionOptions } from './query-execution';
 /**
  * Typed bridges for cross-component communication.
  *
@@ -79,14 +80,14 @@ export function recordQuery(opts: {
 export const engine = {
   /** Run SQL. Becomes callable at worker boot — well BEFORE the VGI catalog is
    *  attached, so anything needing the catalog must await `attached` too. */
-  query: null as ((sql: string) => Promise<QueryResult>) | null,
+  query: null as ((sql: string, options?: QueryExecutionOptions) => Promise<QueryResult>) | null,
   /** Execute one prepared statement with positional values. Report datasets
    *  use this path so parameter values never become SQL source text. */
-  queryPrepared: null as ((sql: string, params: unknown[]) => Promise<QueryResult>) | null,
+  queryPrepared: null as ((sql: string, params: unknown[], options?: QueryExecutionOptions) => Promise<QueryResult>) | null,
   /** Parse SQL with DuckDB and return the relations it reads. Reports use
    *  this to infer dataset dependencies from ordinary FROM/JOIN references. */
   getTableNames: null as ((sql: string) => Promise<string[]>) | null,
-  querySync: null as ((sql: string) => Promise<QueryResult>) | null,
+  querySync: null as ((sql: string, options?: QueryExecutionOptions) => Promise<QueryResult>) | null,
   cancelQuery: null as (() => void) | null,
   progress: null as ((pct: number) => void) | null,
   catalogName: null as string | null,
