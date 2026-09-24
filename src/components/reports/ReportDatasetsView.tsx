@@ -53,6 +53,9 @@ interface Props {
   onApplyDataset?: (dataset: ReportDataset) => Promise<void>;
   onDeleteDataset?: (datasetId: string) => void | Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
+  recoveredDraft?: ReportDataset | null;
+  onRecoveredDraftHandled?: () => void;
+  onDraftChange?: (draft: ReportDataset | null) => void;
   onAcceptSemanticModel?: (datasetId: string, fingerprint: string) => void;
   catalogs?: readonly CatalogData[];
   onAddDataset?: (kind: "semantic" | "sql") => void;
@@ -102,10 +105,11 @@ function SemanticJsonEditor({ dataset, onChange }: { dataset: Extract<ReportData
   return <label className="mt-2 block space-y-1 text-xs"><span className="block text-[10px] font-normal text-muted-foreground">Inspect or edit the complete semantic query. Changes here are reflected in the builder.</span><textarea data-testid="report-dataset-semantic-editor" spellCheck={false} className="min-h-48 w-full rounded-md border border-input bg-white p-3 font-mono text-xs leading-relaxed text-slate-950 shadow-inner outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-slate-950 dark:text-slate-50" value={text} onChange={(event) => { const raw = event.target.value; setText(raw); try { const query = JSON.parse(raw); if (!query || typeof query !== "object" || Array.isArray(query)) throw new Error("The semantic query must be a JSON object."); appliedQuery.current = JSON.stringify(query); setError(null); onChange({ ...dataset, query, acceptedModelFingerprint: undefined }); } catch (cause) { setError(cause instanceof Error ? cause.message : "Invalid JSON"); } }} />{error && <span role="alert" className="block text-destructive">{error}</span>}</label>;
 }
 
-export function ReportDatasetsView({ report, results, appliedValues, running, engineReady, onRunDataset, onOpenSql, canEdit = false, editRequestId, onEditRequestHandled, onTestDataset, onApplyDataset, onDeleteDataset, onDirtyChange, onAcceptSemanticModel, catalogs = [], onAddDataset }: Props) {
-  const [selectedId, setSelectedId] = useState(report.datasets[0]?.id ?? "");
-  const [editing, setEditing] = useState(false);
-  const [datasetDraft, setDatasetDraft] = useState<ReportDataset | null>(null);
+export function ReportDatasetsView({ report, results, appliedValues, running, engineReady, onRunDataset, onOpenSql, canEdit = false, editRequestId, onEditRequestHandled, onTestDataset, onApplyDataset, onDeleteDataset, onDirtyChange, recoveredDraft, onRecoveredDraftHandled, onDraftChange, onAcceptSemanticModel, catalogs = [], onAddDataset }: Props) {
+  const [selectedId, setSelectedId] = useState(recoveredDraft?.id ?? report.datasets[0]?.id ?? "");
+  const [editing, setEditing] = useState(Boolean(recoveredDraft));
+  const [datasetDraft, setDatasetDraft] = useState<ReportDataset | null>(recoveredDraft ?? null);
+  useEffect(() => { if (recoveredDraft) onRecoveredDraftHandled?.(); }, [recoveredDraft, onRecoveredDraftHandled]);
   const [testResult, setTestResult] = useState<{ json: string; ok: boolean; transient?: boolean; message: string; warnings?: string[] } | null>(null);
   const [testing, setTesting] = useState(false);
   const [datasetView, setDatasetView] = useState<"details" | "profile">("details");
@@ -136,6 +140,7 @@ export function ReportDatasetsView({ report, results, appliedValues, running, en
     onDirtyChange?.(datasetDirty);
     return () => onDirtyChange?.(false);
   }, [datasetDirty, onDirtyChange]);
+  useEffect(() => { onDraftChange?.(datasetDirty ? datasetDraft : null); }, [datasetDirty, datasetDraft, onDraftChange]);
   const consumers = useMemo(() => dataset ? report.blocks.filter((block) => "datasetId" in block && block.datasetId === dataset.id) : [], [dataset, report.blocks]);
   const parameterConsumers = useMemo(() => dataset ? report.parameters.filter((parameter) => (parameter.options?.kind === "dataset" && parameter.options.datasetId === dataset.id) || parameter.validationDataset?.datasetId === dataset.id) : [], [dataset, report.parameters]);
   const dependencies = useMemo(() => (result?.dependencies ?? []).map((id) => report.datasets.find((candidate) => candidate.id === id)).filter((candidate) => candidate !== undefined), [report.datasets, result?.dependencies]);

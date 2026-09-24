@@ -134,6 +134,7 @@ function referencedColumns(block: ReportBlock): string[] {
     block.colorColumn,
     ...(block.tooltipColumns ?? []),
   ].filter((column): column is string => !!column);
+  if (block.type === "chart" && block.filter) columns.push(block.filter.column);
   columns.push(...(block.appearance?.rules ?? []).map((rule) => rule.column));
   return columns.filter((column, index, all) => all.indexOf(column) === index);
 }

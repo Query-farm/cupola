@@ -24,6 +24,7 @@ import { wkbToGeoJSON, rewindGeometryForD3 } from "@/lib/wkb";
 export const CUPOLA_DATA_NAME = "__cupola_data";
 
 export interface VegaView {
+  addEventListener(type: string, handler: (event: unknown, item: { datum?: Record<string, unknown> } | null) => void): VegaView;
   change(name: string, changeset: any): VegaView;
   runAsync(): Promise<VegaView>;
   toImageURL(format: "png", scaleFactor?: number): Promise<string>;

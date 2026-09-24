@@ -293,6 +293,13 @@ const blockProperties = {
   },
   pageSize: { type: "number", minimum: 1, maximum: 1000 },
   spec: { type: "object", description: "A Vega-Lite v5 spec without data or datasets." },
+  filter: {
+    type: "object",
+    description: "For chart: clicking a mark sets a report parameter from a column in that mark and refreshes affected datasets. The column must survive chart transforms. Do not use a date_range parameter.",
+    properties: { parameterKey: stringSchema, column: stringSchema },
+    required: ["parameterKey", "column"],
+    additionalProperties: false,
+  },
   config: { type: "object" },
   geometryColumn: stringSchema,
   latitudeColumn: stringSchema,
