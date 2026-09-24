@@ -85,6 +85,15 @@ export default defineConfig({
     },
     plugins: [
       {
+        name: 'evidence-table-fullscreen',
+        enforce: 'pre',
+        resolveId(source, importer) {
+          if (source === './TableFullscreenModal.svelte' && importer?.includes('/@evidence/core/')) {
+            return resolve('src/components/evidence/EvidenceTableFullscreen.svelte');
+          }
+        },
+      },
+      {
         // Older transitive toolbelt versions expose only a `svelte` export.
         // Astro's static-entrypoint resolver does not carry that condition.
         // Preserve each importer's version instead of aliasing all to one copy.

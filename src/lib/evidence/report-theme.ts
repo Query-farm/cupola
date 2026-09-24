@@ -73,6 +73,6 @@ export function buildReportTheme(appearance: ReportAppearance | undefined, appDa
   });
   const overrides = Object.entries(variables).map(([name, value]) => `${name}: ${value} !important;`).join('\n');
   return { config, mode, style: { ...variables, backgroundColor: base, color: colors.foreground, colorScheme: mode } as CSSProperties,
-    css: generateThemeCSS(config, { scopeSelector: ':host', lightModeOnly: true }) + `\n:host { ${overrides} color-scheme: ${mode}; }\n.evidence-document { --theme-font-scale: .875; font-family: var(--theme-font-body); }`,
+    css: generateThemeCSS(config, { scopeSelector: ':host', lightModeOnly: true }) + `\n:host, .evidence-theme { ${overrides} color-scheme: ${mode}; }\n.evidence-document { --theme-font-scale: .875; font-family: var(--theme-font-body); }`,
   };
 }

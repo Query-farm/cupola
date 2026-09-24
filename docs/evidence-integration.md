@@ -318,3 +318,12 @@ authors' configurations save with the report, while reader-only adjustments are
 session-local. This is interactive exploration of the refreshed snapshot, not a
 streaming subscription. For nonadditive semantic measures, changing grain should
 recompile the semantic query rather than summing already-aggregated values.
+
+### Expanded tables
+
+Cupola resolves Core's table fullscreen wrapper to a native dialog inside the
+report shadow root. The browser top layer keeps the table above scroll containers
+and focus mode while preserving report styles. Closing or pressing Escape restores
+focus to the expand control; Escape leaves report focus mode active. Theme tokens
+also apply to the inner renderer root so Core's default dark colors cannot override
+a report's chosen palette.

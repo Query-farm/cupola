@@ -27,6 +27,7 @@ export function EvidencePreview({ run, onQuery, onError, onIssues, onData, repor
     // Core defines its own light tokens at :root; inherit Cupola's tokens instead.
     style.textContent = styles.replaceAll(':root', ':host');
     const target = document.createElement('div');
+    target.classList.add('evidence-theme');
     const appearanceStyle = document.createElement('style');
     appearanceStyle.textContent = latestTheme.current.css;
     target.classList.toggle('dark', latestTheme.current.mode === 'dark');
