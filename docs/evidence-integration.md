@@ -1,10 +1,10 @@
 # Evidence reporting evaluation
 
 Run `bun install` and `bun run dev --host 127.0.0.1 --port 4323`, then open
-http://127.0.0.1:4323/v0.4.168/evidence in Chrome. The separate worktree is
+http://127.0.0.1:4323/v0.4.170/evidence in Chrome. The separate worktree is
 `vgi-web-frontend-evidence`, branch `feature/evidence-reporting`.
 
-The Evidence lab tab embeds the real Evidence Core Svelte/Markdoc renderer in
+The Reports tab embeds the real Evidence Core Svelte/Markdoc renderer in
 Cupola's React shell. The toolbar, library and editor use Cupola controls and
 theme tokens. Only the document renderer uses a shadow root; it shares the JavaScript
 realm and the existing Haybarn engine. The shell owns WASM startup, extension
@@ -64,11 +64,11 @@ All actions reuse the shell's Worker; no additional engine is created.
 
 **Save report** stores the title, source, setup SQL, parameter definitions,
 selected values and service URL in localStorage, under versioned per-report keys
-`cupola.evidence.report.v1:<id>`. Saving does not save result rows. **Save a copy**
+`cupola.evidence.report.v2:<encoded-worker-url>:<encoded-report-id>`. Saving does not save result rows. **Save a copy**
 creates another ID. Storage and validation failures are surfaced; failed saves
 do not claim success. No existing block-report IndexedDB data is changed.
 
-**Saved reports** opens `/v0.4.168/evidence/reports`, with search, open, create and
+**Saved reports** opens `/v0.4.170/reports/saved`, with search, open, create and
 delete actions. A saved report URL carries `?evidence_report=<id>` and resolves
 only in the same browser/origin. Reopening reruns its datasets with saved values;
 a service mismatch requires opening its saved service connection. Draft edits
@@ -206,7 +206,7 @@ URLs use the application's exact service URL identity, including paths and query
 strings. Multiple reports per worker are supported; matching report IDs on other
 workers remain independent.
 
-Previous `cupola.evidence.report.v1:<id>` records remain readable on their saved
+Previous `cupola.evidence.report.v2:<encoded-worker-url>:<encoded-report-id>` records remain readable on their saved
 worker. Saving writes the new key before removing the matching legacy record,
 so a failed write preserves the old report. Storage remains local to this browser
 and Cupola origin; it is not shared with other browsers or users.

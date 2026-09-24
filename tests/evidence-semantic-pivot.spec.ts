@@ -1,3 +1,4 @@
+import { BASE } from './helpers';
 import { test, expect } from '@playwright/test';
 
 test.use({ channel: 'chrome', viewport: { width: 1500, height: 1100 } });
@@ -8,7 +9,7 @@ test('semantic datasets feed Evidence and live pivots preserve configuration', a
   await page.evaluate(async fixtureUrl => {
     (window as any).__semanticWorker = (window as any).__bridge.worker;
     await (await import(/* @vite-ignore */ fixtureUrl)).mountEvidenceSemantic();
-  }, '/v0.4.168/tests/fixtures/evidence-semantic-browser.tsx');
+  }, `${BASE}tests/fixtures/evidence-semantic-browser.tsx`);
   const panel = page.locator('#evidence-semantic-host').getByTestId('evidence-panel');
   await expect(panel.getByTestId('evidence-document')).toContainText('120', { timeout: 30000 });
   await panel.getByRole('button', { name: 'Edit report', exact: true }).click();

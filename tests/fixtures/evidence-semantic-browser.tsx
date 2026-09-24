@@ -16,7 +16,7 @@ export async function mountEvidenceSemantic() {
     source: '# Model report\n\n{% table data="revenue" /%}', setupSql: '', parameters: [], values: {},
     semanticDatasets: [{ id: 'revenue-id', name: 'revenue', kind: 'semantic', query: { measures: [{ catalog_id: 'com.example.sales', entity_id: 'orders', member_id: 'revenue' }] } }],
   });
-  window.history.replaceState({}, '', '/v0.4.168/reports?evidence_report=semantic-test');
+  window.history.replaceState({}, '', `${import.meta.env.BASE_URL}reports?evidence_report=semantic-test`);
   const host = document.createElement('div'); host.id = 'evidence-semantic-host'; host.style.cssText = 'position:fixed;inset:0;z-index:100;background:white'; document.body.append(host);
   createRoot(host).render(<SettingsProvider><EvidencePanel catalogName="sales" serviceUrl={serviceUrl} catalogs={reportSemanticCatalogs()} /></SettingsProvider>);
 }

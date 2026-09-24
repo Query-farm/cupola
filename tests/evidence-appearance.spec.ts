@@ -1,3 +1,4 @@
+import { BASE } from './helpers';
 import { test, expect } from '@playwright/test';
 
 test.use({ channel: 'chrome', viewport: { width: 1500, height: 1100 } });
@@ -20,7 +21,7 @@ test('report appearance updates without queries and survives save, copy and reop
     win.__themeCalls = 0;
   });
   // Inspect the adapter's queries instead of replacing the shared bridge API.
-  const moduleUrl = new URL('src/lib/evidence/haybarn-query-service.ts', page.url().split('/v')[0] + '/v0.4.168/').href;
+  const moduleUrl = new URL('src/lib/evidence/haybarn-query-service.ts', new URL(BASE, page.url()).href).href;
   await page.evaluate(async url => {
     const { HaybarnQueryService } = await import(/* @vite-ignore */ url);
     const original = HaybarnQueryService.prototype.execute;

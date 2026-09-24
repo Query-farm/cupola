@@ -82,7 +82,7 @@ Daily forecasts follow each city's local calendar. Hourly comparisons use **UTC*
 
 ## Right now
 
-**{% value data="primary_current" value="max(city)" /%} · {% value data="primary_current" value="max(conditions)" /%}**  
+**{% value data="primary_current" value="max(city)" /%} · {% value data="primary_current" value="max(conditions)" /%}**\
 As of {% value data="primary_current" value="max(as_of_local)" /%}.
 These are the model's current conditions, separate from the upcoming hourly forecast.
 
