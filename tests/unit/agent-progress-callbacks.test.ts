@@ -142,3 +142,30 @@ describe("agent progress callbacks", () => {
     expect(trace).toContain("done");
   });
 });
+
+test('transport progress reports connection and streamed tool size without exposing contents', async () => {
+  const responses = [sseStream(textThenToolUse('SELECT 1')), sseStream(endTurn)];
+  globalThis.fetch = (async () => responses.shift()!) as unknown as typeof fetch;
+  const progress: unknown[] = [];
+  await runAgentTurn({ apiKey: 'key' }, 'claude-sonnet-4-6', [{ role: 'user', content: 'hi' }], 'system', async () => 'ok', {
+    ...recorder().callbacks, onProgress: event => progress.push(event),
+  });
+  expect(progress).toContainEqual({ stage: 'connecting' });
+  expect(progress).toContainEqual({ stage: 'connected' });
+  expect(progress).toContainEqual({ stage: 'tool_input', tool: 'run_sql', characters: '{"sql":"SELECT 1"}'.length });
+  expect(JSON.stringify(progress)).not.toContain('SELECT 1');
+});
+
+test('a truncated stream never executes its tool or reports success', async () => {
+  globalThis.fetch = (async () => sseStream(textThenToolUse('SELECT 1').slice(0, -1))) as unknown as typeof fetch;
+  let executed = false;
+  const { callbacks, trace } = recorder();
+  await expect(runAgentTurn({ apiKey: 'key' }, 'claude-sonnet-4-6', [{ role: 'user', content: 'hi' }], 'system', async () => { executed = true; return 'ok'; }, callbacks)).rejects.toThrow('before the AI response finished');
+  expect(executed).toBe(false);
+  expect(trace).not.toContain('done');
+});
+
+test('provider errors within a successful HTTP stream are surfaced', async () => {
+  globalThis.fetch = (async () => sseStream([{ type: 'error', error: { message: 'Overloaded' } }])) as unknown as typeof fetch;
+  await expect(runAgentTurn({ apiKey: 'key' }, 'claude-sonnet-4-6', [{ role: 'user', content: 'hi' }], 'system', async () => 'ok', recorder().callbacks)).rejects.toThrow('AI stream error: Overloaded');
+});

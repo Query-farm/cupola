@@ -6,7 +6,7 @@
 import { Database, FileCode2, Sparkles, Table2, History, BarChart3, PanelLeftClose, PanelLeftOpen, FileChartColumn } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type TabId = "catalog" | "editor" | "shell" | "askai" | "reports" | "preview" | "queries" | "perspective";
+export type TabId = "catalog" | "editor" | "shell" | "askai" | "reports" | "evidence" | "preview" | "queries" | "perspective";
 
 interface TabDef {
   id: TabId;

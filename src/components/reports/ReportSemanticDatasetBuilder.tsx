@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { SemanticMemberTree } from "./SemanticMemberTree";
 import { Search, ShieldCheck } from "lucide-react";
 import type { CatalogData } from "@/lib/service";
 import {
@@ -98,6 +99,7 @@ export function ReportSemanticDatasetBuilder(props: Props) {
 
 function SemanticDatasetForm({ dataset, report, catalogs, onChange }: Props) {
   const [search, setSearch] = useState("");
+  const [selectedOnly, setSelectedOnly] = useState(false);
   const [newParameter, setNewParameter] = useState("");
   const environment = useMemo(
     () => buildSemanticEnvironment(catalogs),
@@ -116,12 +118,10 @@ function SemanticDatasetForm({ dataset, report, catalogs, onChange }: Props) {
   const visible = members.filter(
     (item) =>
       !normalizedSearch ||
-      `${title(item)} ${item.member.description ?? ""} ${item.entity.entityId}`
+      `${title(item)} ${item.member.member_id} ${item.member.description ?? ""} ${item.member.unit ?? ""} ${item.entity.catalogId} ${item.entity.attachmentAlias} ${item.entity.entityId}`
         .toLocaleLowerCase("en-US")
         .includes(normalizedSearch),
   );
-  const measures = visible.filter((item) => item.member.kind === "measure");
-  const dimensions = visible.filter((item) => item.member.kind !== "measure");
   const selectedMeasures = new Map<string, any>(
     (dataset.query.measures ?? []).map((item: any) => [
       selectionKey(item),
@@ -226,7 +226,17 @@ function SemanticDatasetForm({ dataset, report, catalogs, onChange }: Props) {
       (selection) => selectionKey(selection) === key,
     );
     if (index >= 0) current.splice(index, 1);
-    else current.push(ref(item));
+    else {
+      const used = new Set(selectedOutputs);
+      const fallback = `${item.entity.entityId}_${item.member.member_id}`.replace(/[^A-Za-z0-9_]/g, '_');
+      let name = item.member.member_id;
+      if (used.has(name)) {
+        name = fallback;
+        let suffix = 2;
+        while (used.has(name)) name = `${fallback}_${suffix++}`;
+      }
+      current.push({ ...ref(item), ...(name !== item.member.member_id ? { alias: name } : {}) });
+    }
     updateQuery({ [kind]: current });
   };
   const updateGranularity = (item: MemberItem, granularity: string) => {
@@ -281,7 +291,7 @@ function SemanticDatasetForm({ dataset, report, catalogs, onChange }: Props) {
       kind === "measures" ? selectedMeasures : selectedDimensions
     ).get(keyOf(item));
     return (
-      <div key={keyOf(item)} className="rounded-md border bg-background p-2.5">
+      <div key={keyOf(item)} className={selected ? "rounded-md border border-primary/30 bg-primary/5 p-2.5" : "rounded-md border border-transparent p-2 hover:bg-muted/40"}>
         <label className="flex cursor-pointer items-start gap-2">
           <input
             type="checkbox"
@@ -308,7 +318,7 @@ function SemanticDatasetForm({ dataset, report, catalogs, onChange }: Props) {
           <div className="mt-2 space-y-2 pl-6">
             <SemanticText
               label={`${title(item)} output name`}
-              value={selected.alias}
+              value={selected.alias || selected.member_id}
               onChange={(alias) =>
                 updateQuery({
                   ...renameSemanticOutput(
@@ -396,7 +406,8 @@ function SemanticDatasetForm({ dataset, report, catalogs, onChange }: Props) {
           className="pl-8"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Find a measure or dimension…"
+          aria-label="Find semantic fields"
+          placeholder="Search fields, entities, catalogs or units…"
         />
       </label>
       {environment.diagnostics.length > 0 && (
@@ -412,34 +423,17 @@ function SemanticDatasetForm({ dataset, report, catalogs, onChange }: Props) {
           </ul>
         </details>
       )}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section>
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Measures
-          </h4>
-          <div className="max-h-72 space-y-2 overflow-auto pr-1">
-            {measures.map((item) => renderMember(item, "measures"))}
-            {measures.length === 0 && (
-              <p className="rounded-md border border-dashed p-4 text-center text-xs text-muted-foreground">
-                No matching measures.
-              </p>
-            )}
-          </div>
-        </section>
-        <section>
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Break down by
-          </h4>
-          <div className="max-h-72 space-y-2 overflow-auto pr-1">
-            {dimensions.map((item) => renderMember(item, "dimensions"))}
-            {dimensions.length === 0 && (
-              <p className="rounded-md border border-dashed p-4 text-center text-xs text-muted-foreground">
-                No matching dimensions.
-              </p>
-            )}
-          </div>
-        </section>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+        <span className="text-muted-foreground">{selectedMeasures.size} measures · {selectedDimensions.size} dimensions selected</span>
+        <Button size="sm" variant={selectedOnly ? 'secondary' : 'outline'} aria-pressed={selectedOnly} onClick={() => setSelectedOnly(!selectedOnly)}>Selected only</Button>
       </div>
+      <SemanticMemberTree
+        items={selectedOnly ? visible.filter(item => selectedMeasures.has(keyOf(item)) || selectedDimensions.has(keyOf(item))) : visible}
+        selected={new Set([...selectedMeasures.keys(), ...selectedDimensions.keys()])}
+        searching={Boolean(normalizedSearch) || selectedOnly}
+        searchKey={`${selectedOnly}:${normalizedSearch}`}
+        renderMember={renderMember}
+      />
       {sourceParameters.length > 0 && (
         <section className="rounded-lg border p-3">
           <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">

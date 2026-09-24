@@ -1,6 +1,6 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -9,6 +9,7 @@ import react from '@astrojs/react';
 import sentry from '@sentry/astro';
 
 import tailwindcss from '@tailwindcss/vite';
+import svelte from '@astrojs/svelte';
 
 const requireJson = createRequire(import.meta.url);
 const pkg = requireJson('./package.json');
@@ -30,6 +31,8 @@ export default defineConfig({
 
   integrations: [
     react(),
+    // Keep component CSS with the renderer across Cupola's version-prefixed asset paths.
+    svelte({ compilerOptions: { css: 'injected' } }),
     sentry({
       // Init lives in sentry.client.config.ts so the runtime DSN/release/scrubbing
       // stay co-located. Source-map upload is deliberately disabled here: the
@@ -42,6 +45,10 @@ export default defineConfig({
   ],
 
   vite: {
+    ssr: {
+      noExternal: ['@evidence/core', /svelte/, 'virtua', 'echarts', 'bits-ui', 'runed'],
+      resolve: { conditions: ['svelte', 'module', 'node', 'development|production'] },
+    },
     // Emit `.js.map` files alongside every bundled chunk so Sentry can
     // symbolicate production stack traces. `'hidden'` omits the
     // `//# sourceMappingURL=` trailer from the JS — the browser never
@@ -58,6 +65,13 @@ export default defineConfig({
       sourcemap: 'hidden',
     },
     environments: {
+      prerender: {
+        resolve: {
+          conditions: ['svelte', 'module', 'node', 'development|production'],
+          externalConditions: ['svelte', 'node'],
+          noExternal: ['@evidence/core', /svelte/, 'virtua', 'echarts', 'bits-ui', 'runed'],
+        },
+      },
       client: {
         build: {
           sourcemap: 'hidden',
@@ -70,6 +84,27 @@ export default defineConfig({
       __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
     },
     plugins: [
+      {
+        // Older transitive toolbelt versions expose only a `svelte` export.
+        // Astro's static-entrypoint resolver does not carry that condition.
+        // Preserve each importer's version instead of aliasing all to one copy.
+        name: 'evidence-svelte-exports',
+        enforce: 'pre',
+        resolveId(source, importer) {
+          if (!['svelte-toolbelt', 'runed', 'mode-watcher', 'bits-ui', 'paneforge', 'formsnap', 'vaul-svelte'].includes(source) || !importer) return;
+          let directory = dirname(importer.split('?')[0]);
+          while (directory !== dirname(directory)) {
+            const manifest = resolve(directory, 'node_modules', source, 'package.json');
+            if (existsSync(manifest)) {
+              const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
+              const entry = pkg.exports?.['.']?.svelte;
+              if (typeof entry === 'string') return resolve(dirname(manifest), entry);
+              return;
+            }
+            directory = dirname(directory);
+          }
+        },
+      },
       tailwindcss(),
       // Serve shell/wasm files directly, bypassing Vite's transform pipeline.
       // Without this, pthread sub-worker requests for duckdb-coi.js hang because
@@ -181,10 +216,11 @@ export default defineConfig({
       },
     },
     optimizeDeps: {
-      include: ['leaflet', 'cli-table3', '@haybarn/haybarn-wasm'],
-      exclude: ['astro'],
+      include: ['leaflet', 'cli-table3', '@haybarn/haybarn-wasm', 'svelte-sonner', 'html-to-image', 'highlight.js/lib/common', 'exceljs', 'json5', 'pako', 'fastest-levenshtein', 'ssf', 'js-yaml', 'lodash', 'echarts', 'posthog-js', '@markdoc/markdoc', 'lodash/assign', 'lodash/defaults', 'lodash/defaultsDeep', 'lodash/get', 'lodash/isEqual', 'lodash/isString', 'lodash/merge', 'lodash/omit'],
+      exclude: ['astro', '@evidence/core'],
     },
     resolve: {
+      conditions: ['svelte', 'module', 'browser', 'development|production'],
       // Force ONE Apache Arrow copy into the bundle. Arrow objects cross the
       // boundary between cupola and its VGI dependencies (vgi/client's
       // deserializeSchema hands us Fields). Without dedupe
@@ -193,6 +229,10 @@ export default defineConfig({
       // `paths` entry in tsconfig.json, which does the same for typechecking.
       dedupe: ['@query-farm/apache-arrow'],
       alias: {
+        '@evidence/core': resolve('node_modules/@evidence/core/src'),
+        '$app/state': resolve('node_modules/@evidence/core/src/shims/page-state.ts'),
+        '$app/environment': resolve('node_modules/@evidence/core/src/shims/env.ts'),
+        '$app/navigation': resolve('src/lib/evidence/navigation.ts'),
         // vgi-rpc 0.21.3 publishes this browser build on its `./connect`
         // export. Resolve the published artifact explicitly because Vite's
         // SSR-aware resolver does not select that conditional subpath while

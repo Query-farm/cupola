@@ -9,6 +9,8 @@ import {
   customerRelationship,
 } from "./fixtures/report-semantic-catalogs";
 
+test.use({ channel: "chrome" });
+
 const fixtureUrl = `${BASE}tests/fixtures/report-semantic-browser.tsx`;
 async function setup(
   page: Page,
@@ -354,4 +356,33 @@ test("new report → KPI → governed dataset → live test → apply preserves 
   expect(saved.document.blocks[0].valueColumn).toBe("revenue");
   expect(saved.document.blocks[0].title).toBeUndefined();
   expect(errors).toEqual([]);
+});
+
+test('semantic field tree keeps selections, supplies names and disambiguates duplicate outputs', async ({ page }) => {
+  const { view, query } = await setup(page);
+  const revenue = view.getByRole('checkbox', { name: /Net revenue/ });
+  await revenue.check();
+  const output = view.getByLabel('Net revenue output name', { exact: true });
+  await expect(output).toHaveValue('revenue');
+  await output.fill('net_sales');
+  await view.getByRole('checkbox', { name: /customer id orders/ }).check();
+  await view.getByRole('checkbox', { name: /customer id customers/ }).check();
+  expect((await query()).dimensions.map((item: any) => item.alias || item.member_id)).toEqual(['customer_id', 'customers_customer_id']);
+  const catalog = view.getByRole('button', { name: 'Catalog com.example.sales', exact: true });
+  await catalog.click();
+  await expect(catalog).toHaveAttribute('aria-expanded', 'false');
+  await expect(output).toHaveCount(0);
+  const search = view.getByRole('textbox', { name: 'Find semantic fields' });
+  await search.fill('revenue after discounts');
+  await expect(catalog).toHaveAttribute('aria-expanded', 'true');
+  await expect(output).toHaveValue('net_sales');
+  await expect(revenue).toBeChecked();
+  await search.fill('no_such_field');
+  await expect(view).toContainText('No matching fields');
+  await search.fill('');
+  await expect(catalog).toHaveAttribute('aria-expanded', 'false');
+  await view.getByRole('button', { name: 'Selected only', exact: true }).click();
+  await expect(output).toHaveValue('net_sales');
+  await expect(view.getByRole('checkbox')).toHaveCount(3);
+  await expect(view).toContainText('1 measures · 2 dimensions selected');
 });

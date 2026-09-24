@@ -15,8 +15,13 @@
 /** Label for the "model is composing this call" phase. */
 export function toolInputLabel(name: string): string {
   switch (name) {
+    case "get_report": return "Reading report";
+    case "list_components": return "Exploring Evidence components";
+    case "get_component": return "Checking Evidence component options";
+    case "propose_report_edit": return "Preparing report changes";
     case "run_sql":
       return "Writing query";
+    case "compile_semantic_query":
     case "query_semantic_model":
       return "Composing semantic query";
     case "render_chart":
@@ -59,6 +64,10 @@ export function toolInputLabel(name: string): string {
 /** Label for the "tool is running" phase, used by the compact status row. */
 export function toolActivityLabel(name: string, input?: any): string {
   switch (name) {
+    case "get_report": return "Reading report";
+    case "list_components": return "Exploring Evidence components";
+    case "get_component": return "Checking Evidence component options";
+    case "propose_report_edit": return "Preparing report changes";
     case "describe_table":
       return `Looking up ${input?.catalog ? `${input.catalog}.` : ""}${input?.schema}.${input?.table}`;
     case "describe_function":
@@ -73,6 +82,7 @@ export function toolActivityLabel(name: string, input?: any): string {
       return "Reading more results";
     case "render_chart":
       return "Rendering chart";
+    case "compile_semantic_query":
     case "query_semantic_model":
       return input?.compile_only ? "Compiling semantic query" : "Running semantic query";
     case "preview_sql":
