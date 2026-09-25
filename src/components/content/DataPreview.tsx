@@ -181,6 +181,10 @@ function makeIndexComparator(table: any, col: string, dir: "asc" | "desc"): (a: 
       cmp = ba < bb ? -1 : ba > bb ? 1 : 0;
     } else if (typeof va === "number" && typeof vb === "number") {
       cmp = va - vb;
+    } else if (typeof va.__rawDays === "number" && typeof vb.__rawDays === "number") {
+      // Date32 values are wrapped by safeGetArrowValue to preserve DuckDB's
+      // full date range. Compare days directly, including infinity sentinels.
+      cmp = va.__rawDays - vb.__rawDays;
     } else if (va instanceof Date && vb instanceof Date) {
       cmp = va.getTime() - vb.getTime();
     } else {
