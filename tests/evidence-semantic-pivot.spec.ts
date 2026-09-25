@@ -1,0 +1,42 @@
+import { BASE } from './helpers';
+import { test, expect } from '@playwright/test';
+
+test.use({ channel: 'chrome', viewport: { width: 1500, height: 1100 } });
+test('semantic datasets feed Evidence and live pivots preserve configuration', async ({ page }) => {
+  test.setTimeout(180000);
+  await page.goto('evidence/reports');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__bridge?.queryPrepared)), { timeout: 90000 }).toBe(true);
+  await page.evaluate(async fixtureUrl => {
+    (window as any).__semanticWorker = (window as any).__bridge.worker;
+    await (await import(/* @vite-ignore */ fixtureUrl)).mountEvidenceSemantic();
+  }, `${BASE}tests/fixtures/evidence-semantic-browser.tsx`);
+  const panel = page.locator('#evidence-semantic-host').getByTestId('evidence-panel');
+  await expect(panel.getByTestId('evidence-document')).toContainText('120', { timeout: 30000 });
+  await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Model', exact: true }).click();
+  await expect(panel.getByTestId('report-semantic-builder')).toBeVisible();
+  await expect(panel.getByRole('region', { name: 'Semantic datasets' })).toContainText('Net revenue');
+  await expect(panel.getByRole('region', { name: 'Semantic datasets' })).toContainText('USD');
+  await panel.getByRole('button', { name: 'Accept current model' }).click();
+  await panel.getByRole('button', { name: 'Update preview', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Browse data', exact: true }).click();
+  const browser = panel.getByRole('region', { name: 'Data browser', exact: true });
+  await browser.getByLabel('Browse dataset').selectOption('query:revenue');
+  await browser.getByRole('button', { name: 'Preview rows', exact: true }).click();
+  await expect(browser.getByRole('columnheader', { name: 'Net revenue (USD)' })).toBeVisible();
+  await browser.getByRole('button', { name: 'Explore pivot' }).click();
+  const pivot = browser.locator('perspective-viewer');
+  await expect(pivot).toBeVisible({ timeout: 60000 });
+  await expect(browser.getByText('Loading pivot…')).toHaveCount(0, { timeout: 60000 });
+  await pivot.evaluate(async (viewer: any) => { await viewer.restore({ group_by: ['revenue'] }); });
+  await browser.getByRole('button', { name: 'Add pivot to report' }).click();
+  await panel.getByRole('tab', { name: 'Code', exact: true }).click();
+  const savedPivot = panel.getByRole('region', { name: 'revenue · exploration' }).locator('perspective-viewer');
+  await expect(savedPivot).toBeVisible({ timeout: 60000 });
+  await expect.poll(() => savedPivot.evaluate(async (viewer: any) => (await viewer.save()).group_by)).toEqual(['revenue']);
+  await panel.getByRole('button', { name: 'Save report', exact: true }).click();
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('cupola.evidence.report.v2:' + encodeURIComponent('https://semantic-test.example') + ':semantic-test')!));
+  expect(stored.pivots[0].config.group_by).toEqual(['revenue']);
+  expect(stored.semanticDatasets[0].acceptedModelFingerprint).toMatch(/^sha256:/);
+  expect(await page.evaluate(() => (window as any).__semanticWorker === (window as any).__bridge.worker)).toBe(true);
+});

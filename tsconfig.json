@@ -21,6 +21,8 @@
     // run fail with TS5101 before it checks a single file. `paths` resolves
     // relative to this file's directory without it.
     "paths": {
+      "@evidence/core": ["./node_modules/@evidence/core/src/index.ts"],
+      "@evidence/core/*": ["./node_modules/@evidence/core/src/*"],
       "@/*": ["./src/*"],
       // Mirrors `vite.resolve.dedupe`: pin every importer to this project's
       // single Arrow install, so `Field` is one nominal type across the client

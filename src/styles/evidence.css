@@ -1,0 +1,60 @@
+@import 'tailwindcss';
+@import '@evidence/core/styles/base.css';
+@plugin '@tailwindcss/typography';
+@custom-variant dark (&:where(.dark, .dark *));
+@source '../../node_modules/@evidence/core/src';
+
+/* Inherit Cupola's semantic tokens through the shadow host. */
+:host {
+  --background: inherit; --foreground: inherit; --card: inherit; --card-foreground: inherit;
+  --popover: inherit; --popover-foreground: inherit; --primary: inherit; --primary-foreground: inherit;
+  --secondary: inherit; --secondary-foreground: inherit; --muted: inherit; --muted-foreground: inherit;
+  --accent: inherit; --accent-foreground: inherit; --destructive: inherit; --border: inherit; --input: inherit; --ring: inherit;
+  --chart-1: inherit; --chart-2: inherit; --chart-3: inherit; --chart-4: inherit; --chart-5: inherit;
+  --radius: inherit;
+  --theme-font-body: 'Commissioner', ui-sans-serif, system-ui, sans-serif;
+  --theme-font-heading: 'Petrona', Georgia, serif;
+  --theme-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --theme-table-bar: var(--primary);
+  --theme-table-subtotal-bg: var(--muted); --theme-table-total-bg: var(--secondary);
+  --theme-table-pivot-bg: var(--muted); --theme-table-link: var(--primary);
+  color: var(--foreground); font-family: var(--theme-font-body);
+}
+.evidence-document {
+  font-size: 14px; --theme-font-scale: .9;
+  --tw-prose-body: var(--foreground); --tw-prose-headings: var(--foreground);
+  --tw-prose-lead: var(--muted-foreground); --tw-prose-links: var(--primary);
+  --tw-prose-bold: var(--foreground); --tw-prose-counters: var(--muted-foreground);
+  --tw-prose-bullets: var(--border); --tw-prose-hr: var(--border);
+  --tw-prose-quotes: var(--foreground); --tw-prose-quote-borders: var(--border);
+  --tw-prose-code: var(--foreground); --tw-prose-th-borders: var(--border); --tw-prose-td-borders: var(--border);
+}
+.evidence-document h1, .evidence-document h2, .evidence-document h3 { font-family: var(--theme-font-heading); font-weight: 600; }
+.evidence-document h1 { font-size: 28px; }
+.evidence-document h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-top: var(--report-section-gap, 28px); }
+.evidence-document table { font-variant-numeric: tabular-nums; }
+/* Core's informational callout uses fixed blue utilities; match Cupola's neutral callout. */
+.evidence-document .bg-blue-50.border-blue-200 {
+  background: var(--muted); border-color: var(--border); color: var(--foreground);
+}
+
+/* Collapsible Evidence tables repeat parent dimensions in detail rows. For this
+   city/day layout, keep the city accessible but show it only in the group header. */
+.evidence-document [data-component-type="table"][data-component-title="Daily outlook"]
+  tbody tr:not(.cursor-pointer) > td:first-child > span {
+  opacity: 0;
+  pointer-events: none;
+}
+/* Temperature arrows indicate direction, not good/bad performance. */
+.evidence-document [data-component-title="Daily outlook"] {
+  --theme-positive: var(--primary);
+  --theme-negative: var(--foreground);
+}
+/* Precipitation is nonnegative; its in-cell zero markers join into a distracting
+   vertical rule. Keep the bars on their zero-based scale without that rule. */
+.evidence-document [data-component-title="Daily outlook"] td > .bg-border.absolute.w-px {
+  display: none;
+}
+
+/* Per-report density applies to standard Evidence table cells. */
+.evidence-document th, .evidence-document td { padding: var(--report-table-padding, 8px 12px); }

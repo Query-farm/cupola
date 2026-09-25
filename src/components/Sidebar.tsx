@@ -1,3 +1,4 @@
+import { SavedReportsSidebar } from "./evidence/SavedReportsSidebar";
 import React, { useState, useMemo } from "react";
 import { Search, TerminalSquare, Cpu, RefreshCw, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -9,6 +10,7 @@ import { buildTreeData, filterTree, parseSelection, selectionToTreeId, type Sele
 
 interface Props {
   catalog: CatalogData;
+  serviceUrl?: string;
   memoryCatalog?: CatalogData | null;
   /** VGI catalogs the user has ATTACH'd from the shell (excludes the primary
    *  ?service= catalog, which is passed separately via `catalog`). */
@@ -36,7 +38,7 @@ function buildRefreshAction(onRefresh: () => void, refreshing?: boolean): React.
   }));
 }
 
-export function Sidebar({ catalog, memoryCatalog, attachedCatalogs, selection, onSelect, onOpenShell, onShellInsert, onRefresh, refreshing }: Props) {
+export function Sidebar({ serviceUrl, catalog, memoryCatalog, attachedCatalogs, selection, onSelect, onOpenShell, onShellInsert, onRefresh, refreshing }: Props) {
   const [search, setSearch] = useState("");
   const { settings } = useSettings();
   const treeData = useMemo(() => buildTreeData(catalog, {
@@ -113,6 +115,7 @@ export function Sidebar({ catalog, memoryCatalog, attachedCatalogs, selection, o
 
       {/* Tree */}
       <div className="flex-1 overflow-y-auto p-2 text-sm">
+        {serviceUrl && <SavedReportsSidebar key={serviceUrl} serviceUrl={serviceUrl} search={search} />}
         <TreeView
           data={filteredData}
           expandAll={!!search}

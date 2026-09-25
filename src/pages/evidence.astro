@@ -1,0 +1,7 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { CatalogApp } from '../components/CatalogApp';
+---
+<Layout title="Cupola · Evidence weather report">
+  <CatalogApp client:load initialTab="evidence" defaultServiceUrl="https://vgi-open-meteo.rusty-bb6.workers.dev" />
+</Layout>

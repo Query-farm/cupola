@@ -129,7 +129,15 @@ export interface AgentCacheDiagnostics {
   diagnostics?: unknown;
 }
 
+export interface AgentProgress {
+  stage: 'connecting' | 'connected' | 'thinking' | 'writing' | 'tool_input' | 'heartbeat';
+  tool?: string;
+  characters?: number;
+}
+
 export interface AgentCallbacks {
+  /** Transport/generation activity only; never exposes private reasoning text. */
+  onProgress?: (progress: AgentProgress) => void;
   onText: (chunk: string) => void;
   /** The model has started streaming a tool_use block's input JSON. Fires at
    *  content_block_start, i.e. BEFORE the arguments have finished arriving —
@@ -897,6 +905,7 @@ async function streamOneRequestInner(
   diagnosticPreviousMessageId?: string | null,
 ): Promise<StreamResult> {
   const workspaceId = credentials.workspaceId?.trim();
+  callbacks.onProgress?.({ stage: 'connecting' });
   const response = await fetchWithRetry(
     "https://api.anthropic.com/v1/messages",
     {
@@ -952,7 +961,9 @@ async function streamOneRequestInner(
     callbacks
   );
 
+  callbacks.onProgress?.({ stage: 'connected' });
   const reader = response.body!.getReader();
+  let streamComplete = false;
   const content: ContentBlock[] = [];
   let currentBlock: ContentBlock | null = null;
   let currentToolInput = "";
@@ -965,6 +976,8 @@ async function streamOneRequestInner(
   let diagnostics: unknown;
 
   for await (const event of parseSSEStream(reader, signal)) {
+    if (event.type === 'error') throw new Error(`AI stream error: ${event.error?.message || 'The service interrupted the response.'}`);
+    if (event.type === 'ping') callbacks.onProgress?.({ stage: 'heartbeat' });
     if (event.type === "message_start" && event.message?.usage) {
       // input_tokens is the UNCACHED remainder; the cache counts are disjoint.
       const usage = event.message.usage;
@@ -978,6 +991,7 @@ async function streamOneRequestInner(
         currentBlock = { type: "text", text: "" };
       } else if (event.content_block.type === "thinking") {
         // Opened empty; thinking_delta and signature_delta fill it in.
+        callbacks.onProgress?.({ stage: 'thinking' });
         currentBlock = { type: "thinking", thinking: "", signature: "" };
       } else if (event.content_block.type === "redacted_thinking") {
         // Arrives whole — no deltas follow. Opaque, but still part of the
@@ -996,9 +1010,11 @@ async function streamOneRequestInner(
     } else if (event.type === "content_block_delta") {
       if (event.delta.type === "text_delta" && currentBlock?.type === "text") {
         currentBlock.text += event.delta.text;
+        callbacks.onProgress?.({ stage: 'writing' });
         callbacks.onText(event.delta.text);
       } else if (event.delta.type === "thinking_delta" && currentBlock?.type === "thinking") {
         currentBlock.thinking = (currentBlock.thinking ?? "") + (event.delta.thinking ?? "");
+        callbacks.onProgress?.({ stage: 'thinking' });
         callbacks.onThinking?.(event.delta.thinking ?? "");
       } else if (event.delta.type === "signature_delta" && currentBlock?.type === "thinking") {
         // Sent just before content_block_stop. Concatenated rather than
@@ -1007,6 +1023,7 @@ async function streamOneRequestInner(
         currentBlock.signature = (currentBlock.signature ?? "") + (event.delta.signature ?? "");
       } else if (event.delta.type === "input_json_delta") {
         currentToolInput += event.delta.partial_json;
+        callbacks.onProgress?.({ stage: 'tool_input', tool: currentBlock?.name, characters: currentToolInput.length });
       }
     } else if (event.type === "content_block_stop") {
       if (currentBlock) {
@@ -1021,11 +1038,14 @@ async function streamOneRequestInner(
         currentBlock = null;
       }
     } else if (event.type === "message_delta") {
+      streamComplete ||= Boolean(event.delta?.stop_reason);
       stopReason = event.delta?.stop_reason || stopReason;
       if (event.usage?.output_tokens) outputTokens = event.usage.output_tokens;
     }
   }
 
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  if (!streamComplete) throw new Error('Connection closed before the AI response finished. Please retry the request.');
   return { content, stopReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, messageId, diagnostics };
 }
 

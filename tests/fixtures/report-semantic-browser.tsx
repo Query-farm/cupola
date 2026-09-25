@@ -3,7 +3,6 @@
 import { createRoot, type Root } from "react-dom/client";
 import { useState } from "react";
 import { ReportSemanticDatasetBuilder } from "../../src/components/reports/ReportSemanticDatasetBuilder";
-import { ReportsWorkspace } from "../../src/components/reports/ReportsWorkspace";
 import { SettingsProvider } from "../../src/lib/settings";
 import { compileSemanticQuery } from "../../src/lib/semantic-compiler";
 import { resolveReportSemanticQuery } from "../../src/lib/reports/semantic";
@@ -94,6 +93,7 @@ export function mountBuilder(
 }
 
 export async function mountWorkspace() {
+  const { ReportsWorkspace } = await import("../../src/components/reports/ReportsWorkspace");
   for (const sql of [
     "ATTACH ':memory:' AS sales",
     "ATTACH ':memory:' AS crm",

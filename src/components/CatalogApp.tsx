@@ -36,7 +36,7 @@ import {
 } from "./ui/dialog";
 const DuckDBShell = lazy(() => import("./DuckDBShell").then(m => ({ default: m.DuckDBShell })));
 const SqlEditorView = lazy(() => import("./editor/SqlEditorView").then(m => ({ default: m.SqlEditorView })));
-const ReportsWorkspace = lazy(() => import("./reports/ReportsWorkspace").then(m => ({ default: m.ReportsWorkspace })));
+const EvidencePanel = lazy(() => import("./evidence/EvidencePanel").then(m => ({ default: m.EvidencePanel })));
 const CatalogRelationships = lazy(() => import("./content/CatalogRelationships").then(m => ({ default: m.CatalogRelationships })));
 import { AppTabBar, type TabId } from "./AppTabBar";
 import { EngineStatusRibbon } from "./EngineStatusRibbon";
@@ -54,7 +54,6 @@ import {
   getAttachOptionsFor,
   type RecentService,
 } from "@/lib/recent-services";
-import { createReportShowcase } from "@/lib/reports/showcase";
 
 /** A recoverable auth error: one the SPA login redirect (below) handles by
  *  bouncing the user back through the IdP. These happen routinely (expired
@@ -127,6 +126,8 @@ function beginLoginFlow(serviceUrl: string, path: string): boolean {
 
 interface CatalogAppProps {
   showcase?: "report-guide";
+  initialTab?: TabId;
+  defaultServiceUrl?: string;
 }
 
 const REPORT_SHOWCASE_CATALOG: CatalogData = {
@@ -137,9 +138,8 @@ const REPORT_SHOWCASE_CATALOG: CatalogData = {
   schemas: [],
 };
 
-export function CatalogApp({ showcase }: CatalogAppProps = {}) {
+export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogAppProps = {}) {
   const showcaseMode = showcase === "report-guide";
-  const showcaseReport = useMemo(() => showcaseMode ? createReportShowcase() : undefined, [showcaseMode]);
   const [data, setData] = useState<CatalogData | null>(() => showcaseMode ? REPORT_SHOWCASE_CATALOG : null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!showcaseMode);
@@ -150,14 +150,16 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
   // the old appView toggle + shell-drawer mode. Persisted (migrating the old
   // vgi-app-view key) so a reload returns to the same tab.
   const [activeTab, setActiveTab] = useState<TabId>(() => {
+    if (initialTab) return initialTab === "evidence" ? "reports" : initialTab;
     if (showcaseMode) return "reports";
     try {
       const stored = localStorage.getItem("vgi-active-tab") as TabId | null;
       // Perspective is backed by transient query/table data that does not
       // survive a page load. Restoring it would therefore open an empty
       // surface; start on the safe Catalog tab instead.
+      if (stored === "evidence") return "reports";
       if (stored === "perspective") return "catalog";
-      if (stored && ["catalog", "editor", "shell", "askai", "reports", "preview", "queries"].includes(stored)) return stored;
+      if (stored && ["catalog", "editor", "shell", "askai", "reports", "evidence", "preview", "queries"].includes(stored)) return stored;
       if (localStorage.getItem("vgi-app-view") === "editor") return "editor";
     } catch {}
     return "catalog";
@@ -189,7 +191,7 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
   // (a) DuckDB boots + ATTACHes once (column stats, previews work on the
   // catalog tab), and (b) terminal / chat / perspective state survives tab
   // switches. It's visible only on an engine-backed tab.
-  const engineVisible = activeTab !== "catalog" && activeTab !== "editor" && activeTab !== "reports";
+  const engineVisible = activeTab !== "catalog" && activeTab !== "editor" && activeTab !== "reports" && activeTab !== "evidence";
   // The editor mounts on its first visit and then stays mounted (hidden the
   // same way as the engine host) for the rest of the session. Its result grid
   // holds a decoded Arrow table in component state, so unmounting on every tab
@@ -469,7 +471,7 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
     });
   }, [activeTab]);
 
-  const serviceUrl = useMemo(() => showcaseMode ? "" : getServiceUrl(), [showcaseMode]);
+  const serviceUrl = useMemo(() => showcaseMode ? "" : (hasExplicitService() ? getServiceUrl() : defaultServiceUrl || getServiceUrl()), [showcaseMode, defaultServiceUrl]);
   // `?attach_options=` URL param wins over the localStorage value and is
   // persisted so a future visit without the param keeps the same options.
   // An explicit empty value clears them.
@@ -602,7 +604,7 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
       // (which would 404 on /__describe__). The render path below detects
       // "no data + no error + not loading + !hasExplicitService" and shows
       // the welcome/connect page.
-      if (!hasExplicitService()) {
+      if (!hasExplicitService() && !defaultServiceUrl) {
         setLoading(false);
         setRefreshing(false);
         return;
@@ -677,7 +679,7 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
         setRefreshing(false);
       }
     },
-    [serviceUrl, showcaseMode, syncAttachedCatalogs]
+    [serviceUrl, showcaseMode, defaultServiceUrl, syncAttachedCatalogs]
   );
 
   // Process any pending SPA OAuth callback before the first catalog fetch.
@@ -764,7 +766,7 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
   // SSR. On the client, ?service=... makes it true. Without the gate the
   // SSR output (WelcomePage) and the first client render (loading spinner)
   // disagree. After mount we're allowed to diverge from the SSR snapshot.
-  if (mounted && !showcaseMode && !hasExplicitService()) {
+  if (mounted && !showcaseMode && !defaultServiceUrl && !hasExplicitService()) {
     return <WelcomePage logoUrl={logoUrl} />;
   }
 
@@ -778,7 +780,7 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
   // getServiceUrl()) before the effect flipped `mounted` and the welcome page
   // above took over. With no service there is nothing to connect to, so there
   // is nothing to report progress on.
-  if (loading && (!mounted || showcaseMode || hasExplicitService())) {
+  if (loading && (!mounted || showcaseMode || defaultServiceUrl || hasExplicitService())) {
     // Pre-mount (SSR + first client paint) we can't read window.location, so
     // we don't yet know whether a service was named. Say something true and
     // neutral; the heading firms up to "Connecting to <service>" one commit
@@ -792,7 +794,7 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
   if (error) {
     // Same rule as the effect above — was a separate inline copy.
     const isAuthError = isRecoverableAuthMessage(error);
-    const explicitService = hasExplicitService();
+    const explicitService = hasExplicitService() || Boolean(defaultServiceUrl);
 
     // Auth redirect is in progress
     if (isAuthError) {
@@ -846,6 +848,7 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
               aria-label={isNarrow ? "Catalog sidebar" : undefined}
             >
               <Sidebar
+                serviceUrl={serviceUrl}
                 catalog={data}
                 memoryCatalog={memoryCatalog}
                 attachedCatalogs={attachedCatalogs}
@@ -911,21 +914,10 @@ export function CatalogApp({ showcase }: CatalogAppProps = {}) {
             </div>
           )}
           {reportsMounted && (
-            <div
-              className="absolute inset-0 overflow-hidden"
-              style={activeTab === "reports" ? undefined : { visibility: "hidden", zIndex: -1 }}
-            >
-              <ErrorBoundary>
-                <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading reports…</div>}>
-                  <ReportsWorkspace
-                    catalogData={data}
-                    serviceUrl={serviceUrl}
-                    attachedCatalogNames={attachedCatalogs.map((c) => c.catalogName)}
-                    attachedCatalogs={attachedCatalogs}
-                    initialReport={showcaseReport}
-                  />
-                </Suspense>
-              </ErrorBoundary>
+            <div className="absolute inset-0 overflow-hidden" style={activeTab === "reports" ? undefined : { visibility: "hidden", zIndex: -1 }}>
+              <ErrorBoundary><Suspense fallback={<div className="p-6">Loading reports…</div>}>
+                <EvidencePanel catalogName={data.catalogName} serviceUrl={serviceUrl} catalogs={[data, ...attachedCatalogs]} />
+              </Suspense></ErrorBoundary>
             </div>
           )}
           {(
