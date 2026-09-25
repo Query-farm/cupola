@@ -6,6 +6,11 @@ import { test, expect, describe } from "bun:test";
 import { splitStatements, statementAtCursor } from "../../src/lib/editor/sql-statements";
 
 describe("splitStatements", () => {
+  test("nested block comments neither split statements nor count as code", () => {
+    expect(splitStatements('/* outer /* nested */ ; ATTACH x */')).toEqual([]);
+    expect(splitStatements('SELECT 1 /* outer /* ; */ ; */; SELECT 2').map(s => s.text))
+      .toEqual(['SELECT 1 /* outer /* ; */ ; */', 'SELECT 2']);
+  });
   test("splits on top-level semicolons", () => {
     const stmts = splitStatements("SELECT 1; SELECT 2; SELECT 3");
     expect(stmts.map((s) => s.text)).toEqual(["SELECT 1", "SELECT 2", "SELECT 3"]);

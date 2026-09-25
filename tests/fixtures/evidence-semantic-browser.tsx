@@ -4,6 +4,7 @@ import { SettingsProvider } from '../../src/lib/settings';
 import { engine } from '../../src/lib/shell-bridge';
 import { reportSemanticCatalogs } from './report-semantic-catalogs';
 import { saveEvidenceReport } from '../../src/lib/evidence/reports';
+import { installSemanticCatalogMetadata } from './semantic-catalog-metadata';
 
 export async function mountEvidenceSemantic() {
   for (const sql of ["ATTACH ':memory:' AS sales", "ATTACH ':memory:' AS crm",
@@ -11,6 +12,7 @@ export async function mountEvidenceSemantic() {
     "CREATE TABLE crm.main.customers AS SELECT 'c1' AS customer_id, 'US' AS country"]) {
     const result = await engine.query!(sql); if (!result.ok) throw new Error(result.error);
   }
+  await installSemanticCatalogMetadata(reportSemanticCatalogs());
   const serviceUrl = 'https://semantic-test.example';
   saveEvidenceReport({ version: 1, id: 'semantic-test', title: 'Semantic report', createdAt: 1, updatedAt: 1, serviceUrl,
     source: '# Model report\n\n{% table data="revenue" /%}', setupSql: '', parameters: [], values: {},

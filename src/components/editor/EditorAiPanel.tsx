@@ -1,3 +1,4 @@
+import { catalogsForTool, catalogInventory } from "@/lib/catalog-store";
 /**
  * Conversational "Ask AI" side panel docked in the Query Editor.
  *
@@ -201,13 +202,12 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
 
     if (settings.aiTelemetry) Sentry.setConversationId(c.conversationId);
 
-    const catalogs = [catalogData, ...attachedCatalogs, ui.memoryCatalog]
-      .filter((value): value is CatalogData => Boolean(value));
+    const catalogs = catalogInventory.getSnapshot().catalogs;
     const queryMode = normalizeAIQueryMode(getSetting("aiQueryMode"));
     const editorGuidance = queryMode === "semantic-only"
       ? "\n\nYou are an AI assistant embedded in a SQL editor. The user is editing SQL in the adjacent pane. Be concise. Semantic query results appear in the editor's results grid. Do not produce or execute raw SQL, and do not produce charts."
       : "\n\nYou are an AI assistant embedded in a SQL editor. The user is editing SQL in the adjacent pane. Be concise. When you run a query, its results appear in the editor's results grid. When you produce a final query for the user, run it with run_sql so it can be applied to the editor. Do not produce charts.";
-    const systemPrompt = buildSystemPrompt(catalogData, getEngineInfo(), catalogs.slice(1), false, queryMode) + editorGuidance;
+    const systemPrompt = buildSystemPrompt(catalogs[0] ?? catalogData, getEngineInfo(), catalogs.slice(1), false, queryMode) + editorGuidance;
     const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
     const maxTokens = getSetting("aiMaxTokens") || DEFAULT_AI_MAX_TOKENS;
@@ -253,6 +253,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
     const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<any> => {
       const denied = deniedAIQueryToolResult(name, queryMode);
       if (denied) return denied;
+      const catalogs = await catalogsForTool(name);
       if (name === "query_semantic_model") {
         const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB engine is still starting — try again in a moment.");
@@ -320,8 +321,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
                 pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
                 setGrid({ running: false, ok: true, error: null, table: null, rowCount: 0, elapsedMs: out.elapsedMs, ran: true });
                 if (out.kind === "ddl" || /COMMENT\s+ON/i.test(input.sql)) {
-                  await ui.refreshMemoryTables?.();
-                  ui.onAttachedCatalogsChanged?.();
+                  await catalogInventory.current().catch(() => { /* Sidebar displays metadata errors; SQL already succeeded. */ });
                 }
                 return;
               }

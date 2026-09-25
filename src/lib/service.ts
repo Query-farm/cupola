@@ -66,6 +66,11 @@ export interface ResolvedSchema {
 /** Full catalog data ready for rendering. */
 export interface CatalogData {
   catalogName: string;
+  databaseType?: string;
+  primary?: boolean;
+  sourceUrl?: string;
+  /** Metadata may be partial; the attachment itself is still valid. */
+  metadataError?: string;
   catalogComment: string | null;
   catalogTags: Record<string, string>;
   defaultSchema: string | null;

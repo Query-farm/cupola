@@ -1,3 +1,4 @@
+import { catalogsForTool } from "../catalog-store";
 import type { CatalogData } from '../service';
 import { executeListCatalogs, executeListTables, executeListCategories, executeDescribeFunction } from '../ai-agent';
 import { executeRunSql, executeSemanticQuery, describeTableWithFallback, type RunSqlEnv } from '../ai-tool-executor';
@@ -15,6 +16,7 @@ export async function executeReportDataTool(
 ): Promise<string | undefined> {
   const denied = deniedAIQueryToolResult(name, mode);
   if (denied) return denied;
+  catalogs = await catalogsForTool(name, catalogs);
   if (name === 'list_catalogs') return executeListCatalogs(catalogs, input);
   if (name === 'list_tables') return executeListTables(catalogs, input);
   if (name === 'list_categories') return executeListCategories(catalogs, input);

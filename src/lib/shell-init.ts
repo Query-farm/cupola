@@ -1,3 +1,4 @@
+import { catalogInventory } from "./catalog-store";
 /**
  * Imperative DuckDB shell initialization — terminal setup, ATTACH flow,
  * read loop, dot-command + AI-mode dispatch, query rendering, CSV/XLSX
@@ -586,7 +587,7 @@ export function initShell(
       setBootPhase(null);
       terminal.runQuery = runQuery;
       notifyQueryChange();
-      ui.onAttachedCatalogsChanged?.();
+      void catalogInventory.activate();
       window.dispatchEvent(new Event("duckdb-ready"));
       readLoop();
     })().catch((error) => {
@@ -769,7 +770,7 @@ export function initShell(
             const elapsedStr = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(1)}s` : `${Math.round(elapsed)}ms`;
             writeln(`OK (${elapsedStr})`, "32");
             // DDL — refresh sidebar and handle navigation
-            ui.refreshMemoryTables?.().then?.(() => {
+            catalogInventory.current().then(() => {
               const createMatch = trimmed.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
               if (createMatch) {
                 const schema = createMatch[1] || "main";
@@ -786,7 +787,7 @@ export function initShell(
                   ui.navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
                 }
               }
-            });
+            }).catch(() => { /* The inventory exposes discovery errors in the sidebar. */ });
 
           // EXPLAIN returns explain_key + explain_value — render as plain text
           } else if (fieldNames.includes("explain_key") && fieldNames.includes("explain_value")) {
@@ -822,11 +823,6 @@ export function initShell(
       const upper = trimmed.toUpperCase();
       if (upper.startsWith("USE ") || upper.startsWith("ATTACH ") || upper.startsWith("SET SCHEMA") || upper.startsWith("SET SEARCH_PATH")) {
         await refreshCatalog();
-      }
-      // Sync sidebar with the live set of attached VGI catalogs whenever
-      // the user ran an ATTACH or DETACH.
-      if (/^\s*(ATTACH|DETACH)\b/i.test(trimmed)) {
-        ui.onAttachedCatalogsChanged?.();
       }
     }
   }
@@ -945,7 +941,7 @@ export function initShell(
   // buildTableSelect/isTableRef so both surfaces behave identically.
   function insertText(text: string) {
     if (isTableRef(text) && promptInputEmpty) {
-      term.paste(buildTableSelect(text, [config.catalogData, ui.memoryCatalog]) + ";");
+      term.paste(buildTableSelect(text, catalogInventory.getSnapshot().catalogs) + ";");
     } else {
       term.paste(text);
     }

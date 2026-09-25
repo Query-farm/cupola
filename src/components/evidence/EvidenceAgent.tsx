@@ -108,9 +108,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
         async (name, input) => {
           if (!active()) throw new DOMException('Aborted', 'AbortError');
           try {
-            const liveCatalogs = ui.memoryCatalog && !catalogs.some(catalog => catalog.catalogName === ui.memoryCatalog!.catalogName)
-              ? [...catalogs, ui.memoryCatalog] : catalogs;
-            const dataResult = await executeReportDataTool(name, input, liveCatalogs, { query, queryPrepared: query, resultCache: resultCache.current }, queryMode);
+            const dataResult = await executeReportDataTool(name, input, catalogs, { query, queryPrepared: query, resultCache: resultCache.current }, queryMode);
             if (dataResult !== undefined) return dataResult;
             if (name === 'get_report') return JSON.stringify(context);
             if (name === 'list_components') return JSON.stringify(await componentReference());

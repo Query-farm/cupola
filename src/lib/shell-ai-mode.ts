@@ -1,3 +1,4 @@
+import { catalogInventory, catalogsForTool } from "./catalog-store";
 /**
  * AI conversation mode for the DuckDB WASM shell.
  * Manages the AI read loop, tool execution, spinner, and markdown rendering.
@@ -139,8 +140,8 @@ function createToolExecutor(
   return async (name: string, input: any): Promise<string> => {
     const denied = deniedAIQueryToolResult(name, queryMode);
     if (denied) return denied;
-    const catalogs = [ops.catalogData, ...ui.attachedCatalogs, ui.memoryCatalog]
-      .filter((value): value is CatalogData => Boolean(value));
+    const catalogs = await catalogsForTool(name, [ops.catalogData, ...ui.attachedCatalogs, ui.memoryCatalog]
+      .filter((value): value is CatalogData => Boolean(value)));
     if (name === "query_semantic_model") {
       const lastUserMsg = conv.messages.filter(m => m.role === "user").pop();
       const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
@@ -372,13 +373,6 @@ export async function runAIMode(
   // Group this session's gen_ai spans in Sentry's Conversations view. Cleared
   // in the exit finally so SQL-mode spans don't inherit it.
   if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
-  const systemPrompt = buildSystemPrompt(
-    ops.catalogData,
-    getEngineInfo(),
-    [...ui.attachedCatalogs, ...(ui.memoryCatalog ? [ui.memoryCatalog] : [])],
-    false,
-    queryMode,
-  );
   const spinner = createSpinner(term);
 
   // Ctrl+D / Escape exits AI mode
@@ -452,6 +446,8 @@ export async function runAIMode(
       const agent = createAgentCallbacks(term, spinner, model);
 
       try {
+        const catalogs = catalogInventory.getSnapshot().catalogs;
+        const systemPrompt = buildSystemPrompt(catalogs[0] ?? ops.catalogData, getEngineInfo(), catalogs.slice(1), false, queryMode);
         await runAgentTurn({ apiKey, workspaceId }, model, conv.messages, systemPrompt, executeTool, agent.callbacks, abort.signal, maxToolRounds, toolsForAIQueryMode(TOOLS, queryMode), maxTokens, true, effort);
       } catch (err: any) {
         spinner.stop();

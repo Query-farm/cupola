@@ -14,6 +14,8 @@ describe("isTableRef", () => {
   test("true for dotted identifiers", () => {
     expect(isTableRef("cat.schema.table")).toBe(true);
     expect(isTableRef("a.b")).toBe(true);
+    expect(isTableRef('"local data"."main"."a.b"')).toBe(true);
+    expect(isTableRef('"local data"."main"."a""b"')).toBe(true);
   });
   test("false for expressions / spaces / parens", () => {
     expect(isTableRef("SELECT 1")).toBe(false);
@@ -50,6 +52,7 @@ describe("buildTableSelect", () => {
 
   test("excludes geometry columns", () => {
     expect(buildTableSelect("c.s.geo", [cat])).toBe("SELECT * EXCLUDE (geom, shape) FROM c.s.geo LIMIT 100");
+    expect(buildTableSelect('"c"."s"."geo"', [cat])).toBe('SELECT * EXCLUDE (geom, shape) FROM "c"."s"."geo" LIMIT 100');
   });
 
   test("unknown table → plain SELECT (no exclusion)", () => {

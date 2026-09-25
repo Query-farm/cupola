@@ -1,3 +1,4 @@
+import { observeCatalogQuery } from './catalog-store';
 import { decodeArrowBuffer } from './duckdb-query';
 import { pendingQuery, parameterVariableSql } from './pending-query';
 import { createQueryExecutor, type QueryExecutionOptions } from './query-execution';
@@ -249,9 +250,9 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
     try { signal.throwIfAborted(); return await work(); }
     finally { await db.runQuery(connId, `SET threads = ${threads}`); }
   };
-  engine.query = (sql, options) => execute(signal => options
+  engine.query = (sql, options) => observeCatalogQuery(sql, () => execute(signal => options
     ? interruptible(signal, () => runQueryWrapped(sql, signal))
-    : runQueryWrapped(sql), options);
+    : runQueryWrapped(sql), options));
   const runPrepared = async (sql: string, params: unknown[], options?: QueryExecutionOptions): Promise<QueryResult> => {
     if (cancelInt32) Atomics.store(cancelInt32, 0, 0);
     let statementId: number | null = null;
@@ -272,7 +273,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   };
   const parameterPrefix = `__cupola_params_${crypto.randomUUID().replaceAll('-', '')}_`;
   let parameterRun = 0;
-  engine.queryPrepared = (sql, params, options) => execute(async signal => {
+  engine.queryPrepared = (sql, params, options) => observeCatalogQuery(sql, () => execute(async signal => {
     if (!options) return runPrepared(sql, params);
     // WASM has no pending prepared-statement API. Bind values through its
     // prepared API into private variables, then execute foldable references
@@ -294,7 +295,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
         for (const name of names) await db.runQuery(connId, `RESET VARIABLE "${name}"`);
       }
     });
-  }, options);
+  }, options));
   engine.getTableNames = (sql: string) => execute(() => conn.getTableNames(sql));
   // Keep the shell alias on the same connection queue.
   engine.querySync = engine.query;

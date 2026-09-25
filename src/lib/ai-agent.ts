@@ -415,14 +415,16 @@ function catalogsOf(value: CatalogCollection): readonly CatalogData[] {
 function resolveCatalog(value: CatalogCollection, requested?: string): CatalogData | string {
   const catalogs = catalogsOf(value);
   if (requested) {
-    return catalogs.find((catalog) => catalog.catalogName === requested)
+    const catalog = catalogs.find((catalog) => catalog.catalogName === requested);
+    if (catalog?.metadataError) return JSON.stringify({ error: `Metadata for '${requested}' is incomplete: ${catalog.metadataError}`, catalog: requested });
+    return catalog
       ?? JSON.stringify({ error: `Catalog '${requested}' is not attached`, catalogs: catalogs.map((c) => c.catalogName) });
   }
   const workers = catalogs.filter((catalog) => catalog.catalogName !== "memory");
-  if (workers.length === 1) return workers[0];
-  if (catalogs.length === 1) return catalogs[0];
+  if (workers.length === 1) return resolveCatalog(catalogs, workers[0].catalogName);
+  if (catalogs.length === 1) return resolveCatalog(catalogs, catalogs[0].catalogName);
   return JSON.stringify({
-    error: "Catalog is required because multiple worker catalogs are attached",
+    error: "Catalog is required because multiple catalogs are attached",
     catalogs: workers.map((catalog) => catalog.catalogName),
   });
 }
@@ -505,8 +507,9 @@ export function executeListCatalogs(collection: CatalogCollection, input: any = 
   const semantic = buildSemanticEnvironment(catalogs);
   const items = catalogs.map((catalog, index) => ({
     catalog: catalog.catalogName,
-    type: catalog.catalogName === "memory" ? "memory" : "vgi",
-    primary: index === 0,
+    type: catalog.databaseType ?? (catalog.catalogName === "memory" ? "memory" : "vgi"),
+    primary: catalog.primary ?? index === 0,
+    ...(catalog.metadataError ? { metadata_error: catalog.metadataError } : {}),
     comment: listingText(catalog.catalogComment),
     tags: filterTagsForAI(catalog.catalogTags),
     semantic_catalog: parseJsonTag(catalog.catalogTags, TAG_SEMANTIC_CATALOG),

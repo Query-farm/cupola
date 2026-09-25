@@ -4,6 +4,7 @@
  */
 
 import React from "react";
+import { quoteIdent } from "./duckdb-query";
 import { Database, Folder, FolderOpen, Table2, Eye, FunctionSquare, Braces, Columns3, Key, TerminalSquare, RefreshCw, Loader2 } from "lucide-react";
 import type { CatalogData, ResolvedSchema } from "./service";
 import { getColumns } from "./service";
@@ -85,12 +86,13 @@ export function treeIdToShellText(id: string): string | null {
     const catalog = parts[0];
     const schema = parts[1];
     const rest = parts[2];
-    if (rest.startsWith("t:")) return `${catalog}.${schema}.${rest.slice(2)}`;
+    const identifier = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : quoteIdent(name);
+    if (rest.startsWith("t:")) return [catalog, schema, rest.slice(2)].map(identifier).join(".");
     if (rest.startsWith("c:")) {
       const colParts = rest.slice(2).split("/");
       return colParts[1] || colParts[0];
     }
-    if (rest.startsWith("v:")) return `${catalog}.${schema}.${rest.slice(2)}`;
+    if (rest.startsWith("v:")) return [catalog, schema, rest.slice(2)].map(identifier).join(".");
     if (rest.startsWith("f:")) return rest.slice(2);
   }
   return null;

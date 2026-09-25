@@ -1,3 +1,5 @@
+import { sessionCatalogs, catalogsForTool } from "@/lib/catalog-store";
+import { useCatalogInventory } from "@/lib/use-catalog-inventory";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from "react";
 import { Popover as BaseUIPopover } from "@base-ui/react/popover";
 import { ResponsiveGridLayout, useContainerWidth, type Layout, type ResponsiveLayouts } from "react-grid-layout";
@@ -699,6 +701,7 @@ function freshnessLabel(timestamp: number): string {
 }
 
 export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames = [], attachedCatalogs = [], onBusyChange, initialReport }: Props) {
+  const inventory = useCatalogInventory();
   const { settings } = useSettings();
   const [reports, setReports] = useState<ReportDocumentV1[]>([]);
   const [publishedReports, setPublishedReports] = useState<Record<string, ReportDocumentV1>>({});
@@ -1138,8 +1141,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
         let phaseStartedAt = performance.now();
         let semanticDiagnostics: SemanticDiagnostic[] | undefined;
         try {
-          const catalogs = [catalogData, ...(attachedCatalogs ?? []), ui.memoryCatalog]
-            .filter((value): value is CatalogData => Boolean(value));
+          const catalogs = isSemanticReportDataset(dataset) ? await sessionCatalogs([catalogData]) : [];
           const semantic = isSemanticReportDataset(dataset)
             ? await prepareSemanticReportDataset(dataset, report, runValues, catalogs)
             : null;
@@ -1477,8 +1479,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const valid = await validateAndRun(draft, publishValues, false);
     if (!valid) return;
     const publishable = cloneReport(draft);
-    const catalogs = [catalogData, ...(attachedCatalogs ?? []), ui.memoryCatalog]
-      .filter((value): value is CatalogData => Boolean(value));
+    const catalogs = await sessionCatalogs([catalogData]);
     for (const dataset of publishable.datasets) {
       if (!isSemanticReportDataset(dataset) || dataset.acceptedModelFingerprint) continue;
       const prepared = await prepareSemanticReportDataset(dataset, publishable, publishValues, catalogs);
@@ -1848,8 +1849,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     const next = cloneReport(draft);
     let dataset: ReportDataset;
     if (kind === "semantic") {
-      const catalogs = [catalogData, ...(attachedCatalogs ?? []), ui.memoryCatalog]
-        .filter((value): value is CatalogData => Boolean(value));
+      const catalogs = inventory.ready ? inventory.catalogs : [catalogData, ...attachedCatalogs];
       const environment = buildSemanticEnvironment(catalogs);
       const first = environment.entities.flatMap((entity) => [...entity.members.values()]
         .filter((member) => member.kind === "measure" && !member.hidden)
@@ -1879,7 +1879,7 @@ export function ReportsWorkspace({ catalogData, serviceUrl, attachedCatalogNames
     }
     setDatasetEditorRequest(dataset.id);
     setWorkspaceView("datasets");
-  }, [attachedCatalogs, catalogData, discardDatasetEditor, draft]);
+  }, [attachedCatalogs, catalogData, inventory, discardDatasetEditor, draft]);
 
   const resetAgentConversation = useCallback(() => {
     abortRef.current?.abort();
@@ -2123,8 +2123,7 @@ Choose parameter types for the appropriate reader controls: date gives a native 
       await runAgentTurn(
         { apiKey: settings.anthropicApiKey, workspaceId: settings.anthropicWorkspaceId },
         settings.aiModel, agentMessagesRef.current, system, async (name, input) => {
-        const catalogs = [catalogData, ...attachedCatalogs, ui.memoryCatalog]
-          .filter((value): value is CatalogData => Boolean(value));
+        const catalogs = await catalogsForTool(name, [catalogData]);
         if (name === "list_catalogs") return executeListCatalogs(catalogs, input);
         if (name === "list_tables") return executeListTables(catalogs, input);
         if (name === "list_categories") return executeListCategories(catalogs, input);
@@ -2333,7 +2332,7 @@ Choose parameter types for the appropriate reader controls: date gives a native 
     }
   }, [draft, agentPrompt, agentBusy, settings, catalogData, attachedCatalogs, runDatasets, agentTargetBlockId]);
 
-  const compatibleCatalogs = useMemo(() => new Set([catalogData.catalogName, ...attachedCatalogNames, "memory"]), [catalogData.catalogName, attachedCatalogNames]);
+  const compatibleCatalogs = useMemo(() => new Set(inventory.ready ? inventory.catalogs.map(c => c.catalogName) : [catalogData.catalogName, ...attachedCatalogNames, "memory"]), [inventory, catalogData.catalogName, attachedCatalogNames]);
   const isCompatible = (r: ReportDocumentV1) => r.requiredSources.every((s) => compatibleCatalogs.has(s.catalog));
   const libraryReports = initialReport && !reports.some((report) => report.id === initialReport.id)
     ? [initialReport, ...reports]
@@ -2522,7 +2521,7 @@ Choose parameter types for the appropriate reader controls: date gives a native 
           onApplyDataset={applyReportDataset}
           onDeleteDataset={removeReportDataset}
           onAcceptSemanticModel={acceptSemanticModel}
-          catalogs={[catalogData, ...(attachedCatalogs ?? []), ...(ui.memoryCatalog ? [ui.memoryCatalog] : [])]}
+          catalogs={inventory.ready ? inventory.catalogs : [catalogData, ...attachedCatalogs]}
           onAddDataset={addReportDataset}
           onDirtyChange={setDatasetEditorDirty}
           recoveredDraft={recoveredDatasetDraft}

@@ -88,11 +88,9 @@ function rawSegments(sql: string): RawSegment[] {
       while (i < n && sql[i] !== "\n") i++;
       continue;
     }
-    // Block comment (non-nesting, matching DuckDB)
+    // DuckDB permits nested block comments.
     if (ch === "/" && sql[i + 1] === "*") {
-      i += 2;
-      while (i < n && !(sql[i] === "*" && sql[i + 1] === "/")) i++;
-      i += 2;
+      i = skipBlockComment(sql, i);
       continue;
     }
     // Single-quoted string ('' escapes a quote)
@@ -178,13 +176,36 @@ function hasCode(sql: string, from: number, to: number): boolean {
       continue;
     }
     if (ch === "/" && sql[i + 1] === "*") {
-      i += 2;
-      while (i < to && !(sql[i] === "*" && sql[i + 1] === "/")) i++;
-      i += 2;
+      i = skipBlockComment(sql, i);
       continue;
     }
     if (!/\s/.test(ch)) return true;
     i++;
   }
   return false;
+}
+
+/** Index just after a possibly nested block comment. */
+function skipBlockComment(sql: string, start: number): number {
+  let depth = 1, i = start + 2;
+  while (i < sql.length && depth > 0) {
+    if (sql.startsWith("/*", i)) { depth++; i += 2; }
+    else if (sql.startsWith("*/", i)) { depth--; i += 2; }
+    else i++;
+  }
+  return i;
+}
+
+/** First SQL keyword, ignoring leading whitespace and comments. */
+export function statementKeyword(sql: string): string {
+  let i = 0;
+  while (i < sql.length) {
+    if (/\s/.test(sql[i])) { i++; continue; }
+    if (sql.startsWith("--", i)) {
+      const end = sql.indexOf("\n", i + 2);
+      i = end < 0 ? sql.length : end + 1;
+    } else if (sql.startsWith("/*", i)) i = skipBlockComment(sql, i);
+    else return /^[A-Za-z]+/.exec(sql.slice(i))?.[0].toUpperCase() ?? "";
+  }
+  return "";
 }

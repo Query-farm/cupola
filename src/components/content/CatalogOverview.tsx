@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 
 interface Props {
   catalog: CatalogData;
-  serviceUrl: string;
+  serviceUrl?: string;
   attachOptions?: string;
   onNavigate: (selection: Selection) => void;
 }
@@ -77,7 +77,7 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate
           switcher in the top-right, which shows the same name/email and owns
           sign-in and sign-out — so this was a second, read-only copy of it
           halfway down the page. */}
-      <ConnectBox catalogName={catalog.catalogName} serviceUrl={serviceUrl} attachOptions={attachOptions} />
+      {serviceUrl && <ConnectBox catalogName={catalog.catalogName} serviceUrl={serviceUrl} attachOptions={attachOptions} />}
 
       {catalog.schemas.length > 0 && (
         <>

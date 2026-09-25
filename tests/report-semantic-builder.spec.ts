@@ -291,9 +291,6 @@ test("new report → KPI → governed dataset → live test → apply preserves 
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`${APP_ORIGIN}${BASE}report-guide/`);
   await waitForShellBridge(page);
-  await expect(page.getByTestId("reports-run")).toHaveText(/Run report/, {
-    timeout: T_SHELL_BOOT,
-  });
   await page.evaluate(
     async (url) => (await import(/* @vite-ignore */ url)).mountWorkspace(),
     fixtureUrl,
@@ -312,6 +309,9 @@ test("new report → KPI → governed dataset → live test → apply preserves 
   ).toContainText("Model validation passed");
   await workspace.getByText("Advanced semantic JSON", { exact: true }).click();
   const jsonEditor = workspace.getByTestId("report-dataset-semantic-editor");
+  // Catalog order comes from the session inventory. Select the intended
+  // measure explicitly instead of depending on which catalog sorts first.
+  await jsonEditor.fill(JSON.stringify({ measures: [{ ...salesRef, member_id: 'revenue' }], limit: 1000 }));
   const validQuery = await jsonEditor.inputValue();
   await jsonEditor.fill('{"measures":[null]}');
   await expect(

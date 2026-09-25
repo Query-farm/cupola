@@ -1,20 +1,19 @@
 import { SavedReportsSidebar } from "./evidence/SavedReportsSidebar";
-import React, { useState, useMemo } from "react";
-import { Search, TerminalSquare, Cpu, RefreshCw, Loader2 } from "lucide-react";
+import { useState, useMemo } from "react";
+import { Search, TerminalSquare, Cpu } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { TreeView } from "@/components/tree-view";
 import { SettingsModal } from "@/components/SettingsModal";
 import type { CatalogData } from "@/lib/service";
+import { quoteIdent } from "@/lib/duckdb-query";
 import { useSettings } from "@/lib/settings";
 import { buildTreeData, filterTree, parseSelection, selectionToTreeId, type Selection } from "@/lib/tree";
 
 interface Props {
-  catalog: CatalogData;
+  catalogs: CatalogData[];
+  defaultCatalogName: string;
+  inventoryError?: string | null;
   serviceUrl?: string;
-  memoryCatalog?: CatalogData | null;
-  /** VGI catalogs the user has ATTACH'd from the shell (excludes the primary
-   *  ?service= catalog, which is passed separately via `catalog`). */
-  attachedCatalogs?: CatalogData[];
   selection: Selection | null;
   onSelect: (selection: Selection | null) => void;
   onOpenShell?: () => void;
@@ -24,67 +23,22 @@ interface Props {
   refreshing?: boolean;
 }
 
-function buildRefreshAction(onRefresh: () => void, refreshing?: boolean): React.ReactNode {
-  return React.createElement("div", {
-    role: "button",
-    tabIndex: 0,
-    className: "p-0.5 text-muted-foreground hover:text-primary transition-colors cursor-pointer",
-    title: "Refresh catalog",
-    "aria-disabled": refreshing || undefined,
-    onClick: (e: React.MouseEvent) => { e.stopPropagation(); if (!refreshing) onRefresh(); },
-    onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); e.preventDefault(); if (!refreshing) onRefresh(); } },
-  }, React.createElement(refreshing ? Loader2 : RefreshCw, {
-    className: `h-3.5 w-3.5${refreshing ? " animate-spin" : ""}`,
-  }));
-}
-
-export function Sidebar({ serviceUrl, catalog, memoryCatalog, attachedCatalogs, selection, onSelect, onOpenShell, onShellInsert, onRefresh, refreshing }: Props) {
+export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onOpenShell, onShellInsert, onRefresh, refreshing }: Props) {
   const [search, setSearch] = useState("");
   const { settings } = useSettings();
-  const treeData = useMemo(() => buildTreeData(catalog, {
+  const combinedData = useMemo(() => catalogs.flatMap(catalog => buildTreeData(catalog, {
     showDuckDBTypes: settings.showDuckDBTypes,
     hideTableBackingFunctions: settings.hideTableBackingFunctions,
     hideDollarTables: settings.hideDollarTables,
-    onTableAction: onShellInsert ? (schema, table) => onShellInsert(`${catalog.catalogName}.${schema}.${table}`) : undefined,
-  }), [catalog, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, onShellInsert]);
-  // Additional VGI catalogs ATTACH'd from the shell (merged as sibling roots)
-  const attachedTreeData = useMemo(() => {
-    if (!attachedCatalogs?.length) return [];
-    return attachedCatalogs.flatMap((c) =>
-      buildTreeData(c, {
-        showDuckDBTypes: settings.showDuckDBTypes,
-        hideTableBackingFunctions: settings.hideTableBackingFunctions,
-        hideDollarTables: settings.hideDollarTables,
-        onTableAction: onShellInsert
-          ? (schema, table) => onShellInsert(`${c.catalogName}.${schema}.${table}`)
-          : undefined,
-      })
-    );
-  }, [attachedCatalogs, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, onShellInsert]);
-  // Memory catalog tree nodes (merged into main tree)
-  const memoryTreeData = useMemo(() => {
-    if (!memoryCatalog) return [];
-    return buildTreeData(memoryCatalog, {
-      showDuckDBTypes: settings.showDuckDBTypes,
-      hideDollarTables: settings.hideDollarTables,
-      rootIcon: Cpu,
-      onTableAction: onShellInsert ? (schema, table) => onShellInsert(`memory.${schema}.${table}`) : undefined,
-    });
-  }, [memoryCatalog, settings.showDuckDBTypes, settings.hideDollarTables]);
-
-  const combinedData = useMemo(() => {
-    const sorted = [...treeData, ...attachedTreeData, ...memoryTreeData].sort((a, b) => a.name.localeCompare(b.name));
-    // Attach refresh action to the first catalog node
-    if (sorted.length > 0 && onRefresh) {
-      sorted[0] = { ...sorted[0], actions: buildRefreshAction(onRefresh, refreshing) };
-    }
-    return sorted;
-  }, [treeData, attachedTreeData, memoryTreeData, onRefresh, refreshing]);
+    rootIcon: catalog.catalogName === "memory" ? Cpu : undefined,
+    onTableAction: onShellInsert ? (schema, table) => onShellInsert([catalog.catalogName, schema, table].map(quoteIdent).join(".")) : undefined,
+    onRefresh, refreshing,
+  })).sort((a, b) => a.name.localeCompare(b.name)), [catalogs, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, onShellInsert, onRefresh, refreshing]);
   const filteredData = useMemo(() => filterTree(combinedData, search), [combinedData, search]);
 
   const selectedTreeId = useMemo(
-    () => selection ? selectionToTreeId(selection, catalog.catalogName) : catalog.catalogName,
-    [selection, catalog.catalogName]
+    () => selection ? selectionToTreeId(selection, defaultCatalogName) : defaultCatalogName,
+    [selection, defaultCatalogName]
   );
 
   function handleSelectChange(item: { id: string } | undefined) {
@@ -113,6 +67,8 @@ export function Sidebar({ serviceUrl, catalog, memoryCatalog, attachedCatalogs, 
         </div>
       </div>
 
+      {inventoryError && <div role="alert" className="px-3 py-2 text-xs text-destructive">Could not refresh catalogs: {inventoryError}<button className="block underline mt-1" onClick={onRefresh}>Retry</button></div>}
+      {catalogs.filter(c => c.metadataError).map(c => <div role="alert" key={c.catalogName} className="px-3 py-2 text-xs text-destructive">{c.catalogName}: metadata unavailable. <button className="underline" onClick={onRefresh}>Retry</button></div>)}
       {/* Tree */}
       <div className="flex-1 overflow-y-auto p-2 text-sm">
         {serviceUrl && <SavedReportsSidebar key={serviceUrl} serviceUrl={serviceUrl} search={search} />}

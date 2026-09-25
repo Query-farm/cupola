@@ -5,10 +5,20 @@
  */
 import { getColumns, type CatalogData } from "@/lib/service";
 
-/** True when `text` looks like a bare dotted table/identifier reference
- *  (e.g. `cat.schema.table`) rather than an expression the user typed. */
+const IDENTIFIER = String.raw`(?:"(?:[^"]|"")*"|[\p{L}_][\p{L}\p{N}_$]*)`;
+const TABLE_REF = new RegExp(`^${IDENTIFIER}(?:\\s*\\.\\s*${IDENTIFIER})+$`, "u");
+
+/** Decode quoted SQL identifiers, including aliases containing spaces/dots. */
+function tableRefParts(text: string): string[] | null {
+  if (!TABLE_REF.test(text)) return null;
+  return [...text.matchAll(new RegExp(IDENTIFIER, "gu"))].map(([part]) =>
+    part.startsWith('"') ? part.slice(1, -1).replaceAll('""', '"') : part,
+  );
+}
+
+/** True for dotted identifiers, including quoted SQL aliases. */
 export function isTableRef(text: string): boolean {
-  return text.includes(".") && !text.includes(" ") && !text.includes("(");
+  return tableRefParts(text) !== null;
 }
 
 /** Geometry column names for a dotted `cat.schema.table`, searched across the
@@ -17,8 +27,8 @@ function geometryColumns(
   dottedName: string,
   catalogs: (CatalogData | null | undefined)[],
 ): string[] {
-  const parts = dottedName.split(".");
-  if (parts.length !== 3) return [];
+  const parts = tableRefParts(dottedName);
+  if (!parts || parts.length !== 3) return [];
   const [cat, schema, table] = parts;
   for (const catData of catalogs) {
     if (!catData || catData.catalogName !== cat) continue;

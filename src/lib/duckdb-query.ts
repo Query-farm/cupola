@@ -90,6 +90,15 @@ export async function readRows(sql: string): Promise<Record<string, any>[] | nul
   return tableToRows(table);
 }
 
+/** Metadata discovery must distinguish failure from an empty catalog. */
+export async function readRowsOrThrow(sql: string): Promise<Record<string, any>[]> {
+  if (!engine.query) throw new Error("The data engine is not ready.");
+  const result = await engine.query(sql);
+  if (!result.ok) throw new Error(result.error || "Metadata query failed.");
+  if (!result.arrowBuffers?.length) throw new Error("Metadata query returned no result.");
+  return tableToRows(decodeArrowBuffer(result.arrowBuffers[0]));
+}
+
 /** Strongly-typed variant of `readRows` for callers that know the column
  *  shape. The values are still pulled via `getChild(name)?.get(i)` — no
  *  conversion is applied, so types must match the Arrow column types. */

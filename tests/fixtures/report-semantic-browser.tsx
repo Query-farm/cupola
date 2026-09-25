@@ -8,6 +8,7 @@ import { compileSemanticQuery } from "../../src/lib/semantic-compiler";
 import { resolveReportSemanticQuery } from "../../src/lib/reports/semantic";
 import { engine } from "../../src/lib/shell-bridge";
 import { getStoredReport } from "../../src/lib/reports/store";
+import { installSemanticCatalogMetadata } from './semantic-catalog-metadata';
 import type {
   ReportParameter,
   ReportSemanticDataset,
@@ -104,6 +105,7 @@ export async function mountWorkspace() {
     if (!result.ok) throw new Error(result.error);
   }
   const catalogs = reportSemanticCatalogs();
+  await installSemanticCatalogMetadata(catalogs);
   host().render(
     <SettingsProvider>
       <div className="h-full">

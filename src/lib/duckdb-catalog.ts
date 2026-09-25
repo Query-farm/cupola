@@ -2,17 +2,15 @@
  * Build a `CatalogData` for an already-attached DuckDB database by
  * introspecting the DuckDB metadata functions through the shell bridge.
  *
- * Used for catalogs the user ATTACH'd from the shell (TYPE vgi, LOCATION ...).
+ * Used for every catalog in the session, including native DuckDB databases.
  * Unlike `fetchCatalog(url)` which opens its own HTTP+RPC connection to the
  * VGI server, this path reuses the DuckDB-WASM extension's authenticated
  * session — OAuth tokens never need to leave the extension.
  *
- * This is the cross-catalog generalization of `fetchMemoryTables` in
- * CatalogApp.tsx. It can target any attached database by `database_name`,
- * including `memory` (though the existing code still uses fetchMemoryTables
- * for that).
+ * The initial HTTP catalog fetch bootstraps the connection; this path supplies
+ * the authoritative metadata once the engine is ready.
  */
-import { esc, readRows } from "./duckdb-query";
+import { esc, readRowsOrThrow } from "./duckdb-query";
 import type { CatalogData, ColumnInfo, ForeignKeyInfo, ResolvedSchema } from "./service";
 import type {
   FunctionInfo,
@@ -25,7 +23,7 @@ import { normalizeTags, parseRequiredFilters } from "./tags";
 import type { FunctionArg, FunctionReturn } from "./function-info";
 
 interface ArrayLikeValue extends Iterable<unknown> {
-  toArray?: () => unknown[];
+  toArray?: () => Iterable<unknown>;
 }
 
 /** Convert an Arrow Vector / JS iterable to a plain string[]. Handles both
@@ -36,7 +34,9 @@ function toStringArray(v: unknown): string[] {
   if (Array.isArray(v)) return v.map((x) => String(x));
   if (typeof v !== "object") return [];
   const candidate = v as Partial<ArrayLikeValue>;
-  if (typeof candidate.toArray === "function") return candidate.toArray().map(String);
+  // Numeric Arrow vectors return typed arrays. Their .map() preserves the
+  // element type (including BigInt), so convert to an ordinary array first.
+  if (typeof candidate.toArray === "function") return Array.from(candidate.toArray(), String);
   if (typeof candidate[Symbol.iterator] === "function") {
     const out: string[] = [];
     for (const x of candidate as ArrayLikeValue) out.push(String(x));
@@ -114,9 +114,11 @@ function normalizeExamples(value: unknown): FunctionInfo["examples"] {
   const items = Array.isArray(value)
     ? value
     : value && typeof value === "object" && typeof (value as ArrayLikeValue).toArray === "function"
-      ? (value as ArrayLikeValue).toArray!()
+      ? Array.from((value as ArrayLikeValue).toArray!())
       : [];
   return items.flatMap((item) => {
+    // DuckDB advertises VARCHAR[] examples; VGI metadata may supply structs.
+    if (typeof item === "string") return item.trim() ? [{ sql: item.trim(), description: "", expected_output: null }] : [];
     if (!item || typeof item !== "object") return [];
     const row = item as Record<string, unknown>;
     const sql = String(row.sql ?? "").trim();
@@ -141,10 +143,17 @@ const MACRO_TYPES = new Set(["macro", "table_macro"]);
 
 /**
  * Fetch a full `CatalogData` for an attached DuckDB database by name.
- * Returns a minimal empty catalog (zero schemas) if the shell bridge isn't
- * available or any of the metadata queries fail.
+ * Keeps partial metadata and reports query failures on the catalog itself.
  */
-export async function fetchAttachedCatalog(databaseName: string): Promise<CatalogData> {
+export async function fetchAttachedCatalog(databaseName: string, databaseType = "vgi"): Promise<CatalogData> {
+  const errors: string[] = [];
+  const readRows = async (sql: string, optional = false): Promise<Record<string, any>[]> => {
+    try { return await readRowsOrThrow(sql); }
+    catch (error) {
+      if (!optional) errors.push(error instanceof Error ? error.message : String(error));
+      return [];
+    }
+  };
   const dbLit = `'${esc(databaseName)}'`;
 
   // Parallel metadata fetches — none depend on each other.
@@ -176,10 +185,10 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
        FROM duckdb_constraints()
        WHERE database_name = ${dbLit}
        ORDER BY schema_name, table_name, constraint_index`
-    ).catch(() => []),
-    readRows(
-      `SELECT * FROM vgi_function_arguments() WHERE catalog_name = ${dbLit} ORDER BY schema_name, function_name, function_type, field_index`
-    ).catch(() => []),
+    ),
+    databaseType === "vgi" ? readRows(
+      `SELECT * FROM vgi_function_arguments() WHERE catalog_name = ${dbLit} ORDER BY schema_name, function_name, function_type, field_index`, true
+    ) : Promise.resolve([]),
   ]);
 
   // Schema name → resolved slot. Seed with schemas from duckdb_schemas() so
@@ -396,7 +405,7 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
       comment,
       tags,
       definition,
-      column_comments: {},
+      column_comments: Object.fromEntries(cols.filter(c => c.comment).map(c => [c.name, c.comment!])),
       _columnInfo: cols.map((c) => ({
         name: c.name,
         arrowType: c.duckdbType,
@@ -566,6 +575,8 @@ export async function fetchAttachedCatalog(databaseName: string): Promise<Catalo
 
   return {
     catalogName: databaseName,
+    databaseType,
+    ...(errors.length ? { metadataError: [...new Set(errors)].join("; ") } : {}),
     catalogComment: databaseRows?.[0]?.comment == null ? null : String(databaseRows[0].comment),
     catalogTags: normalizeTags(databaseRows?.[0]?.tags),
     defaultSchema,

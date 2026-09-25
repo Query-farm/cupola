@@ -1,3 +1,4 @@
+import { catalogInventory } from "@/lib/catalog-store";
 /**
  * DBeaver-style SQL editor surface: a tab strip of named query documents, a
  * CodeMirror editor with a run toolbar, and a results grid below. Coexists
@@ -231,9 +232,6 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     if (isCount) {
       setActiveResult(docId, { running: false, error: null, ok: true, table: null, rowCount: 0, elapsedMs });
       recordQuery({ sql: trimmed, executionTimeMs: elapsedMs, success: true });
-      // A DDL statement likely changed the schema — refresh sidebar catalogs.
-      ui.refreshMemoryTables?.();
-      ui.onAttachedCatalogsChanged?.();
       return;
     }
     setActiveResult(docId, {
@@ -447,7 +445,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     const ed = editorRef.current;
     if (!ed) return;
     if (isTableRef(text) && ed.getDoc().trim() === "") {
-      ed.insertAtCursor(buildTableSelect(text, [catalogData, ui.memoryCatalog]));
+      ed.insertAtCursor(buildTableSelect(text, catalogInventory.getSnapshot().catalogs));
     } else {
       ed.insertAtCursor(text);
     }

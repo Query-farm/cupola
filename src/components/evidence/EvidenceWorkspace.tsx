@@ -1,3 +1,4 @@
+import { sessionCatalogs } from "@/lib/catalog-store";
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square } from 'lucide-react';
@@ -149,7 +150,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
         setLogs([{ sql: next.setupSql, rows: 0, durationMs: performance.now() - start, error: response.ok ? null : response.error || 'Dataset setup failed' }]);
         if (!response.ok) throw new Error(response.error || 'Dataset setup failed');
       }
-      const semantic = await prepareEvidenceSemanticDatasets(next, values, catalogs, name => semanticTables.current.add(name), current);
+      const semanticCatalogs = next.semanticDatasets?.length ? await current.wait(sessionCatalogs(catalogs)) : catalogs;
+      const semantic = await prepareEvidenceSemanticDatasets(next, values, semanticCatalogs, name => semanticTables.current.add(name), current);
       current.signal.throwIfAborted();
       setSemanticStates(semantic.states);
       setRun({ execution: current, report: structuredClone(next), values, semanticQueries: semantic.queries, semanticStates: semantic.states, revision: ++revision.current });

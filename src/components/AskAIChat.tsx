@@ -1,3 +1,4 @@
+import { catalogsForTool, catalogInventory } from "@/lib/catalog-store";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Sparkles, RotateCcw, Settings, FileText, Copy } from "lucide-react";
 import * as Sentry from "@sentry/astro";
@@ -279,18 +280,17 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     // hasChartTool = true: include render_chart capability in the prompt
     // guidance (and CHART_TOOL in the tool list below). Terminal `.ai` mode
     // passes a different surface and would set this false.
-    const catalogs = [catalogData, ...attachedCatalogs, ui.memoryCatalog]
-      .filter((value): value is CatalogData => Boolean(value));
+    const catalogs = catalogInventory.getSnapshot().catalogs;
     const queryMode = normalizeAIQueryMode(getSetting("aiQueryMode"));
 
     // Build the system prompt once per conversation and reuse the exact bytes.
-    // Sorted attached-catalog names rather than the array's identity: a prop
-    // that re-creates the array each render would otherwise rebuild the prompt
-    // every turn, which is the bug this is fixing.
-    const promptKey = `${queryMode}\u0000${attachedCatalogs.map((c) => c.catalogName).sort().join(",")}`;
+    // Refresh the cached prompt when catalog metadata changes, including
+    // changes under an existing alias. Memory changes still travel in the
+    // user turn so temporary analysis tables do not invalidate the prefix.
+    const promptKey = `${queryMode}\u0000${JSON.stringify(catalogs.filter(c => c.catalogName !== "memory"))}`;
     const cachedPrompt = systemPromptKeyRef.current;
     if (!systemPromptRef.current || cachedPrompt?.catalog !== catalogData || cachedPrompt.key !== promptKey) {
-      systemPromptRef.current = buildSystemPrompt(catalogData, getEngineInfo(), catalogs.slice(1), true, queryMode);
+      systemPromptRef.current = buildSystemPrompt(catalogs[0] ?? catalogData, getEngineInfo(), catalogs.slice(1), true, queryMode);
       systemPromptKeyRef.current = { catalog: catalogData, key: promptKey };
       memoryObjectsRef.current = memoryObjectNames(ui.memoryCatalog);
     }
@@ -386,6 +386,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<ToolResult> => {
       const denied = deniedAIQueryToolResult(name, queryMode);
       if (denied) return denied;
+      const catalogs = await catalogsForTool(name);
       if (name === "query_semantic_model") {
         const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB shell not initialized — open SQL Shell first");
@@ -466,7 +467,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
                 });
                 pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
                 // COMMENT ON returns empty — refresh sidebar so comments appear.
-                if (/COMMENT\s+ON/i.test(input.sql)) await ui.refreshMemoryTables?.();
+                if (/COMMENT\s+ON/i.test(input.sql)) await catalogInventory.current().catch(() => { /* Sidebar displays metadata errors; SQL already succeeded. */ });
                 return;
               }
               if (out.kind === "ddl") {
@@ -475,7 +476,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
                   executionTimeMs: out.elapsedMs, success: true, rowCount: 0, userQuestion,
                 });
                 pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
-                await ui.refreshMemoryTables?.();
+                await catalogInventory.current().catch(() => { /* Sidebar displays metadata errors; SQL already succeeded. */ });
                 const createMatch = input.sql.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
                 if (createMatch) {
                   const schema = createMatch[1] || "main";
@@ -867,7 +868,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   // is exactly the drift the freeze exists to prevent. Reading a ref during
   // render is safe because opening the dialog is itself a state change.
   const systemPrompt = useMemo(() => systemPromptRef.current ?? (catalogData
-    ? buildSystemPrompt(catalogData, getEngineInfo(), [...attachedCatalogs, ...(ui.memoryCatalog ? [ui.memoryCatalog] : [])], true, normalizeAIQueryMode(settings.aiQueryMode))
+    ? buildSystemPrompt(catalogInventory.getSnapshot().catalogs[0] ?? catalogData, getEngineInfo(), catalogInventory.getSnapshot().catalogs.slice(1), true, normalizeAIQueryMode(settings.aiQueryMode))
     : null), [catalogData, attachedCatalogs, serviceUrl, settings.aiQueryMode, showSystemPrompt, messages.length]);
 
   return (

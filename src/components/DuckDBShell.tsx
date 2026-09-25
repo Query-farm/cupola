@@ -1,3 +1,4 @@
+import { useCatalogInventory } from "@/lib/use-catalog-inventory";
 /**
  * DuckDB-WASM Shell React component.
  * Loads xterm.js + addons from CDN to avoid SSR/bundling issues.
@@ -126,10 +127,7 @@ function loadScripts(): Promise<void> {
 }
 
 export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, onQueryHistoryCountChange, onAiBusyChange, onShellReady, catalogData, attachedCatalogs = [], selection, onAuthError, onAttachError, attachOptions }: Props) {
-  useEffect(() => {
-    ui.attachedCatalogs = attachedCatalogs;
-    return () => { ui.attachedCatalogs = []; };
-  }, [attachedCatalogs]);
+  const inventory = useCatalogInventory();
   // The parent controls the active tab; expose a local alias so the existing
   // setActiveTab(...) call sites (history re-run, bridge slots) keep working.
   const setActiveTab = onTabChange;
@@ -175,8 +173,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
 
   // Resolve selected table or view for Data Viewer and Perspective tabs
   // Search the primary, every secondary VGI worker, and the memory catalog.
-  const allCatalogs = [catalogData, ...attachedCatalogs, ui.memoryCatalog]
-    .filter((catalog): catalog is CatalogData => catalog !== null && catalog !== undefined);
+  const allCatalogs = inventory.catalogs;
   function findInCatalogs(type: "table", name?: string, schema?: string, catalog?: string): TableInfo | null;
   function findInCatalogs(type: "view", name?: string, schema?: string, catalog?: string): ViewInfo | null;
   function findInCatalogs(type: "table" | "view", name?: string, schema?: string, catalog?: string): TableInfo | ViewInfo | null {

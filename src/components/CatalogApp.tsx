@@ -1,11 +1,11 @@
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
-import { fetchCatalog, type CatalogData, type ColumnInfo, type ResolvedSchema } from "@/lib/service";
-import type { SchemaInfo, TableInfo, ViewInfo } from "@/lib/vgi-catalog-types";
+import { fetchCatalog, type CatalogData } from "@/lib/service";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql, clearSharedSql } from "@/lib/url-params";
 import type { PendingEditorSql } from "./editor/SqlEditorView";
-import { fetchAttachedCatalog } from "@/lib/duckdb-catalog";
-import { readRows, readRowsTyped, quoteLiteral } from "@/lib/duckdb-query";
+import { catalogInventory } from "@/lib/catalog-store";
+import { useCatalogInventory } from "@/lib/use-catalog-inventory";
+import { quoteLiteral } from "@/lib/duckdb-query";
 import { isRecoverableAuthError } from "@/lib/auth-errors";
 import { type Selection } from "@/lib/tree";
 import { getAuthTokenForService, getUserInfo, hadAuthToken } from "@/lib/auth";
@@ -17,7 +17,7 @@ import {
   hasTokens as hasOAuthTokens,
 } from "@/lib/oauth-client";
 import { SettingsProvider } from "@/lib/settings";
-import { engine, terminal, ui, setShellWorkerSentryUser } from "@/lib/shell-bridge";
+import { terminal, ui, setShellWorkerSentryUser } from "@/lib/shell-bridge";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
 import { loadTheme } from "@/lib/theme";
 import { lazy, Suspense } from "react";
@@ -70,34 +70,6 @@ const CUPOLA_MARK = `${import.meta.env.BASE_URL}cupola-logo-large.png`;
 
 /** Minimum spacing between two login redirects before we call it a loop. */
 const AUTH_REDIRECT_LOOP_WINDOW_MS = 10_000;
-
-interface MemoryColumnRow {
-  schema_name: unknown;
-  table_name: unknown;
-  column_name: unknown;
-  data_type: unknown;
-  comment: unknown;
-  nullable: unknown;
-}
-
-interface MemoryCommentRow {
-  schema_name: unknown;
-  table_name: unknown;
-  comment: unknown;
-}
-
-interface MemoryViewRow {
-  schema_name: unknown;
-  view_name: unknown;
-  sql: unknown;
-}
-
-type MemoryTableInfo = TableInfo & { _columnInfo: ColumnInfo[] };
-type MemoryViewInfo = ViewInfo & { _columnInfo: ColumnInfo[] };
-
-function memorySchemaInfo(name: string): SchemaInfo {
-  return { name, comment: "", tags: {}, attach_opaque_data: new Uint8Array(0) };
-}
 
 /** Start an OAuth login redirect, refusing to do so twice in quick succession.
  *
@@ -213,17 +185,9 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
   // shared query links). `autoRun` is false for shared links: the recipient
   // gets the query staged and ready, but chooses when to execute it.
   const [pendingEditorSql, setPendingEditorSql] = useState<PendingEditorSql | null>(null);
-  const [memoryCatalog, setMemoryCatalog] = useState<CatalogData | null>(null);
-  const [attachedCatalogs, setAttachedCatalogs] = useState<CatalogData[]>([]);
-  // Keep the latest attached list in a ref so syncAttachedCatalogs can diff
-  // without depending on state and becoming a new callback on every change.
-  const attachedCatalogsRef = useRef<CatalogData[]>([]);
-  useEffect(() => { attachedCatalogsRef.current = attachedCatalogs; }, [attachedCatalogs]);
-  // Track catalogName in a ref so syncAttachedCatalogs doesn't depend on
-  // `data` state — otherwise setData() inside loadCatalog recreates the
-  // callback chain and the mount effect fires a second loadCatalog().
-  const catalogNameRef = useRef<string | undefined>(undefined);
-  useEffect(() => { catalogNameRef.current = data?.catalogName; }, [data?.catalogName]);
+  const inventory = useCatalogInventory();
+  const catalogs = showcaseMode && !inventory.ready ? [REPORT_SHOWCASE_CATALOG] : inventory.catalogs;
+  const attachedCatalogs = catalogs.filter(c => !c.primary && c.catalogName !== "memory");
   // Brand mark for the welcome / connecting / error screens. Defaults to the
   // Cupola mark and is replaced when a `?theme=` config supplies its own logo.
   //
@@ -243,171 +207,6 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
   useEffect(() => { setMounted(true); }, []);
 
 
-  /** Fetch in-memory DuckDB tables via the shell worker. Returns null if shell isn't running. */
-  const fetchMemoryTables = useCallback(async () => {
-    if (!engine.query) { setMemoryCatalog(null); return; }
-
-    try {
-      const colRows = await readRowsTyped<MemoryColumnRow>(
-        `SELECT schema_name, table_name, column_name, data_type, comment, CASE WHEN is_nullable = 'YES' THEN true ELSE false END as nullable
-         FROM duckdb_columns()
-         WHERE database_name = 'memory'
-         ORDER BY schema_name, table_name, column_index`
-      );
-      if (colRows === null) { setMemoryCatalog(null); return; }
-      if (colRows.length === 0) {
-        setMemoryCatalog({ catalogName: "memory", catalogComment: null, catalogTags: {}, defaultSchema: "main", schemas: [] });
-        return;
-      }
-
-      // Fetch table comments
-      const commentMap = new Map<string, string>(); // "schema.table" → comment
-      const commentRows = await readRowsTyped<MemoryCommentRow>(
-        `SELECT schema_name, table_name, comment FROM duckdb_tables() WHERE database_name = 'memory' AND comment IS NOT NULL AND comment != ''`
-      );
-      for (const row of commentRows ?? []) {
-        const c = String(row.comment ?? "");
-        if (c) commentMap.set(`${row.schema_name ?? ""}.${row.table_name ?? ""}`, c);
-      }
-
-      // Fetch view names and definitions to distinguish views from tables
-      const viewDefs = new Map<string, string>(); // "schema.view" → SQL definition
-      const viewRows = await readRowsTyped<MemoryViewRow>(
-        `SELECT schema_name, view_name, sql FROM duckdb_views() WHERE database_name = 'memory'`
-      );
-      for (const row of viewRows ?? []) {
-        viewDefs.set(`${row.schema_name ?? ""}.${row.view_name ?? ""}`, String(row.sql ?? ""));
-      }
-
-      // Group by schema → table → columns
-      const schemaMap = new Map<string, Map<string, { name: string; type: string; nullable: boolean; comment?: string }[]>>();
-      for (const row of colRows) {
-        const schema = String(row.schema_name ?? "main");
-        const tbl = String(row.table_name ?? "");
-        const col = String(row.column_name ?? "");
-        const dtype = String(row.data_type ?? "VARCHAR");
-        const nullable = Boolean(row.nullable ?? true);
-        const comment = row.comment ? String(row.comment) : undefined;
-
-        if (!schemaMap.has(schema)) schemaMap.set(schema, new Map());
-        const tableMap = schemaMap.get(schema)!;
-        if (!tableMap.has(tbl)) tableMap.set(tbl, []);
-        tableMap.get(tbl)!.push({ name: col, type: dtype, nullable, comment });
-      }
-
-      // Build CatalogData structure — separate tables from views
-      const schemas: ResolvedSchema[] = [];
-      for (const [schemaName, tableMap] of schemaMap) {
-        const tables: MemoryTableInfo[] = [];
-        const views: MemoryViewInfo[] = [];
-        for (const [tableName, columns] of tableMap) {
-          const viewKey = `${schemaName}.${tableName}`;
-          const isView = viewDefs.has(viewKey);
-          const columnInfo: ColumnInfo[] = columns.map((c) => ({
-              name: c.name,
-              arrowType: c.type,
-              duckdbType: c.type,
-              nullable: c.nullable,
-              comment: c.comment,
-          }));
-          if (isView) {
-            views.push({
-              name: tableName,
-              schema_name: schemaName,
-              tags: {},
-              comment: commentMap.get(`${schemaName}.${tableName}`) || "",
-              definition: viewDefs.get(viewKey) || "",
-              column_comments: {},
-              _columnInfo: columnInfo,
-            });
-          } else {
-            tables.push({
-              name: tableName,
-              schema_name: schemaName,
-              tags: {},
-              comment: commentMap.get(`${schemaName}.${tableName}`) || "",
-              columns: new Uint8Array(0),
-              primary_key_constraints: [],
-              unique_constraints: [],
-              check_constraints: [],
-              not_null_constraints: [],
-              foreign_key_constraints: [],
-              // Read-only in-memory table; see the note in duckdb-catalog.
-              write_result_modes: {},
-              supports_column_statistics: false,
-              required_filters: [],
-              _columnInfo: columnInfo,
-            });
-          }
-        }
-        schemas.push({
-          info: memorySchemaInfo(schemaName),
-          tables,
-          views,
-          functions: [],
-          macros: [],
-        });
-      }
-
-      setMemoryCatalog({
-        catalogName: "memory",
-        catalogComment: null,
-        catalogTags: {},
-        defaultSchema: "main",
-        schemas,
-      });
-    } catch (e) {
-      console.error("Failed to fetch memory tables:", e);
-      setMemoryCatalog(null);
-    }
-  }, []);
-
-  /** Diff the live set of VGI-type databases in DuckDB against our rendered
-   *  list, fetch any new ones via the TypeScript VGI client, drop any that
-   *  were detached. Called after ATTACH/DETACH in the shell and by the
-   *  refresh button. The primary (?service=) catalog is excluded — it's
-   *  rendered from `data` separately. */
-  const syncAttachedCatalogs = useCallback(async (): Promise<void> => {
-    if (!engine.query) return;
-    let names: string[] = [];
-    try {
-      const rows = await readRows(
-        "SELECT database_name FROM duckdb_databases() WHERE type = 'vgi'"
-      );
-      if (rows === null) return;
-      for (const row of rows) {
-        const name = String(row.database_name ?? "");
-        if (name) names.push(name);
-      }
-    } catch (e) {
-      console.error("[catalog] duckdb_databases() query failed:", e);
-      return;
-    }
-
-    // Exclude the primary catalog — it's already rendered from `data`.
-    const primaryName = catalogNameRef.current ?? engine.catalogName ?? null;
-    if (primaryName) names = names.filter((n) => n !== primaryName);
-
-    const current = attachedCatalogsRef.current;
-    const liveNames = new Set(names);
-
-    // Fetch the full CatalogData for every live attached catalog from
-    // DuckDB introspection, always. Cheap (four metadata queries per
-    // catalog, no HTTP round-trips) and always up-to-date, so we don't
-    // bother caching unchanged entries.
-    const fetched = await Promise.allSettled(names.map((n) => fetchAttachedCatalog(n)));
-    const additions: CatalogData[] = [];
-    fetched.forEach((res, i) => {
-      if (res.status === "fulfilled") additions.push(res.value);
-      else console.error(`[catalog] fetchAttachedCatalog(${names[i]}) failed:`, res.reason);
-    });
-
-    const dropped = current.filter((c) => !liveNames.has(c.catalogName));
-    if (dropped.length) {
-      console.log("[catalog] detached:", dropped.map((c) => c.catalogName).join(", "));
-    }
-    setAttachedCatalogs(additions);
-  }, []);
   // Persist the active tab.
   useEffect(() => {
     if (showcaseMode) return;
@@ -446,20 +245,15 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
     return () => { cancelled = true; };
   }, []);
 
-  // Expose refresh globally (navigate is exposed after it's defined below).
-  // useEffect + cleanup so unmount clears the slots instead of leaking the
-  // previous component instance's closures.
+  // Legacy imperative callers refresh the same inventory as every other surface.
   useEffect(() => {
-    ui.refreshMemoryTables = fetchMemoryTables;
-    ui.onAttachedCatalogsChanged = syncAttachedCatalogs;
-    ui.memoryCatalog = memoryCatalog;
+    ui.refreshMemoryTables = catalogInventory.refresh;
+    ui.onAttachedCatalogsChanged = catalogInventory.refresh;
     return () => {
       ui.refreshMemoryTables = null;
       ui.onAttachedCatalogsChanged = null;
-      ui.memoryCatalog = null;
     };
-  }, [fetchMemoryTables, syncAttachedCatalogs, memoryCatalog]);
-
+  }, []);
 
   // Refit the terminal when the shell tab becomes active (it may have been
   // hidden/zero-sized while another tab was showing).
@@ -593,6 +387,10 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
 
   const loadCatalog = useCallback(
     async (isRefresh = false) => {
+      if (isRefresh && catalogInventory.getSnapshot().ready) {
+        await catalogInventory.refresh();
+        return;
+      }
       if (showcaseMode) {
         setData(REPORT_SHOWCASE_CATALOG);
         setError(null);
@@ -635,7 +433,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
       try {
         const catalog = await fetchCatalog(serviceUrl);
         setData(catalog);
-        catalogNameRef.current = catalog.catalogName;
+        catalogInventory.seed(catalog, serviceUrl);
         setError(null);
         if (hasExplicitService()) {
           saveRecentService(serviceUrl, catalog.catalogName);
@@ -645,22 +443,10 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
           const hashSel = hashToSelection(window.location.hash);
           const defaultSchema = catalog.defaultSchema || catalog.schemas[0]?.info.name;
           const initialSel = hashSel ?? (defaultSchema
-            ? { type: "schema" as const, name: defaultSchema, schema: defaultSchema }
-            : { type: "catalog" as const, name: catalog.catalogName });
+            ? { type: "schema" as const, name: defaultSchema, schema: defaultSchema, catalog: catalog.catalogName }
+            : { type: "catalog" as const, name: catalog.catalogName, catalog: catalog.catalogName });
           setSelection(initialSel);
           updatePageTitle(initialSel, catalog.catalogName);
-        }
-        // Also refresh memory tables if shell is running
-        if (engine.query) {
-          await fetchMemoryTables();
-          // On refresh (not initial load), force every attached VGI catalog
-          // to re-fetch by clearing the cache first — explicit user intent
-          // to resync everything.
-          if (isRefresh) {
-            setAttachedCatalogs([]);
-            attachedCatalogsRef.current = [];
-          }
-          await syncAttachedCatalogs();
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Failed to connect";
@@ -679,7 +465,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
         setRefreshing(false);
       }
     },
-    [serviceUrl, showcaseMode, defaultServiceUrl, syncAttachedCatalogs]
+    [serviceUrl, showcaseMode, defaultServiceUrl]
   );
 
   // Process any pending SPA OAuth callback before the first catalog fetch.
@@ -849,9 +635,9 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
             >
               <Sidebar
                 serviceUrl={serviceUrl}
-                catalog={data}
-                memoryCatalog={memoryCatalog}
-                attachedCatalogs={attachedCatalogs}
+                catalogs={catalogs}
+                defaultCatalogName={data.catalogName}
+                inventoryError={inventory.error}
                 selection={selection}
                 onSelect={(sel) => { navigate(sel); if (isNarrow) setMobileSidebarOpen(false); }}
                 onOpenShell={() => { setActiveTab("shell"); if (isNarrow) setMobileSidebarOpen(false); }}
@@ -865,7 +651,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
                   }
                 }}
                 onRefresh={() => loadCatalog(true)}
-                refreshing={refreshing}
+                refreshing={refreshing || inventory.refreshing}
               />
             </div>
             {!isNarrow && <div
@@ -889,7 +675,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
               : "absolute inset-0 overflow-y-auto p-3 sm:p-6"}
             >
               <ErrorBoundary>
-                <ContentPanel data={data} memoryCatalog={memoryCatalog} attachedCatalogs={attachedCatalogs} selection={selection} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={navigate} onOpenShell={() => setActiveTab("shell")} />
+                <ContentPanel catalogs={catalogs} defaultCatalogName={data.catalogName} selection={selection} attachOptions={attachOptions} onNavigate={navigate} onOpenShell={() => setActiveTab("shell")} />
               </ErrorBoundary>
             </main>
           )}
@@ -916,7 +702,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
           {reportsMounted && (
             <div className="absolute inset-0 overflow-hidden" style={activeTab === "reports" ? undefined : { visibility: "hidden", zIndex: -1 }}>
               <ErrorBoundary><Suspense fallback={<div className="p-6">Loading reports…</div>}>
-                <EvidencePanel catalogName={data.catalogName} serviceUrl={serviceUrl} catalogs={[data, ...attachedCatalogs]} />
+                <EvidencePanel catalogName={data.catalogName} serviceUrl={serviceUrl} catalogs={catalogs} />
               </Suspense></ErrorBoundary>
             </div>
           )}
@@ -936,8 +722,9 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
                     onTabChange={setActiveTab}
                     onQueryHistoryCountChange={setQueryHistoryCount}
                     onAiBusyChange={setAskAiBusy}
-                    onShellReady={(insert) => { shellInsertRef.current = insert; fetchMemoryTables(); syncAttachedCatalogs(); }}
+                    onShellReady={(insert) => { shellInsertRef.current = insert; }}
                     catalogData={data}
+                    attachedCatalogs={attachedCatalogs}
                     selection={selection}
                     onAuthError={(title, message) => setAuthError({ title, message })}
                     onAttachError={(title, message) => setAttachError({ title, message })}
@@ -1457,47 +1244,24 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
 }
 
 function ContentPanel({
-  data,
-  memoryCatalog,
-  attachedCatalogs,
-  selection,
-  serviceUrl,
-  attachOptions,
-  onNavigate,
-  onOpenShell,
+  catalogs, defaultCatalogName, selection, attachOptions, onNavigate, onOpenShell,
 }: {
-  data: CatalogData;
-  memoryCatalog?: CatalogData | null;
-  attachedCatalogs?: CatalogData[];
+  catalogs: CatalogData[];
+  defaultCatalogName: string;
   selection: Selection | null;
-  serviceUrl: string;
   attachOptions?: string;
   onNavigate: (selection: Selection) => void;
   onOpenShell?: () => void;
 }) {
-  if (!selection || selection.type === "catalog") {
-    if (selection?.catalog && memoryCatalog && selection.catalog === memoryCatalog.catalogName) {
-      return <MemoryCatalogOverview catalog={memoryCatalog} onNavigate={onNavigate} />;
-    }
-    const attached = selection?.catalog
-      ? attachedCatalogs?.find((c) => c.catalogName === selection.catalog)
-      : undefined;
-    if (attached) {
-      return <CatalogOverview catalog={attached} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;
-    }
-    return <CatalogOverview catalog={data} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;
-  }
-
-  // Determine which catalog to search. Both branches must be a ternary, not
-  // `cond && find(...) ?? data`: with an empty-string `selection.catalog` that
-  // expression evaluates to `""`, which is not nullish, so `?? data` doesn't
-  // fire and every `catalog.schemas` access below hits a string.
-  const catalog: CatalogData =
-    (selection.catalog && memoryCatalog && selection.catalog === memoryCatalog.catalogName)
-      ? memoryCatalog
-      : (selection.catalog
-          ? attachedCatalogs?.find((c) => c.catalogName === selection.catalog)
-          : undefined) ?? data;
+  const selectedName = selection?.catalog ?? defaultCatalogName;
+  const catalog = catalogs.find(c => c.catalogName === selectedName);
+  if (!catalog) return <div className="p-6 text-sm text-muted-foreground">Catalog “{selectedName}” is not attached. Select a catalog from the sidebar.</div>;
+  const onCatalogNavigate = (next: Selection) => onNavigate({ ...next, catalog: next.catalog ?? catalog.catalogName });
+  if (catalog.metadataError) return <div role="alert" className="p-6 text-sm"><p>Could not load all metadata for {catalog.catalogName}.</p><p className="text-muted-foreground mt-2">{catalog.metadataError}</p><Button className="mt-3" variant="outline" onClick={() => void catalogInventory.refresh()}>Retry catalog metadata</Button></div>;
+  const overview = catalog.catalogName === "memory"
+    ? <MemoryCatalogOverview catalog={catalog} onNavigate={onCatalogNavigate} />
+    : <CatalogOverview catalog={catalog} serviceUrl={catalog.sourceUrl} attachOptions={catalog.primary ? attachOptions : undefined} onNavigate={onCatalogNavigate} />;
+  if (!selection || selection.type === "catalog") return overview;
 
   if (selection.type === "relationships") {
     return (
@@ -1506,38 +1270,38 @@ function ContentPanel({
           catalog={catalog}
           initialSchema={selection.schema}
           initialFocusTable={selection.focusTable}
-          onNavigate={onNavigate}
+          onNavigate={onCatalogNavigate}
         />
       </Suspense>
     );
   }
 
   const schema = catalog.schemas.find((s) => s.info.name === selection.schema);
-  if (!schema) return <CatalogOverview catalog={data} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;
+  if (!schema) return overview;
 
   if (selection.type === "schema") {
-    return <SchemaDetail schema={schema} onNavigate={onNavigate} catalogName={catalog.catalogName} onOpenShell={onOpenShell} />;
+    return <SchemaDetail schema={schema} onNavigate={onCatalogNavigate} catalogName={catalog.catalogName} onOpenShell={onOpenShell} />;
   }
 
   if (selection.type === "table") {
     const table = schema.tables.find((t) => t.name === selection.name);
-    if (table) return <TableDetail table={table} catalogName={catalog.catalogName} onNavigate={onNavigate} onOpenShell={onOpenShell} />;
+    if (table) return <TableDetail table={table} catalogName={catalog.catalogName} onNavigate={onCatalogNavigate} onOpenShell={onOpenShell} />;
   }
 
   if (selection.type === "view") {
     const view = schema.views.find((v) => v.name === selection.name);
-    if (view) return <ViewDetail view={view} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onNavigate} onOpenShell={onOpenShell} />;
+    if (view) return <ViewDetail view={view} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onCatalogNavigate} onOpenShell={onOpenShell} />;
   }
 
   if (selection.type === "function") {
     const func = schema.functions.find((f) => f.name === selection.name);
-    if (func) return <FunctionDetail func={func} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onNavigate} onOpenShell={onOpenShell} />;
+    if (func) return <FunctionDetail func={func} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onCatalogNavigate} onOpenShell={onOpenShell} />;
   }
 
   if (selection.type === "macro") {
     const macro = schema.macros?.find((m) => m.name === selection.name);
-    if (macro) return <MacroDetail macro={macro} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onNavigate} onOpenShell={onOpenShell} />;
+    if (macro) return <MacroDetail macro={macro} catalogName={catalog.catalogName} schemaName={selection.schema} onNavigate={onCatalogNavigate} onOpenShell={onOpenShell} />;
   }
 
-  return <CatalogOverview catalog={data} serviceUrl={serviceUrl} attachOptions={attachOptions} onNavigate={onNavigate} />;
+  return overview;
 }
