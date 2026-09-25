@@ -414,7 +414,7 @@ export const REPORT_TOOLS: Tool[] = [
   { name: "list_categories", description: "List controlled semantic categories for one catalog/schema.", input_schema: { type: "object", additionalProperties: false, properties: { catalog: stringSchema, schema: stringSchema } } },
   { name: "describe_table", description: "Describe a table before writing SQL for it.", input_schema: { type: "object", additionalProperties: false, properties: { catalog: stringSchema, schema: stringSchema, table: stringSchema }, required: ["schema", "table"] } },
   { name: "describe_function", description: "Describe a function or macro before using it.", input_schema: { type: "object", additionalProperties: false, properties: { catalog: stringSchema, schema: stringSchema, function: stringSchema }, required: ["schema", "function"] } },
-  { name: "preview_sql", description: "Run one read-only SQL query to verify columns and sample results.", input_schema: { type: "object", additionalProperties: false, properties: { sql: stringSchema }, required: ["sql"] } },
+  { name: "preview_sql", description: "Run one standalone read-only SQL query to verify columns and sample results. Fully qualify external tables as catalog.schema.table. Report dataset ids are unavailable here; use upsert_report_dataset to validate queries that depend on other report datasets.", input_schema: { type: "object", additionalProperties: false, properties: { sql: stringSchema }, required: ["sql"] } },
   {
     name: "configure_report",
     description: "Set report-level metadata and, when needed, parameters. Call near the start of authoring. Omitted optional fields retain their current values.",

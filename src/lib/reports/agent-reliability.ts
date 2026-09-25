@@ -101,6 +101,10 @@ export function reportAgentRepair(
   errors: string[],
   retryTool: string,
 ): Record<string, unknown> {
+  const missingRelation = errors.some((message) => /\b(?:Table|View) with name .+? does not exist\b/i.test(message));
+  const discovery = missingRelation
+    ? " Resolve the missing relation first: use list_catalogs and list_tables, then describe_table, and reference the verified external source as catalog.schema.table. Do not substitute DuckDB's suggested table without checking its meaning. For a report-local source, use an existing dataset id or create the upstream dataset first; CTEs from other queries are not shared."
+    : "";
   return {
     ok: false,
     code: `report_${stage}_failed`,
@@ -110,7 +114,7 @@ export function reportAgentRepair(
     retry: {
       tool: retryTool,
       target,
-      instruction: `Correct only ${target}, then call ${retryTool} again with the same identifier before continuing.`,
+      instruction: `Correct only ${target}, then call ${retryTool} again with the same identifier before continuing.${discovery}`,
     },
   };
 }

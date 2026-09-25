@@ -254,15 +254,59 @@ const WINDOW_AGGREGATES_ANY = [
  */
 export type PerspectiveServeMode = "materialized" | "live";
 
+/** What a single layout is stored as. Chosen per LAYOUT, not per table. */
+type LayoutEntity = "TABLE" | "VIEW";
+
+/**
+ * Does this layout return one row per source row?
+ *
+ * That is the only thing that decides TABLE vs VIEW, because it is the only
+ * thing that decides whether materializing is bounded. Mirrors upstream's
+ * `QueryOrientation` (`table_make_view.rs`): anything that aggregates or pivots
+ * is bounded by group/pivot cardinality; a flat layout is not.
+ *
+ * `split_by` alone does NOT make a layout small — a pivot without a group_by is
+ * still one row per source row (it pivots `GROUP BY "__ROW_NUM__"`), just wider.
+ * It has to be a TABLE anyway: DuckDB refuses a data-dependent PIVOT in a view.
+ */
+function layoutIsFlat(config: any): boolean {
+  // `tableMakeView` receives a ViewConfigUpdate, so every field may be absent.
+  return (
+    (config?.group_by?.length ?? 0) === 0 &&
+    (config?.split_by?.length ?? 0) === 0 &&
+    config?.group_rollup_mode !== "total"
+  );
+}
+
 const SQL_MODEL_COMMON = { column_separator: "|", like_escape_clause: "\\", regex_fn: "regexp_matches" };
-// Scratch objects live in `temp.main` (see `scratchView`), and DuckDB only
-// creates there with the TEMP keyword.
-const SQL_MODEL_ARGS: Record<PerspectiveServeMode, Record<string, string>> = {
-  materialized: { ...SQL_MODEL_COMMON, create_entity: "TEMP TABLE", drop_entity: "TABLE" },
-  // A typed NULL orders by nothing. A bare `NULL` is refused by DuckDB
-  // ("ORDER BY non-integer literal has no effect"); a cast is an expression.
-  live: { ...SQL_MODEL_COMMON, create_entity: "TEMP VIEW", drop_entity: "VIEW", row_id_expr: "CAST(NULL AS INTEGER)" },
-};
+
+/**
+ * Model args for one (row identity, layout entity) pair.
+ *
+ * These are two independent questions that used to be one `mode` flag:
+ *
+ * - **Row identity** is a property of the TABLE. With a real `rowid` the
+ *   natural order is stable and windows need no explicit order. Without one,
+ *   `row_id_expr` orders by nothing — and note that is not merely "unordered",
+ *   it makes paging *wrong*: two reads of the same OFFSET return different
+ *   rows, so a scrolling grid repeats and skips.
+ * - **Layout entity** is a property of the LAYOUT (see `layoutIsFlat`).
+ *
+ * Scratch objects live in `temp.main` (see `scratchView`), and DuckDB only
+ * creates there with the TEMP keyword.
+ */
+function sqlModelArgs(hasRowId: boolean, entity: LayoutEntity): Record<string, string> {
+  return {
+    ...SQL_MODEL_COMMON,
+    create_entity: entity === "TABLE" ? "TEMP TABLE" : "TEMP VIEW",
+    drop_entity: entity,
+    // A typed NULL orders by nothing. A bare `NULL` is refused by DuckDB
+    // ("ORDER BY non-integer literal has no effect"); a cast is an expression.
+    // Left unset when the table has a rowid — upstream then defaults to
+    // `rowid` (`table_make_view.rs`).
+    ...(hasRowId ? {} : { row_id_expr: "CAST(NULL AS INTEGER)" }),
+  };
+}
 
 import { Type as ArrowType } from "@query-farm/apache-arrow";
 
@@ -447,18 +491,60 @@ async function queryRows(sql: string, step: string): Promise<any[]> {
 }
 
 /**
+ * Cache a lookup as its in-flight promise, so concurrent callers share one
+ * query rather than each starting their own. Perspective asks for a table's
+ * size and a view's schema several times while opening a layout; caching only
+ * the settled value let every request in the first query's window through,
+ * so a 16-second `COUNT(*)` on a remote table ran again for each of them —
+ * back to back, since DuckDB runs one query at a time. A failed lookup is
+ * evicted so the next call retries.
+ */
+function memoized<V>(cache: Map<string, Promise<V>>, key: string, compute: () => Promise<V>): Promise<V> {
+  const cached = cache.get(key);
+  if (cached) return cached;
+  const pending = compute();
+  cache.set(key, pending);
+  pending.catch(() => {
+    if (cache.get(key) === pending) cache.delete(key);
+  });
+  return pending;
+}
+
+/**
  * VirtualServerHandler that bridges Perspective to our DuckDB WASM worker.
  */
 export class VgiDuckDBHandler {
-  private _sqlBuilder: any = null;
-  private tableSizeCache = new Map<string, number>();
-  private tableSchemaCache = new Map<string, Record<string, ColumnType>>();
-  private viewSizeCache = new Map<string, number>();
-  private sourceViewCache = new Set<string>();
+  private _sqlBuilders = new Map<LayoutEntity, any>();
+  /**
+   * Which entity each layout was created as, so `viewDelete` drops the
+   * matching kind. DuckDB errors on a mismatch — `DROP VIEW` against a table
+   * raises a Catalog Error even with IF EXISTS — and the builder emits no
+   * `OR REPLACE`, so a leaked object would poison that id for the session.
+   */
+  private viewEntities = new Map<string, LayoutEntity>();
+  // Keyed by table (catalog.schema.table) or by Perspective view id; values
+  // are in-flight promises — see `memoized`.
+  private tableSizeCache = new Map<string, Promise<number>>();
+  private tableSchemaCache = new Map<string, Promise<Record<string, ColumnType>>>();
+  private sourceViewCache = new Map<string, Promise<string>>();
+  // A view's schema and size are fixed for its lifetime: Perspective makes a
+  // new view for every configuration change, and these are cleared with it.
+  private viewSizeCache = new Map<string, Promise<number>>();
+  private viewSchemaCache = new Map<string, Promise<Record<string, ColumnType>>>();
+  /** Shared only while a request is in flight: the list changes as pivots come and go. */
+  private hostedTablesInFlight: Promise<string[]> | null = null;
   /** Traversals for grouped views — enables collapse/expand. */
   private traversals = new Map<string, ViewTraversal>();
 
   constructor(_perspectiveMod: any, readonly mode: PerspectiveServeMode = "live") {
+  }
+
+  /**
+   * Does this table have a real row identity? `perspectiveServeMode` probes
+   * for `rowid`; that answer now drives ordering only, not storage.
+   */
+  private get hasRowId(): boolean {
+    return this.mode === "materialized";
   }
 
   /**
@@ -480,31 +566,43 @@ export class VgiDuckDBHandler {
     return scratchView(viewId);
   }
 
-  private get sqlBuilder() {
-    if (!this._sqlBuilder) {
-      // Get the WASM module from the already-initialized perspective-viewer custom element.
-      // The viewer class has __wasm_module__ set after perspective.worker() is called.
-      const viewerClass = customElements?.get("perspective-viewer") as any;
-      const wasmMod = viewerClass?.__wasm_module__;
-      if (wasmMod?.GenericSQLVirtualServerModel) {
-        this._sqlBuilder = new wasmMod.GenericSQLVirtualServerModel(SQL_MODEL_ARGS[this.mode]);
-      } else {
-        throw new Error("Perspective WASM not initialized — call perspective.worker() first");
-      }
+  /**
+   * One builder per layout entity. The model is a stateless value object, so
+   * holding both costs nothing; `entity` varies per layout while row identity
+   * is fixed for the table.
+   */
+  private builderFor(entity: LayoutEntity) {
+    const cached = this._sqlBuilders.get(entity);
+    if (cached) return cached;
+    // Get the WASM module from the already-initialized perspective-viewer custom element.
+    // The viewer class has __wasm_module__ set after perspective.worker() is called.
+    const viewerClass = customElements?.get("perspective-viewer") as any;
+    const wasmMod = viewerClass?.__wasm_module__;
+    if (!wasmMod?.GenericSQLVirtualServerModel) {
+      throw new Error("Perspective WASM not initialized — call perspective.worker() first");
     }
-    return this._sqlBuilder;
+    const built = new wasmMod.GenericSQLVirtualServerModel(sqlModelArgs(this.hasRowId, entity));
+    this._sqlBuilders.set(entity, built);
+    return built;
+  }
+
+  /** Entity-agnostic calls (data, size, min/max, validate) can use either. */
+  private get sqlBuilder() {
+    return this.builderFor("VIEW");
   }
 
   getFeatures() {
-    const live = this.mode === "live";
     return {
       group_by: true,
-      split_by: !live,
+      // Pivots need MATERIALIZATION, not row identity: `__ROW_NUM__` only has
+      // to be unique, and it is EXCLUDEd from the output. Since the entity is
+      // now chosen per layout, every table can pivot.
+      split_by: true,
       sort: true,
       expressions: true,
       // No row identity: Perspective then rejects a window without an
       // explicit order_by, rather than the SQL failing on `rowid`.
-      unordered: live,
+      unordered: !this.hasRowId,
       window_aggregates: {
         integer: WINDOW_AGGREGATES,
         float: WINDOW_AGGREGATES,
@@ -514,7 +612,7 @@ export class VgiDuckDBHandler {
         boolean: WINDOW_AGGREGATES_ANY,
       },
       group_rollup_mode: ["rollup", "flat", "total"],
-      ...(live ? {} : { split_rollup_mode: ["flat", "rollup"] }),
+      split_rollup_mode: ["flat", "rollup"],
       filter_ops: {
         integer: FILTER_OPS,
         float: FILTER_OPS,
@@ -534,7 +632,14 @@ export class VgiDuckDBHandler {
     };
   }
 
-  async getHostedTables(): Promise<string[]> {
+  getHostedTables(): Promise<string[]> {
+    this.hostedTablesInFlight ??= this.fetchHostedTables().finally(() => {
+      this.hostedTablesInFlight = null;
+    });
+    return this.hostedTablesInFlight;
+  }
+
+  private async fetchHostedTables(): Promise<string[]> {
     // Perspective refuses to open a table missing from this list ("No table
     // set"), and duckdb_tables() has no views. The editor's live-view pivots
     // are TEMP views, so they are listed too — only those, not every view, or
@@ -548,9 +653,11 @@ export class VgiDuckDBHandler {
     return rows.map((row) => `${row.database_name}.${row.schema_name}.${row.table_name}`);
   }
 
-  async tableSchema(tableId: string): Promise<Record<string, ColumnType>> {
-    const cached = this.tableSchemaCache.get(tableId);
-    if (cached) return cached;
+  tableSchema(tableId: string): Promise<Record<string, ColumnType>> {
+    return memoized(this.tableSchemaCache, tableId, () => this.fetchTableSchema(tableId));
+  }
+
+  private async fetchTableSchema(tableId: string): Promise<Record<string, ColumnType>> {
     const qualifiedId = tableId.includes(".") ? tableId : scratchView(tableId);
     const fields = await getArrowSchema(qualifiedId, "tableSchema");
     const schema: Record<string, ColumnType> = {};
@@ -560,21 +667,20 @@ export class VgiDuckDBHandler {
       if (pspType === null) continue;
       schema[field.name] = pspType;
     }
-    this.tableSchemaCache.set(tableId, schema);
     return schema;
   }
 
-  async tableSize(tableId: string): Promise<number> {
-    const cached = this.tableSizeCache.get(tableId);
-    if (cached !== undefined) return cached;
+  tableSize(tableId: string): Promise<number> {
+    return memoized(this.tableSizeCache, tableId, () => this.fetchTableSize(tableId));
+  }
+
+  private async fetchTableSize(tableId: string): Promise<number> {
     // A bare id (no dots) is one of our scratch views, not a catalog table.
     const sql = this.sqlBuilder.tableSize(
       tableId.includes(".") ? tableId : this.qualifiedView(tableId),
     );
     const rows = await queryRows(sql, "tableSize");
-    const size = Number(rows[0]?.["count_star()"] ?? 0);
-    this.tableSizeCache.set(tableId, size);
-    return size;
+    return Number(rows[0]?.["count_star()"] ?? 0);
   }
 
   private sourceViewId(tableId: string): string {
@@ -605,9 +711,12 @@ export class VgiDuckDBHandler {
    * rename only changed the user's column names, and collided `a_b` with
    * `a-b`.
    */
-  private async ensureSourceView(tableId: string): Promise<string> {
+  private ensureSourceView(tableId: string): Promise<string> {
+    return memoized(this.sourceViewCache, tableId, () => this.createSourceView(tableId));
+  }
+
+  private async createSourceView(tableId: string): Promise<string> {
     const sourceViewId = this.sourceViewId(tableId);
-    if (this.sourceViewCache.has(tableId)) return sourceViewId;
 
     // Get Arrow schema to classify columns by their actual Arrow DataType
     const fields = await getArrowSchema(tableId, "sourceView");
@@ -639,13 +748,12 @@ export class VgiDuckDBHandler {
     // A materialized source's `rowid` is re-exported as a column: the builder
     // orders by `rowid` against this view, and a pseudo-column does not pass
     // through a view on its own.
-    const selectCols = this.mode === "materialized" ? `rowid, ${aliases}` : aliases;
+    const selectCols = this.hasRowId ? `rowid, ${aliases}` : aliases;
 
     // Checked: a failure here otherwise surfaced one step later, from the
     // first pivot view, as a misleading "table … does not exist".
     const created = await runQuery(`CREATE OR REPLACE TEMP VIEW ${sourceViewId} AS SELECT ${selectCols} FROM ${tableId}`, "sourceView");
     if (!created.ok) throw new Error(created.error || `Could not create ${sourceViewId}`);
-    this.sourceViewCache.add(tableId);
     return sourceViewId;
   }
 
@@ -653,13 +761,23 @@ export class VgiDuckDBHandler {
     const sourceView = await this.ensureSourceView(tableId);
     // Window order keys need column types for `range` frame emission.
     const schema = Object.keys(config.windows ?? {}).length ? await this.tableSchema(tableId) : undefined;
-    // `create_entity` makes this a TEMP TABLE or TEMP VIEW per mode, and
-    // `row_id_expr` gives it the right natural order — no rewriting needed.
-    const sql = this.sqlBuilder.tableMakeView(sourceView, this.qualifiedView(viewId), config, schema);
+    // A flat layout returns one row per source row, so materializing it is
+    // unbounded — on a 25M-row table that is a 2 GiB malloc failure. Serve it
+    // from a view instead. Everything else is bounded by group/pivot
+    // cardinality, and wants to be a TABLE: a view re-runs the whole aggregate
+    // on every page, and DuckDB refuses a data-dependent PIVOT in a view.
+    const entity: LayoutEntity = layoutIsFlat(config) ? "VIEW" : "TABLE";
+    // `create_entity` makes this a TEMP TABLE or TEMP VIEW, and `row_id_expr`
+    // gives it the right natural order — no rewriting needed.
+    const sql = this.builderFor(entity).tableMakeView(sourceView, this.qualifiedView(viewId), config, schema);
 
+    // Recorded BEFORE the CREATE: a failed CREATE still needs `viewDelete` to
+    // issue the matching DROP, and a DROP of something absent is a no-op.
+    this.viewEntities.set(viewId, entity);
     const result = await runQuery(sql, "tableMakeView");
     if (!result.ok) throw new Error(result.error || "Failed to create view");
     this.viewSizeCache.delete(viewId);
+    this.viewSchemaCache.delete(viewId);
 
     // Build traversal for grouped views to support collapse/expand.
     // Skip traversal for views with no data columns (e.g. filter dropdown views)
@@ -678,9 +796,21 @@ export class VgiDuckDBHandler {
   }
 
   async viewDelete(viewId: string): Promise<void> {
-    // `drop_entity` matches `create_entity`, so no DROP TABLE-then-VIEW retry.
-    await runQuery(this.sqlBuilder.viewDelete(this.qualifiedView(viewId)), "viewDelete");
+    // The DROP has to name the kind this layout was actually created as.
+    // DuckDB raises a Catalog Error on a mismatch even with IF EXISTS, and the
+    // builder emits no `OR REPLACE`, so a swallowed failure would leak a
+    // materialized TEMP TABLE for the session and poison the id. Default to
+    // VIEW for an id we never recorded — the old, bounded behaviour.
+    const entity = this.viewEntities.get(viewId) ?? "VIEW";
+    const result = await runQuery(this.builderFor(entity).viewDelete(this.qualifiedView(viewId)), "viewDelete");
+    // Checked, unlike before: a silent failure here is a leak, not a no-op.
+    if (!result.ok) {
+      console.warn(`[perspective] viewDelete(${viewId}) as ${entity} failed — scratch object may leak: ${result.error}`);
+    }
+    this.viewEntities.delete(viewId);
     this.traversals.delete(viewId);
+    this.viewSizeCache.delete(viewId);
+    this.viewSchemaCache.delete(viewId);
   }
 
   async viewCollapse(viewId: string, rowIndex: number): Promise<number> {
@@ -742,16 +872,17 @@ export class VgiDuckDBHandler {
   async viewSize(viewId: string): Promise<number> {
     const traversal = this.traversals.get(viewId);
     if (traversal) return traversal.length;
-    const cached = this.viewSizeCache.get(viewId);
-    if (cached !== undefined) return cached;
-    const sql = this.sqlBuilder.viewSize(this.qualifiedView(viewId));
-    const rows = await queryRows(sql, "viewSize");
-    const size = Number(Object.values(rows[0] ?? {})[0] ?? 0);
-    this.viewSizeCache.set(viewId, size);
-    return size;
+    return memoized(this.viewSizeCache, viewId, async () => {
+      const rows = await queryRows(this.sqlBuilder.viewSize(this.qualifiedView(viewId)), "viewSize");
+      return Number(Object.values(rows[0] ?? {})[0] ?? 0);
+    });
   }
 
-  async viewSchema(viewId: string): Promise<Record<string, ColumnType>> {
+  viewSchema(viewId: string): Promise<Record<string, ColumnType>> {
+    return memoized(this.viewSchemaCache, viewId, () => this.fetchViewSchema(viewId));
+  }
+
+  private async fetchViewSchema(viewId: string): Promise<Record<string, ColumnType>> {
     const fields = await getArrowSchema(scratchView(viewId), "viewSchema");
     const schema: Record<string, ColumnType> = {};
     for (const field of fields) {
