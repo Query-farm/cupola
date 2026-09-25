@@ -1,7 +1,8 @@
 import { SavedReportsSidebar } from "./evidence/SavedReportsSidebar";
 import { useState, useMemo } from "react";
-import { Search, TerminalSquare, Cpu } from "lucide-react";
+import { Search, TerminalSquare, Cpu, RefreshCw, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { TreeView } from "@/components/tree-view";
 import { SettingsModal } from "@/components/SettingsModal";
 import type { CatalogData } from "@/lib/service";
@@ -32,8 +33,7 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
     hideDollarTables: settings.hideDollarTables,
     rootIcon: catalog.catalogName === "memory" ? Cpu : undefined,
     onTableAction: onShellInsert ? (schema, table) => onShellInsert([catalog.catalogName, schema, table].map(quoteIdent).join(".")) : undefined,
-    onRefresh, refreshing,
-  })).sort((a, b) => a.name.localeCompare(b.name)), [catalogs, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, onShellInsert, onRefresh, refreshing]);
+  })).sort((a, b) => a.name.localeCompare(b.name)), [catalogs, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, onShellInsert]);
   const filteredData = useMemo(() => filterTree(combinedData, search), [combinedData, search]);
 
   const selectedTreeId = useMemo(
@@ -53,8 +53,8 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
   return (
     <div className="bg-card flex flex-col h-full">
       {/* Search */}
-      <div className="p-3 border-b border-border">
-        <div className="relative">
+      <div className="p-3 border-b border-border flex items-center gap-2">
+        <div className="relative flex-1 min-w-0">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             type="text"
@@ -65,6 +65,19 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
             className="pl-8 h-9 text-sm"
           />
         </div>
+        {onRefresh && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            aria-label="Refresh catalogs"
+            title="Refresh catalogs"
+            disabled={refreshing}
+            onClick={onRefresh}
+          >
+            {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          </Button>
+        )}
       </div>
 
       {inventoryError && <div role="alert" className="px-3 py-2 text-xs text-destructive">Could not refresh catalogs: {inventoryError}<button className="block underline mt-1" onClick={onRefresh}>Retry</button></div>}

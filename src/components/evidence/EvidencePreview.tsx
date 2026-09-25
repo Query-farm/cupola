@@ -1,4 +1,5 @@
 import { manageReportChartTooltips } from '../../lib/evidence/chart-tooltips';
+import { preserveReportCharts } from './useReportPrint';
 import type { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { useEffect, useRef, useState } from 'react';
 import { writable, type Readable } from 'svelte/store';
@@ -36,6 +37,7 @@ export function EvidencePreview({ run, onQuery, onError, onIssues, onData, repor
     themeStyle.current = appearanceStyle; themeTarget.current = target;
     root.replaceChildren(style, appearanceStyle, target);
     const cleanupTooltips = manageReportChartTooltips(host.current!, root);
+    const cleanupPrint = preserveReportCharts(host.current!, root);
     void (async () => {
       try {
         const [{ mount, unmount }, { default: Component }, { HaybarnQueryService }] = await Promise.all([
@@ -52,7 +54,7 @@ export function EvidencePreview({ run, onQuery, onError, onIssues, onData, repor
         cleanup = () => { void unmount(instance); };
       } catch (error) { if (!disposed) callbacks.current.onError(error instanceof Error ? error.message : String(error)); }
     })();
-    return () => { disposed = true; cleanupTooltips(); run.execution.stop(); cleanup?.(); };
+    return () => { disposed = true; cleanupTooltips(); cleanupPrint(); run.execution.stop(); cleanup?.(); };
   }, [run]);
   useEffect(() => {
     themeConfig.set(reportTheme.config);

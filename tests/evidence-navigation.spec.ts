@@ -1,6 +1,40 @@
 import { test, expect } from '@playwright/test';
+import { gotoApp, waitForShellBridge } from './helpers';
 
 test.use({ channel: 'chrome', viewport: { width: 1500, height: 1100 } });
+test('Reports starts at the list and preserves an opened report across tab switches and saved links', async ({ page }) => {
+  await gotoApp(page);
+  await waitForShellBridge(page);
+  await page.getByTestId('tab-reports').click();
+  const panel = page.getByTestId('evidence-panel');
+  const list = panel.getByRole('heading', { name: 'Saved reports', exact: true });
+  await expect(list).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Back to report', exact: true })).toHaveCount(0);
+  await expect(panel.getByTestId('evidence-document')).toHaveCount(0);
+  await expect(page).toHaveURL(/reports\/saved/);
+
+  await page.getByTestId('tab-catalog').click();
+  await page.getByTestId('tab-reports').click();
+  await expect(list).toBeVisible();
+  await panel.getByRole('button', { name: 'New report', exact: true }).click();
+  const title = panel.getByRole('textbox', { name: 'Report title', exact: true });
+  await title.fill('Session report');
+  await page.getByTestId('tab-catalog').click();
+  await page.getByTestId('tab-reports').click();
+  await expect(title).toHaveValue('Session report');
+  await panel.getByRole('button', { name: 'Save report', exact: true }).click();
+  await expect(page).toHaveURL(/evidence_report=/);
+  await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
+  await expect(list).toBeVisible();
+  await panel.getByRole('button', { name: 'Back to report', exact: true }).click();
+  await expect(title).toHaveValue('Session report');
+
+  await page.reload();
+  await expect(panel.getByRole('button', { name: 'Edit report', exact: true })).toBeVisible();
+  await expect(panel.getByText('Session report', { exact: true }).first()).toBeVisible();
+  await expect(list).toHaveCount(0);
+});
+
 test('editor navigation stays on one row and reveals the selected tab at variable widths', async ({ page }) => {
   test.setTimeout(120000);
   await page.goto('evidence/reports');

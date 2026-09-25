@@ -181,7 +181,7 @@ test('saved report library restores typed parameters, source and selected values
   await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
   await expect(page).toHaveURL(/reports\/saved/);
   await expect(panel.getByRole('row').filter({ hasText: 'Parameter round trip' })).toContainText('City, Amount, As of, Include');
-  await panel.getByRole('button', { name: 'Open report', exact: true }).click();
+  await panel.getByRole('button', { name: 'Parameter round trip', exact: true }).click();
   expect(await page.evaluate(() => (window as any).__savedReportWorker === (window as any).__bridge.worker)).toBe(true);
   await expect(panel.getByTestId('evidence-document')).toContainText(city);
   await page.reload();
@@ -225,6 +225,8 @@ test('saved reports list and direct links are scoped to the active worker URL', 
   await expect(panel.getByRole('row').filter({ hasText: 'Other worker report' })).toHaveCount(0);
   await expect(panel.getByRole('row').filter({ hasText: 'Other private report' })).toHaveCount(0);
   await page.goto('evidence?evidence_report=other-only');
-  await expect(panel.getByRole('alert')).toContainText('not found for this worker', { timeout: 90_000 });
+  await expect(page).toHaveURL(/reports\/saved/);
   await expect(panel.getByRole('row').filter({ hasText: 'This worker report' })).toBeVisible();
+  await expect(panel.getByRole('row').filter({ hasText: 'Other private report' })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Back to report', exact: true })).toHaveCount(0);
 });

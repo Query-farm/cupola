@@ -1,7 +1,7 @@
 import { sessionCatalogs } from "@/lib/catalog-store";
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square } from 'lucide-react';
+import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square, Printer } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { engine, waitForEngineReady } from '../../lib/shell-bridge';
@@ -21,19 +21,19 @@ import { consumeReportPromotion } from '../../lib/reports/events';
 import { useReportTheme } from './useReportTheme';
 import { EvidenceEditor } from './EvidenceEditor';
 import { EvidencePreview, type ReportRun } from './EvidencePreview';
+import { useReportPrint } from './useReportPrint';
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const isLibraryUrl = () => (window.location.pathname.endsWith('/evidence/reports') || window.location.pathname.endsWith('/reports/saved')) || new URLSearchParams(window.location.search).get('evidence_view') === 'library';
 
-export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catalogName: string; serviceUrl: string; catalogs: readonly CatalogData[] }) {
+export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultToLibrary = true }: { catalogName: string; serviceUrl: string; catalogs: readonly CatalogData[]; defaultToLibrary?: boolean }) {
   const [initial] = useState(() => {
     let reports: EvidenceReport[] = [], error = '';
     try { reports = listEvidenceReports(serviceUrl); } catch (e) { error = `Could not read saved reports: ${message(e)}`; }
     const id = new URLSearchParams(window.location.search).get('evidence_report');
     const found = reports.find(report => report.id === id);
-    const missingReport = Boolean(id && !found && !error);
     const report = found ?? newEvidenceReport(serviceUrl, catalogName, serviceUrl === WEATHER_SERVICE);
-    return { reports, report, error, missingReport, saved: found ? JSON.stringify(found) : '', library: isLibraryUrl() || Boolean(id && !found) };
+    return { reports, report, error, saved: found ? JSON.stringify(found) : '', library: isLibraryUrl() || (!found && (defaultToLibrary || Boolean(id))) };
   });
   const [promotion, setPromotion] = useState(consumeReportPromotion);
   const [report, setReport] = useState(initial.report);
@@ -41,6 +41,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
   const [saved, setSaved] = useState(initial.saved);
   const [reports, setReports] = useState(initial.reports);
   const [library, setLibrary] = useState(initial.library);
+  const [hasOpenedReport, setHasOpenedReport] = useState(!initial.library);
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -78,6 +79,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
   const [dataContext, setDataContext] = useState<EvidenceDataContext | null>(null);
   const [run, setRun] = useState<ReportRun | null>(null);
   const [updated, setUpdated] = useState('');
+  useReportPrint(workspace, !library && Boolean(run));
   const [logs, setLogs] = useState<QueryLogEntry[]>([]);
   const booted = useRef(false);
   const busyRef = useRef(false);
@@ -166,7 +168,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
   useEffect(() => {
     if (!booted.current) {
       booted.current = true;
-      if (initial.missingReport) navigate(true, undefined, true);
+      if (initial.library) navigate(true, undefined, true);
       else if (!initial.library && !initial.error) void refresh(initial.report);
     }
     const changed = (event: StorageEvent) => { if (event.key === null || event.key.startsWith(STORAGE_PREFIX) || event.key.startsWith(LEGACY_STORAGE_PREFIX)) reloadList(); };
@@ -216,7 +218,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
   function openReport(next: EvidenceReport, updateUrl = true, fresh = false) {
     if (busyRef.current) return;
     if (next.id !== reportRef.current.id && dirtyRef.current && !window.confirm('Discard unsaved changes to the current report?')) return;
-    setReport(next); setSaved(fresh ? '' : JSON.stringify(next)); baseline.current = JSON.stringify(next); setEditing(fresh); setEditorOnly(false);
+    setReport(next); setHasOpenedReport(true); setSaved(fresh ? '' : JSON.stringify(next)); baseline.current = JSON.stringify(next); setEditing(fresh); setEditorOnly(false);
     setError(''); setNotice(''); setRun(null); setUpdated(''); setLibrary(false);
     if (updateUrl) navigate(false, fresh ? undefined : next.id);
     void refresh(next);
@@ -253,7 +255,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
   }}>
     <header className="z-10 flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-5 py-3">
       {library ? <><FolderOpen className="size-4 text-muted-foreground" /><h1 className="text-sm font-semibold">Saved reports</h1><span className="text-xs text-muted-foreground">{reports.length} {reports.length === 1 ? 'report' : 'reports'}</span>
-        <div className="ml-auto flex gap-2"><Button variant="outline" disabled={busy} onClick={() => { navigate(false, saved ? report.id : undefined); if (!run) void refresh(); }}>Back to report</Button><Button onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName), true, true)} disabled={busy}><Plus />New report</Button></div></>
+        <div className="ml-auto flex gap-2">{hasOpenedReport && <Button variant="outline" disabled={busy} onClick={() => { navigate(false, saved ? report.id : undefined); if (!run) void refresh(); }}>Back to report</Button>}<Button onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName), true, true)} disabled={busy}><Plus />New report</Button></div></>
         : <><Button variant="ghost" onClick={() => navigate(true)}><ArrowLeft />Saved reports</Button><div className="h-5 w-px bg-border" /><FileText className="size-4 text-muted-foreground" /><span className="max-w-64 truncate text-sm font-semibold">{report.title}</span><span role="status" className="text-xs text-muted-foreground">{dirty ? (saved ? 'Unsaved changes' : 'Not saved yet') : 'Saved locally'}</span>
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <div className="flex rounded-lg bg-muted p-1" role="group" aria-label="Report mode">
@@ -263,6 +265,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
             <Button variant="outline" disabled={busy} onClick={() => save()} title="Save in this browser · ⌘ / Ctrl + S"><Save />Save report</Button>
             <Button variant="ghost" size="icon" disabled={busy} onClick={() => save(true)} aria-label="Save a copy" title="Save a copy"><Copy /></Button>
             <Button variant="field" disabled={refreshing} onClick={() => void refresh()} title="⌘ / Ctrl + Enter"><RefreshCw className={refreshing ? 'animate-spin' : ''} />{refreshing ? 'Refreshing…' : editing ? 'Update preview' : 'Refresh report'}</Button>
+            <Button variant="outline" disabled={refreshing || !run} onClick={() => window.print()} title="Print the current report view or save as PDF · Selected tabs and table pages"><Printer />Print report</Button>
             {refreshing && <Button variant="outline" onClick={stopRefresh}><Square />Stop refresh</Button>}
             {editing && <Button variant="outline" onClick={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }}>{focused && editorOnly ? <Minimize2 /> : <Maximize2 />}{focused && editorOnly ? 'Exit full-screen editor' : 'Full-screen editor'}</Button>}
             <Button variant="ghost" size="icon" aria-label={focused ? 'Exit focus mode' : 'Focus report'} title={focused ? 'Exit focus mode · Esc' : 'Focus report'} aria-pressed={focused} onClick={() => { if (focused) setEditorOnly(false); setFocused(!focused); }}>{focused ? <Minimize2 /> : <Maximize2 />}</Button>
@@ -275,7 +278,12 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
       <p className="text-sm text-muted-foreground">Reports for this worker are saved in this browser, including source, parameter definitions, and selected values. Data is refreshed when you open a report.</p>
       <div className="relative max-w-sm"><Search className="absolute left-2.5 top-2 size-4 text-muted-foreground" /><Input className="pl-8" aria-label="Search saved reports" placeholder="Search reports…" value={search} onChange={e => setSearch(e.target.value)} /></div>
       {visible.length ? <div className="overflow-x-auto rounded-lg border bg-card"><table className="w-full text-left text-sm"><thead className="border-b bg-muted/40 text-xs text-muted-foreground"><tr><th className="px-4 py-3">Report</th><th className="px-4 py-3">Parameters</th><th className="px-4 py-3">Last saved</th><th className="px-4 py-3"><span className="sr-only">Actions</span></th></tr></thead><tbody>{visible.map(item => <tr key={item.id} className="border-b last:border-0">
-        <td className="px-4 py-3"><span className="font-medium">{item.title}</span><span className="mt-1 block max-w-sm truncate text-xs text-muted-foreground">{item.serviceUrl}</span></td><td className="px-4 py-3 text-xs text-muted-foreground">{item.parameters.map(p => p.label).join(', ') || 'None'}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">{new Date(item.updatedAt).toLocaleString()}</td>
+        <td className="px-4 py-3">
+          {item.serviceUrl === serviceUrl
+            ? <Button variant="link" className="h-auto justify-start whitespace-normal p-0 text-left font-medium" disabled={busy} onClick={() => openReport(item)}>{item.title}</Button>
+            : <a className="font-medium text-primary underline-offset-4 hover:underline" href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/reports?service=${encodeURIComponent(item.serviceUrl)}&evidence_report=${encodeURIComponent(item.id)}`}>{item.title}</a>}
+          <span className="mt-1 block max-w-sm truncate text-xs text-muted-foreground">{item.serviceUrl}</span>
+        </td><td className="px-4 py-3 text-xs text-muted-foreground">{item.parameters.map(p => p.label).join(', ') || 'None'}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">{new Date(item.updatedAt).toLocaleString()}</td>
         <td className="px-4 py-3"><div className="flex justify-end gap-2">{item.serviceUrl === serviceUrl ? <Button variant="outline" disabled={busy} onClick={() => openReport(item)}>Open report</Button> : <a className="text-xs text-primary underline" href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/evidence?service=${encodeURIComponent(item.serviceUrl)}&evidence_report=${encodeURIComponent(item.id)}`}>Open service</a>}<Button variant="ghost" size="icon" aria-label={`Copy ${item.title}`} title="Copy report" onClick={() => copySavedReport(item)}><Copy /></Button><Button variant="ghost" size="icon" aria-label={`Delete ${item.title}`} onClick={() => remove(item)}><Trash2 /></Button></div></td>
       </tr>)}</tbody></table></div> : <div className="rounded-lg border border-dashed p-12 text-center"><FileText className="mx-auto mb-3 size-7 text-muted-foreground" /><h2 className="text-sm font-semibold">{reports.length ? 'No matching reports' : 'No saved reports yet'}</h2><p className="mt-2 text-xs text-muted-foreground">{reports.length ? 'Try a different search.' : 'Save your current report or create a new one to start your library.'}</p></div>}
       {serviceUrl === WEATHER_SERVICE && <Button variant="outline" disabled={busy} onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName, true), true, true)}>Use weather example</Button>}
@@ -290,7 +298,13 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs }: { catal
             {pending && <span className="rounded bg-accent px-2 py-1 text-xs text-accent-foreground" role="status">Changes not applied · {editing ? 'Update preview' : 'Refresh to apply'}</span>}
           </div>
           <div data-testid="evidence-viewer-scroll" className="min-h-0 flex-1 overflow-auto bg-muted/20 p-3 md:p-6">
-            <article data-testid="evidence-report-surface" data-report-mode={reportTheme.mode} style={reportTheme.style} aria-busy={busy} className="mx-auto min-w-0 max-w-6xl rounded-lg border bg-card p-5 md:p-8">
+            <article data-testid="evidence-report-surface" data-print-title={report.title} data-report-mode={reportTheme.mode} style={reportTheme.style} aria-busy={busy} className="mx-auto min-w-0 max-w-6xl rounded-lg border bg-card p-5 md:p-8">
+              {run && <div className="evidence-print-heading">
+                <h1>{report.title}</h1>
+                <p>Current report view{updated ? ` · Updated ${updated}` : ''}</p>
+                {pending && <p>Unapplied changes are not included.</p>}
+                {run.report.parameters.length > 0 && <dl>{run.report.parameters.map(parameter => <div key={parameter.id}><dt>{parameter.label}</dt><dd>{String(run.values[parameter.key] ?? '—')}</dd></div>)}</dl>}
+              </div>}
               {report.parameters.length > 0 && <form className="mb-6 flex flex-wrap items-end gap-4 border-b pb-5" onSubmit={event => { event.preventDefault(); void refresh(); }} aria-label="Report inputs">
                 {report.parameters.map(parameter => <label key={parameter.id} className="min-w-32 max-w-56 space-y-1 text-xs font-medium">{parameter.label}{parameter.required && <span className="text-muted-foreground"> *</span>}<ParameterInput parameter={parameter} value={Object.hasOwn(report.values, parameter.key) ? report.values[parameter.key] : parameter.defaultValue} label={parameter.label} disabled={busy} onChange={value => change({ ...report, values: { ...report.values, [parameter.key]: value } })} /></label>)}
                 <button type="submit" className="sr-only" tabIndex={-1}>Run with parameters</button>

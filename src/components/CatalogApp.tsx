@@ -702,7 +702,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
           {reportsMounted && (
             <div className="absolute inset-0 overflow-hidden" style={activeTab === "reports" ? undefined : { visibility: "hidden", zIndex: -1 }}>
               <ErrorBoundary><Suspense fallback={<div className="p-6">Loading reports…</div>}>
-                <EvidencePanel catalogName={data.catalogName} serviceUrl={serviceUrl} catalogs={catalogs} />
+                <EvidencePanel catalogName={data.catalogName} serviceUrl={serviceUrl} catalogs={catalogs} defaultToLibrary={!showcaseMode && initialTab !== "evidence"} />
               </Suspense></ErrorBoundary>
             </div>
           )}

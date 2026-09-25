@@ -11,6 +11,7 @@ import { TagsTable } from "./TagsTable";
 import { ExampleQueries } from "./ExampleQueries";
 import { filterDisplayTags, getTag, parseExecutableExamples, TAG_DOC_MD, TAG_EXAMPLE_QUERIES, TAG_TITLE } from "@/lib/tags";
 import { DescriptionSection } from "./DescriptionSection";
+import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 import { ObjectMeta } from "./ObjectMeta";
 import { engine } from "@/lib/shell-bridge";
 import { readRows, quoteLiteral } from "@/lib/duckdb-query";
@@ -79,7 +80,9 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate, onOpenSh
       {title && <h1 className="text-xl font-semibold mt-1 mb-1">{title}</h1>}
 
       {view.comment && (
-        <p className="text-muted-foreground mb-4">{view.comment}</p>
+        <div className="text-muted-foreground mb-4">
+          <ChatMarkdown content={view.comment} />
+        </div>
       )}
 
       {docMd && <DescriptionSection markdown={docMd} />}

@@ -335,6 +335,26 @@ focus to the expand control; Escape leaves report focus mode active. Theme token
 also apply to the inner renderer root so Core's default dark colors cannot override
 a report's chosen palette.
 
+### Browser printing
+
+Print report opens the browser's print / Save as PDF dialog. Native browser print
+shortcuts use the same layout while a report is active. The report title and
+applied parameter values accompany the current preview; unapplied draft changes
+are labelled. Sidebar, toolbars, parameter controls and editor are omitted.
+
+Printing captures the current view: selected tabs, expanded groups and selected
+table pages. It does not fetch additional rows or expand interactive Perspective
+views. Table row counts remain visible. Authors can use Evidence's `print_group`
+and `print_break` options for additional control over page breaks.
+
+The print handler releases the app's constrained ancestor layout for natural
+pagination, and freezes rendered chart canvases before the print reflow. Hidden
+previews in full-screen editor mode retain their last rendered chart images.
+Print styles are also injected into the Evidence shadow root. Native
+`afterprint` restores the document title and removes temporary print state.
+`tests/evidence-print.spec.ts` checks the print layout, PDF pagination, applied
+parameters, chart snapshots, editor restoration and inactive-tab isolation.
+
 ### Stopping refreshes and query deadlines
 
 Stop refresh is available during dataset setup and while the renderer is querying.

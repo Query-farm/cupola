@@ -324,6 +324,11 @@
   size: landscape;
   margin: 12mm;
 }
+.evidence-print-heading { display: none; }
+@page evidence-report {
+  size: auto;
+  margin: 15mm;
+}
 @media print {
   body * { visibility: hidden !important; }
   .report-canvas, .report-canvas * { visibility: visible !important; }
@@ -360,4 +365,50 @@
     grid-column: var(--report-grid-column) / span var(--report-grid-width);
     grid-row: var(--report-grid-row) / span var(--report-grid-height);
   }
+
+  /* Evidence lives inside the fixed-height app and renders into a shadow root.
+     The native print handler marks just the active report's ancestor chain. */
+  [data-evidence-print-path] {
+    display: block !important;
+    position: static !important;
+    width: auto !important;
+    height: auto !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    max-width: none !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    transform: none !important;
+    contain: none !important;
+    background: white !important;
+    page: evidence-report;
+  }
+  [data-evidence-print-path] > :not([data-evidence-print-path], [data-testid="evidence-report-surface"]) {
+    display: none !important;
+  }
+  [data-evidence-print-path] [data-testid="evidence-report-surface"],
+  [data-evidence-print-path] [data-testid="evidence-report-surface"] * {
+    visibility: visible !important;
+  }
+  [data-evidence-print-path] [data-testid="evidence-report-surface"] {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  [data-evidence-print-path] [data-testid="evidence-report-surface"] :is(form, button) { display: none !important; }
+  [data-evidence-print-path] .evidence-print-heading { display: block; margin-bottom: 1.5rem; }
+  .evidence-print-heading h1 { font-size: 20pt; font-weight: 600; }
+  .evidence-print-heading p { font-size: 9pt; margin-top: 4pt; }
+  .evidence-print-heading dl { display: flex; flex-wrap: wrap; gap: 8pt 20pt; margin-top: 12pt; font-size: 10pt; }
+  .evidence-print-heading dt { font-weight: 600; }
+  .evidence-print-heading dd { overflow-wrap: anywhere; }
 }

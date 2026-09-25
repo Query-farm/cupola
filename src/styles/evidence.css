@@ -58,3 +58,30 @@
 
 /* Per-report density applies to standard Evidence table cells. */
 .evidence-document th, .evidence-document td { padding: var(--report-table-padding, 8px 12px); }
+
+[data-evidence-print-snapshot] { display: none; }
+@media print {
+  :host { display: block; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .evidence-document { overflow: visible; }
+  .evidence-document :is(h1, h2, h3, h4) { break-after: avoid; }
+  .evidence-document :is(p, li) { orphans: 3; widows: 3; }
+  .evidence-document :is(button:not(:has([data-echarts-ready])), [role="tooltip"], [role="dialog"]) { display: none !important; }
+  /* Keep the selected tab's label, without printing the other tab controls. */
+  .evidence-document [role="tab"][aria-selected="true"] { display: inline-block !important; }
+  .evidence-document [data-component-type="table"],
+  .evidence-document [data-component-type="table"] div {
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+  .evidence-document [data-component-type="table"] { break-inside: auto; }
+  .evidence-document table { width: 100%; font-size: 9pt; }
+  .evidence-document :is(th, td) { white-space: normal !important; overflow-wrap: anywhere; }
+  .evidence-document thead { display: table-header-group; }
+  .evidence-document tr { break-inside: avoid; }
+  .evidence-document [data-component-type]:has([data-evidence-print-chart]) { break-inside: avoid; }
+  [data-evidence-print-chart] { height: auto !important; min-height: 0 !important; overflow: visible !important; }
+  [data-evidence-print-chart] > :not([data-evidence-print-snapshot]) { display: none !important; }
+  [data-evidence-print-snapshot] { display: block; width: 100%; height: auto; }
+}
