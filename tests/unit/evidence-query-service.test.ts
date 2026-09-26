@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { Decimal, Table, Vector, makeData, tableFromArrays, tableToIPC, vectorFromArray, List, Field, Float64 } from '@query-farm/apache-arrow';
+import { Decimal, Table, Vector, makeData, tableFromArrays, tableToIPC, vectorFromArray, List, Field, Float64, FixedSizeBinary, RecordBatch, Schema, Struct } from '@query-farm/apache-arrow';
 import { evidenceResult, HaybarnQueryService } from '../../src/lib/evidence/haybarn-query-service';
 import { engine } from '../../src/lib/shell-bridge';
 
@@ -55,6 +55,31 @@ test('Evidence SQL binds parameters without interpolating user text', async () =
   expect(actualSql).toBe("SELECT ? AS city, '$city' AS literal");
   expect(actualParams).toEqual([city]);
   expect((await service.query('SELECT $unknown')).error).toContain('Unknown report parameter');
+});
+
+function int128Bytes(value: bigint): Uint8Array {
+  const view = new DataView(new ArrayBuffer(16));
+  const unsigned = value < 0n ? (1n << 128n) + value : value;
+  view.setBigUint64(0, unsigned & 0xFFFFFFFFFFFFFFFFn, true);
+  view.setBigUint64(8, unsigned >> 64n, true);
+  return new Uint8Array(view.buffer);
+}
+const opaque = (typeName: string) => new Map([['ARROW:extension:name', 'arrow.opaque'], ['ARROW:extension:metadata', JSON.stringify({ type_name: typeName })]]);
+
+test('decodes DuckDB lossless HUGEINT and UUID bytes instead of leaking byte lists', () => {
+  // DuckDB's sum(BIGINT) is HUGEINT: it arrives as 16 raw bytes, and used to render as "12,3,0,0,…".
+  const fields = [
+    new Field('total', new FixedSizeBinary(16), true, opaque('hugeint')),
+    new Field('id', new FixedSizeBinary(16), true, opaque('uuid')),
+  ];
+  const uuid = Uint8Array.from('0123456789abcdef0123456789abcdef'.match(/../g)!.map(byte => parseInt(byte, 16)));
+  const total = vectorFromArray([int128Bytes(780n), int128Bytes(-(1n << 100n)), null], new FixedSizeBinary(16));
+  const id = vectorFromArray([uuid, uuid, uuid], new FixedSizeBinary(16));
+  const data = makeData({ type: new Struct(fields), length: 3, nullCount: 0, children: [total.data[0], id.data[0]] });
+  const result = evidenceResult(new Table([new RecordBatch(new Schema(fields), data)]));
+  expect(result.rows.map(row => row.total)).toEqual([780, (-(1n << 100n)).toString(), null]);
+  expect(result.rows[0].id).toBe('01234567-89ab-cdef-0123-456789abcdef');
+  expect(result.columns.find(column => column.name === 'total')?.jsType).toBe('number');
 });
 
 test('turns nested Arrow lists into arrays for Evidence sparklines', () => {
@@ -122,4 +147,23 @@ test('stopping a run interrupts its active query, skips queued SQL and allows a 
   expect(interrupts).toBe(1);
   expect(calls).toEqual(['slow']);
   expect((await new HaybarnQueryService().query('recovered')).error).toBeNull();
+});
+
+test('a query cancelled by stopping the refresh is not logged as a failure', async () => {
+  const { EvidenceQueryRun } = await import('../../src/lib/evidence/query-run');
+  const logged: unknown[] = [];
+  const run = new EvidenceQueryRun();
+  let release: () => void = () => {};
+  engine.query = () => new Promise(resolve => { release = () => resolve({ ok: true }); });
+  const service = new HaybarnQueryService(entry => logged.push(entry), [], {}, run);
+  const pending = service.query('select slow');
+  run.stop();
+  release();
+  const result = await pending;
+  expect(result.error).toContain('Report refresh stopped');
+  expect(logged).toEqual([]);
+  // A real failure on a live run still reaches the log.
+  engine.query = async () => ({ ok: false, error: 'Binder Error' });
+  await new HaybarnQueryService(entry => logged.push(entry)).query('select broken');
+  expect(logged).toHaveLength(1);
 });

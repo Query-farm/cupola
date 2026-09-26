@@ -1,19 +1,26 @@
-import { DataType, type Table } from '@query-farm/apache-arrow';
+import { DataType, type Field, type Table } from '@query-farm/apache-arrow';
 import { normalizeSparklineRows } from '@evidence/core/connectors/normalize-sparkline-rows';
 import { MotherDuckDialect } from '@evidence/core/sql-dialect/motherduck';
 import type { QueryService, QueryOpts, QueryResult, AnyRowType, Column } from '@evidence/core/user-components/interfaces/query-service';
 import { EvidenceQueryRun } from './query-run';
-import { decodeArrowBuffer } from '../duckdb-query';
+import { decodeArrowBuffer, duckdbExtensionDecoder } from '../duckdb-query';
+import { getDuckDBExtensionType } from '../format';
 import { compileReportQuery } from '../reports/parameters';
 import type { ReportParameter, ReportParameterValue } from '../reports/types';
 
 export interface QueryLogEntry { sql: string; rows: number; durationMs: number; error: string | null }
 
-/** Normalize nested Arrow vectors too: Evidence sparklines expect ordinary arrays. */
-function arrowValue(value: any, type: DataType): any {
+/** Normalize nested Arrow vectors too: Evidence sparklines expect ordinary arrays.
+ *  DuckDB's lossless export sends HUGEINT/UUID/BIT/… as raw extension bytes;
+ *  decode them the way every other result surface does, or a `sum()` renders
+ *  as the byte list "12,3,0,0,…". */
+function arrowValue(value: any, field: Field): any {
   if (value == null) return null;
-  if (DataType.isList(type) || DataType.isFixedSizeList(type)) return Array.from(value, item => arrowValue(item, type.valueType));
-  if (DataType.isStruct(type)) return Object.fromEntries(type.children.map(field => [field.name, arrowValue(value[field.name], field.type)]));
+  const decode = duckdbExtensionDecoder(field);
+  if (decode) value = decode(value);
+  const type = field.type;
+  if (DataType.isList(type) || DataType.isFixedSizeList(type)) return Array.from(value, item => arrowValue(item, type.children[0]));
+  if (DataType.isStruct(type)) return Object.fromEntries(type.children.map(child => [child.name, arrowValue(value[child.name], child)]));
   if (DataType.isDecimal(type)) {
     const raw = BigInt(value.toString());
     const scale = type.scale;
@@ -38,7 +45,8 @@ export function evidenceResult(table: Table): Pick<QueryResult, 'rows' | 'column
     clickhouseType: field.type.toString(), // Upstream's historical name; this is source type metadata.
     jsType: DataType.isTimestamp(field.type) || DataType.isDate(field.type) ? 'date'
       : DataType.isBool(field.type) ? 'boolean'
-      : DataType.isInt(field.type) || DataType.isFloat(field.type) || DataType.isDecimal(field.type) ? 'number'
+      : DataType.isInt(field.type) || DataType.isFloat(field.type) || DataType.isDecimal(field.type)
+        || ['hugeint', 'uhugeint', 'bignum', 'varint'].includes(getDuckDBExtensionType(field) ?? '') ? 'number'
       : DataType.isUtf8(field.type) ? 'string' : 'unknown',
     nullable: field.nullable,
   }));
@@ -48,7 +56,7 @@ export function evidenceResult(table: Table): Pick<QueryResult, 'rows' | 'column
     for (let j = 0; j < columns.length; j++) {
       const field = table.schema.fields[j];
       const value = table.getChildAt(j)?.get(i);
-      row[field.name] = arrowValue(value, field.type);
+      row[field.name] = arrowValue(value, field);
     }
     rows.push(row);
   }
@@ -104,7 +112,10 @@ export class HaybarnQueryService implements QueryService {
       result = { rows: [], columns: [], error: error instanceof Error ? error.message : String(error) };
     }
     result.queryDurationMs = performance.now() - start;
-    this.onQuery?.({ sql, rows: result.rows.length, durationMs: result.queryDurationMs, error: result.error });
+    // A query cancelled because its refresh was stopped or superseded did not fail:
+    // logging it made every in-flight query of a stopped run a "report problem".
+    const cancelled = this.run.signal.aborted || Boolean(signal?.aborted);
+    if (!cancelled) this.onQuery?.({ sql, rows: result.rows.length, durationMs: result.queryDurationMs, error: result.error });
     return result;
   }
 }

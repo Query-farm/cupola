@@ -145,7 +145,7 @@ export function tableToRows(table: Table): Record<string, any>[] {
  *  a KPI rendered as "170,215,68,…" and a chart plotted as NaN. The integer
  *  types decode to a bigint so `coerceArrowValue` applies its usual
  *  Number-or-exact-string rule; the rest decode to the string the grid shows. */
-function duckdbExtensionDecoder(field: any): ((raw: any) => unknown) | null {
+export function duckdbExtensionDecoder(field: any): ((raw: any) => unknown) | null {
   const extName: string | undefined = field.metadata?.get?.("ARROW:extension:name");
   if (!extName) return null;
   if (extName === "arrow.bool8") return (raw) => typeof raw === "number" ? raw !== 0 : raw;
