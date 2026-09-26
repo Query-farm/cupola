@@ -14,9 +14,9 @@ test('chart tooltips keep a clear gap between each label and its value', async (
     try { localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(saved.serviceUrl)}:${saved.id}`, JSON.stringify(saved)); } catch { /* sandboxed frame */ }
   }, [report]);
   await page.goto(evidencePath('evidence?evidence_report=tooltips'));
-  const document = page.getByTestId('evidence-panel').getByTestId('evidence-document');
+  const reportDocument = page.getByTestId('evidence-panel').getByTestId('evidence-document');
   for (const kind of ['line_chart', 'bar_chart']) {
-    const canvas = document.locator(`[data-render="${kind}"] canvas`).first();
+    const canvas = reportDocument.locator(`[data-render="${kind}"] canvas`).first();
     await expect(canvas).toBeVisible({ timeout: 90_000 });
     const box = (await canvas.boundingBox())!;
     await expect(async () => {
