@@ -18,7 +18,6 @@ export function emitTypst(doc: ReportDocument): { main: string; files: Record<st
     `  meta: ${pairs(doc.meta)},`,
     `  filters: ${pairs(doc.filters ?? [])},`,
     `  appendix: ${array((doc.appendix ?? []).map(item => `(${lit(item.label)}, ${array(item.values.map(lit))})`))},`,
-    `  view: ${doc.link && /^https?:\/\//.test(doc.link.url) ? `(${lit(doc.link.label)}, ${lit(doc.link.url)})` : 'none'},`,
     `  theme: (heading: ${lit(theme.heading)}, body: ${lit(theme.body)}, accent: rgb(${lit(color(theme.accent))}), foreground: rgb(${lit(color(theme.foreground))}), muted: rgb(${lit(color(theme.muted))}), border: rgb(${lit(color(theme.border))}), paper: ${lit(theme.paper)}),`,
     `)`,
     '',

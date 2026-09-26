@@ -112,14 +112,11 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   const pdfDoneTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(pdfDoneTimer.current), []);
   const previewRoot = () => workspace.current?.querySelector('[data-testid="evidence-preview"]')?.shadowRoot?.querySelector('[data-markdoc-content]') ?? null;
-  /** What every PDF of this report shares: title, update time, a link back to a saved view, fonts. */
+  /** What every PDF of this report shares: title, update time, fonts. */
   function pdfDocument(extraMeta: { label: string; value: string }[] = []) {
-    const view = saved && !isLibraryUrl() ? new URL(window.location.href) : null;
-    if (view) view.hash = ''; // Never carry a fragment (auth tokens, keys) into a document.
     return {
       title: report.title, meta: extraMeta, fonts: reportTheme.config.fonts,
       updated: updatedAt.current ? new Intl.DateTimeFormat(undefined, { dateStyle: 'long', timeStyle: 'short' }).format(updatedAt.current) : undefined,
-      link: view ? { label: 'Open this view in Cupola', url: view.href } : undefined,
       accent: reportTheme.mode === 'light' ? (reportTheme.style as Record<string, string>)['--primary'] : undefined,
     };
   }

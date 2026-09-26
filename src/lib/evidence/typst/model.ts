@@ -70,8 +70,6 @@ export interface ReportDocument {
   filters?: { label: string; value: string }[];
   /** Lists too long for the header (a multi-select of many values), printed in full at the end. */
   appendix?: { label: string; values: string[] }[];
-  /** A link back to the view the PDF was made from. */
-  link?: { label: string; url: string };
   theme: PdfTheme;
   blocks: Block[];
   /** Virtual files the Typst source references, keyed by absolute path (e.g. `/charts/1.svg`). */

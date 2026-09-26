@@ -15,8 +15,8 @@ export const REPORT_TEMPLATE = String.raw`
 
 // The page is the report's own content: no title block and no running header. The title
 // names the PDF (its document metadata); when it was made and by what sit in the footer; the
-// data's context (filters, extra details, a link back) follows the content.
-#let report(title: "", meta: (), updated: none, filters: (), appendix: (), view: none, theme: (:), doc) = {
+// data's context (filters, extra details) follows the content.
+#let report(title: "", meta: (), updated: none, filters: (), appendix: (), theme: (:), doc) = {
   palette.update(theme)
   set document(title: title)
   set page(
@@ -51,27 +51,23 @@ export const REPORT_TEMPLATE = String.raw`
   show quote.where(block: true): it => block(inset: (left: 10pt, y: 2pt), stroke: (left: 2pt + theme.border), text(fill: theme.muted, it.body))
 
   doc
-  // About this view, below a rule after everything the report says.
-  if updated != none or meta.len() > 0 or filters.len() > 0 or view != none {
+  // The view's context, below a rule after everything the report says. The update time is
+  // in the footer, so it isn't repeated here.
+  if meta.len() > 0 or filters.len() > 0 {
     block(above: 2em, breakable: false, {
       line(length: 100%, stroke: 0.5pt + theme.border)
       v(0.4em)
       set text(size: 8pt)
-      let details = (if updated != none { (("Updated", updated),) } else { () }) + meta
-      if details.len() > 0 {
+      if meta.len() > 0 {
         grid(columns: (auto, 1fr), column-gutter: 10pt, row-gutter: 4pt,
-          ..details.map(item => (text(fill: theme.muted, item.at(0)), item.at(1))).flatten())
+          ..meta.map(item => (text(fill: theme.muted, item.at(0)), item.at(1))).flatten())
       }
       // Every parameter and input in effect: a PDF of a filtered view must say so.
       if filters.len() > 0 {
-        v(0.6em)
+        if meta.len() > 0 { v(0.6em) }
         block(below: 0.35em, text(size: 7pt, weight: 600, tracking: 0.06em, fill: theme.muted, upper("Filters")))
         grid(columns: (auto, 1fr), column-gutter: 10pt, row-gutter: 4pt,
           ..filters.map(item => (text(fill: theme.muted, item.at(0)), item.at(1))).flatten())
-      }
-      if view != none {
-        v(0.6em)
-        text(fill: theme.muted, link(view.at(1), view.at(0)))
       }
     })
   }

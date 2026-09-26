@@ -160,7 +160,8 @@ test('a PDF per value has one section per choice, links back to the view, and le
   expect(main).toContain('text("State: British Columbia")');
   expect(main).toContain('text("State: Ontario")');
   expect(main).toContain('("Country", "Canada")');
-  expect(main).toMatch(/view: \("Open this view in Cupola", "http[^"]*evidence_report=geo-parameters[^"]*p\.country=CA/);
+  // The update time is in the footer; nothing links back to the view.
+  expect(main).not.toContain('Open this view');
 
   // The view the reader had is back.
   await expect(panel.getByRole('button', { name: 'PDF exported', exact: true })).toBeVisible();

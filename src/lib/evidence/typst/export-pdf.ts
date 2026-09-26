@@ -15,8 +15,6 @@ export interface PdfDocumentRequest {
   updated?: string;
   /** Parameters and inputs in effect, listed after the content. */
   filters?: FilterSummary;
-  /** A link back to the view, printed under the header metadata. */
-  link?: { label: string; url: string };
   fonts: { heading: string; body: string };
   /** The report's accent color, when it suits white paper. */
   accent?: string;
@@ -63,7 +61,7 @@ export function createPdfExport(request: PdfDocumentRequest) {
       sections++;
     },
     async finish(): Promise<PdfExportResult> {
-      const { main, files: all } = emitTypst({ title: request.title, meta: request.meta, updated: request.updated, filters: request.filters?.filters, appendix: request.filters?.appendix, link: request.link, theme, blocks, files });
+      const { main, files: all } = emitTypst({ title: request.title, meta: request.meta, updated: request.updated, filters: request.filters?.filters, appendix: request.filters?.appendix, theme, blocks, files });
       // `window.__cupolaPdfDebug = true` keeps the last export's Typst source and files for inspection.
       const debug = window as { __cupolaPdfDebug?: unknown };
       if (debug.__cupolaPdfDebug) debug.__cupolaPdfDebug = { main, files: all, coverage };

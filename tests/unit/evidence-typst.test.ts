@@ -27,7 +27,6 @@ function sampleDocument(text = HOSTILE): ReportDocument {
   return {
     title: text, updated: text, meta: [{ label: text, value: 'x' }],
     filters: [{ label: text, value: text }], appendix: [{ label: text, values: [text, 'b'] }],
-    link: { label: text, url: 'https://example.com/r?p.state="VA"' },
     theme: { heading: 'serif', body: 'sans-serif', accent: '#685442', foreground: 'rgb(20, 20, 20)', muted: 'rgba(100, 100, 100, 0.8)', border: '#ddd', paper: 'us-letter' },
     files: { '/charts/1.svg': svg, '/icons/1.svg': icon, '/shots/1.png': PNG },
     blocks: [
@@ -290,7 +289,7 @@ describe('the page frame', () => {
     const t = (value: string) => [{ kind: 'text' as const, text: value }];
     const bytes = await compile({
       title: 'Quarterly sales', updated: 'September 26, 2026 at 4:52 PM', meta: [], theme: sampleDocument().theme, files: {},
-      filters: [{ label: 'Region', value: 'West' }], link: { label: 'Open this view in Cupola', url: 'https://cupola.example/r?p.region=West' },
+      filters: [{ label: 'Region', value: 'West' }],
       blocks: [{ kind: 'heading', level: 1, children: t('Sales overview') }, { kind: 'paragraph', children: t('Body text.') }, { kind: 'pagebreak' }, { kind: 'paragraph', children: t('Second page.') }],
     });
     const pdf = await getDocument({ data: bytes }).promise;
@@ -310,7 +309,8 @@ describe('the page frame', () => {
       expect(page.text).toContain(`Page ${i + 1} of 2`);
       expect(page.links).toContain('https://query.farm/');
     }
-    // After the content: when, the filters, and the way back.
-    expect(pages[1].text).toMatch(/Second page\..*Updated September 26, 2026 at 4:52 PM.*FILTERS Region West.*Open this view in Cupola/);
+    // After the content, only the filters: the update time is in the footer, and nothing else trails.
+    expect(pages[1].text).toMatch(/Second page\. FILTERS Region West September 26/);
+    expect(pages.map(page => page.text).join(' ')).not.toMatch(/Updated|Open this view/);
   });
 });
