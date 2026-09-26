@@ -416,3 +416,31 @@
   .evidence-print-heading dt { font-weight: 600; }
   .evidence-print-heading dd { overflow-wrap: anywhere; }
 }
+
+/*
+  Evidence chart tooltips. ECharts appends them to <body>, outside the report's shadow
+  root, so neither Evidence's stylesheet nor the Tailwind utilities its markup names
+  (`grid-cols-[auto_auto] gap-x-4`, ...) reach them unless Cupola's own build happens to
+  emit the same class. It didn't emit `gap-x-4`, so labels ran into values ("Outdoors79k").
+  The layout the thirteen chart tooltips share is defined here, scoped to the container
+  ECharts marks with its inline z-index, with a guaranteed gap and aligned figures. The
+  font is Cupola's: the inline style names Geist, which Cupola doesn't load.
+*/
+body > div[style*="z-index: 9999999"] {
+  font-family: var(--font-sans) !important;
+  font-variant-numeric: tabular-nums;
+}
+body > div[style*="z-index: 9999999"] .flex { display: flex; }
+body > div[style*="z-index: 9999999"] .flex-col { flex-direction: column; }
+body > div[style*="z-index: 9999999"] .flex-row { flex-direction: row; }
+body > div[style*="z-index: 9999999"] .items-center { align-items: center; }
+body > div[style*="z-index: 9999999"] .justify-end { justify-content: flex-end; }
+body > div[style*="z-index: 9999999"] .gap-1 { gap: 0.25rem; }
+body > div[style*="z-index: 9999999"] .grid { display: grid; align-items: center; column-gap: 1.25rem; row-gap: 0.125rem; }
+body > div[style*="z-index: 9999999"] .grid-cols-\[auto_auto\] { grid-template-columns: auto auto; }
+body > div[style*="z-index: 9999999"] .gap-x-4 { column-gap: 1.25rem; }
+body > div[style*="z-index: 9999999"] .text-right { text-align: right; }
+body > div[style*="z-index: 9999999"] .font-semibold { font-weight: 600; }
+body > div[style*="z-index: 9999999"] .text-xs { font-size: 0.75rem; line-height: 1rem; }
+body > div[style*="z-index: 9999999"] .mb-1 { margin-bottom: 0.25rem; }
+body > div[style*="z-index: 9999999"] .text-muted-foreground { color: var(--muted-foreground); }
