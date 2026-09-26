@@ -24,7 +24,7 @@ export const REPORT_TEMPLATE = String.raw`
     footer: context {
       set text(size: 7.5pt, fill: theme.muted)
       grid(columns: (1fr, auto),
-        meta.find(item => item.at(0) == "Updated").at(1, default: ""),
+        { let updated = meta.find(item => item.at(0) == "Updated"); if updated != none { updated.at(1) } },
         [Page #counter(page).display() of #counter(page).final().first()])
     },
   )
@@ -63,10 +63,6 @@ export const REPORT_TEMPLATE = String.raw`
       grid(columns: (auto, 1fr), column-gutter: 10pt, row-gutter: 4pt,
         ..meta.map(item => (text(fill: theme.muted, item.at(0)), item.at(1))).flatten())
     }
-    if view != none {
-      v(0.2em)
-      text(size: 8pt, link(view.at(1), view.at(0)))
-    }
     // Every parameter and input in effect: a PDF of a filtered view must say so.
     if filters.len() > 0 {
       v(0.5em)
@@ -87,6 +83,14 @@ export const REPORT_TEMPLATE = String.raw`
       // A grid, not columns(): columns fill the first column down the page before the next.
       block(below: 1.4em, grid(columns: (1fr, 1fr, 1fr), column-gutter: 12pt, row-gutter: 5pt, ..item.at(1).map(value => [• #value])))
     }
+  }
+  // A link back to the view, after everything the report says.
+  if view != none {
+    block(above: 2em, sticky: false, {
+      line(length: 100%, stroke: 0.5pt + theme.border)
+      v(0.4em)
+      text(size: 8pt, fill: theme.muted, link(view.at(1), view.at(0)))
+    })
   }
 }
 
@@ -154,23 +158,64 @@ export const REPORT_TEMPLATE = String.raw`
   )
 }
 
-#let cupola-table(title: none, subtitle: none, note: none, widths: none, header: (), rows: ()) = context {
+// Column widths from the content, the way a browser lays out an automatic table. Every column
+// gets at least its widest unbreakable word or number plus padding (so figures never run into
+// the next column); if every column fits unwrapped, the spare width is shared in the screen's
+// proportions, otherwise it goes to the columns that can wrap. Only when the unbreakable
+// minimums alone are too wide does the text shrink, down to 6pt, and then the padding halve;
+// a table still too wide after that is printed as is, with a note saying so.
+#let table-inset = 6pt
+#let table-layout(sizing, screen, available, size) = {
+  let pad = 2 * table-inset
+  let m(value, bold: false) = measure(text(size: size, if bold { strong(value) } else { value })).width
+  let widest(values, bold: false) = calc.max(0pt, ..values.map(value => m(value, bold: bold)))
+  // A single enormous word (a URL) may take a third of the width, not all of it.
+  let mins = sizing.map(c => calc.min(calc.max(widest(c.words), widest(c.at("head-words"), bold: true)) + pad, available / 3))
+  let fulls = sizing.enumerate().map(((i, c)) => calc.max(mins.at(i), calc.max(widest(c.lines), widest(c.head, bold: true)) + pad))
+  let total-full = fulls.sum(default: 0pt)
+  let total-min = mins.sum(default: 0pt)
+  if total-full <= available {
+    let weights = if screen != none and screen.len() == fulls.len() and screen.sum(default: 0) > 0 { screen } else { fulls.map(f => f / 1pt) }
+    let extra = available - total-full
+    (widths: fulls.enumerate().map(((i, f)) => f + extra * weights.at(i) / weights.sum()), size: size, inset: table-inset, overflow: false)
+  } else if total-min <= available {
+    let slack = fulls.zip(mins).map(((f, n)) => f - n)
+    let total-slack = slack.sum(default: 0pt)
+    let extra = available - total-min
+    (widths: mins.enumerate().map(((i, n)) => n + if total-slack > 0pt { extra * (slack.at(i) / total-slack) } else { extra / mins.len() }), size: size, inset: table-inset, overflow: false)
+  } else {
+    // Text scales, padding doesn't: find the size at which the minimums fit, no smaller than 6pt,
+    // with half the padding once the text is at its floor.
+    let scale = calc.max(0.75, (available - pad * mins.len()) / (total-min - pad * mins.len()))
+    let inset = if scale > 0.75 { table-inset } else { table-inset / 2 }
+    let widths = mins.map(n => (n - pad) * scale + 2 * inset)
+    (widths: widths, size: size * scale, inset: inset, overflow: widths.sum(default: 0pt) > available + 0.5pt)
+  }
+}
+
+#let cupola-table(title: none, subtitle: none, note: none, widths: none, sizing: none, header: (), rows: ()) = context {
   let theme = palette.get()
   let first = if header.len() > 0 { header.at(0) } else if rows.len() > 0 { rows.at(0) } else { () }
   let count = first.map(cell => cell.at("colspan", default: 1)).sum(default: 1)
-  // Screen proportions at full width, like Evidence; natural widths otherwise.
-  let columns = if widths != none and widths.len() == count { widths } else { count }
   // A short table stays on one page, so its total row is never stranded.
   block(width: 100%, above: 16pt, below: 16pt, breakable: rows.len() > 14, {
     chart-heading(title, subtitle)
-    set text(size: 8pt)
-    table(
-      columns: columns,
-      stroke: (x, y) => (bottom: 0.5pt + theme.border),
-      inset: (x: 6pt, y: 4pt),
-      table.header(..header.flatten().map(cell => table-cell(cell, bold: true))),
-      ..rows.flatten().map(table-cell),
-    )
+    layout(space => {
+      let fitted = if sizing != none and sizing.len() == count { table-layout(sizing, widths, space.width, 8pt) } else { none }
+      // For the unit tests: the widths and text size each table was given.
+      if fitted != none { [#metadata(fitted) <cupola-table-layout>] }
+      set text(size: if fitted != none { fitted.size } else { 8pt })
+      table(
+        columns: if fitted != none { fitted.widths } else if widths != none and widths.len() == count { widths.map(w => w * 1fr) } else { count },
+        stroke: (x, y) => (bottom: 0.5pt + theme.border),
+        inset: (x: if fitted != none { fitted.inset } else { table-inset }, y: 4pt),
+        table.header(..header.flatten().map(cell => table-cell(cell, bold: true))),
+        ..rows.flatten().map(table-cell),
+      )
+      if fitted != none and fitted.overflow {
+        block(above: 0.5em, text(size: 7.5pt, fill: theme.muted, "This table is wider than the page even at 6pt, so some columns may overlap. Fewer columns would print cleanly."))
+      }
+    })
     if note != none { block(above: 0.5em, text(size: 7.5pt, fill: theme.muted, note)) }
   })
 }

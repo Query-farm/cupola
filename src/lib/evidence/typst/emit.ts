@@ -98,6 +98,33 @@ function cellExpr(cell: Cell): string {
   return `(${args.join(', ')})`;
 }
 
+/** The text of a cell, for measuring. Graphics (icons) are ignored. */
+function plainText(inlines: Inline[]): string {
+  return inlines.map(inline => inline.kind === 'text' ? inline.text : inline.kind === 'link' ? plainText(inline.children) : inline.kind === 'linebreak' ? '\n' : '').join('');
+}
+/** The `n` longest strings (by characters) of a list, without duplicates. */
+function longest(values: Iterable<string>, n: number): string[] {
+  return [...new Set(values)].filter(Boolean).sort((a, b) => b.length - a.length).slice(0, n);
+}
+/** Per column, the few strings that decide its width: the longest unbreakable words (a column
+ *  never gets narrower than these), the longest whole lines (its width without wrapping), and
+ *  the header's words and line (measured bold). Typst measures only these, in the real font:
+ *  measuring every cell of a 2,000-row table would be slow, and a character count is too rough
+ *  (a "1" is narrower than an "M"). Columns are counted from rows without spanning cells. */
+function sizingExpr(block: Extract<Block, { kind: 'table' }>): string {
+  const plain = (row: Cell[]) => row.every(cell => !(cell.colspan && cell.colspan > 1)) ? row.map(cell => plainText(cell.children)) : null;
+  const body = block.rows.map(plain).filter((row): row is string[] => row !== null);
+  const head = block.header.map(plain).filter((row): row is string[] => row !== null);
+  const count = Math.max(0, ...[...head, ...body].map(row => row.length));
+  if (!count) return 'none';
+  const words = (text: string) => text.split(/\s+/);
+  return array(Array.from({ length: count }, (_, i) => {
+    const cells = body.map(row => row[i] ?? '');
+    const headers = head.map(row => row[i] ?? '');
+    return `(words: ${array(longest(cells.flatMap(words), 3).map(lit))}, lines: ${array(longest(cells.flatMap(text => text.split('\n')), 3).map(lit))}, head-words: ${array(longest(headers.flatMap(words), 2).map(lit))}, head: ${array(longest(headers, 1).map(lit))})`;
+  }));
+}
+
 /** A Typst array literal; a one-element array needs its trailing comma. */
 function array(items: string[]): string {
   return `(${items.join(', ')}${items.length === 1 ? ',' : ''})`;
@@ -125,7 +152,7 @@ export function blockExpr(block: Block): string {
     case 'callout': return `cupola-callout(color: ${block.color ? `rgb(${lit(color(block.color))})` : 'none'}, title: ${block.title ? inlineExpr(block.title) : 'none'}, ${blocksExpr(block.blocks)})`;
     case 'chart': return `cupola-chart(title: ${opt(block.title)}, subtitle: ${opt(block.subtitle)}, legend: ${array((block.legend ?? []).map(entry => `(${lit(entry.label)}, rgb(${lit(color(entry.color))}))`))}, ${graphic(block.graphic.file, block.graphic.width, block.graphic.height)})`;
     case 'metric': return `cupola-metric(title: ${opt(block.title)}, size: ${block.valueSize ? `${round(Math.min(40, Math.max(12, block.valueSize)))}pt` : 'none'}, value: ${inlineExpr(block.value)}, comparison: ${block.comparison?.length ? inlineExpr(block.comparison) : 'none'}, sparkline: ${block.sparkline ? graphic(block.sparkline.file, block.sparkline.width, block.sparkline.height) : 'none'})`;
-    case 'table': return `cupola-table(title: ${opt(block.title)}, subtitle: ${opt(block.subtitle)}, note: ${opt(block.note)}, widths: ${block.widths ? array(block.widths.map(w => `${round(w)}fr`)) : 'none'}, header: ${array(block.header.map(row => array(row.map(cellExpr))))}, rows: ${array(block.rows.map(row => array(row.map(cellExpr))))})`;
+    case 'table': return `cupola-table(title: ${opt(block.title)}, subtitle: ${opt(block.subtitle)}, note: ${opt(block.note)}, widths: ${block.widths ? array(block.widths.map(w => String(round(w)))) : 'none'}, sizing: ${sizingExpr(block)}, header: ${array(block.header.map(row => array(row.map(cellExpr))))}, rows: ${array(block.rows.map(row => array(row.map(cellExpr))))})`;
     case 'image': return `cupola-image(title: ${opt(block.title)}, ${graphic(block.graphic.file, block.graphic.width, block.graphic.height)})`;
     case 'error': return `cupola-error(${lit(block.message)})`;
     case 'omitted': return `cupola-omitted(${lit(block.label)})`;

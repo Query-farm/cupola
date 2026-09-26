@@ -26,6 +26,7 @@ function sampleDocument(text = HOSTILE): ReportDocument {
   return {
     title: text, subtitle: text, meta: [{ label: 'Updated', value: text }, { label: text, value: 'x' }],
     filters: [{ label: text, value: text }], appendix: [{ label: text, values: [text, 'b'] }],
+    link: { label: text, url: 'https://example.com/r?p.state="VA"' },
     theme: { heading: 'serif', body: 'sans-serif', accent: '#685442', foreground: 'rgb(20, 20, 20)', muted: 'rgba(100, 100, 100, 0.8)', border: '#ddd', paper: 'us-letter' },
     files: { '/charts/1.svg': svg, '/icons/1.svg': icon, '/shots/1.png': PNG },
     blocks: [
@@ -201,5 +202,52 @@ describe('long tables', () => {
       if (onPage.length) expect(text).toContain('Revenue total');
     }
     expect(seen).toEqual(Array.from({ length: 150 }, (_, i) => String(i + 1)));
+  });
+});
+
+describe('table column widths', () => {
+  const t = (value: string) => [{ kind: 'text' as const, text: value }];
+  const theme = { heading: 'serif' as const, body: 'sans-serif' as const, accent: '#685442', foreground: '#1f1d1a', muted: '#6b6b5a', border: '#dddddd', paper: 'us-letter' as const };
+  async function layouts(blocks: ReportDocument['blocks']) {
+    await compile({ title: 'Widths', meta: [], theme, files: {}, blocks });
+    const found = await compiler.runWithWorld({ mainFilePath: '/main.typ' }, async world => {
+      await world.compile();
+      return world.query({ selector: '<cupola-table-layout>' }) as Promise<{ value: { widths: string[]; size: string; overflow: boolean } }[]>;
+    });
+    return found.map(item => ({ widths: item.value.widths.map(parseFloat), size: parseFloat(item.value.size), overflow: item.value.overflow }));
+  }
+  const available = 612 - 2 * 54; // US Letter minus the template's margins, in pt.
+
+  test('numbers get room for their widest value, even when the screen squeezed their columns', async () => {
+    const money = ['1,234,567.89', '-98,765,432.10', '0.00'];
+    const [layout] = await layouts([{ kind: 'table', widths: [900, 40, 40, 40],
+      header: [[{ children: t('Description') }, { children: t('Revenue') }, { children: t('Cost') }, { children: t('Margin') }]],
+      rows: money.map(value => [{ children: t('A long description of the line item that should wrap onto several lines rather than squeeze the figures') }, { children: t(value), align: 'right' }, { children: t(value), align: 'right' }, { children: t(value), align: 'right' }]),
+    }]);
+    // The screen's proportions would have given each figure column ~17pt; "-98,765,432.10" needs far more.
+    for (const width of layout.widths.slice(1)) expect(width).toBeGreaterThan(55);
+    expect(layout.widths[0]).toBeGreaterThan(layout.widths[1]);
+    expect(layout.widths.reduce((a, b) => a + b)).toBeCloseTo(available, 0);
+    expect(layout.size).toBe(8);
+  });
+  test('a table that fits keeps the screen proportions for its spare width', async () => {
+    const [layout] = await layouts([{ kind: 'table', widths: [300, 100],
+      header: [[{ children: t('Region') }, { children: t('Total') }]],
+      rows: [[{ children: t('West') }, { children: t('12') }], [{ children: t('East') }, { children: t('7') }]],
+    }]);
+    expect(layout.widths[0] / layout.widths[1]).toBeGreaterThan(2);
+    expect(layout.widths.reduce((a, b) => a + b)).toBeCloseTo(available, 0);
+  });
+  test('wide figures shrink the text rather than overlap, and a table too wide even at 6pt says so', async () => {
+    const figures = (columns: number) => ({ kind: 'table' as const,
+      header: [Array.from({ length: columns }, (_, i) => ({ children: t(`C${i}`) }))],
+      rows: [Array.from({ length: columns }, () => ({ children: t('-12,345,678.90'), align: 'right' as const }))],
+    });
+    const [squeezed, impossible] = await layouts([figures(8), figures(14)]);
+    expect(squeezed.size).toBeLessThan(8);
+    expect(squeezed.size).toBeGreaterThanOrEqual(6);
+    expect(squeezed.widths.reduce((a, b) => a + b)).toBeLessThanOrEqual(available + 0.5);
+    expect(impossible.size).toBe(6);
+    expect(impossible.overflow).toBe(true);
   });
 });
