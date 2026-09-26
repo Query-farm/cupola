@@ -10,7 +10,7 @@ import { lintGutter, setDiagnostics } from '@codemirror/lint';
 import { evidenceCompletion, type EvidenceIssue } from '../../lib/evidence/editor-support';
 
 export interface EvidenceCodeHandle { insert: (text: string) => void; goToLine: (line: number) => void }
-interface Props { value: string; onChange: (value: string) => void; language: 'document' | 'data'; parameters: string[]; issues: EvidenceIssue[] }
+interface Props { value: string; onChange: (value: string) => void; language: 'document' | 'data'; parameters: string[]; issues: EvidenceIssue[]; ariaLabel?: string }
 const markdocTags = ViewPlugin.fromClass(class {
   decorations: DecorationSet;
   constructor(view: EditorView) { this.decorations = this.highlight(view); }
@@ -21,7 +21,7 @@ const markdocTags = ViewPlugin.fromClass(class {
   }
 }, { decorations: instance => instance.decorations });
 
-export const EvidenceCodeEditor = forwardRef<EvidenceCodeHandle, Props>(function EvidenceCodeEditor({ value, onChange, language, parameters, issues }, ref) {
+export const EvidenceCodeEditor = forwardRef<EvidenceCodeHandle, Props>(function EvidenceCodeEditor({ value, onChange, language, parameters, issues, ariaLabel }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const latest = useRef({ onChange, parameters }); latest.current = { onChange, parameters };
@@ -35,7 +35,7 @@ export const EvidenceCodeEditor = forwardRef<EvidenceCodeHandle, Props>(function
       EditorState.languageData.of(() => [{ autocomplete: complete }]),
       autocompletion(), keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
-      EditorView.contentAttributes.of({ 'aria-label': language === 'document' ? 'Evidence source' : 'Dataset SQL', 'aria-multiline': 'true', spellcheck: 'false' }),
+      EditorView.contentAttributes.of({ 'aria-label': ariaLabel ?? (language === 'document' ? 'Evidence source' : 'Dataset SQL'), 'aria-multiline': 'true', spellcheck: 'false' }),
       EditorView.theme({
         '&': { height: '100%', fontSize: '13px', backgroundColor: 'var(--background)', color: 'var(--foreground)' },
         '.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, monospace' },

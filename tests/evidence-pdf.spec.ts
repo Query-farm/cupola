@@ -51,13 +51,16 @@ test('Evidence exports a typeset PDF of the rendered report', async ({ page }, t
   expect(pdf.startsWith('%PDF-')).toBe(true);
   // The explicit page break forces a second page.
   expect(pdf.match(/\/Type\s*\/Page\b/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
-  await expect(panel.getByText('PDF exported. Not included: dropdown.')).toBeVisible();
-  await expect(panel.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+  // Progress and the result are shown on the button, which then resets.
+  // The dropdown's control is not drawn, but its value is listed, so nothing is "not included".
+  await expect(panel.getByRole('button', { name: 'PDF exported', exact: true })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled({ timeout: 12_000 });
 
   const { main, files } = await page.evaluate(() => (window as unknown as { __cupolaPdfDebug: { main: string; files: Record<string, string> } }).__cupolaPdfDebug);
   // The report's own "# PDF check report" is not repeated under the title block.
   expect(main.match(/PDF check report/g)).toHaveLength(1);
-  expect(main).toContain('("Region", "North & \\"South\\" #1")');
+  // Every parameter and input in effect is listed in the header's Filters section.
+  expect(main).toContain('filters: (("Region", "North & \\"South\\" #1"), ("Region filter", "All")),');
   expect(main).toContain('text("780")');
   expect(main).not.toMatch(/12,3,0/);
   expect(main).toContain('emph(text("emphasis"))');

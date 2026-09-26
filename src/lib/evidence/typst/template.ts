@@ -10,7 +10,7 @@ export const REPORT_TEMPLATE = String.raw`
 #let palette = state("cupola-theme", (heading: "serif", body: "sans-serif", accent: black,
   foreground: black, muted: gray, border: silver, paper: "a4"))
 
-#let report(title: "", subtitle: none, meta: (), theme: (:), doc) = {
+#let report(title: "", subtitle: none, meta: (), filters: (), appendix: (), view: none, theme: (:), doc) = {
   palette.update(theme)
   set document(title: title)
   set page(
@@ -63,10 +63,31 @@ export const REPORT_TEMPLATE = String.raw`
       grid(columns: (auto, 1fr), column-gutter: 10pt, row-gutter: 4pt,
         ..meta.map(item => (text(fill: theme.muted, item.at(0)), item.at(1))).flatten())
     }
+    if view != none {
+      v(0.2em)
+      text(size: 8pt, link(view.at(1), view.at(0)))
+    }
+    // Every parameter and input in effect: a PDF of a filtered view must say so.
+    if filters.len() > 0 {
+      v(0.5em)
+      set text(size: 8pt)
+      block(below: 0.35em, text(size: 7pt, weight: 600, tracking: 0.06em, fill: theme.muted, upper("Filters")))
+      grid(columns: (auto, 1fr), column-gutter: 10pt, row-gutter: 4pt,
+        ..filters.map(item => (text(fill: theme.muted, item.at(0)), item.at(1))).flatten())
+    }
     v(0.3em)
     line(length: 100%, stroke: 0.75pt + theme.accent)
   })
   doc
+  // Filter values too long for the header, in full.
+  if appendix.len() > 0 {
+    heading(level: 2, "Filter values")
+    for item in appendix {
+      block(below: 0.9em, sticky: true, strong(item.at(0)))
+      // A grid, not columns(): columns fill the first column down the page before the next.
+      block(below: 1.4em, grid(columns: (1fr, 1fr, 1fr), column-gutter: 12pt, row-gutter: 5pt, ..item.at(1).map(value => [• #value])))
+    }
+  }
 }
 
 #let cupola-rule() = context line(length: 100%, stroke: 0.5pt + palette.get().border)

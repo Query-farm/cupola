@@ -10,9 +10,11 @@
  * - `part`: rendered by its parent (a chart's series, a table's columns).
  * - `snapshot`: custom HTML with no Typst equivalent, captured as an image.
  * - `input`: a report control; its effect prints, the control does not.
+ * - `filter`: an input that sets a filter; the control does not print, but its value is
+ *   listed in the PDF header's filter summary, so it is not "not included".
  * - `omitted`: cannot be printed; a placeholder says so.
  */
-export type Handling = 'native' | 'chart' | 'container' | 'part' | 'snapshot' | 'input' | 'omitted';
+export type Handling = 'native' | 'chart' | 'container' | 'part' | 'snapshot' | 'input' | 'filter' | 'omitted';
 
 export const COMPONENT_HANDLING: Record<string, Handling> = {
   // Charts
@@ -42,13 +44,13 @@ export const COMPONENT_HANDLING: Record<string, Handling> = {
   // Maps draw to WebGL; captured when the canvas allows it.
   map: 'snapshot', custom_map: 'snapshot', area_layer: 'part', heatmap_layer: 'part', point_layer: 'part',
   // Inputs
-  benchmark_comparison: 'input', button_group: 'input', comparison_selector: 'input', date_grain_selector: 'input',
-  dimension_grid: 'input', dropdown: 'input', dropdown_option: 'input', filter_bar: 'input', input_tabs: 'input',
-  option: 'input', range_calendar: 'input', slider: 'input', table_filter: 'input', target_comparison: 'input',
-  text_input: 'input', toggle: 'input', workflow_period: 'input',
+  benchmark_comparison: 'filter', button_group: 'filter', comparison_selector: 'filter', date_grain_selector: 'filter',
+  dimension_grid: 'filter', dropdown: 'filter', dropdown_option: 'input', filter_bar: 'filter', input_tabs: 'filter',
+  option: 'input', range_calendar: 'filter', slider: 'filter', table_filter: 'filter', target_comparison: 'filter',
+  text_input: 'filter', toggle: 'filter', workflow_period: 'filter',
 };
 
 export const handlingOf = (render: string): Handling | undefined => COMPONENT_HANDLING[render];
 
 /** What happened to one rendered component during an export. */
-export interface CoverageEntry { render: string; handling: Handling | 'unclassified'; outcome: 'printed' | 'skipped' | 'placeholder' }
+export interface CoverageEntry { render: string; handling: Handling | 'unclassified'; outcome: 'printed' | 'skipped' | 'placeholder' | 'summarized' }

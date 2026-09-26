@@ -11,7 +11,7 @@ import { EvidenceAppearance } from './EvidenceAppearance';
 import type { ReportTheme } from '../../lib/evidence/report-theme';
 import { EvidenceDataBrowser } from './EvidenceDataBrowser';
 import type { EvidenceDataContext } from '../../lib/evidence/data-browser';
-import { EvidenceParameters } from './EvidenceParameters';
+import { EvidenceParameters, type ParameterChoicesContext } from './EvidenceParameters';
 import type { EvidenceReport } from '../../lib/evidence/reports';
 
 const EvidenceAgent = lazy(() => import('./EvidenceAgent').then(module => ({ default: module.EvidenceAgent })));
@@ -25,7 +25,7 @@ const snippets: Record<string, string> = {
   'Two columns': '\n\n{% row %}\n\nAdd components here.\n\n{% /row %}\n',
 };
 
-export function EvidenceEditor({ fullScreen, onToggleFullScreen, report, onChange, issues, stale, editorOnly, onTogglePreview, onApplyPreview, previewBusy, dataContext, onRefreshData, reportTheme, catalogs, semanticStates }: { fullScreen: boolean; onToggleFullScreen: () => void; catalogs: readonly CatalogData[]; semanticStates: SemanticDatasetState[]; reportTheme: ReportTheme; dataContext: EvidenceDataContext | null; onRefreshData: () => Promise<void>; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; editorOnly: boolean; onTogglePreview: () => void; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
+export function EvidenceEditor({ parameterChoices, fullScreen, onToggleFullScreen, report, onChange, issues, stale, editorOnly, onTogglePreview, onApplyPreview, previewBusy, dataContext, onRefreshData, reportTheme, catalogs, semanticStates }: { parameterChoices?: ParameterChoicesContext; fullScreen: boolean; onToggleFullScreen: () => void; catalogs: readonly CatalogData[]; semanticStates: SemanticDatasetState[]; reportTheme: ReportTheme; dataContext: EvidenceDataContext | null; onRefreshData: () => Promise<void>; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; editorOnly: boolean; onTogglePreview: () => void; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
   const [tab, setTab] = useState('agent');
   const [agentOpened, setAgentOpened] = useState(true);
   const source = useRef<EvidenceCodeHandle>(null);
@@ -87,7 +87,7 @@ export function EvidenceEditor({ fullScreen, onToggleFullScreen, report, onChang
       <TabsContent value="model" className="min-h-0 overflow-auto px-4 pb-4"><EvidenceSemanticDatasets report={report} catalogs={catalogs} states={semanticStates} onChange={onChange} /></TabsContent>
       <TabsContent value="browser" className="min-h-0 overflow-auto px-4 pb-4"><EvidenceDataBrowser onAddPivot={pivot => onChange({ ...report, pivots: [...(report.pivots ?? []), pivot] })} context={dataContext} stale={stale} busy={previewBusy} onRefresh={onRefreshData} onEdit={target => setTab(target)} /></TabsContent>
       <TabsContent value="appearance" className="min-h-0 overflow-auto px-4 pb-4"><EvidenceAppearance value={report.appearance} theme={reportTheme} onChange={appearance => onChange({ ...report, appearance })} /></TabsContent>
-      <TabsContent value="parameters" className="min-h-0 overflow-auto px-4 pb-4"><EvidenceParameters report={report} onChange={onChange} /></TabsContent>
+      <TabsContent value="parameters" className="min-h-0 overflow-auto px-4 pb-4"><EvidenceParameters report={report} onChange={onChange} choices={parameterChoices} /></TabsContent>
     </Tabs>
     <section aria-label="Report problems" className="max-h-48 shrink-0 overflow-auto border-t bg-background p-3 text-xs">
       <h3 className="font-semibold">Problems · {errors.length} errors{stale ? ' · previous preview' : ''}</h3>

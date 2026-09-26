@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { CatalogData } from '../../lib/service';
-import type { EvidenceReport } from '../../lib/evidence/reports';
+import { toReportParameters, type EvidenceReport } from '../../lib/evidence/reports';
 import type { SemanticDatasetState } from '../../lib/evidence/semantic-datasets';
 import { ReportSemanticDatasetBuilder } from '../reports/ReportSemanticDatasetBuilder';
 import { Button } from '../ui/button';
@@ -25,7 +25,7 @@ export function EvidenceSemanticDatasets({ report, catalogs, states, onChange }:
     {datasets.length > 0 && <label className="block space-y-1">Dataset<select aria-label="Semantic dataset" className="h-9 w-full rounded border bg-background px-2" value={dataset?.id} onChange={event => setSelected(event.target.value)}>{datasets.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
     {dataset && <>
       <label className="block space-y-1">Dataset name<Input aria-label="Semantic dataset name" value={dataset.name} onChange={event => onChange({ ...report, semanticDatasets: datasets.map(item => item.id === dataset.id ? { ...item, name: event.target.value } : item) })} /></label>
-      <ReportSemanticDatasetBuilder key={dataset.id} dataset={dataset} report={report} catalogs={catalogs} onChange={next => onChange({ ...report, semanticDatasets: datasets.map(item => item.id === next.id ? next : item) })} />
+      <ReportSemanticDatasetBuilder key={dataset.id} dataset={dataset} report={{ parameters: toReportParameters(report.parameters, report.values) }} catalogs={catalogs} onChange={next => onChange({ ...report, semanticDatasets: datasets.map(item => item.id === next.id ? next : item) })} />
       <details><summary className="cursor-pointer">Advanced semantic JSON</summary>
         <textarea key={dataset.id + JSON.stringify(dataset.query)} aria-label="Semantic query JSON" className="mt-2 min-h-48 w-full rounded border bg-background p-2 font-mono text-xs" defaultValue={JSON.stringify(dataset.query, null, 2)} onBlur={event => {
           try {

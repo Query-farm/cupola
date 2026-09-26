@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
+import { evidencePath, EVIDENCE_SERVICE_URL, replaceEditorText } from './helpers';
 import { test, expect } from '@playwright/test';
 
 test.use({ viewport: { width: 1500, height: 1100 } });
@@ -87,7 +87,7 @@ test('live Evidence report reuses the shell worker across refresh, editing and t
   await expect(panel.getByRole('textbox', { name: 'Dataset SQL', exact: true })).toContainText('cupola_weather');
   await panel.getByRole('tab', { name: 'Code', exact: true }).click();
   const source = panel.getByRole('textbox', { name: 'Evidence source', exact: true });
-  await source.fill(readFileSync(new URL('../src/lib/evidence/open-meteo.md', import.meta.url), 'utf8').replace('# Your week outdoors', '# Shared engine forecast'));
+  await replaceEditorText(source, readFileSync(new URL('../src/lib/evidence/open-meteo.md', import.meta.url), 'utf8').replace('# Your week outdoors', '# Shared engine forecast'));
   await expect(panel.getByRole('status', { name: 'Changes not applied' })).toBeVisible();
   await panel.getByRole('tab', { name: 'Parameters', exact: true }).click();
   await panel.getByRole('tab', { name: 'Code', exact: true }).click();

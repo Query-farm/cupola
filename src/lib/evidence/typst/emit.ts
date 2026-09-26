@@ -15,7 +15,10 @@ export function emitTypst(doc: ReportDocument): { main: string; files: Record<st
     `#show: report.with(`,
     `  title: ${lit(doc.title)},`,
     `  subtitle: ${doc.subtitle ? lit(doc.subtitle) : 'none'},`,
-    `  meta: (${doc.meta.map(item => `(${lit(item.label)}, ${lit(item.value)})`).join(', ')}${doc.meta.length === 1 ? ',' : ''}),`,
+    `  meta: ${pairs(doc.meta)},`,
+    `  filters: ${pairs(doc.filters ?? [])},`,
+    `  appendix: ${array((doc.appendix ?? []).map(item => `(${lit(item.label)}, ${array(item.values.map(lit))})`))},`,
+    `  view: ${doc.link && /^https?:\/\//.test(doc.link.url) ? `(${lit(doc.link.label)}, ${lit(doc.link.url)})` : 'none'},`,
     `  theme: (heading: ${lit(theme.heading)}, body: ${lit(theme.body)}, accent: rgb(${lit(color(theme.accent))}), foreground: rgb(${lit(color(theme.foreground))}), muted: rgb(${lit(color(theme.muted))}), border: rgb(${lit(color(theme.border))}), paper: ${lit(theme.paper)}),`,
     `)`,
     '',
@@ -23,6 +26,8 @@ export function emitTypst(doc: ReportDocument): { main: string; files: Record<st
   ].join('\n');
   return { main, files: { ...doc.files, [TEMPLATE_PATH]: REPORT_TEMPLATE } };
 }
+
+const pairs = (items: { label: string; value: string }[]) => array(items.map(item => `(${lit(item.label)}, ${lit(item.value)})`));
 
 /** A Typst string literal. Safe for any input: Typst strings only interpret `\` and `"`. */
 export function lit(value: string): string {

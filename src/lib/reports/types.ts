@@ -7,7 +7,7 @@ export type ReportParameterType =
   | "select"
   | "multi_select";
 
-export type ReportParameterValue = string | number | boolean | null | string[] | { start: string | null; end: string | null };
+export type ReportParameterValue = string | number | boolean | null | (string | number)[] | { start: string | null; end: string | null };
 
 export interface ReportOption {
   label: string;

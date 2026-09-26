@@ -3,6 +3,7 @@ import type { CatalogData } from '../service';
 import type { SemanticPlan } from '../semantic-compiler';
 import { prepareSemanticReportDataset } from '../reports/semantic';
 import type { EvidenceReport, ParameterValues } from './reports';
+import { toReportParameters } from './parameters';
 import { quoteIdentifier } from './data-browser';
 import { EvidenceQueryRun } from './query-run';
 
@@ -16,7 +17,7 @@ export async function prepareEvidenceSemanticDatasets(report: EvidenceReport, va
   const queries: Record<string, string> = {};
   const states: SemanticDatasetState[] = [];
   for (const dataset of report.semanticDatasets ?? []) {
-    const prepared = await prepareSemanticReportDataset(dataset, report, values, catalogs);
+    const prepared = await prepareSemanticReportDataset(dataset, { parameters: toReportParameters(report.parameters, values) }, values, catalogs);
     if (!prepared.compilation.ok) throw new Error(`${dataset.name}: ${prepared.compilation.diagnostics.map(item => item.message).join('\n')}`);
     run.signal.throwIfAborted();
     const table = `cupola_evidence_${report.id}_${dataset.id}`;

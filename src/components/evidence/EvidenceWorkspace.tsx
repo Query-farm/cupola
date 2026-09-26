@@ -1,19 +1,24 @@
 import { sessionCatalogs } from "@/lib/catalog-store";
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square, FileDown, MoreHorizontal } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square, FileDown, MoreHorizontal, Loader2, Check, ChevronRight } from 'lucide-react';
 import { Button, buttonVariants } from '../ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu';
 import { Input } from '../ui/input';
 import { engine, waitForEngineReady } from '../../lib/shell-bridge';
 import { compileReportQuery } from '../../lib/reports/parameters';
-import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveParameters, saveEvidenceReport, STORAGE_PREFIX, LEGACY_STORAGE_PREFIX, type EvidenceReport } from '../../lib/evidence/reports';
-import { newEvidenceReport } from '../../lib/evidence/templates';
-import { isWeatherService } from '../../lib/evidence/weather';
+import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveParameters, saveEvidenceReport, STORAGE_PREFIX, LEGACY_STORAGE_PREFIX, type EvidenceReport, type ParameterValues } from '../../lib/evidence/reports';
+import { newDrillExampleReport, newEvidenceReport } from '../../lib/evidence/templates';
+import { isWeatherService, WEATHER_TEST_SERVICE } from '../../lib/evidence/weather';
 import { quoteIdentifier } from '../../lib/evidence/data-browser';
 import type { EvidenceDataContext } from '../../lib/evidence/data-browser';
 import type { QueryLogEntry } from '../../lib/evidence/haybarn-query-service';
-import { ParameterInput } from './EvidenceParameters';
+import { ParameterInput, useParameterChoices } from './EvidenceParameters';
+import { describeParameter, resolveChoices } from '../../lib/evidence/parameter-choices';
+import { summarizeFilters } from '../../lib/evidence/filter-summary';
+import { parameterLint } from '../../lib/evidence/parameter-lint';
+import { drillState, drillValues, matchDrillValue } from '../../lib/evidence/drill';
+import { completeValuesFromUrl, PARAMETER_URL_PREFIX, valuesFromUrl, withParameterValues } from '../../lib/evidence/parameter-url';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
 import type { CatalogData } from '../../lib/service';
 import { prepareEvidenceSemanticDatasets, type SemanticDatasetState } from '../../lib/evidence/semantic-datasets';
@@ -21,10 +26,12 @@ import { EvidencePivot } from './EvidencePivot';
 import { consumeReportPromotion } from '../../lib/reports/events';
 import { useReportTheme } from './useReportTheme';
 import { EvidenceEditor } from './EvidenceEditor';
-import { EvidencePreview, type ReportRun } from './EvidencePreview';
+import { EvidencePreview, type EvidenceInputState, type PreviewDrill, type ReportRun } from './EvidencePreview';
 import { useReportPrint } from './useReportPrint';
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+/** A PDF per parameter value re-renders the report once per section; past this, it stops. */
+const MAX_PDF_SECTIONS = 25;
 const isLibraryUrl = () => (window.location.pathname.endsWith('/evidence/reports') || window.location.pathname.endsWith('/reports/saved')) || new URLSearchParams(window.location.search).get('evidence_view') === 'library';
 
 export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultToLibrary = true }: { catalogName: string; serviceUrl: string; catalogs: readonly CatalogData[]; defaultToLibrary?: boolean }) {
@@ -32,7 +39,9 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     let reports: EvidenceReport[] = [], error = '';
     try { reports = listEvidenceReports(serviceUrl); } catch (e) { error = `Could not read saved reports: ${message(e)}`; }
     const id = new URLSearchParams(window.location.search).get('evidence_report');
-    const found = reports.find(report => report.id === id);
+    const stored = reports.find(report => report.id === id);
+    // A shared link's `p.<key>` values are the view it names; they win over the saved ones.
+    const found = stored && { ...stored, values: { ...stored.values, ...valuesFromUrl(stored.parameters, new URLSearchParams(window.location.search)) } };
     const report = found ?? newEvidenceReport(serviceUrl, catalogName, isWeatherService(serviceUrl));
     return { reports, report, error, saved: found ? JSON.stringify(found) : '', library: isLibraryUrl() || (!found && (defaultToLibrary || Boolean(id))) };
   });
@@ -69,7 +78,18 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   const [busy, setBusy] = useState(false);
   const execution = useRef<EvidenceQueryRun | null>(null);
   const [pendingQueries, setPendingQueries] = useState(0);
+  const pendingRef = useRef(0);
   const refreshing = busy || pendingQueries > 0;
+  // Stop replaces Refresh in the same spot. A refresh the reader started shows Stop at once, but
+  // lazy renderer queries (a chart scrolling into view) run for a moment at any time, and a
+  // click meant for Refresh landed on Stop. Those offer Stop only once they've run for a beat.
+  const [slowQueries, setSlowQueries] = useState(false);
+  useEffect(() => {
+    if (pendingQueries === 0) { setSlowQueries(false); return; }
+    const timer = setTimeout(() => setSlowQueries(true), 400);
+    return () => clearTimeout(timer);
+  }, [pendingQueries > 0]);
+  const offerStop = busy || slowQueries;
   function stopRefresh() {
     execution.current?.stop();
     setStatus('Refresh stopped');
@@ -78,34 +98,100 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   const semanticTables = useRef(new Set<string>());
   const [semanticStates, setSemanticStates] = useState<SemanticDatasetState[]>([]);
   const [dataContext, setDataContext] = useState<EvidenceDataContext | null>(null);
+  /** Reads the rendered document's Evidence input values (for the PDF's filter summary). */
+  const readInputs = useRef<(() => EvidenceInputState[]) | null>(null);
   const [run, setRun] = useState<ReportRun | null>(null);
   const [updated, setUpdated] = useState('');
   useReportPrint(workspace, !library && Boolean(run));
-  const [exporting, setExporting] = useState(false);
+  // Export progress lives on the button: working, then "exported" for a moment.
+  const [pdfExport, setPdfExport] = useState<{ state: 'idle' } | { state: 'exporting'; progress?: string } | { state: 'done'; omitted: string[] }>({ state: 'idle' });
+  const exporting = pdfExport.state === 'exporting';
+  const pdfDoneTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(pdfDoneTimer.current), []);
+  const previewRoot = () => workspace.current?.querySelector('[data-testid="evidence-preview"]')?.shadowRoot?.querySelector('[data-markdoc-content]') ?? null;
+  /** What every PDF of this report shares: title, update time, a link back to a saved view, fonts. */
+  function pdfDocument(extraMeta: { label: string; value: string }[] = []) {
+    const view = saved && !isLibraryUrl() ? new URL(window.location.href) : null;
+    if (view) view.hash = ''; // Never carry a fragment (auth tokens, keys) into a document.
+    return {
+      title: report.title, meta: [...(updated ? [{ label: 'Updated', value: updated }] : []), ...extraMeta], fonts: reportTheme.config.fonts,
+      link: view ? { label: 'Open this view in Cupola', url: view.href } : undefined,
+      accent: reportTheme.mode === 'light' ? (reportTheme.style as Record<string, string>)['--primary'] : undefined,
+    };
+  }
+  function downloadPdf(pdf: Blob, name: string, omitted: string[]) {
+    const url = URL.createObjectURL(pdf);
+    Object.assign(document.createElement('a'), { href: url, download: name }).click();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    const skipped = [...new Set(omitted)].map(item => item.replaceAll('_', ' '));
+    setPdfExport({ state: 'done', omitted: skipped });
+    pdfDoneTimer.current = setTimeout(() => setPdfExport({ state: 'idle' }), skipped.length ? 8_000 : 4_000);
+  }
   async function exportPdf() {
-    const root = workspace.current?.querySelector('[data-testid="evidence-preview"]')?.shadowRoot?.querySelector('[data-markdoc-content]');
+    const root = previewRoot();
     if (!run || !root) return;
-    setExporting(true); setError(''); setNotice('Preparing PDF…');
+    clearTimeout(pdfDoneTimer.current); setPdfExport({ state: 'exporting' }); setError('');
     try {
       const { exportReportPdf, pdfFileName } = await import('../../lib/evidence/typst/export-pdf');
-      const meta = [
-        ...(updated ? [{ label: 'Updated', value: updated }] : []),
-        ...run.report.parameters.map(parameter => ({ label: parameter.label, value: String(run.values[parameter.key] ?? '—') })),
-      ];
-      const { pdf, omitted } = await exportReportPdf({
-        root, title: report.title, meta, fonts: reportTheme.config.fonts,
-        accent: reportTheme.mode === 'light' ? (reportTheme.style as Record<string, string>)['--primary'] : undefined,
-      });
-      const url = URL.createObjectURL(pdf);
-      const link = Object.assign(document.createElement('a'), { href: url, download: pdfFileName(report.title) });
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      const skipped = [...new Set(omitted)].map(name => name.replaceAll('_', ' '));
-      setNotice(skipped.length ? `PDF exported. Not included: ${skipped.join(', ')}.` : 'PDF exported.');
+      const filters = summarizeFilters({ parameters: run.report.parameters, values: run.values, states: choices.states, inputs: readInputs.current?.() ?? [], drill: drillSummary || undefined });
+      const { pdf, omitted } = await exportReportPdf({ ...pdfDocument(), root, filters });
+      downloadPdf(pdf, pdfFileName(report.title), omitted);
     } catch (cause) {
-      setNotice('');
+      setPdfExport({ state: 'idle' });
       setError(`PDF export failed: ${cause instanceof Error ? cause.message : String(cause)}`);
-    } finally { setExporting(false); }
+    }
+  }
+  /** Wait until a freshly refreshed report has rendered and gone quiet: a new document root,
+   *  no report queries in flight and no chart still drawing, for several checks in a row. */
+  async function settledRoot(previous: Element | null): Promise<Element> {
+    const deadline = Date.now() + 90_000;
+    let quiet = 0;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const root = previewRoot();
+      const ready = root && root !== previous && !busyRef.current && pendingRef.current === 0 && !root.querySelector('[data-echarts-ready="false"]');
+      if (!ready) { quiet = 0; continue; }
+      if (++quiet >= 5) return root;
+    }
+    throw new Error('The report did not finish loading.');
+  }
+  /** One PDF with a section per choice of a parameter. Each section is the report refreshed with
+   *  that value; the reader's draft is untouched, and the original view is restored afterwards. */
+  async function exportPdfPerValue(key: string) {
+    if (!run || busyRef.current) return;
+    const original = reportRef.current;
+    const parameter = run.report.parameters.find(item => item.key === key);
+    if (!parameter) return;
+    const all = choices.states[key]?.options ?? (parameter.options?.kind === 'static' ? parameter.options.values : []);
+    const options = all.slice(0, MAX_PDF_SECTIONS);
+    if (!options.length) { setError(`${parameter.label} has no choices to export.`); return; }
+    clearTimeout(pdfDoneTimer.current); setError('');
+    let restored = false;
+    try {
+      const { createPdfExport, pdfFileName } = await import('../../lib/evidence/typst/export-pdf');
+      const book = createPdfExport({
+        ...pdfDocument([{ label: 'Sections', value: `One per ${parameter.label} (${options.length}${all.length > options.length ? ` of ${all.length}; the first ${MAX_PDF_SECTIONS}` : ''})` }]),
+        filters: summarizeFilters({ parameters: run.report.parameters.filter(item => item.key !== key), values: run.values, states: choices.states }),
+      });
+      let previous = previewRoot();
+      for (const [index, option] of options.entries()) {
+        setPdfExport({ state: 'exporting', progress: `${index + 1} of ${options.length}` });
+        const values = { ...original.values, [key]: parameter.type === 'multi_select' ? [option.value] : option.value };
+        if (!await refresh({ ...original, values }, 'none')) throw new Error(`${parameter.label} ${option.label}: the report could not be refreshed.`);
+        const root = await settledRoot(previous);
+        await book.addSection(root, `${parameter.label}: ${option.label}`);
+        previous = root;
+      }
+      setPdfExport({ state: 'exporting', progress: 'finishing' });
+      const { pdf, omitted } = await book.finish();
+      await refresh(original, 'none'); restored = true;
+      downloadPdf(pdf, pdfFileName(`${original.title} by ${parameter.label}`), omitted);
+    } catch (cause) {
+      setPdfExport({ state: 'idle' });
+      setError(`PDF export failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      if (!restored) void refresh(original, 'none');
+    }
   }
   const [logs, setLogs] = useState<QueryLogEntry[]>([]);
   const booted = useRef(false);
@@ -143,26 +229,63 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     url.pathname = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/reports${showLibrary ? '/saved' : ''}`;
     url.searchParams.delete('evidence_view');
     url.searchParams.set('service', serviceUrl);
+    if (id !== url.searchParams.get('evidence_report')) for (const key of [...url.searchParams.keys()]) if (key.startsWith(PARAMETER_URL_PREFIX)) url.searchParams.delete(key);
     if (id) url.searchParams.set('evidence_report', id); else url.searchParams.delete('evidence_report');
     window.history[replace ? 'replaceState' : 'pushState']({}, '', url);
     setLibrary(showLibrary);
     if (showLibrary) setFocused(false);
     if (showLibrary) { setRun(null); reloadList(); }
   }
-  async function refresh(next = report) {
+  const choices = useParameterChoices(report.parameters, report.values, !library,
+    resets => setReport(current => ({ ...current, values: { ...current.values, ...resets } })));
+  /** `history`: a reader's refresh pushes an entry so Back restores the previous parameters;
+   *  opening a report replaces the current one; Back/Forward itself writes nothing. */
+  // Drill paths stand where the applied values put them; a drill applies at once.
+  const drills = run ? (run.report.drillPaths ?? []).map(path => drillState(path, run.report.parameters, run.values, choices.states)) : [];
+  function drillTo(values: ParameterValues) {
     if (busyRef.current) return;
+    const next = { ...reportRef.current, values };
+    change(next);
+    void refresh(next, 'push');
+  }
+  const previewDrill: PreviewDrill | undefined = drills.length ? {
+    match: text => drills.some(drill => drill.next && matchDrillValue(drill.next, text, choices.states) !== undefined),
+    onDrill: text => {
+      for (const drill of drills) {
+        const value = drill.next && matchDrillValue(drill.next, text, choices.states);
+        if (value === undefined || value === null) continue;
+        drillTo(drillValues(drill.path, reportRef.current.parameters, reportRef.current.values, drill.crumbs.length - 1, value));
+        return;
+      }
+    },
+    version: JSON.stringify([drills.map(drill => drill.next?.key ?? null), Object.entries(choices.states).map(([key, state]) => [key, state.status, state.options.length])]),
+  } : undefined;
+  const drillSummary = drills.map(drill => drill.crumbs.map(crumb => crumb.label).join(' › ')).join('; ');
+  // `reportRef`, not `report`: an edit made just before ⌘Enter (CodeMirror reports changes outside
+  // React events) has not re-rendered yet, and the render's `report` would refresh the old draft.
+  async function refresh(next = reportRef.current, history: 'push' | 'replace' | 'none' = 'push'): Promise<boolean> {
+    if (busyRef.current) return false;
     execution.current?.stop();
-    const current = new EvidenceQueryRun(count => { if (execution.current === current) setPendingQueries(count); });
+    const current = new EvidenceQueryRun(count => { if (execution.current === current) { pendingRef.current = count; setPendingQueries(count); } });
     execution.current = current;
     setPendingQueries(0);
     busyRef.current = true;
     setBusy(true); setSemanticStates([]); setDataContext(null); setError(''); setNotice(''); setLogs([]); setSpecIssues([]);
     try {
       if (next.serviceUrl !== serviceUrl) throw new Error('Open this report using its saved service connection.');
-      const values = resolveParameters(next);
+      resolveParameters(next);
       setStatus('Waiting for engine…');
       await current.wait(waitForEngineReady());
       current.signal.throwIfAborted();
+      // Fit every choice to its current options before binding, so a Refresh pressed
+      // mid-cascade never runs with a child value its parent no longer offers.
+      const fitted = await current.wait(resolveChoices(next.parameters, next.values, choices.loader, { signal: current.signal }));
+      const unavailable = next.parameters.find(parameter => fitted.states[parameter.key]?.status === 'error');
+      if (unavailable) {
+        const state = fitted.states[unavailable.key];
+        throw new Error(`${unavailable.label}: choices could not be loaded${state.status === 'error' ? `: ${state.error}` : ''}`);
+      }
+      const values = resolveParameters({ ...next, values: fitted.values });
       if (!engine.queryPrepared || engine.bootError) throw new Error(engine.bootError || 'Haybarn is not ready');
       // Unmount the old document before replacing its temporary datasets.
       setRun(null);
@@ -186,9 +309,15 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
       setRun({ execution: current, report: structuredClone(next), values, semanticQueries: semantic.queries, semanticStates: semantic.states, revision: ++revision.current });
       setUpdated(new Date().toLocaleTimeString());
       setStatus('Connected');
+      if (history !== 'none' && !isLibraryUrl()) {
+        const url = withParameterValues(new URL(window.location.href), next.parameters, values);
+        if (url.href !== window.location.href) window.history[history === 'push' ? 'pushState' : 'replaceState'](window.history.state, '', url);
+      }
+      return true;
     } catch (e) {
       if (current.signal.aborted) setStatus('Refresh stopped');
       else { setError(message(e)); setStatus('Refresh failed'); }
+      return false;
     }
     finally { busyRef.current = false; setBusy(false); }
   }
@@ -196,17 +325,23 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     if (!booted.current) {
       booted.current = true;
       if (initial.library) navigate(true, undefined, true);
-      else if (!initial.library && !initial.error) void refresh(initial.report);
+      else if (!initial.library && !initial.error) void refresh(initial.report, 'replace');
     }
     const changed = (event: StorageEvent) => { if (event.key === null || event.key.startsWith(STORAGE_PREFIX) || event.key.startsWith(LEGACY_STORAGE_PREFIX)) reloadList(); };
     const unload = (event: BeforeUnloadEvent) => { if (dirtyRef.current) { event.preventDefault(); event.returnValue = ''; } };
     const pop = () => {
       if (isLibraryUrl()) { setRun(null); setLibrary(true); reloadList(); return; }
       const id = new URLSearchParams(window.location.search).get('evidence_report');
-      if (!id || id === reportRef.current.id) { setLibrary(false); void refresh(reportRef.current); return; }
+      const search = new URLSearchParams(window.location.search);
+      if (!id || id === reportRef.current.id) {
+        // Back/Forward between parameter views: the URL names every value that isn't a default.
+        const restored = { ...reportRef.current, values: completeValuesFromUrl(reportRef.current.parameters, search) };
+        setReport(restored); setLibrary(false); void refresh(restored, 'none'); return;
+      }
       try {
         const found = listEvidenceReports(serviceUrl).find(item => item.id === id);
-        if (found) openReport(found, false); else { setError(''); navigate(true, undefined, true); }
+        if (found) openReport({ ...found, values: { ...found.values, ...valuesFromUrl(found.parameters, search) } }, false, false, 'none');
+        else { setError(''); navigate(true, undefined, true); }
       } catch (e) { setError(message(e)); }
     };
     window.addEventListener('storage', changed);
@@ -232,7 +367,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     openReport(next, true, true);
   }, [promotion, busy]);
 
-  function change(next: EvidenceReport) { setReport(next); setNotice(''); }
+  function change(next: EvidenceReport) { reportRef.current = next; setReport(next); setNotice(''); }
   function save(copy = false) {
     try {
       const input = copy ? { ...report, id: crypto.randomUUID(), title: `${report.title} (copy)`, createdAt: Date.now() } : report;
@@ -242,13 +377,13 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
       navigate(false, next.id, true);
     } catch (e) { setError(`Could not save report: ${message(e)}`); }
   }
-  function openReport(next: EvidenceReport, updateUrl = true, fresh = false) {
+  function openReport(next: EvidenceReport, updateUrl = true, fresh = false, history: 'replace' | 'none' = 'replace') {
     if (busyRef.current) return;
     if (next.id !== reportRef.current.id && dirtyRef.current && !window.confirm('Discard unsaved changes to the current report?')) return;
     setReport(next); setHasOpenedReport(true); setSaved(fresh ? '' : JSON.stringify(next)); baseline.current = JSON.stringify(next); setEditing(fresh); setEditorOnly(false);
     setError(''); setNotice(''); setRun(null); setUpdated(''); setLibrary(false);
     if (updateUrl) navigate(false, fresh ? undefined : next.id);
-    void refresh(next);
+    void refresh(next, history);
   }
   function copySavedReport(item: EvidenceReport) {
     try {
@@ -267,7 +402,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   const visible = reports.filter(item => `${item.title} ${item.serviceUrl}`.toLowerCase().includes(search.toLowerCase()));
   const pending = run && (run.report.source !== report.source || run.report.setupSql !== report.setupSql || JSON.stringify(run.report.parameters) !== JSON.stringify(report.parameters) || JSON.stringify(run.report.values) !== JSON.stringify(report.values) || JSON.stringify(run.report.semanticDatasets) !== JSON.stringify(report.semanticDatasets));
 
-  const issues: EvidenceIssue[] = [...specIssues, ...logs.filter(log => log.error).map(log => ({
+  const lint = useMemo(() => { try { return parameterLint(report); } catch { return []; } }, [report.parameters, report.setupSql, report.source, report.drillPaths]);
+  const issues: EvidenceIssue[] = [...lint, ...specIssues, ...logs.filter(log => log.error).map(log => ({
     message: log.error!, severity: 'error' as const, target: log.sql === report.setupSql ? 'data' as const : 'document' as const, sql: log.sql,
   }))];
 
@@ -284,7 +420,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   }}>
     <header className="z-10 flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-5 py-3">
       {library ? <><FolderOpen className="size-4 text-muted-foreground" /><h1 className="text-sm font-semibold">Saved reports</h1><span className="text-xs text-muted-foreground">{reports.length} {reports.length === 1 ? 'report' : 'reports'}</span>
-        <div className="ml-auto flex gap-2">{hasOpenedReport && <Button variant="outline" disabled={busy} onClick={() => { navigate(false, saved ? report.id : undefined); if (!run) void refresh(); }}>Back to report</Button>}<Button onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName), true, true)} disabled={busy}><Plus />New report</Button></div></>
+        <div className="ml-auto flex gap-2">{hasOpenedReport && <Button variant="outline" disabled={busy} onClick={() => { navigate(false, saved ? report.id : undefined); if (!run) void refresh(report, 'replace'); }}>Back to report</Button>}<Button onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName), true, true)} disabled={busy}><Plus />New report</Button></div></>
         : <>
           <Button variant="ghost" size="sm" className="-ml-2" onClick={() => navigate(true)}><ArrowLeft />Saved reports</Button>
           <span className="text-muted-foreground" aria-hidden>/</span>
@@ -309,13 +445,18 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
             </div>
             {/* One slot: Refresh while idle, Stop while a refresh runs. The dot says
                 edits are waiting to be applied (it replaced a "Changes not applied" banner). */}
-            {refreshing
-              ? <Button variant="outline" onClick={stopRefresh}><Square />Stop refresh</Button>
-              : <Button variant="field" aria-label={editing ? 'Update preview' : 'Refresh report'} title={`${pending ? 'Changes not applied · ' : ''}⌘ / Ctrl + Enter`} onClick={() => void refresh()}>
+            {offerStop
+              ? <Button key="stop" variant="outline" onClick={stopRefresh}><Square />Stop refresh</Button>
+              : <Button key="refresh" variant="field" aria-label={editing ? 'Update preview' : 'Refresh report'} title={`${pending ? 'Changes not applied · ' : ''}⌘ / Ctrl + Enter`} onClick={() => void refresh()}>
                   <RefreshCw />{editing ? 'Update preview' : 'Refresh report'}
                   {pending && <span role="status" aria-label="Changes not applied" className="size-2 rounded-full bg-amber-400" />}
                 </Button>}
-            {!editing && <Button variant="outline" disabled={refreshing || !run || exporting} onClick={() => void exportPdf()} title="Download the report as a typeset PDF · The selected tab of each tab group, and every table row"><FileDown />{exporting ? 'Exporting…' : 'Export PDF'}</Button>}
+            {(!editing || pdfExport.state !== 'idle') && <Button variant="outline" disabled={refreshing || !run || exporting} onClick={() => void exportPdf()} aria-live="polite"
+              title={pdfExport.state === 'done' && pdfExport.omitted.length ? `Not included: ${pdfExport.omitted.join(', ')}` : 'Download the report as a typeset PDF · The selected tab of each tab group, and every table row'}>
+              {pdfExport.state === 'exporting' ? <><Loader2 className="animate-spin" />{pdfExport.progress ? `Preparing PDF ${pdfExport.progress}…` : 'Preparing PDF…'}</>
+                : pdfExport.state === 'done' ? <><Check />PDF exported{pdfExport.omitted.length ? ` · ${pdfExport.omitted.length} not included` : ''}</>
+                : <><FileDown />Export PDF</>}
+            </Button>}
             {dirty && <Button variant="outline" disabled={busy} onClick={() => save()} title="Save in this browser · ⌘ / Ctrl + S"><Save />Save report</Button>}
             {focused
               ? <Button variant="ghost" size="icon" aria-label="Exit focus mode" title="Exit focus mode · Esc" onClick={() => { setEditorOnly(false); setFocused(false); }}><Minimize2 /></Button>
@@ -323,6 +464,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
                   <DropdownMenuTrigger aria-label="More report actions" className={buttonVariants({ variant: 'ghost', size: 'icon' })}><MoreHorizontal /></DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="min-w-44">
                     {editing && <DropdownMenuItem disabled={refreshing || !run || exporting} onClick={() => void exportPdf()}><FileDown />Export PDF</DropdownMenuItem>}
+                    {run?.report.parameters.filter(item => item.type === 'select' || item.type === 'multi_select').map(item => <DropdownMenuItem key={item.key} disabled={refreshing || exporting} onClick={() => void exportPdfPerValue(item.key)}><FileDown />PDF per {item.label.toLowerCase()}</DropdownMenuItem>)}
                     <DropdownMenuItem disabled={busy} onClick={() => save(true)}><Copy />Save a copy</DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => setFocused(true)}><Maximize2 />Focus report</DropdownMenuItem>
@@ -345,7 +487,10 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
         </td><td className="px-4 py-3 text-xs text-muted-foreground">{item.parameters.map(p => p.label).join(', ') || 'None'}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">{new Date(item.updatedAt).toLocaleString()}</td>
         <td className="px-4 py-3"><div className="flex justify-end gap-2">{item.serviceUrl === serviceUrl ? <Button variant="outline" disabled={busy} onClick={() => openReport(item)}>Open report</Button> : <a className="text-xs text-primary underline" href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/evidence?service=${encodeURIComponent(item.serviceUrl)}&evidence_report=${encodeURIComponent(item.id)}`}>Open service</a>}<Button variant="ghost" size="icon" aria-label={`Copy ${item.title}`} title="Copy report" onClick={() => copySavedReport(item)}><Copy /></Button><Button variant="ghost" size="icon" aria-label={`Delete ${item.title}`} onClick={() => remove(item)}><Trash2 /></Button></div></td>
       </tr>)}</tbody></table></div> : <div className="rounded-lg border border-dashed p-12 text-center"><FileText className="mx-auto mb-3 size-7 text-muted-foreground" /><h2 className="text-sm font-semibold">{reports.length ? 'No matching reports' : 'No saved reports yet'}</h2><p className="mt-2 text-xs text-muted-foreground">{reports.length ? 'Try a different search.' : 'Save your current report or create a new one to start your library.'}</p></div>}
-      {isWeatherService(serviceUrl) && <Button variant="outline" disabled={busy} onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName, true), true, true)}>Use weather example</Button>}
+      <div className="flex flex-wrap gap-2">
+        {isWeatherService(serviceUrl) && <Button variant="outline" disabled={busy} onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName, true), true, true)}>Use weather example</Button>}
+        {serviceUrl === WEATHER_TEST_SERVICE && <Button variant="outline" disabled={busy} onClick={() => openReport(newDrillExampleReport(serviceUrl), true, true)}>Use drilldown example</Button>}
+      </div>
     </section>
     <main hidden={library} className="min-h-0 flex-1 flex-col" style={{ display: library ? 'none' : 'flex' }}>
       <div ref={split} style={{ '--evidence-editor-width': `clamp(280px, ${editorWidth}%, calc(100% - 288px))` } as CSSProperties} className={`grid min-h-0 flex-1 ${editing && !editorOnly ? 'grid-rows-[minmax(360px,1fr)_minmax(360px,1fr)] overflow-auto lg:grid-rows-1 lg:grid-cols-[minmax(0,1fr)_8px_var(--evidence-editor-width)] lg:overflow-hidden' : 'grid-rows-1'}`}>
@@ -356,13 +501,25 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
                 <h1>{report.title}</h1>
                 <p>Current report view{updated ? ` · Updated ${updated}` : ''}</p>
                 {pending && <p>Unapplied changes are not included.</p>}
-                {run.report.parameters.length > 0 && <dl>{run.report.parameters.map(parameter => <div key={parameter.id}><dt>{parameter.label}</dt><dd>{String(run.values[parameter.key] ?? '—')}</dd></div>)}</dl>}
+                {run.report.parameters.length > 0 && <dl>{run.report.parameters.map(parameter => <div key={parameter.id}><dt>{parameter.label}</dt><dd>{describeParameter(parameter, run.values, choices.states)}</dd></div>)}</dl>}
               </div>}
               {report.parameters.length > 0 && <form className="mb-6 flex flex-wrap items-end gap-4 border-b pb-5" onSubmit={event => { event.preventDefault(); void refresh(); }} aria-label="Report inputs">
-                {report.parameters.map(parameter => <label key={parameter.id} className="min-w-32 max-w-56 space-y-1 text-xs font-medium">{parameter.label}{parameter.required && <span className="text-muted-foreground"> *</span>}<ParameterInput parameter={parameter} value={Object.hasOwn(report.values, parameter.key) ? report.values[parameter.key] : parameter.defaultValue} label={parameter.label} disabled={busy} onChange={value => change({ ...report, values: { ...report.values, [parameter.key]: value } })} /></label>)}
+                {report.parameters.map(parameter => <label key={parameter.id} className={`min-w-32 ${parameter.type === 'date_range' ? 'max-w-80' : 'max-w-56'} space-y-1 text-xs font-medium`}>{parameter.label}{parameter.required && <span className="text-muted-foreground"> *</span>}<ParameterInput parameter={parameter} value={choices.values[parameter.key] ?? null} choices={choices.states[parameter.key]} label={parameter.label} disabled={busy} onChange={value => { choices.clearNotes(); change({ ...report, values: { ...report.values, [parameter.key]: value } }); }} /></label>)}
                 <button type="submit" className="sr-only" tabIndex={-1}>Run with parameters</button>
+                {choices.notes.length > 0 && <p role="status" aria-label="Parameter changes" className="basis-full text-xs text-amber-700 dark:text-amber-400">{choices.notes.join(' ')}</p>}
               </form>}
-              {run ? <EvidencePreview reportTheme={reportTheme} run={run} onData={setDataContext} onIssues={setSpecIssues} onQuery={entry => setLogs(current => [...current.slice(-99), entry])} onError={message => { setError(message); setSpecIssues(current => [...current, { message, severity: 'error', target: 'document' }]); }} /> : <p className="py-8 text-sm text-muted-foreground" role="status">{busy ? status : 'Refresh to render this report.'}</p>}
+              {drills.map(drill => <nav key={drill.path.id} aria-label={drill.path.label ? `Drill path: ${drill.path.label}` : 'Drill path'} className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                <ol className="flex flex-wrap items-center gap-1">
+                  {drill.crumbs.map((crumb, index) => <li key={crumb.depth} className="flex items-center gap-1">
+                    {index > 0 && <ChevronRight aria-hidden className="size-3.5 text-muted-foreground" />}
+                    {index === drill.crumbs.length - 1
+                      ? <span aria-current="location" className="font-medium">{crumb.label}</span>
+                      : <button type="button" disabled={busy} className="text-primary underline-offset-2 hover:underline disabled:opacity-60" onClick={() => drillTo(drillValues(drill.path, report.parameters, report.values, crumb.depth))}>{crumb.label}</button>}
+                  </li>)}
+                </ol>
+                {drill.next && <span className="text-xs text-muted-foreground print:hidden">Click a chart bar or underlined value to drill into {drill.next.label.toLowerCase()}.</span>}
+              </nav>)}
+              {run ? <EvidencePreview reportTheme={reportTheme} run={run} drill={previewDrill} onInputs={read => { readInputs.current = read; }} onData={setDataContext} onIssues={setSpecIssues} onQuery={entry => setLogs(current => [...current.slice(-99), entry])} onError={message => { setError(message); setSpecIssues(current => [...current, { message, severity: 'error', target: 'document' }]); }} /> : <p className="py-8 text-sm text-muted-foreground" role="status">{busy ? status : 'Refresh to render this report.'}</p>}
               {dataContext && (report.pivots ?? []).map(pivot => <section key={pivot.id} className="mt-8 space-y-3" aria-label={pivot.title}>
                 <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg font-semibold">{pivot.title}</h2>{editing && <Button variant="ghost" size="sm" onClick={() => change({ ...report, pivots: report.pivots?.filter(item => item.id !== pivot.id) })}>Remove pivot</Button>}</div>
                 <EvidencePivot mode={reportTheme.mode} context={dataContext} datasetId={pivot.datasetId} config={pivot.config} onConfig={config => { if (editing) change({ ...reportRef.current, pivots: reportRef.current.pivots?.map(item => item.id === pivot.id ? { ...item, config } : item) }); }} />
@@ -391,7 +548,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
             resizeEditor(event.key === 'Home' ? 25 : event.key === 'End' ? 70 : editorWidth + (event.key === 'ArrowLeft' ? 2 : -2));
           }}
         ><span className="h-10 w-0.5 rounded-full bg-muted-foreground/40" /></div>}
-        <div style={{ display: editing ? 'contents' : 'none' }}><EvidenceEditor fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={() => refresh()} key={report.id} report={report} onChange={change} issues={issues} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => setEditorOnly(!editorOnly)} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); await refresh(next); }} /></div>
+        <div style={{ display: editing ? 'contents' : 'none' }}><EvidenceEditor parameterChoices={{ states: choices.states, values: choices.values, loader: choices.loader }} fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={async () => { await refresh(); }} key={report.id} report={report} onChange={change} issues={issues} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => setEditorOnly(!editorOnly)} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); await refresh(next); }} /></div>
       </div>
     </main>
   </div>;

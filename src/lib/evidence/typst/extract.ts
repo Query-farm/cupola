@@ -45,8 +45,9 @@ export const MAX_TABLE_ROWS = 2000;
  * queries; past the budget a table prints what it has, and its note says so. */
 export const PAGING_BUDGET_MS = 30_000;
 
-export async function extractReport(root: Element, widthPx: number, renderChart: ChartRenderer, snapshot: SnapshotRenderer): Promise<Extraction> {
-  const extractor = new Extractor(renderChart);
+/** `filePrefix` keeps several extractions' files apart when they share one PDF. */
+export async function extractReport(root: Element, widthPx: number, renderChart: ChartRenderer, snapshot: SnapshotRenderer, filePrefix = ''): Promise<Extraction> {
+  const extractor = new Extractor(renderChart, filePrefix);
   await extractor.collectPagedTables(root);
   const blocks = extractor.blocks(root, widthPx);
   await extractor.captureSnapshots(snapshot);
@@ -64,10 +65,10 @@ class Extractor {
   private pagedRows = new Map<Element, { rows: Cell[][]; total: number; capped: boolean }>();
   private snapshots: { el: HTMLElement; exclude: Element[]; width: number; block: Extract<Block, { kind: 'image' }> }[] = [];
   private count = 0;
-  constructor(private renderChart: ChartRenderer) {}
+  constructor(private renderChart: ChartRenderer, private filePrefix = '') {}
 
   private file(ext: string, content: string | Uint8Array): string {
-    const path = `/assets/${++this.count}.${ext}`;
+    const path = `/assets/${this.filePrefix}${++this.count}.${ext}`;
     this.files[path] = content;
     return path;
   }
@@ -176,7 +177,7 @@ class Extractor {
       const handling = handlingOf(render);
       const error = this.errorIn(node);
       if (error) { this.record(render, 'printed'); return [{ kind: 'text', text: error, bold: true, color: ERROR_COLOR }]; }
-      if (handling === 'input' || handling === 'omitted') { this.skip(render, node); return []; }
+      if (handling === 'input' || handling === 'filter' || handling === 'omitted') { this.skip(render, node); return []; }
       this.record(render, 'printed');
     }
     if (node.hasAttribute('_echarts_instance_')) { const graphic = this.inlineChart(node as HTMLElement); return graphic ? [graphic] : []; }
@@ -242,6 +243,8 @@ class Extractor {
 
   private skip(render: string, el: Element) {
     const handling = handlingOf(render);
+    // A filter's value is listed in the header's filter summary; only its control is left out.
+    if (handling === 'filter') { this.record(render, 'summarized'); return; }
     this.record(render, handling === 'omitted' ? 'placeholder' : 'skipped');
     const title = el.getAttribute('data-component-title');
     this.omitted.push(title && handling === 'omitted' ? `${title} (${label(render)})` : label(render));
@@ -275,7 +278,7 @@ class Extractor {
       this.record(render, 'printed');
       return [...(title ? [{ kind: 'heading' as const, level: 4, children: [{ kind: 'text' as const, text: title }] }] : []), { kind: 'error', message: error }];
     }
-    if (handling === 'input') { this.skip(render, el); return []; }
+    if (handling === 'input' || handling === 'filter') { this.skip(render, el); return []; }
     if (handling === 'omitted') { this.record(render, 'placeholder'); return this.omit(title ? `${title} (${label(render)})` : label(render)); }
     const content = this.content(el);
     // Containers (tabs, details, accordions…) hold other components' charts and
@@ -305,7 +308,8 @@ class Extractor {
       !this.hidden(child) && child.parentElement?.closest('[data-render]') === content.closest('[data-render]'));
     const printable = children.filter(child => {
       const render = child.getAttribute('data-render')!;
-      if (handlingOf(render) !== 'input') return true;
+      const handling = handlingOf(render);
+      if (handling !== 'input' && handling !== 'filter') return true;
       this.skip(render, child);
       return false;
     });

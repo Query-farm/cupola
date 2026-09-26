@@ -25,6 +25,7 @@ function sampleDocument(text = HOSTILE): ReportDocument {
   const t = (value: string) => [{ kind: 'text' as const, text: value }];
   return {
     title: text, subtitle: text, meta: [{ label: 'Updated', value: text }, { label: text, value: 'x' }],
+    filters: [{ label: text, value: text }], appendix: [{ label: text, values: [text, 'b'] }],
     theme: { heading: 'serif', body: 'sans-serif', accent: '#685442', foreground: 'rgb(20, 20, 20)', muted: 'rgba(100, 100, 100, 0.8)', border: '#ddd', paper: 'us-letter' },
     files: { '/charts/1.svg': svg, '/icons/1.svg': icon, '/shots/1.png': PNG },
     blocks: [

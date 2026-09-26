@@ -8,6 +8,10 @@ test('report setup and renderer queries can be stopped, time out, and recover on
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report', exact: true }).click({ timeout: 90_000 });
   await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
+  // The button is not a readiness signal (Refresh stays on screen for a moment while a refresh
+  // starts); wait for the engine itself.
+  await expect.poll(() => page.evaluate(() => typeof (window as any).__bridge?.query === 'function'), { timeout: 90_000 }).toBe(true);
+  await expect(panel.getByRole('status', { name: 'Report refresh status' })).toContainText('Updated', { timeout: 90_000 });
   await page.evaluate(() => { (window as any).__refreshWorker = (window as any).__bridge.worker; });
   await page.evaluate(() => (window as any).__bridge.query("CREATE TEMP TABLE __refresh_threads AS SELECT current_setting('threads') AS n"));
   const bound = await page.evaluate(async () => {

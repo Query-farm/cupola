@@ -5,11 +5,24 @@ export interface CompiledReportQuery {
   params: unknown[];
 }
 
+/** True when a parameter is unset or set to All: null, empty text, or an empty list. */
+export function isAllValue(value: ReportParameterValue | undefined): boolean {
+  return value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+}
+
+interface TransformHooks {
+  /** Called with each referenced parameter key (after `_start`/`_end`/`_all` resolution). */
+  onReference?: (key: string) => void;
+  /** Called instead of throwing for an unknown `$token`; the token is kept as written. */
+  onUnknown?: (token: string) => void;
+}
+
 function transformReportQuery(
   source: string,
   report: Pick<ReportDocumentV1, "parameters">,
   values: Record<string, ReportParameterValue>,
   renderValue: (value: unknown) => string,
+  hooks: TransformHooks = {},
 ): string {
   const byKey = new Map(report.parameters.map((p) => [p.key, p]));
   let sql = "", i = 0, quote: "string" | "identifier" | "line" | "block" | null = null;
@@ -51,14 +64,27 @@ function transformReportQuery(
         let key = token, part: "start" | "end" | null = null;
         if (token.endsWith("_start") && byKey.get(token.slice(0, -6))?.type === "date_range") { key = token.slice(0, -6); part = "start"; }
         if (token.endsWith("_end") && byKey.get(token.slice(0, -4))?.type === "date_range") { key = token.slice(0, -4); part = "end"; }
+        // `$key_all` is TRUE when `key` is unset or All, for `($key_all OR col IN ($key))`.
+        const all = !byKey.has(token) && token.endsWith("_all") && byKey.has(token.slice(0, -4));
+        if (all) key = token.slice(0, -4);
         const parameter = byKey.get(key);
-        if (!parameter) throw new Error(`Unknown report parameter $${token}`);
+        if (!parameter) {
+          if (!hooks.onUnknown) throw new Error(`Unknown report parameter $${token}`);
+          hooks.onUnknown(token);
+          sql += match[0]; i += match[0].length; continue;
+        }
+        hooks.onReference?.(key);
         const value = values[key] ?? parameter.defaultValue;
-        if (parameter.type === "multi_select") {
+        if (all) {
+          sql += renderValue(isAllValue(value));
+        } else if (parameter.type === "multi_select") {
           const list = Array.isArray(value) ? value : [];
           sql += list.length ? list.map(renderValue).join(", ") : "NULL";
         } else if (parameter.type === "date_range") {
-          if (!part) throw new Error(`Date range $${key} must be referenced as $${key}_start or $${key}_end`);
+          if (!part) {
+            if (!hooks.onUnknown) throw new Error(`Date range $${key} must be referenced as $${key}_start or $${key}_end`);
+            hooks.onUnknown(token); sql += match[0]; i += match[0].length; continue;
+          }
           const range = value && typeof value === "object" && !Array.isArray(value) ? value as { start: string | null; end: string | null } : { start: null, end: null };
           sql += renderValue(range[part]);
         } else {
@@ -84,6 +110,25 @@ export function compileReportQuery(
     return "?";
   });
   return { sql, params };
+}
+
+/** The parameters a query references, and any `$tokens` that name no parameter.
+ *  Never throws for unknown tokens, so it can drive dependency graphs and lint. */
+export function scanReportQuery(
+  source: string,
+  report: Pick<ReportDocumentV1, "parameters">,
+): { references: string[]; unknown: string[] } {
+  const references = new Set<string>();
+  const unknown = new Set<string>();
+  try {
+    transformReportQuery(source, report, {}, () => "?", {
+      onReference: (key) => references.add(key),
+      onUnknown: (token) => unknown.add(token),
+    });
+  } catch {
+    // Scanning never throws for references; anything else is the binder's to report at run time.
+  }
+  return { references: [...references], unknown: [...unknown] };
 }
 
 function sqlLiteral(value: unknown): string {

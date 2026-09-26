@@ -122,3 +122,12 @@ export async function shellQuery(
     return { ok: true, numRows: table.numRows, columns, rows };
   }, sql);
 }
+
+/** Replace all of a CodeMirror editor's text. `fill()` selects the editor's rendered DOM, and
+ *  CodeMirror renders only the lines near the viewport, so on a long document it replaced the
+ *  visible part and left the rest. CodeMirror's own select-all selects the whole document. */
+export async function replaceEditorText(editor: import("@playwright/test").Locator, text: string): Promise<void> {
+  await editor.click();
+  await editor.press("ControlOrMeta+a");
+  await editor.page().keyboard.insertText(text);
+}

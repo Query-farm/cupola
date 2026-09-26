@@ -26,7 +26,7 @@ describe('Evidence component catalog', () => {
     if (/```\w/.test(sources)) inReports.add('fence');
     if (/^\|[-:| ]+\|$/m.test(sources)) inReports.add('html_table');
     if (/\]\(https?:/.test(sources)) inReports.add('link');
-    const printable = CATALOG.filter(component => !['part', 'input'].includes(COMPONENT_HANDLING[component.render]));
+    const printable = CATALOG.filter(component => !['part', 'input', 'filter'].includes(COMPONENT_HANDLING[component.render]));
     // Structural helpers only exist inside custom components or partial files.
     const untestable = new Set(['fill', 'slot', 'partial', 'conditional', 'accordion_body_slot']);
     expect(printable.map(c => c.render).filter(render => !inReports.has(render) && !untestable.has(render))).toEqual([]);

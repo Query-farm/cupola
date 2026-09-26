@@ -14,10 +14,11 @@ import { EVIDENCE_AGENT_PROMPT, EVIDENCE_AGENT_TOOLS, createReportProposal, appl
 import { componentReference } from '../../lib/evidence/agent-reference';
 import type { CatalogData } from '../../lib/service';
 import { sourceQueries } from '../../lib/evidence/source-queries';
-import { normalizeAIQueryMode, toolsForAIQueryMode, aiQueryModePrompt } from '../../lib/ai/query-mode';
+import { normalizeAIQueryMode, toolsForAIQueryMode, aiQueryModePrompt, deniedAIQueryToolResult } from '../../lib/ai/query-mode';
 import { executeReportDataTool } from '../../lib/evidence/agent-data-tools';
 import { QueryResultCache } from '../../lib/query-results';
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
+import { ParameterChoicesLoader, previewParameterOptions } from '../../lib/evidence/parameter-choices';
 import { waitForEngineReady, ui } from '../../lib/shell-bridge';
 import type { EvidenceReport } from '../../lib/evidence/reports';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
@@ -25,7 +26,7 @@ import type { EvidenceIssue } from '../../lib/evidence/editor-support';
 type ProposalState = 'pending' | 'applied' | 'discarded' | 'superseded' | 'undone' | 'stopped';
 type Message = { id: string; role: 'user' | 'assistant'; text: string; proposal?: ReportProposal; state?: ProposalState; blocks?: ContentBlock[] };
 const uid = () => crypto.randomUUID();
-const fieldLabel = { title: 'Title', source: 'Document', setupSql: 'Dataset SQL', parameters: 'Parameters', values: 'Input values', appearance: 'Appearance', semanticDatasets: 'Semantic datasets', pivots: 'Pivot views' };
+const fieldLabel = { title: 'Title', source: 'Document', setupSql: 'Dataset SQL', parameters: 'Parameters', values: 'Input values', drillPaths: 'Drill paths', appearance: 'Appearance', semanticDatasets: 'Semantic datasets', pivots: 'Pivot views' };
 const printable = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview, previewBusy, catalogs }: { catalogs: readonly CatalogData[]; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
   const { settings } = useSettings();
@@ -47,6 +48,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
   const [applying, setApplying] = useState(false);
   const history = useRef<MessageParam[]>([]);
   const resultCache = useRef(new QueryResultCache());
+  const choicesLoader = useRef(new ParameterChoicesLoader());
   const abort = useRef<AbortController | null>(null);
   const activeMessage = useRef<string | null>(null);
   const latest = useRef(report); latest.current = report;
@@ -111,6 +113,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
             const dataResult = await executeReportDataTool(name, input, catalogs, { query, queryPrepared: query, resultCache: resultCache.current }, queryMode);
             if (dataResult !== undefined) return dataResult;
             if (name === 'get_report') return JSON.stringify(context);
+            if (name === 'preview_parameter_options') return deniedAIQueryToolResult(name, queryMode) ?? await previewParameterOptions(snapshot, input, choicesLoader.current);
             if (name === 'list_components') return JSON.stringify(await componentReference());
             if (name === 'get_component') {
               if (typeof input?.name !== 'string') throw new Error('Component name is required.');

@@ -1,27 +1,36 @@
 import { compilePdf } from './compiler';
 import { emitTypst } from './emit';
 import { extractReport } from './extract';
-import { contentWidthPx, defaultPaper, dropRepeatedTitle, type PdfFont, type PdfTheme } from './model';
+import { contentWidthPx, defaultPaper, dropRepeatedTitle, type Block, type PdfFont, type PdfTheme } from './model';
 import { loadChartRenderer } from './charts';
 import { loadPdfFonts, loadTypstCompiler } from './load-compiler';
 import { loadSnapshotRenderer } from './snapshot';
 import type { CoverageEntry } from './components';
+import type { FilterSummary } from '../filter-summary';
 
-export interface PdfExportRequest {
-  /** The rendered report: Evidence's `[data-markdoc-content]` root. */
-  root: Element;
+export interface PdfDocumentRequest {
   title: string;
   meta: { label: string; value: string }[];
+  /** Parameters and inputs in effect, for the header's Filters section. */
+  filters?: FilterSummary;
+  /** A link back to the view, printed under the header metadata. */
+  link?: { label: string; url: string };
   fonts: { heading: string; body: string };
   /** The report's accent color, when it suits white paper. */
   accent?: string;
+}
+export interface PdfExportRequest extends PdfDocumentRequest {
+  /** The rendered report: Evidence's `[data-markdoc-content]` root. */
+  root: Element;
 }
 
 export interface PdfExportResult { pdf: Blob; omitted: string[]; coverage: CoverageEntry[] }
 
 const font = (value: string): PdfFont => value === 'serif' || value === 'mono' ? value : 'sans-serif';
 
-export async function exportReportPdf(request: PdfExportRequest): Promise<PdfExportResult> {
+/** A PDF built from one or more rendered reports: each `addSection` reads the report as it is
+ *  on screen now, so a caller can re-render between sections (one section per parameter value). */
+export function createPdfExport(request: PdfDocumentRequest) {
   // Start the heavy download while the DOM is read.
   const compiler = loadTypstCompiler();
   const theme: PdfTheme = {
@@ -30,14 +39,41 @@ export async function exportReportPdf(request: PdfExportRequest): Promise<PdfExp
     accent: request.accent ?? '#685442', foreground: '#1f1d1a', muted: '#6b6b5a', border: '#dcd7ca',
     paper: defaultPaper(navigator.language),
   };
-  const [chartRenderer, snapshotRenderer] = await Promise.all([loadChartRenderer(), loadPdfFonts().then(loadSnapshotRenderer)]);
-  const extraction = await extractReport(request.root, contentWidthPx(theme.paper), chartRenderer, snapshotRenderer);
-  const { main, files } = emitTypst({ title: request.title, meta: request.meta, theme, blocks: dropRepeatedTitle(extraction.blocks, request.title), files: extraction.files });
-  // `window.__cupolaPdfDebug = true` keeps the last export's Typst source and files for inspection.
-  const debug = window as { __cupolaPdfDebug?: unknown };
-  if (debug.__cupolaPdfDebug) debug.__cupolaPdfDebug = { main, files, coverage: extraction.coverage };
-  const bytes = await compilePdf(await compiler, main, files);
-  return { pdf: new Blob([bytes as BlobPart], { type: 'application/pdf' }), omitted: extraction.omitted, coverage: extraction.coverage };
+  const renderers = Promise.all([loadChartRenderer(), loadPdfFonts().then(loadSnapshotRenderer)]);
+  const blocks: Block[] = [];
+  const files: Record<string, string | Uint8Array> = {};
+  const omitted: string[] = [];
+  const coverage: CoverageEntry[] = [];
+  let sections = 0;
+  return {
+    async addSection(root: Element, heading?: string) {
+      const [chartRenderer, snapshotRenderer] = await renderers;
+      const extraction = await extractReport(root, contentWidthPx(theme.paper), chartRenderer, snapshotRenderer, sections ? `s${sections}-` : '');
+      if (heading) {
+        if (sections) blocks.push({ kind: 'pagebreak' });
+        blocks.push({ kind: 'heading', level: 1, children: [{ kind: 'text', text: heading }] });
+      }
+      blocks.push(...dropRepeatedTitle(extraction.blocks, request.title));
+      Object.assign(files, extraction.files);
+      omitted.push(...extraction.omitted);
+      coverage.push(...extraction.coverage);
+      sections++;
+    },
+    async finish(): Promise<PdfExportResult> {
+      const { main, files: all } = emitTypst({ title: request.title, meta: request.meta, filters: request.filters?.filters, appendix: request.filters?.appendix, link: request.link, theme, blocks, files });
+      // `window.__cupolaPdfDebug = true` keeps the last export's Typst source and files for inspection.
+      const debug = window as { __cupolaPdfDebug?: unknown };
+      if (debug.__cupolaPdfDebug) debug.__cupolaPdfDebug = { main, files: all, coverage };
+      const bytes = await compilePdf(await compiler, main, all);
+      return { pdf: new Blob([bytes as BlobPart], { type: 'application/pdf' }), omitted, coverage };
+    },
+  };
+}
+
+export async function exportReportPdf(request: PdfExportRequest): Promise<PdfExportResult> {
+  const pdf = createPdfExport(request);
+  await pdf.addSection(request.root);
+  return pdf.finish();
 }
 
 /** A filesystem-safe name derived from the report title. */

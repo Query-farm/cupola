@@ -21,7 +21,11 @@
   import type { HaybarnQueryService } from '../../lib/evidence/haybarn-query-service';
   import { validationIssues, type EvidenceIssue } from '../../lib/evidence/editor-support';
 
-  let props: { semanticQueries: Record<string, string>; semanticStates: SemanticDatasetState[]; themeConfig: Readable<ThemeConfig>; markdown: string; service: HaybarnQueryService; onIssues: (issues: EvidenceIssue[]) => void; onData: (context: EvidenceDataContext) => void; onError: (message: string) => void } = $props();
+  /** A report parameter offered to Evidence as a filter: `filters=["id"]` compares `column`. */
+  type ParameterFilter = { id: string; value: unknown; column?: string };
+  /** An Evidence input's current value, for the PDF's filter summary. */
+  type InputState = { id: string; component: string; value: unknown; title?: string };
+  let props: { semanticQueries: Record<string, string>; semanticStates: SemanticDatasetState[]; themeConfig: Readable<ThemeConfig>; markdown: string; service: HaybarnQueryService; parameterFilters?: ParameterFilter[]; onIssues: (issues: EvidenceIssue[]) => void; onData: (context: EvidenceDataContext) => void; onError: (message: string) => void; onInputs?: (read: () => InputState[]) => void } = $props();
   const { markdown, service, semanticQueries, semanticStates } = untrack(() => props);
   const { themeConfig } = untrack(() => props);
   const theme = setThemeContext(untrack(() => $themeConfig));
@@ -39,6 +43,19 @@
     url: () => new URL(window.location.href),
     updateUrl: (url) => window.history.replaceState(window.history.state, '', url.toString()),
   });
+  // Report parameters join Evidence's filters before the document is processed, so its
+  // validation sees them and components can filter on them. setDefault never writes the URL:
+  // parameters keep their own `p.` params, and the document is rebuilt on every refresh.
+  for (const parameter of untrack(() => props.parameterFilters) ?? []) {
+    const filter = filters.createExternal(parameter.id, parameter.value ?? undefined, parameter.column);
+    filter.setDefault(parameter.value ?? undefined);
+  }
+  // Input titles by id, from the processed document (the rendered DOM doesn't link the two).
+  const inputTitles = new Map<string, string>();
+  untrack(() => props.onInputs)?.(() => filters.componentFilterIds.map(id => {
+    const filter = filters.get(id);
+    return { id, component: filter?.userComponentName ?? '', value: filter?.value, title: inputTitles.get(id) };
+  }));
   const inlineQueries = createInlineQueriesContext({ filterContexts: [filters] }, undefined, semanticQueries);
   const inlineQueryMetadata = new InlineQueryMetadata(service, { inlineQueries, pageFilters: filters });
   setInlineQueryMetadataContext(inlineQueryMetadata);
@@ -49,6 +66,10 @@
     dialect: service.dialect, trees: undefined,
   };
   const processed = processMarkdown(markdown, validationContext);
+  for (const node of processed.ast.walk()) {
+    const { id, title } = node.attributes ?? {};
+    if (node.type === 'tag' && typeof id === 'string') inputTitles.set(id, typeof title === 'string' ? title : '');
+  }
   // Transform registers named SQL queries; validate their references only after registration.
   const checkedErrors = validate(processed.ast, validationContext);
   $effect(() => { inlineQueryMetadata.loadAllDebounced(); });
