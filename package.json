@@ -2,7 +2,7 @@
   "name": "@query-farm/cupola",
   "private": true,
   "type": "module",
-  "version": "0.4.175",
+  "version": "0.4.176",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.12.0"
@@ -40,6 +40,8 @@
     "@codemirror/view": "^6.43.1",
     "@evidence/core": "./vendor/evidence-core-c770bf8.tgz",
     "@haybarn/haybarn-wasm": "1.5.5-rc6",
+    "@myriaddreamin/typst-ts-web-compiler": "0.7.0",
+    "@myriaddreamin/typst.ts": "0.7.0",
     "@query-farm/apache-arrow": "21.1.1",
     "@query-farm/vgi-rpc": "0.25.4",
     "@radix-ui/react-accordion": "^1.2.12",
@@ -56,6 +58,7 @@
     "cli-table3": "^0.6.5",
     "clsx": "^2.1.1",
     "highlight.js": "^11.12.0",
+    "html-to-image": "1.11.13",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.7.0",
     "patch-package": "^8.0.1",
@@ -86,6 +89,10 @@
     "@types/bun": "^1.3.14",
     "@types/leaflet": "^1.9.21",
     "happy-dom": "^20.9.0",
+    "pdfjs-dist": "4.10.38",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "maplibre-gl": "6.4.1"
   }
 }

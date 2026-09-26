@@ -1,0 +1,1939 @@
+[
+ {
+  "render": "accordion",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": []
+ },
+ {
+  "render": "accordion_body_slot",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": []
+ },
+ {
+  "render": "accordion_item",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Accordion with Items",
+    "source": "{% accordion %}\n    {% accordion_item title=\"Section 1\" open=true %}\n        Content for section 1.\n    {% /accordion_item %}\n    {% accordion_item title=\"Section 2\" %}\n        Content for section 2.\n    {% /accordion_item %}\n    {% accordion_item title=\"Section 3\" icon=\"settings\" %}\n        Content for section 3 with an icon.\n    {% /accordion_item %}\n{% /accordion %}"
+   }
+  ]
+ },
+ {
+  "render": "accordion_title",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Accordion item with a big_value in the title",
+    "source": "{% accordion %}\n    {% accordion_item %}\n        {% accordion_title padding_top=8 padding_bottom=8 %}\n            {% big_value data=\"orders\" value=\"sum(sales)\" fmt=\"usd\" /%}\n        {% /accordion_title %}\n        Body content for this section.\n    {% /accordion_item %}\n{% /accordion %}",
+    "skip": "reads data it does not define (orders)"
+   }
+  ]
+ },
+ {
+  "render": "area",
+  "category": "chart_slot",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Area Series",
+    "source": "{% combo_chart data=\"demo.daily_orders\" x=\"date\" date_grain=\"month\" %}\n    {% area y=\"sum(total_sales)\" /%}\n{% /combo_chart %}"
+   },
+   {
+    "title": "Unstacked Areas",
+    "source": "{% combo_chart data=\"demo.daily_orders\" x=\"date\" date_grain=\"month\" %}\n    {% area y=\"sum(total_sales)\" series=\"category\" stacked=false /%}\n{% /combo_chart %}"
+   },
+   {
+    "title": "Area with Gradient Fill",
+    "source": "{% combo_chart data=\"demo.daily_orders\" x=\"date\" date_grain=\"month\" %}\n    {% area y=\"sum(total_sales)\" stacked=false options={\n        gradient=true\n    } /%}\n{% /combo_chart %}"
+   }
+  ]
+ },
+ {
+  "render": "area_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% area_chart\n\tdata=\"demo.daily_orders\"\n\tx=\"date\"\n\ty=\"sum(total_sales)\"\n\tdate_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "Area Chart with Series",
+    "source": "{% area_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    series=\"category\"\n    date_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "Area Chart with Formatting",
+    "source": "{% area_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    title=\"Sales Over Time\"\n    subtitle=\"Monthly sales performance\"\n    date_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "100% Stacked Area Chart",
+    "source": "{% area_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    series=\"category\"\n    stacked=\"100%\"\n    date_grain=\"month\"\n    title=\"Sales Distribution by Category\"\n/%}"
+   },
+   {
+    "title": "Revenue by Day of Week",
+    "source": "{% area_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"day of week\"\n    title=\"Revenue by Day of Week\"\n    subtitle=\"Weekday vs weekend sales patterns\"\n/%}"
+   },
+   {
+    "title": "Seasonality Analysis (Month of Year)",
+    "source": "{% area_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"month of year\"\n    title=\"Seasonality Analysis\"\n    subtitle=\"Sales patterns across months\"\n/%}"
+   },
+   {
+    "title": "Quarterly Trends",
+    "source": "{% area_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"quarter of year\"\n    title=\"Quarterly Performance\"\n    subtitle=\"Q1 through Q4 comparison\"\n/%}"
+   },
+   {
+    "title": "Monthly Billing Cycle Patterns",
+    "source": "{% area_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"day of month\"\n    title=\"Daily Revenue by Day of Month\"\n    subtitle=\"Identify billing cycle patterns\"\n/%}"
+   },
+   {
+    "title": "Week Number Analysis",
+    "source": "{% area_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"week of year\"\n    title=\"Revenue by Week of Year\"\n    subtitle=\"Weekly performance across the year\"\n/%}"
+   },
+   {
+    "title": "Day of Year Analysis",
+    "source": "{% area_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"day of year\"\n    title=\"Revenue by Day of Year\"\n    subtitle=\"Identify patterns across 365 days\"\n/%}"
+   },
+   {
+    "title": "Area Chart with Gradient Fill",
+    "source": "{% area_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"month\"\n    stacked=false\n    area_options={\n        gradient=true\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "area_layer",
+  "category": "map_slot",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "US States by Name",
+    "source": "{% map %}\n    {% area_layer\n        geography=\"us_states\"\n        match_by=\"name\"\n        data=\"state_sales\"\n        area_id=\"state\"\n        value=\"sum(sales)\"\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (state_sales)"
+   },
+   {
+    "title": "US States by Abbreviation",
+    "source": "{% map %}\n    {% area_layer\n        geography=\"us_states\"\n        match_by=\"abbr\"\n        data=\"state_sales\"\n        area_id=\"state_abbr\"\n        value=\"sum(sales)\"\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (state_sales)"
+   },
+   {
+    "title": "US Counties by State + County",
+    "source": "{% map %}\n    {% area_layer\n        geography=\"us_counties\"\n        match_by=\"state-county\"\n        data=\"county_sales\"\n        area_id=\"state || '-' || county\"\n        value=\"sum(sales)\"\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (county_sales)"
+   },
+   {
+    "title": "US Counties by FIPS",
+    "source": "{% map %}\n    {% area_layer\n        geography=\"us_counties\"\n        match_by=\"fips\"\n        data=\"county_sales\"\n        area_id=\"state_fips || county_fips\"\n        value=\"sum(sales)\"\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (county_sales)"
+   },
+   {
+    "title": "Custom GeoJSON",
+    "source": "{% area_layer\n    geojson_url=\"https://example.com/custom.geojson\"\n    geojson_id=\"id\"\n    data=\"my_data\"\n    area_id=\"region_id\"\n    value=\"sum(sales)\"\n/%}",
+    "skip": "reads data it does not define (my_data)"
+   },
+   {
+    "title": "Diverging Scale Centered at 0",
+    "source": "{% map %}\n    {% area_layer\n        geography=\"us_states\"\n        match_by=\"abbr\"\n        data=\"state_growth\"\n        area_id=\"state_abbr\"\n        value=\"growth_pct\"\n        color_scale=[\"#d73027\", \"#ffffbf\", \"#1a9850\"]\n        min=-100\n        max=100\n        midpoint=0\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (state_growth)"
+   },
+   {
+    "title": "Custom Breakpoints",
+    "source": "{% map %}\n    {% area_layer\n        geography=\"us_states\"\n        match_by=\"abbr\"\n        data=\"state_sales\"\n        area_id=\"state_abbr\"\n        value=\"sum(sales)\"\n        color_stops=[\n            { value=0 color=\"#ffffff\" },\n            { value=10000 color=\"#f59e0b\" },\n            { value=50000 color=\"#1a9850\" }\n        ]\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (state_sales)"
+   }
+  ]
+ },
+ {
+  "render": "audio",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Audio Player",
+    "source": "{% audio url=\"https://files.example.com/podcast/episode-01.mp3\" /%}"
+   },
+   {
+    "title": "WAV File with Title",
+    "source": "{% audio url=\"https://files.example.com/recordings/call.wav\" type=\"wav\" title=\"Call Recording\" /%}"
+   }
+  ]
+ },
+ {
+  "render": "bar",
+  "category": "chart_slot",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Bar Series",
+    "source": "{% combo_chart data=\"demo.daily_orders\" x=\"date\" date_grain=\"month\" %}\n    {% bar y=\"sum(total_sales)\" /%}\n{% /combo_chart %}"
+   },
+   {
+    "title": "Unstacked Bars",
+    "source": "{% combo_chart data=\"demo.daily_orders\" x=\"date\" date_grain=\"month\" %}\n    {% bar y=\"sum(total_sales)\" series=\"category\" stacked=false /%}\n{% /combo_chart %}"
+   },
+   {
+    "title": "Multiple Stacks",
+    "source": "{% combo_chart data=\"demo.daily_orders\" x=\"date\" date_grain=\"month\" %}\n    {% bar y=\"sum(total_sales)\" stack_id=\"sales\" /%}\n    {% bar y=\"sum(total_sales)+1000000\" stack_id=\"sales\" /%}\n    {% bar y=\"sum(quantity)\" stack_id=\"quantity\" /%}\n{% /combo_chart %}"
+   },
+   {
+    "title": "Extra tooltip fields",
+    "source": "<!-- tooltip_fields adds extra rows to this series' tooltip on hover, using the same GROUP BY / filters / date range as the primary y. color_by_sign paints positives green and negatives red; down_is_good flips that mapping. -->\n{% combo_chart data=\"demo.daily_orders\" x=\"date\" date_grain=\"month\" %}\n    {% bar\n        y=\"sum(total_sales)\"\n        fmt=\"usd\"\n        tooltip_fields=[\n            { value=\"count(distinct order_id)\" label=\"Orders\" },\n            { value=\"sum(total_sales) - lag(sum(total_sales)) over (order by date_trunc('month', date))\" label=\"MoM Δ\" fmt=\"usd\" color_by_sign=true }\n        ]\n    /%}\n{% /combo_chart %}",
+    "skip": "fails in Evidence itself: nests a window function inside an aggregate, which DuckDB rejects"
+   }
+  ]
+ },
+ {
+  "render": "bar_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% bar_chart\n\tdata=\"demo.daily_orders\"\n\tx=\"category\"\n\ty=\"sum(total_sales)\"\n/%}"
+   },
+   {
+    "title": "Bar Chart with Date Grain",
+    "source": "{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "Sorting by Value",
+    "source": "{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"category\"\n    y=\"sum(total_sales)\"\n    order=\"sum(total_sales) desc\"\n/%}"
+   },
+   {
+    "title": "Custom Category Order",
+    "source": "{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"category\"\n    y=\"sum(total_sales)\"\n    x_sort=[\"Clothing\", \"Home\", \"Sports\", \"Electronics\"]\n/%}"
+   },
+   {
+    "title": "Bar Chart with Series Colors",
+    "source": "{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"category\"\n    y=\"sum(total_sales)\"\n    series=\"case when sum(total_sales) > 7000 then '>$7k' when sum(total_sales) > 3500 then '>$3.5k' else '<$3.5k' end\"\n    title=\"Sales by Category and Performance\"\n    chart_options={\n        series_colors={\n            \">$7k\"=\"#22c55e\"\n            \">$3.5k\"=\"#f59e0b\"\n            \"<$3.5k\"=\"#ef4444\"\n        }\n    }\n/%}"
+   },
+   {
+    "title": "100% Stacked Bar Chart",
+    "source": "{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    series=\"category\"\n    stacked=\"100%\"\n    date_grain=\"month\"\n    title=\"Sales Distribution by Category\"\n/%}"
+   },
+   {
+    "title": "Revenue by Day of Week",
+    "source": "{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"day of week\"\n    title=\"Revenue by Day of Week\"\n    subtitle=\"Weekday vs weekend sales patterns\"\n/%}"
+   },
+   {
+    "title": "Seasonality Analysis (Month of Year)",
+    "source": "{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"month of year\"\n    title=\"Seasonality Analysis\"\n    subtitle=\"Sales patterns across months\"\n/%}"
+   },
+   {
+    "title": "Quarterly Trends",
+    "source": "{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"quarter of year\"\n    title=\"Quarterly Performance\"\n    subtitle=\"Q1 through Q4 comparison\"\n/%}"
+   },
+   {
+    "title": "Monthly Billing Cycle Patterns",
+    "source": "{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"day of month\"\n    title=\"Daily Revenue by Day of Month\"\n    subtitle=\"Identify billing cycle patterns\"\n/%}"
+   },
+   {
+    "title": "Week Number Analysis",
+    "source": "{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"week of year\"\n    title=\"Revenue by Week of Year\"\n    subtitle=\"Weekly performance across the year\"\n/%}"
+   },
+   {
+    "title": "Day of Year Analysis",
+    "source": "{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"day of year\"\n    title=\"Revenue by Day of Year\"\n    subtitle=\"Identify patterns across 365 days\"\n/%}"
+   },
+   {
+    "title": "Extra tooltip fields",
+    "source": "<!-- tooltip_fields adds extra rows to the tooltip on hover, using the same GROUP BY / filters / date range as the chart's primary y. color_by_sign paints positives green and negatives red; add down_is_good=true to flip that mapping. -->\n{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"month\"\n    tooltip_fields=[\n        { value=\"count(distinct order_id)\" label=\"Orders\" },\n        { value=\"sum(total_sales) / nullif(count(distinct order_id), 0)\" label=\"Avg order\" fmt=\"usd\" }\n    ]\n/%}"
+   },
+   {
+    "title": "Raw ECharts overrides (rounded bars, background track)",
+    "source": "{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"category\"\n    y=\"sum(total_sales)\"\n    echarts_series_options={\n        itemStyle={ borderRadius=[6, 6, 0, 0] }\n        showBackground=true\n        backgroundStyle={ color=\"rgba(0,0,0,0.04)\" }\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "benchmark_comparison",
+  "category": "input",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "Compare vs Franchisees",
+    "source": "{% benchmark_comparison \n    name=\"vs Franchisees\" \n    agg=\"avg\" \n    subject=\"store_id\"\n    where=\"ownership_type = 'franchise'\"\n/%}"
+   },
+   {
+    "title": "Compare vs Full Network",
+    "source": "{% benchmark_comparison \n    name=\"vs Full Network\" \n    agg=\"avg\" \n    subject=\"store_id\"\n/%}"
+   },
+   {
+    "title": "Compare vs Region Average",
+    "source": "{% benchmark_comparison \n    name=\"vs Region Avg\" \n    agg=\"avg\" \n    subject=\"store_id\"\n    within=[\"region\"]\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "big_value",
+  "category": "value",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% big_value\n  data=\"demo.daily_orders\"\n  value=\"sum(total_sales)\"\n  fmt=\"usd1m\"\n/%}"
+   },
+   {
+    "title": "Comparison",
+    "source": "{% big_value\n\tdata=\"demo.daily_orders\"\n\tvalue=\"sum(total_sales)\"\n\tfmt=\"usd1m\"\n\tdate_range={\n\t\tdate=\"date\"\n\t\trange=\"last 12 months\"\n\t}\n\tcomparison={\n\t\tcompare_vs=\"prior year\"\n\t}\n/%}"
+   },
+   {
+    "title": "Sparkline",
+    "source": "{% big_value\n\tdata=\"demo.daily_orders\"\n\tvalue=\"sum(total_sales)\"\n\tfmt=\"usd1m\"\n\tsparkline={\n\t\ttype=\"line\"\n\t\tx=\"date\"\n\t}\n/%}"
+   },
+   {
+    "title": "Text Size",
+    "source": "{% big_value\n\tdata=\"demo.daily_orders\"\n\tvalue=\"sum(total_sales)\"\n\tfmt=\"usd1m\"\n\ttext_size=\"4xl\"\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "bubble",
+  "category": "chart_slot",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Bubble Series",
+    "source": "{% combo_chart data=\"demo.daily_orders\" x=\"date\" date_grain=\"month\" %}\n    {% bubble\n        y=\"avg(avg_transaction_value)\"\n        size=\"sum(transactions)\"\n    /%}\n{% /combo_chart %}"
+   }
+  ]
+ },
+ {
+  "render": "bubble_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% bubble_chart\n    data=\"demo.daily_orders\"\n    x=\"sum(total_sales)\"\n    y=\"avg(avg_transaction_value)\"\n    size=\"sum(transactions)\"\n    series=\"category\"\n/%}"
+   },
+   {
+    "title": "Bubble Chart with Formatting",
+    "source": "{% bubble_chart\n    data=\"demo.daily_orders\"\n    x=\"sum(total_sales)\"\n    y=\"avg(avg_transaction_value)\"\n    size=\"sum(transactions)\"\n    x_fmt=\"usd\"\n    y_fmt=\"usd\"\n    title=\"Sales Performance Analysis\"\n    subtitle=\"Bubble size represents transaction count\"\n    series=\"category\"\n/%}"
+   },
+   {
+    "title": "Bubble Chart with Point Titles",
+    "source": "{% bubble_chart\n    data=\"demo.daily_orders\"\n    x=\"sum(total_sales)\"\n    y=\"avg(avg_transaction_value)\"\n    size=\"sum(transactions)\"\n    point_title=\"category\"\n    x_fmt=\"usd\"\n    y_fmt=\"usd\"\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "button_group",
+  "category": "input",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Using `filters`",
+    "source": "{% button_group\n    id=\"category_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"category\"\n/%}\n\n{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    filters=[\"category_filter\"]\n    date_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "Using `where`",
+    "source": "{% button_group\n    id=\"category_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"category\"\n/%}\n\n{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    where=\"category = {{category_filter}}\"\n    date_grain=\"month\"\n/%}",
+    "skip": "fails in Evidence itself: filters on an input with no default selection, so the SQL reads `category = )`"
+   },
+   {
+    "title": "Using Inline SQL",
+    "source": "{% button_group\n    id=\"category_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"category\"\n/%}\n\n```sql filtered_orders\nselect * from demo.daily_orders\nwhere category = {{category_filter}}\n```\n\n{% table data=\"filtered_orders\" /%}",
+    "skip": "fails in Evidence itself: filters on an input with no default selection, so the SQL is incomplete"
+   },
+   {
+    "title": "Vertical orientation inside a row",
+    "source": "{% row %}\n\n{% button_group\n    id=\"category_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"category\"\n    orientation=\"vertical\"\n/%}\n\n{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    filters=[\"category_filter\"]\n    date_grain=\"month\"\n/%}\n\n{% /row %}"
+   }
+  ]
+ },
+ {
+  "render": "calendar_heatmap",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% calendar_heatmap\n    data=\"demo.daily_orders\"\n    date=\"date\"\n    value=\"sum(total_sales)\"\n/%}"
+   },
+   {
+    "title": "Calendar Heatmap with Custom Colors",
+    "source": "{% calendar_heatmap\n    data=\"demo.daily_orders\"\n    date=\"date\"\n    value=\"sum(total_sales)\"\n    title=\"Daily Sales Heatmap\"\n    chart_options={\n        color_scale = [\"#0d0887\", \"#6300a7\", \"#a62098\", \"#d5546e\", \"#f68d45\", \"#fcd225\", \"#f0f921\"]\n    }\n/%}"
+   },
+   {
+    "title": "Calendar Heatmap with Conditional Colors",
+    "source": "{% calendar_heatmap\n    data=\"demo.daily_orders\"\n    date=\"date\"\n    value=\"sum(total_sales)\"\n    title=\"Sales Performance Heatmap\"\n    chart_options={\n        conditional_colors = \"case when sum(total_sales) > 65000 then '#22c55e' when sum(total_sales) > 40000 then '#f59e0b' else '#ef4444' end\"\n    }\n/%}"
+   },
+   {
+    "title": "Calendar Heatmap with Conditional Colors and Legend",
+    "source": "{% calendar_heatmap\n    data=\"demo.daily_orders\"\n    date=\"date\"\n    value=\"sum(total_sales)\"\n    title=\"Sales Performance Heatmap\"\n    chart_options={\n        conditional_colors=\"case when sum(total_sales) > 65000 then '#22c55e' when sum(total_sales) > 40000 then '#f59e0b' else '#ef4444' end\"\n        color_map={\n            \"#22c55e\"=\"High Sales\"\n            \"#f59e0b\"=\"Medium Sales\"\n            \"#ef4444\"=\"Low Sales\"\n        }\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "callout",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% callout type=\"info\" title=\"Report Info\"%}\nThis is an info callout\n{% /callout %}"
+   }
+  ]
+ },
+ {
+  "render": "candlestick",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "```sql stock_prices\nSELECT '2024-01-01'::date as date, 100.0 as open, 105.0 as high, 95.0 as low, 102.0 as close\nUNION ALL SELECT '2024-01-02'::date, 102.0, 108.0, 100.0, 105.0\nUNION ALL SELECT '2024-01-03'::date, 105.0, 110.0, 103.0, 108.0\nUNION ALL SELECT '2024-01-04'::date, 108.0, 112.0, 106.0, 104.0\nUNION ALL SELECT '2024-01-05'::date, 104.0, 107.0, 98.0, 100.0\n```\n\n{% candlestick\n    data=\"stock_prices\"\n    x=\"date\"\n    open=\"open\"\n    high=\"high\"\n    low=\"low\"\n    close=\"close\"\n    y_axis_options={\n        min=90\n        max=115\n    }\n/%}"
+   },
+   {
+    "title": "With Volume",
+    "source": "```sql stock_prices\nSELECT '2024-01-01'::date as date, 100.0 as open, 105.0 as high, 95.0 as low, 102.0 as close, 1500000 as volume\nUNION ALL SELECT '2024-01-02'::date, 102.0, 108.0, 100.0, 105.0, 2100000\nUNION ALL SELECT '2024-01-03'::date, 105.0, 110.0, 103.0, 108.0, 1800000\nUNION ALL SELECT '2024-01-04'::date, 108.0, 112.0, 106.0, 104.0, 2500000\nUNION ALL SELECT '2024-01-05'::date, 104.0, 107.0, 98.0, 100.0, 3200000\n```\n\n{% candlestick\n    data=\"stock_prices\"\n    x=\"date\"\n    open=\"open\"\n    high=\"high\"\n    low=\"low\"\n    close=\"close\"\n    volume=\"volume\"\n    y2_fmt=\"num0\"\n    title=\"Stock Price with Volume\"\n    y_axis_options={\n        min=90\n        max=115\n    }\n/%}"
+   },
+   {
+    "title": "With Custom Colors",
+    "source": "```sql stock_prices\nSELECT '2024-01-01'::date as date, 100.0 as open, 105.0 as high, 95.0 as low, 102.0 as close\nUNION ALL SELECT '2024-01-02'::date, 102.0, 108.0, 100.0, 105.0\nUNION ALL SELECT '2024-01-03'::date, 105.0, 110.0, 103.0, 108.0\nUNION ALL SELECT '2024-01-04'::date, 108.0, 112.0, 106.0, 104.0\nUNION ALL SELECT '2024-01-05'::date, 104.0, 107.0, 98.0, 100.0\n```\n\n{% candlestick\n    data=\"stock_prices\"\n    x=\"date\"\n    open=\"open\"\n    high=\"high\"\n    low=\"low\"\n    close=\"close\"\n    chart_options={\n        up_color=\"#22c55e\"\n        down_color=\"#ef4444\"\n    }\n    y_axis_options={\n        min=90\n        max=115\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "chord_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% chord_chart\n    data=\"demo.order_details\"\n    source=\"category\"\n    target=\"item_name\"\n    value=\"sum(quantity)\"\n/%}"
+   },
+   {
+    "title": "Chord Chart with Custom Colors",
+    "source": "{% chord_chart\n    data=\"demo.order_details\"\n    source=\"category\"\n    target=\"item_name\"\n    value=\"sum(quantity)\"\n    title=\"Category to Item Flow\"\n    chart_options={\n        color_palette = [\"#0d0887\", \"#6300a7\", \"#a62098\", \"#d5546e\", \"#f68d45\", \"#fcd225\", \"#f0f921\"]\n    }\n/%}"
+   },
+   {
+    "title": "Chord Chart with Raw ECharts Overrides",
+    "source": "{% chord_chart\n    data=\"demo.order_details\"\n    source=\"category\"\n    target=\"item_name\"\n    value=\"sum(quantity)\"\n    echarts_options={\n        series=[{ startAngle=0 padAngle=6 }]\n    }\n    echarts_series_options={\n        itemStyle={ borderRadius=6 }\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "clock",
+  "category": "ui",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "Default Clock (12h)",
+    "source": "{% clock /%}"
+   },
+   {
+    "title": "24-Hour Clock",
+    "source": "{% clock format=\"24h\" /%}"
+   }
+  ]
+ },
+ {
+  "render": "combo_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% combo_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    date_grain=\"month\"\n%}\n    {% line\n        y=\"sum(total_sales)\"\n    /%}\n    {% bar\n        y=\"sum(transactions)\"\n        axis=\"y2\"\n    /%}\n{% /combo_chart %}"
+   },
+   {
+    "title": "Combo Chart with Area and Line",
+    "source": "{% combo_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    date_grain=\"month\"\n%}\n    {% area\n        y=\"sum(total_sales)\"\n    /%}\n    {% line\n        y=\"avg(avg_transaction_value)\"\n        axis=\"y2\"\n    /%}\n{% /combo_chart %}"
+   },
+   {
+    "title": "Combo Chart with Formatting",
+    "source": "{% combo_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y_fmt=\"usd\"\n    y2_fmt=\"num0\"\n    title=\"Sales and Transactions Overview\"\n    subtitle=\"Combined view of sales and transaction volume\"\n    date_grain=\"month\"\n%}\n    {% line\n        y=\"sum(total_sales)\"\n    /%}\n    {% bar\n        y=\"sum(transactions)\"\n        axis=\"y2\"\n    /%}\n{% /combo_chart %}"
+   },
+   {
+    "title": "Raw ECharts overrides",
+    "source": "{% combo_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    date_grain=\"month\"\n    echarts_options={\n        dataZoom=[{ type=\"slider\" }]\n        tooltip={ position=\"top\" }\n    }\n    echarts_series_options={\n        itemStyle={ borderRadius=4 }\n    }\n%}\n    {% bar y=\"sum(total_sales)\" /%}\n{% /combo_chart %}"
+   }
+  ]
+ },
+ {
+  "render": "commentary",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Page-wide commentary",
+    "source": "{% commentary id=\"overview\" /%}"
+   },
+   {
+    "title": "Reporting-period commentary",
+    "source": "{% commentary id=\"monthly-review\" scope=\"period\" /%}"
+   }
+  ]
+ },
+ {
+  "render": "comparison_selector",
+  "category": "input",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Using `comparison`",
+    "source": "{% comparison_selector\n    id=\"comp\"\n    default_value=\"prior year\"\n/%}\n\n{% big_value\n    data=\"demo.daily_orders\"\n    value=\"sum(total_sales)\"\n    fmt=\"usd1m\"\n    date_range={\n        date=\"date\"\n        range=\"last 12 months\"\n    }\n    comparison={\n        compare_vs={{comp}}\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "conditional",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": []
+ },
+ {
+  "render": "custom_echart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% custom_echart data=\"demo.daily_orders\" %}\n{\n  xAxis: { type: 'category' },\n  yAxis: {},\n  series: [{ type: 'bar', encode: { x: 'category', y: 'total_sales' } }]\n}\n{% /custom_echart %}"
+   },
+   {
+    "title": "Multiple Series with Tooltip",
+    "source": "{% custom_echart data=\"demo.daily_orders\" %}\n{\n  tooltip: { trigger: 'axis' },\n  legend: { show: true },\n  xAxis: { type: 'category' },\n  yAxis: {},\n  series: [\n    { type: 'bar', name: 'Sales', encode: { x: 'category', y: 'total_sales' } },\n    { type: 'line', name: 'Transactions', encode: { x: 'category', y: 'transactions' } }\n  ]\n}\n{% /custom_echart %}"
+   },
+   {
+    "title": "Dataset Transform",
+    "source": "{% custom_echart data=\"demo.daily_orders\" %}\n{\n  dataset: [\n    {},\n    { transform: { type: 'sort', config: { dimension: 'total_sales', order: 'desc' } } }\n  ],\n  xAxis: { type: 'category' },\n  yAxis: {},\n  series: [{ type: 'bar', datasetIndex: 1, encode: { x: 'category', y: 'total_sales' } }]\n}\n{% /custom_echart %}"
+   },
+   {
+    "title": "Waterfall (EBITDA Bridge)",
+    "source": "<!-- Waterfalls float each bar on a transparent placeholder series; inc/dec/tot must be mutually exclusive per row. fmt: formatters handle currency display, so values stay unscaled in SQL. -->\n```sql ebitda_bridge\nselect 'Prior EBITDA' as step, 1 as ord, 0 as placeholder, null as inc, null as dec, 32000000 as tot\nunion all select 'Home', 2, 32000000, 6200000, null, null\nunion all select 'Sports', 3, 38200000, 4100000, null, null\nunion all select 'Groceries', 4, 40000000, null, 2300000, null\nunion all select 'Current EBITDA', 5, 0, null, null, 40000000\norder by ord\n```\n\n{% custom_echart data=\"ebitda_bridge\" title=\"EBITDA Bridge\" %}\n{\n  tooltip: { trigger: 'axis', valueFormatter: 'fmt:usd1m' },\n  xAxis: { type: 'category', axisLabel: { interval: 0 } },\n  yAxis: { axisLabel: { formatter: 'fmt:usd0m' } },\n  series: [\n    { type: 'bar', stack: 'bridge', silent: true,\n      itemStyle: { color: 'transparent' },\n      encode: { x: 'step', y: 'placeholder' } },\n    { type: 'bar', stack: 'bridge', name: 'Increase',\n      itemStyle: { color: '#22A39F' },\n      label: { show: true, position: 'top', formatter: 'fmt:usd1m' },\n      encode: { x: 'step', y: 'inc' } },\n    { type: 'bar', stack: 'bridge', name: 'Decrease',\n      itemStyle: { color: '#E2483D' },\n      label: { show: true, position: 'bottom', formatter: 'fmt:usd1m' },\n      encode: { x: 'step', y: 'dec' } },\n    { type: 'bar', stack: 'bridge', name: 'Total',\n      itemStyle: { color: '#475569' },\n      label: { show: true, position: 'top', formatter: 'fmt:usd1m' },\n      encode: { x: 'step', y: 'tot' } }\n  ]\n}\n{% /custom_echart %}"
+   },
+   {
+    "title": "JavaScript mode (functions, gradients)",
+    "source": "<!-- A body with JS function syntax automatically routes to a sandboxed iframe. Globals: data, columns, echarts, theme, fmt. Use real functions when you need them (formatter/tooltip/renderItem) or echarts.graphic. -->\n{% custom_echart data=\"demo.daily_orders\" %}\n{\n  tooltip: { trigger: 'axis', valueFormatter: (value) => fmt(value, 'usd0') },\n  xAxis: { type: 'category' },\n  yAxis: { axisLabel: { formatter: (value) => fmt(value, 'usd0m') } },\n  series: [\n    {\n      type: 'bar',\n      encode: { x: 'category', y: 'total_sales' },\n      itemStyle: {\n        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [\n          { offset: 0, color: theme.colorPalettes.default[0] },\n          { offset: 1, color: theme.colorPalettes.default[1] }\n        ])\n      },\n      label: { show: true, formatter: (params) => fmt(params.value.total_sales, 'usd0') }\n    }\n  ]\n}\n{% /custom_echart %}"
+   }
+  ]
+ },
+ {
+  "render": "custom_map",
+  "category": "map",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic map",
+    "source": "{% custom_map height=400 %}\n// mapgl is Mapbox GL when a token is available, else MapLibre GL.\n// container and the access token are provided for you.\nconst map = new mapgl.Map({\n  container,\n  center: [-71.06, 42.36],\n  zoom: 9\n});\n// Tiles load asynchronously — signal readiness once painted so PDF/PNG\n// export captures a finished map rather than a blank frame.\nmap.on('idle', () => evidence.ready());\n{% /custom_map %}"
+   },
+   {
+    "title": "Plot Evidence data as points",
+    "source": "```sql locations\nselect 'New York'    as name, -74.01  as lng, 40.71 as lat\nunion all select 'Los Angeles', -118.24, 34.05\nunion all select 'Chicago',      -87.63, 41.88\nunion all select 'Houston',      -95.37, 29.76\nunion all select 'Denver',      -104.99, 39.74\nunion all select 'Seattle',     -122.33, 47.61\nunion all select 'Miami',        -80.19, 25.76\n```\n\n{% custom_map height=500 %}\nconst map = new mapgl.Map({ container, center: [-98, 39], zoom: 3 });\nmap.on('load', async () => {\n  const rows = await evidence.query('locations');\n  map.addSource('pts', {\n    type: 'geojson',\n    data: {\n      type: 'FeatureCollection',\n      features: rows.map((r) => ({\n        type: 'Feature',\n        geometry: { type: 'Point', coordinates: [r.lng, r.lat] },\n        properties: r\n      }))\n    }\n  });\n  map.addLayer({ id: 'pts', type: 'circle', source: 'pts', paint: { 'circle-radius': 5 } });\n});\n{% /custom_map %}"
+   },
+   {
+    "title": "Import a plugin (lasso / draw)",
+    "source": "{% custom_map height=500 %}\n// The draw control's buttons are CSS sprites — load its stylesheet or they render blank.\nconst link = document.createElement('link');\nlink.rel = 'stylesheet';\nlink.href = 'https://cdn.jsdelivr.net/npm/@mapbox/mapbox-gl-draw@1/dist/mapbox-gl-draw.css';\ndocument.head.appendChild(link);\n\nconst { default: MapboxDraw } = await import('https://cdn.jsdelivr.net/npm/@mapbox/mapbox-gl-draw@1/+esm');\nconst map = new mapgl.Map({ container, center: [-98, 39], zoom: 3 });\nmap.on('load', () => {\n  map.addControl(new MapboxDraw({ displayControlsDefault: false, controls: { polygon: true, trash: true } }));\n});\n{% /custom_map %}"
+   }
+  ]
+ },
+ {
+  "render": "date_grain_selector",
+  "category": "input",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Using `date_grain`",
+    "source": "{% date_grain_selector\n    id=\"time_grain\"\n    default_value=\"month\"\n/%}\n\n{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain={{time_grain}}\n/%}"
+   },
+   {
+    "title": "Using Inline SQL",
+    "source": "{% date_grain_selector\n    id=\"time_grain\"\n    default_value=\"month\"\n/%}\n\n```sql sales_by_period\nselect \n    date_trunc({{time_grain}}, date) as period,\n    sum(total_sales) as total_sales\nfrom demo.daily_orders\ngroup by 1\norder by 1\n```\n\n{% line_chart\n    data=\"sales_by_period\"\n    x=\"period\"\n    y=\"total_sales\"\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "delta",
+  "category": "value",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% delta\n\tdata=\"demo.daily_orders\"\n\tvalue=\"sum(total_sales)\"\n\tcomparison={\n\t\tcompare_vs=\"target\"\n\t\ttarget=\"120000000\"\n\t}\n/%}"
+   },
+   {
+    "title": "Semantic metric",
+    "source": "{% delta metric=\"revenue\" comparison={ compare_vs=\"prior year\" } /%}",
+    "skip": "uses the semantic metrics catalog, which Cupola reports do not configure"
+   }
+  ]
+ },
+ {
+  "render": "details",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% details\n    title=\"Metric Definitions\"\n%}\n\n**Sales:** includes sales of all core products in all regions\n\n**Sales Growth:** YoY growth in sales\n\n{% /details %}"
+   },
+   {
+    "title": "Open on Desktop, Collapsed on Mobile",
+    "source": "{% details\n    title=\"Metric Definitions\"\n    open=true\n    open_mobile=false\n%}\n\n**Sales:** includes sales of all core products in all regions\n\n**Sales Growth:** YoY growth in sales\n\n{% /details %}"
+   }
+  ]
+ },
+ {
+  "render": "dimension",
+  "category": "table",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Table with Dimensions",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% dimension value=\"date\" date_grain=\"month\" title=\"Month\" /%}\n{% /table %}"
+   },
+   {
+    "title": "With Image",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" image=\"image_url\" /%}\n    {% measure value=\"sum(total_sales)\" /%}\n{% /table %}"
+   },
+   {
+    "title": "With Link",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" link=\"concat('https://www.google.com/search?q=', category)\" /%}\n    {% measure value=\"sum(total_sales)\" /%}\n{% /table %}"
+   },
+   {
+    "title": "With Logo",
+    "source": "{% table data=\"sales\" %}\n    {% dimension value=\"vendor\" logo=\"domain\" /%}\n    {% measure value=\"sum(amount)\" /%}\n{% /table %}",
+    "skip": "reads data it does not define (sales)"
+   },
+   {
+    "title": "Conditional Colors",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" conditional_colors=\"case when sum(total_sales) > 20000000 then '#22c55e' when sum(total_sales) > 10000000 then '#f59e0b' else '#ef4444' end\" /%}\n    {% measure value=\"sum(total_sales)\" fmt=\"usd1m\" /%}\n{% /table %}"
+   }
+  ]
+ },
+ {
+  "render": "dimension_grid",
+  "category": "input",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% dimension_grid\n    id=\"product_filter\"\n    data=\"demo.daily_orders\"\n/%}"
+   },
+   {
+    "title": "With Explicit Dimensions and Metric",
+    "source": "{% dimension_grid\n    id=\"sales_filter\"\n    data=\"orders\"\n    dimensions=[\"category\", \"region\"]\n    metric=\"sum(sales)\"\n    fmt=\"usd\"\n    limit=5\n/%}",
+    "skip": "uses the semantic metrics catalog, which Cupola reports do not configure"
+   },
+   {
+    "title": "Using Filter in Query",
+    "source": "{% dimension_grid id=\"order_filter\" data=\"orders\" /%}\n\n```sql filtered_orders\nselect * from orders\nwhere {{order_filter.filter}}\n```",
+    "skip": "reads data it does not define (orders)"
+   }
+  ]
+ },
+ {
+  "render": "download",
+  "category": "ui",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% download data=\"demo.daily_orders\" /%}"
+   },
+   {
+    "title": "Custom Label and Filename",
+    "source": "{% download\n  data=\"demo.daily_orders\"\n  label=\"Export Orders\"\n  filename=\"daily_orders_export\"\n/%}"
+   },
+   {
+    "title": "With Variant",
+    "source": "{% download\n  data=\"demo.daily_orders\"\n  label=\"Export Data\"\n  variant=\"primary\"\n/%}"
+   },
+   {
+    "title": "With Large Limit",
+    "source": "{% download\n  data=\"demo.daily_orders\"\n  label=\"Download Recent Orders\"\n  limit=50000\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "dropdown",
+  "category": "input",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Using `filters`",
+    "source": "{% dropdown\n    id=\"category_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"category\"\n/%}\n\n{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    filters=[\"category_filter\"]\n    date_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "Using `where`",
+    "source": "{% dropdown\n    id=\"category_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"category\"\n/%}\n\n{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    where=\"category = {{category_filter}}\"\n    date_grain=\"month\"\n/%}",
+    "skip": "fails in Evidence itself: filters on an input with no default selection, so the SQL reads `category = )`"
+   },
+   {
+    "title": "Using Inline SQL",
+    "source": "{% dropdown\n    id=\"category_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"category\"\n/%}\n\n```sql filtered_orders\nselect * from demo.daily_orders\nwhere category = {{category_filter}}\n```\n\n{% table data=\"filtered_orders\" /%}",
+    "skip": "fails in Evidence itself: filters on an input with no default selection, so the SQL is incomplete"
+   },
+   {
+    "title": "Using `date_range`",
+    "source": "{% dropdown\n    id=\"category_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"category\"\n    date_range={\n        date=\"date\"\n        range=\"last 12 months\"\n    }\n/%}"
+   },
+   {
+    "title": "Cascading Dropdowns (Linked Filters)",
+    "source": "{% dropdown\n    id=\"category\"\n    data=\"demo.order_details\"\n    value_column=\"category\"\n    title=\"Category\"\n/%}\n\n{% dropdown\n    id=\"item\"\n    data=\"demo.order_details\"\n    value_column=\"item_name\"\n    title=\"Item\"\n    filters=[\"category\"]\n/%}\n\n{% table\n    data=\"demo.order_details\"\n    filters=[\"category\", \"item\"]\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "dropdown_option",
+  "category": "input",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% dropdown_option value=\"option_one\" label=\"Option One\" /%}"
+   }
+  ]
+ },
+ {
+  "render": "else",
+  "category": "logic",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% if data=\"demo.daily_orders\" %}\n\tIf Content\n{% /if %}\n{% else %}\n\tElse Content\n{% /else %}"
+   }
+  ]
+ },
+ {
+  "render": "else_if",
+  "category": "logic",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% if data=\"demo.daily_orders\" condition=\"no_rows\" %}\n\tIf Content\n{% /if %}\n{% else_if data=\"demo.daily_orders\" %}\n\tElse If Content\n{% /else_if %}"
+   }
+  ]
+ },
+ {
+  "render": "fence",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "```language query_name\n  content\n```"
+   },
+   {
+    "title": "Define a SQL query",
+    "source": "```sql electronics_orders\n  SELECT * FROM demo.daily_orders WHERE category = 'Electronics'\n```\n\n<!-- Use the query in other components -->\n{% table data=\"electronics_orders\" /%}"
+   }
+  ]
+ },
+ {
+  "render": "fill",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Filling named slots",
+    "source": "{% metric_card title=\"EMEA Revenue\" %}\n{% fill slot=\"figure\" %}{% big_value data=\"emea\" value=\"rev\" fmt=\"usd0\" /%}{% /fill %}\n{% fill slot=\"detail\" %}{% line_chart data=\"emea_monthly\" x=\"month\" y=\"rev\" /%}{% /fill %}\n{% /metric_card %}",
+    "skip": "reads data it does not define (emea, emea_monthly)"
+   }
+  ]
+ },
+ {
+  "render": "filter_bar",
+  "category": "input",
+  "wrapper": "none",
+  "examples": []
+ },
+ {
+  "render": "funnel_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% funnel_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(transactions)\"\n/%}"
+   },
+   {
+    "title": "Funnel Chart with Custom Styling",
+    "source": "{% funnel_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(transactions)\"\n    align=\"left\"\n    label_position=\"outside\"\n    gap=5\n    title=\"Styled Funnel\"\n/%}"
+   },
+   {
+    "title": "Funnel Chart with Custom Colors",
+    "source": "{% funnel_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(transactions)\"\n    chart_options={\n        color_palette = [\"#0d0887\", \"#6300a7\", \"#a62098\", \"#d5546e\", \"#f68d45\", \"#fcd225\", \"#f0f921\"]\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "heat_grid",
+  "category": "value",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% heat_grid\n  data=\"appointments\"\n  dimension=\"province\"\n  value=\"avg(wait_time)\"\n  thresholds=[60, 90]\n  units=\"MIN\"\n  lower_is_better=true\n/%}",
+    "skip": "reads data it does not define (appointments)"
+   }
+  ]
+ },
+ {
+  "render": "heatmap",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% heatmap\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    x_date_grain=\"year\"\n    y=\"category\"\n    value=\"sum(total_sales)\"\n/%}"
+   },
+   {
+    "title": "With Custom Colors",
+    "source": "{% heatmap\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    x_date_grain=\"year\"\n    y=\"category\"\n    value=\"sum(total_sales)\"\n    title=\"Sales Intensity by Year and Category\"\n    chart_options={\n        color_scale = [\"#f7fafc\", \"#e2e8f0\", \"#cbd5e0\", \"#a0aec0\", \"#718096\", \"#4a5568\", \"#2d3748\"]\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "heatmap_layer",
+  "category": "map_slot",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Heatmap",
+    "source": "{% map %}\n    {% heatmap_layer\n        data=\"events\"\n        lat=\"latitude\"\n        lng=\"longitude\"\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (events)"
+   },
+   {
+    "title": "Weighted Heatmap",
+    "source": "{% map %}\n    {% heatmap_layer\n        data=\"sales\"\n        lat=\"latitude\"\n        lng=\"longitude\"\n        weight=\"sum(revenue)\"\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (sales)"
+   },
+   {
+    "title": "Custom Color Palette",
+    "source": "{% map %}\n    {% heatmap_layer\n        data=\"incidents\"\n        lat=\"latitude\"\n        lng=\"longitude\"\n        color_scale=[\"#ffffb2\", \"#fecc5c\", \"#fd8d3c\", \"#f03b20\", \"#bd0026\"]\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (incidents)"
+   },
+   {
+    "title": "Adjusted Radius and Intensity",
+    "source": "{% map %}\n    {% heatmap_layer\n        data=\"visits\"\n        lat=\"latitude\"\n        lng=\"longitude\"\n        weight=\"visit_count\"\n        radius=50\n        intensity=2\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (visits)"
+   }
+  ]
+ },
+ {
+  "render": "histogram",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% histogram\n    data=\"demo.daily_orders\"\n    value=\"transactions\"\n    bin_count=30\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "horizontal_bar_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% horizontal_bar_chart\n\tdata=\"demo.daily_orders\"\n\ty=\"category\"\n\tx=\"sum(total_sales)\"\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "html",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "```sql daily_orders\nselect 'Mon' as day, 120 as orders union all\nselect 'Tue', 180 union all\nselect 'Wed', 90\n```\n\n{% html %}\n<div id=\"bars\" style=\"display:flex; gap:8px; align-items:flex-end; height:120px;\"></div>\n<script>\n\t// Wrap the draw in a function and register it with evidence.subscribe so\n\t// it re-runs whenever a filter, theme, or variable changes. evidence.query\n\t// always returns the latest interpolated rows, so the same function works\n\t// for the first render AND every subsequent reactive re-render.\n\tasync function render() {\n\t\tconst rows = await evidence.query(\"daily_orders\");\n\t\tconst max = Math.max(...rows.map((r) => r.orders));\n\t\tdocument.getElementById(\"bars\").innerHTML = rows\n\t\t\t.map((r) => `<div style=\"flex:1; background:${evidence.theme.palette[0]}; height:${(r.orders / max) * 100}%\"></div>`)\n\t\t\t.join(\"\");\n\t}\n\tevidence.subscribe(render);\n\tawait render();\n\tevidence.ready();\n</script>\n{% /html %}"
+   },
+   {
+    "title": "Responsive D3 chart from a CDN",
+    "source": "{% html %}\n<div id=\"chart\"></div>\n<script type=\"module\">\n\timport * as d3 from \"https://esm.sh/d3@7\";\n\tconst mount = document.getElementById(\"chart\");\n\t// viewBox + width:100% lets the SVG scale with the container — responsive\n\t// with no redraw. Draw in a fixed coordinate space, then let CSS stretch it.\n\tconst W = 400, H = 220;\n\n\t// Same pattern as the basic example: wrap the draw in a function so a\n\t// filter / theme change can re-run it. d3.select(...).html(\"\") clears any\n\t// previous SVG before re-rendering.\n\tasync function render() {\n\t\tconst rows = await evidence.query(\"daily_orders\");\n\t\tmount.innerHTML = \"\";\n\t\tconst svg = d3.select(mount).append(\"svg\")\n\t\t\t.attr(\"viewBox\", `0 0 ${W} ${H}`)\n\t\t\t.attr(\"width\", \"100%\")\n\t\t\t.attr(\"height\", \"auto\");\n\t\tconst x = d3.scaleBand().domain(rows.map((d) => d.day)).range([0, W]).padding(0.2);\n\t\tconst y = d3.scaleLinear().domain([0, d3.max(rows, (d) => d.orders)]).range([H, 0]);\n\t\tsvg.selectAll(\"rect\").data(rows).join(\"rect\")\n\t\t\t.attr(\"x\", (d) => x(d.day)).attr(\"y\", (d) => y(d.orders))\n\t\t\t.attr(\"width\", x.bandwidth()).attr(\"height\", (d) => H - y(d.orders))\n\t\t\t.attr(\"fill\", evidence.theme.palette[0]);\n\t}\n\tevidence.subscribe(render);\n\tawait render();\n\tevidence.ready();\n</script>\n{% /html %}"
+   }
+  ]
+ },
+ {
+  "render": "html_table",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": []
+ },
+ {
+  "render": "icon",
+  "category": "ui",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% icon name=\"info\" /%}"
+   },
+   {
+    "title": "With Size",
+    "source": "{% icon name=\"star\" size=24 color=\"#ff0000\" /%}"
+   },
+   {
+    "title": "With Color",
+    "source": "{% icon name=\"check\" color=\"#0000ff\" /%}"
+   },
+   {
+    "title": "With Tooltip",
+    "source": "{% icon name=\"info\" tooltip=\"This is an info icon\" /%}"
+   }
+  ]
+ },
+ {
+  "render": "if",
+  "category": "logic",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% if data=\"demo.daily_orders\" %}\n\tContent\n{% /if %}"
+   },
+   {
+    "title": "With an else branch",
+    "source": "{% if data=\"demo.daily_orders\" condition=\"has_rows\" %}\n\tThere are orders.\n{% /if %}\n{% else %}\n\tNo orders found.\n{% /else %}"
+   }
+  ]
+ },
+ {
+  "render": "iframe",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% iframe src=\"https://example.com\" /%}"
+   },
+   {
+    "title": "Custom Height",
+    "source": "{% iframe src=\"https://example.com\" height=400 /%}"
+   }
+  ]
+ },
+ {
+  "render": "image",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% image\n    url=\"https://raw.githubusercontent.com/evidence-dev/media-kit/refs/heads/main/png/wordmark-gray-800.png\"\n    description=\"Sample placeholder image\"\n/%}"
+   },
+   {
+    "title": "With Dark Mode",
+    "source": "{% image\n    url=\"https://raw.githubusercontent.com/evidence-dev/media-kit/refs/heads/main/png/wordmark-gray-800.png\"\n    dark_url=\"https://raw.githubusercontent.com/evidence-dev/media-kit/refs/heads/main/png/wordmark-white.png\"\n    description=\"Logo that changes in dark mode\"\n/%}"
+   },
+   {
+    "title": "From a Data Query",
+    "source": "{% image\n    data=\"products\"\n    column=\"image_url\"\n    description_column=\"product_name\"\n/%}",
+    "skip": "reads data it does not define (products)"
+   },
+   {
+    "title": "From a Data Query with Filters",
+    "source": "{% dropdown id=\"category_filter\" data=\"products\" value_column=\"category\" /%}\n\n{% image\n    data=\"products\"\n    column=\"image_url\"\n    description=\"Best selling product\"\n    filters=[\"category_filter\"]\n    order=\"sales desc\"\n/%}",
+    "skip": "reads data it does not define (products)"
+   }
+  ]
+ },
+ {
+  "render": "info",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% info text=\"Report data as of Dec 31, 2024\" /%}"
+   }
+  ]
+ },
+ {
+  "render": "input_tabs",
+  "category": "input",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Using `filters`",
+    "source": "{% input_tabs\n    id=\"category_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"category\"\n/%}\n\n{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    filters=[\"category_filter\"]\n    date_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "Using `where`",
+    "source": "{% input_tabs\n    id=\"category_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"category\"\n/%}\n\n{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    where=\"category = {{category_filter}}\"\n    date_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "Using Inline SQL",
+    "source": "{% input_tabs\n    id=\"category_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"category\"\n/%}\n\n```sql filtered_orders\nselect * from demo.daily_orders\nwhere category = {{category_filter}}\n```\n\n{% table data=\"filtered_orders\" /%}"
+   }
+  ]
+ },
+ {
+  "render": "line",
+  "category": "chart_slot",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Line Series",
+    "source": "{% combo_chart data=\"demo.daily_orders\" x=\"date\" date_grain=\"month\" %}\n    {% line y=\"sum(total_sales)\" /%}\n{% /combo_chart %}"
+   },
+   {
+    "title": "Styled Line",
+    "source": "{% combo_chart data=\"demo.daily_orders\" x=\"date\" date_grain=\"month\" %}\n    {% line y=\"sum(total_sales)\" options={type=\"dashed\" width=2 markers={shape=\"circle\"}} /%}\n{% /combo_chart %}"
+   },
+   {
+    "title": "Raw ECharts overrides on a single series",
+    "source": "{% combo_chart data=\"demo.daily_orders\" x=\"date\" date_grain=\"month\" %}\n    {% line\n        y=\"sum(total_sales)\"\n        echarts_options={\n            endLabel={ show=true }\n            markPoint={ data=[{ type=\"max\" }, { type=\"min\" }] }\n        }\n    /%}\n{% /combo_chart %}"
+   }
+  ]
+ },
+ {
+  "render": "line_break",
+  "category": "ui",
+  "wrapper": "inline",
+  "examples": []
+ },
+ {
+  "render": "line_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% line_chart\n\tdata=\"demo.daily_orders\"\n\tx=\"date\"\n\ty=\"sum(total_sales)\"\n\tdate_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "Semantic metric (time series)",
+    "source": "{% line_chart metric=\"revenue\" /%}",
+    "skip": "uses the semantic metrics catalog, which Cupola reports do not configure"
+   },
+   {
+    "title": "Multiple metrics",
+    "source": "{% line_chart metric=[\"revenue\", \"order_count\"] /%}",
+    "skip": "uses the semantic metrics catalog, which Cupola reports do not configure"
+   },
+   {
+    "title": "Line Chart with Series",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    series=\"category\"\n    date_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "Line Chart with Formatting",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    title=\"Sales Over Time\"\n    subtitle=\"Monthly sales performance\"\n    date_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "Line Chart with Series Colors",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    series=\"case when sum(total_sales) > 7000 then 'High' when sum(total_sales) > 3500 then 'Medium' else 'Low' end\"\n    date_grain=\"month\"\n    title=\"Sales Performance Tiers\"\n    chart_options={\n        series_colors={\n            \"High\"=\"#22c55e\"\n            \"Medium\"=\"#f59e0b\"\n            \"Low\"=\"#ef4444\"\n        }\n    }\n/%}"
+   },
+   {
+    "title": "Revenue by Day of Week",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"day of week\"\n    title=\"Revenue by Day of Week\"\n    subtitle=\"Weekday vs weekend sales patterns\"\n/%}"
+   },
+   {
+    "title": "Seasonality Analysis (Month of Year)",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"month of year\"\n    title=\"Seasonality Analysis\"\n    subtitle=\"Sales patterns across months\"\n/%}"
+   },
+   {
+    "title": "Quarterly Trends",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"quarter of year\"\n    title=\"Quarterly Performance\"\n    subtitle=\"Q1 through Q4 comparison\"\n/%}"
+   },
+   {
+    "title": "Monthly Billing Cycle Patterns",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"day of month\"\n    title=\"Daily Revenue by Day of Month\"\n    subtitle=\"Identify billing cycle patterns\"\n/%}"
+   },
+   {
+    "title": "Week Number Analysis",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"week of year\"\n    title=\"Revenue by Week of Year\"\n    subtitle=\"Weekly performance across the year\"\n/%}"
+   },
+   {
+    "title": "Day of Year Analysis",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    date_grain=\"day of year\"\n    title=\"Revenue by Day of Year\"\n    subtitle=\"Identify patterns across 365 days\"\n/%}"
+   },
+   {
+    "title": "Raw ECharts overrides",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n    echarts_options={\n        dataZoom=[{ type=\"slider\" }]\n        grid={ right=60 }\n        tooltip={ position=\"top\" }\n    }\n    echarts_series_options={\n        endLabel={ show=true }\n    }\n/%}"
+   },
+   {
+    "title": "Styled markers via echarts_series_options",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n    echarts_series_options={\n        symbol=\"circle\"\n        symbolSize=10\n        itemStyle={\n            opacity=1\n            color=\"#ffffff\"\n            borderColor=\"#3b82f6\"\n            borderWidth=2\n        }\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "link",
+  "category": "ui",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "Basic usage",
+    "source": "[Link Text](href)"
+   },
+   {
+    "title": "Link to another Evidence page",
+    "source": "<!-- Root page, not in a folder -->\n[My Other Page](/project-slug/page-slug)\n\n<!-- Page within a folder -->\n[My Other Page](/project-slug/folder-slug/page-slug)\n\n<!-- Page nested depply within folders -->\n[My Other Page](/project-slug/folder1-slug/folder2-slug/page-slug)"
+   },
+   {
+    "title": "Link to an external site",
+    "source": "[My External Site](https://example.com)"
+   }
+  ]
+ },
+ {
+  "render": "link_button",
+  "category": "ui",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% link_button\n    url=\"https://example.com\"\n    title=\"Visit Example\"\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "logo",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% logo domain=\"stripe.com\" /%}"
+   },
+   {
+    "title": "Large Size",
+    "source": "{% logo domain=\"github.com\" size=\"lg\" /%}"
+   },
+   {
+    "title": "Inside a Header",
+    "source": "# {% logo domain=\"stripe.com\" size=\"sm\" /%} Stripe Report"
+   }
+  ]
+ },
+ {
+  "render": "map",
+  "category": "map",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Map",
+    "source": "{% map %}\n{% /map %}"
+   },
+   {
+    "title": "Map with Title",
+    "source": "{% map title=\"Sales by Region\" %}\n{% /map %}"
+   },
+   {
+    "title": "Custom Height",
+    "source": "{% map height=500 %}\n{% /map %}"
+   },
+   {
+    "title": "Custom Zoom Level",
+    "source": "{% map zoom=10 %}\n{% /map %}"
+   },
+   {
+    "title": "Map with Choropleth Layer",
+    "source": "```sql east_coast_states\n    select 'Maine' as state, 1362359 as population union all \n    select 'New Hampshire', 1377529 union all \n    select 'Vermont', 643077 union all \n    select 'Massachusetts', 7029917 union all \n    select 'Rhode Island', 1097379 union all \n    select 'Connecticut', 3605944 union all \n    select 'New York', 20201249 union all \n    select 'New Jersey', 9288994 union all \n    select 'Pennsylvania', 13002700 union all \n    select 'Delaware', 989948 union all \n    select 'Maryland', 6177224\n```\n\n{% map %}\n    {% area_layer\n        geography=\"us_states\"\n        match_by=\"name\"\n        data=\"east_coast_states\"\n        area_id=\"state\"\n        value=\"population\"\n    /%}\n{% /map %}"
+   },
+   {
+    "title": "Map with Point Layer",
+    "source": "```sql us_stores\nselect 40.7128 as lat, -74.0060 as lng, 1250000 as sales union all\nselect 34.0522, -118.2437, 980000 union all\nselect 41.8781, -87.6298, 875000 union all\nselect 29.7604, -95.3698, 720000 union all\nselect 33.4484, -112.0740, 650000 union all\nselect 39.9526, -75.1652, 590000 union all\nselect 29.4241, -98.4936, 480000 union all\nselect 32.7157, -117.1611, 520000 union all\nselect 32.7767, -96.7970, 810000 union all\nselect 37.3382, -121.8863, 690000 union all\nselect 30.2672, -97.7431, 560000 union all\nselect 47.6062, -122.3321, 920000\n```\n\n{% map title=\"Store Locations\" %}\n    {% point_layer\n        data=\"us_stores\"\n        lat=\"lat\"\n        lng=\"lng\"\n        color_value=\"sales\"\n        color_palette=[\"#feedde\", \"#fdd0a2\", \"#fdae6b\", \"#fd8d3c\", \"#e6550d\", \"#a63603\"]\n    /%}\n{% /map %}"
+   },
+   {
+    "title": "Map with Heatmap Layer",
+    "source": "{% map title=\"Activity Density\" %}\n    {% heatmap_layer\n        data=\"events\"\n        lat=\"latitude\"\n        lng=\"longitude\"\n        weight=\"event_count\"\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (events)"
+   }
+  ]
+ },
+ {
+  "render": "measure",
+  "category": "table",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Table with Measures",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure value=\"sum(total_sales)\" fmt=\"usd1m\" /%}\n    {% measure value=\"sum(quantity)\" fmt=\"num0\" /%}\n{% /table %}"
+   },
+   {
+    "title": "Date Range Filtering",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        date_range={\n            range=\"last 12 months\"\n            date=\"date\"\n        }\n        fmt=\"usd1m\"\n    /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        date_range={\n            range=\"last 6 months\"\n            date=\"date\"\n        }\n        fmt=\"usd1m\"\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Prior Year Comparison",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        date_range={\n            range=\"last 12 months\"\n            date=\"date\"\n        }\n        comparison={\n            compare_vs=\"prior year\"\n        }\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Calculated Measures",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales) / sum(transactions) as avg_price\" \n        fmt=\"usd2\"\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Color Scale",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        fmt=\"usd1m\"\n        viz=\"color\"\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Color Scale with Custom Colors",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        fmt=\"usd1m\"\n        viz=\"color\"\n        color_options={\n            color_scale=[\"#c0392b\",\"#f4f4f4\",\"#27ae60\"]\n        }\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Diverging Color Scale Centered at 0",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales) - 10000 as vs_target\"\n        fmt=\"usd\"\n        viz=\"color\"\n        color_options={\n            color_scale=[\"#d73027\", \"#ffffbf\", \"#1a9850\"]\n            min=-10000\n            max=10000\n            midpoint=0\n        }\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Color Scale with Pinned Values",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        fmt=\"usd\"\n        viz=\"color\"\n        color_options={\n            color_stops=[\n                { value=5000 color=\"#e74c3c\" },\n                { value=10000 color=\"#f39c12\" },\n                { value=15000 color=\"#27ae60\" }\n            ]\n        }\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Color with Conditional Colors",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        fmt=\"usd1m\"\n        viz=\"color\"\n        color_options={\n            conditional_colors=\"case when sum(total_sales) > 10000 then '#22c55e' when sum(total_sales) > 5000 then '#f59e0b' else '#ef4444' end\"\n        }\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Bar",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        fmt=\"usd1m\"\n        viz=\"bar\"\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Bar with Custom Colors",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        fmt=\"usd1m\"\n        viz=\"bar\"\n        bar_options={\n            bar_color=\"#2c7d00\"\n        }\n    /%}\n    {% measure\n        value=\"sum(transactions)\"\n        viz=\"bar\"\n        bar_options={\n            bar_color=\"#339e9c\"\n        }\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Delta",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        date_range={\n            range=\"last 12 months\"\n            date=\"date\"\n        }\n        comparison={\n            compare_vs=\"prior year\"\n        }\n        viz=\"delta\"\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Sparkline",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        fmt=\"usd1m\"\n        viz=\"sparkline\"\n        sparkline_options={\n            x=\"date\"\n            type=\"area\"\n        }\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Column Info",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        fmt=\"usd1m\"\n        info=\"Includes all product sales\"\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Sorting",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        fmt=\"usd1m\"\n        viz=\"color\"\n        sort=\"asc\"\n    /%}\n{% /table %}"
+   }
+  ]
+ },
+ {
+  "render": "modal",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% modal\n    title=\"Detailed Trend\"\n%}\nBelow is a detailed sales trend\n\n    {% line_chart\n        data=\"demo.daily_orders\"\n        x=\"date\"\n        y=\"sum(total_sales)\"\n        date_grain=\"quarter\"\n    /%}\n{% /modal %}"
+   }
+  ]
+ },
+ {
+  "render": "note",
+  "category": "ui",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% note  %}\nReport data sourced from the World Bank\n{% /note %}"
+   }
+  ]
+ },
+ {
+  "render": "option",
+  "category": "input",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "In a Dropdown",
+    "source": "{% dropdown id=\"category\" label=\"Category\" %}\n    {% option value=\"electronics\" label=\"Electronics\" /%}\n    {% option value=\"clothing\" label=\"Clothing\" /%}\n    {% option value=\"home\" label=\"Home & Garden\" /%}\n{% /dropdown %}"
+   },
+   {
+    "title": "In a Button Group",
+    "source": "{% button_group id=\"metric\" label=\"Metric\" %}\n    {% option value=\"revenue\" label=\"Revenue\" fmt=\"usd\" /%}\n    {% option value=\"quantity\" label=\"Quantity\" fmt=\"num0\" /%}\n    {% option value=\"margin\" label=\"Margin\" fmt=\"pct1\" /%}\n{% /button_group %}"
+   }
+  ]
+ },
+ {
+  "render": "page_break",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Page Break",
+    "source": "Content before page break.\n\n{% page_break /%}\n\nContent that appears on the next page."
+   }
+  ]
+ },
+ {
+  "render": "partial",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% partial file=\"my_partial\" /%}",
+    "skip": "includes a partial file"
+   },
+   {
+    "title": "Passing Variables from Frontmatter",
+    "source": "{% partial file=\"my_partial\" variables={\n\tmy_category=$category\n} /%}",
+    "skip": "includes a partial file"
+   },
+   {
+    "title": "Passing Hardcoded Values",
+    "source": "{% partial file=\"my_partial\" variables={\n\tmy_category=\"Home\"\n\tsales_threshold=10000\n} /%}",
+    "skip": "includes a partial file"
+   }
+  ]
+ },
+ {
+  "render": "pie_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% pie_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n/%}"
+   },
+   {
+    "title": "Pie Chart with Title",
+    "source": "{% pie_chart\n    data=\"demo.daily_orders\"\n    value=\"sum(total_sales)\"\n    category=\"category\"\n    title=\"Sales by Category\"\n/%}"
+   },
+   {
+    "title": "With Custom Colors",
+    "source": "{% pie_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n    title=\"Sales by Category\"\n    chart_options={\n        color_palette = [\"#0d0887\", \"#6300a7\", \"#a62098\", \"#d5546e\", \"#f68d45\", \"#fcd225\", \"#f0f921\"]\n    }\n/%}"
+   },
+   {
+    "title": "With Series Colors",
+    "source": "{% pie_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n    title=\"Sales by Category\"\n    chart_options={\n        series_colors={\n            \"Electronics\"=\"#3b82f6\"\n            \"Clothing\"=\"#22c55e\"\n            \"Home\"=\"#f59e0b\"\n            \"Sports\"=\"#ef4444\"\n        }\n    }\n/%}"
+   },
+   {
+    "title": "With Percentage Labels",
+    "source": "{% pie_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n    title=\"Sales by Category\"\n    pct=true\n/%}"
+   },
+   {
+    "title": "With Custom Percentage Format",
+    "source": "{% pie_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n    title=\"Sales by Category\"\n    pct=true\n    pct_fmt=\"pct0\"\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "pivot",
+  "category": "table",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Pivoted Table",
+    "source": "{% table data=\"demo.daily_orders\" %}\n    {% dimension value=\"category\" /%}\n    {% pivot value=\"date\" date_grain=\"year\" /%}\n    {% measure value=\"sum(total_sales)\" fmt=\"usd1m\" /%}\n{% /table %}"
+   }
+  ]
+ },
+ {
+  "render": "point_layer",
+  "category": "map_slot",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Point Map",
+    "source": "{% map %}\n    {% point_layer\n        data=\"store_locations\"\n        lat=\"latitude\"\n        lng=\"longitude\"\n        point_title=\"store_name\"\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (store_locations)"
+   },
+   {
+    "title": "Colored by Value",
+    "source": "{% map %}\n    {% point_layer\n        data=\"store_sales\"\n        lat=\"latitude\"\n        lng=\"longitude\"\n        point_title=\"store_name\"\n        color_value=\"sum(sales)\"\n        color_palette=[\"#feedde\", \"#fdd0a2\", \"#fdae6b\", \"#fd8d3c\", \"#e6550d\", \"#a63603\"]\n        color_value_fmt=\"usd\"\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (store_sales)"
+   },
+   {
+    "title": "Sized by Value",
+    "source": "{% map %}\n    {% point_layer\n        data=\"store_locations\"\n        lat=\"latitude\"\n        lng=\"longitude\"\n        point_title=\"store_name\"\n        size_value=\"sum(customers)\"\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (store_locations)"
+   },
+   {
+    "title": "Color and Size by Different Values",
+    "source": "{% map %}\n    {% point_layer\n        data=\"store_metrics\"\n        lat=\"latitude\"\n        lng=\"longitude\"\n        color_value=\"sum(sales)\"\n        size_value=\"sum(customers)\"\n        color_palette=[\"#feedde\", \"#fdd0a2\", \"#fdae6b\", \"#fd8d3c\", \"#e6550d\", \"#a63603\"]\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (store_metrics)"
+   },
+   {
+    "title": "Categorical Coloring",
+    "source": "{% point_layer\n    data=\"locations\"\n    lat=\"latitude\"\n    lng=\"longitude\"\n    point_title=\"name\"\n    color_value=\"category\"\n    color_palette=[\"#154886\", \"#45a1bf\", \"#a5cdee\", \"#8dacbf\", \"#85c7c6\"]\n/%}",
+    "skip": "reads data it does not define (locations)"
+   },
+   {
+    "title": "Custom Tooltip Fields",
+    "source": "{% map %}\n    {% point_layer\n        data=\"power_plants\"\n        lat=\"latitude\"\n        lng=\"longitude\"\n        point_title=\"name\"\n        point_subtitle=\"region\"\n        tooltip_fields=[\"fuel_type\", \"capacity_mw\", \"emissions\"]\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (power_plants)"
+   },
+   {
+    "title": "Clustered (large datasets)",
+    "source": "{% map %}\n    {% point_layer\n        data=\"stations\"\n        lat=\"latitude\"\n        lng=\"longitude\"\n        cluster=true\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (stations)"
+   }
+  ]
+ },
+ {
+  "render": "polar_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% polar_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n/%}"
+   },
+   {
+    "title": "Polar Chart with Custom Colors",
+    "source": "{% polar_chart\n    data=\"demo.daily_orders\"\n    value=\"sum(total_sales)\"\n    category=\"category\"\n    series=\"category\"\n    title=\"Sales by Category\"\n    chart_options={\n        color_palette = [\"#0d0887\", \"#6300a7\", \"#a62098\", \"#d5546e\", \"#f68d45\", \"#fcd225\", \"#f0f921\"]\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "print_group",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Print Group",
+    "source": "{% print_group %}\nThis content will stay together when printed.\n{% /print_group %}"
+   },
+   {
+    "title": "Hidden Print Group",
+    "source": "{% print_group hide=true %}\nThis content will be hidden when printed.\n{% /print_group %}"
+   }
+  ]
+ },
+ {
+  "render": "progress_bars",
+  "category": "value",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% progress_bars\n  data=\"staff\"\n  dimension=\"provider_type\"\n  numerator=\"count(*) FILTER (WHERE on_shift = true)\"\n  denominator=\"count(*)\"\n  title=\"Provider Staffing\"\n/%}",
+    "skip": "reads data it does not define (staff)"
+   }
+  ]
+ },
+ {
+  "render": "radar_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% radar_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n/%}"
+   },
+   {
+    "title": "Radar Chart with Multiple Series",
+    "source": "{% radar_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    series=\"year(date)\"\n    value=\"sum(total_sales)\"\n    title=\"Sales by Category and Year\"\n/%}"
+   },
+   {
+    "title": "With Custom Colors",
+    "source": "{% radar_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n    title=\"Sales by Category\"\n    chart_options={\n        color_palette = [\"#0d0887\", \"#6300a7\", \"#a62098\", \"#d5546e\", \"#f68d45\", \"#fcd225\", \"#f0f921\"]\n    }\n/%}"
+   },
+   {
+    "title": "With Raw ECharts Overrides",
+    "source": "{% radar_chart\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n    echarts_series_options={\n        lineStyle={ width=3 }\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "range_calendar",
+  "category": "input",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Using `date_range`",
+    "source": "{% range_calendar id=\"date_filter\" /%}\n\n{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n    date_range={\n        date=\"date\"\n        range={{date_filter}}\n    }\n/%}"
+   },
+   {
+    "title": "Using `where`",
+    "source": "{% range_calendar id=\"date_filter\" value_column=\"date\" /%}\n\n{% table\n    data=\"demo.daily_orders\"\n    where=\"{{date_filter.filter}}\"\n/%}"
+   },
+   {
+    "title": "Using `filters`",
+    "source": "{% range_calendar id=\"date_filter\" value_column=\"date\" /%}\n\n{% big_value\n    data=\"demo.daily_orders\"\n    value=\"sum(total_sales)\"\n    filters=[\"date_filter\"]\n/%}"
+   },
+   {
+    "title": "Using Inline SQL",
+    "source": "{% range_calendar id=\"date_filter\" /%}\n\n```sql filtered_orders\nselect * from demo.daily_orders\nwhere date {{date_filter.between}}\n```\n\n{% table data=\"filtered_orders\" /%}"
+   },
+   {
+    "title": "Redefining \"all time\" with `all_time_range`",
+    "source": "{% range_calendar id=\"date_filter\" value_column=\"date\" all_time_range=\"from 2022-12-01\" /%}\n\n{% big_value\n    data=\"demo.daily_orders\"\n    value=\"sum(total_sales)\"\n    filters=[\"date_filter\"]\n/%}"
+   },
+   {
+    "title": "Named presets with `custom_ranges`",
+    "source": "{% range_calendar\n    id=\"date_filter\"\n    custom_ranges=[\n        { range=\"last 30 days\" },\n        { label=\"FY{start:yyyy}\" range=\"from 2022-02-01\" grain=\"year\" },\n        { label=\"Retail {end:yyyy}\" range=[\n            \"2024-12-29 to 2025-12-27\",\n            \"2025-12-28 to 2026-12-26\"\n        ] }\n    ]\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "reference_area",
+  "category": "chart_slot",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Highlight Date Range",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_area \n        x_min=\"2023-11-01\" \n        x_max=\"2024-02-01\" \n        label=\"Peak Season\"\n        color=\"green\"\n    /%}\n{% /line_chart %}"
+   },
+   {
+    "title": "Horizontal Value Band",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_area \n        y_min=2500000 \n        y_max=4000000 \n        label=\"Target Range\"\n        color=\"blue\"\n    /%}\n{% /line_chart %}"
+   },
+   {
+    "title": "Areas from Data",
+    "source": "```sql seasons\nselect '2021-01-01' as start_date, '2021-03-31' as end_date, 'Q1' as quarter\nunion all\nselect '2021-04-01', '2021-06-30', 'Q2'\nunion all\nselect '2021-07-01', '2021-09-30', 'Q3'\nunion all\nselect '2021-10-01', '2021-12-31', 'Q4'\n```\n\n{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_area \n        data=\"seasons\"\n        x_min=\"start_date\" \n        x_max=\"end_date\" \n        label=\"quarter\"\n    /%}\n{% /bar_chart %}"
+   },
+   {
+    "title": "Custom Styling",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_area \n        y_min=3000000 \n        y_max=4500000 \n        label=\"Goal Zone\"\n        color=\"green\"\n        area_options={ \n            border={ width=2 type=\"dashed\" color=\"green\" }\n        }\n        label_options={\n            position=\"top_right\"\n            color=\"green\"\n        }\n    /%}\n{% /line_chart %}"
+   }
+  ]
+ },
+ {
+  "render": "reference_line",
+  "category": "chart_slot",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Horizontal Target Line",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_line \n        y=3500000 \n        label=\"Target\" \n        color=\"red\" \n    /%}\n{% /line_chart %}"
+   },
+   {
+    "title": "Vertical Line at Date",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_line \n        x=\"2021-06-01\" \n        label=\"Product Launch\" \n        color=\"green\" \n    /%}\n{% /line_chart %}"
+   },
+   {
+    "title": "Reference Lines from Data",
+    "source": "```sql ref_lines\nselect 2500000 as ref, 'Min Target' as ref_label\nunion all\nselect 4000000, 'Stretch Goal'\n```\n\n{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_line \n        data=\"ref_lines\" \n        y=\"ref\" \n        label=\"ref_label\" \n    /%}\n{% /bar_chart %}"
+   },
+   {
+    "title": "Custom Label Styling",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_line \n        y=3000000 \n        label=\"Threshold\" \n        color=\"orange\"\n        label_options={\n            position=\"above_start\"\n            background_color=\"orange\"\n            color=\"white\"\n            padding=4\n        }\n        line_options={\n            type=\"dashed\"\n            width=2\n        }\n    /%}\n{% /line_chart %}"
+   },
+   {
+    "title": "Multiple Reference Lines",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_line y=2500000 label=\"Min Target\" color=\"red\" /%}\n    {% reference_line y=4500000 label=\"Stretch Goal\" color=\"green\" /%}\n{% /line_chart %}"
+   }
+  ]
+ },
+ {
+  "render": "reference_point",
+  "category": "chart_slot",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Hardcoded Point",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_point\n        x=\"2024-12-01\"\n        y=4441307\n        label=\"Peak Month\"\n        color=\"green\"\n        label_options={\n            position=\"left\"\n        }\n    /%}\n{% /line_chart %}"
+   },
+   {
+    "title": "Point from Data",
+    "source": "```sql top_months\nselect \n    toStartOfMonth(date) as month,\n    sum(total_sales) as sales,\n    'Top ' || row_number() over (order by sum(total_sales) desc) as label\nfrom demo.daily_orders\ngroup by month\norder by sales desc\nlimit 3\n```\n\n{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_point \n        data=\"top_months\"\n        x=\"month\" \n        y=\"sales\" \n        label=\"label\"\n        color=\"purple\"\n    /%}\n{% /line_chart %}"
+   },
+   {
+    "title": "Callout Style",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_point \n        x=\"2021-02-01\" \n        y=1754436 \n        label=\"Lowest Month\"\n        color=\"red\"\n        label_options={\n            variant=\"callout\"\n            position=\"top\"\n        }\n    /%}\n{% /line_chart %}"
+   },
+   {
+    "title": "Custom Symbol",
+    "source": "{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    date_grain=\"month\"\n%}\n    {% reference_point \n        x=\"2023-12-01\" \n        y=3720260 \n        label=\"Record High\"\n        symbol_options={\n            shape=\"diamond\"\n            size=12\n            color=\"gold\"\n        }\n        label_options={\n            position=\"right\"\n            color=\"orange\"\n        }\n    /%}\n{% /line_chart %}"
+   }
+  ]
+ },
+ {
+  "render": "repeat",
+  "category": "logic",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% repeat \n\tid=\"category_repeat\" \n\tdata=\"demo.daily_orders\" \n\tcolumn=\"category\" \n%}\n   {% line_chart\n        data=\"demo.daily_orders\"\n        x=\"date\"\n        date_grain=\"month\"\n        y=\"sum(total_sales)\"\n        filters=[\"category_repeat\"]\n   /%}\n{% /repeat %}"
+   },
+   {
+    "title": "With WHERE Clause",
+    "source": "{% repeat \n\tid=\"top_categories\" \n\tdata=\"demo.daily_orders\" \n\tcolumn=\"category\"\n\twhere=\"total_sales > 1000\"\n%}\n   ### {{top_categories}}\n   {% line_chart\n        data=\"demo.daily_orders\"\n        x=\"date\"\n        y=\"sum(total_sales)\"\n        filters=[\"top_categories\"]\n   /%}\n{% /repeat %}"
+   }
+  ]
+ },
+ {
+  "render": "row",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "<!-- 2 side-by-side charts -->\n{% row %}\n    {% line_chart\n        data=\"demo.daily_orders\"\n        x=\"date\"\n        date_grain=\"quarter\"\n        y=\"sum(total_sales)\"\n    /%}\n    {% bar_chart\n        data=\"demo.daily_orders\"\n        x=\"category\"\n        y=\"sum(transactions)\"\n    /%}\n{% /row %}"
+   }
+  ]
+ },
+ {
+  "render": "sankey_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% sankey_chart\n    data=\"demo.order_details\"\n    source=\"category\"\n    target=\"item_name\"\n    value=\"sum(quantity)\"\n/%}"
+   },
+   {
+    "title": "Sankey Chart with Custom Colors",
+    "source": "{% sankey_chart\n    data=\"demo.order_details\"\n    source=\"category\"\n    target=\"item_name\"\n    value=\"sum(quantity)\"\n    title=\"Category to Item Flow\"\n    chart_options={\n        color_palette = [\"#0d0887\", \"#6300a7\", \"#a62098\", \"#d5546e\", \"#f68d45\", \"#fcd225\", \"#f0f921\"]\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "scatter",
+  "category": "chart_slot",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Basic Scatter Series",
+    "source": "{% combo_chart data=\"demo.daily_orders\" x=\"date\" date_grain=\"month\" %}\n    {% scatter y=\"sum(total_sales)\" /%}\n{% /combo_chart %}"
+   }
+  ]
+ },
+ {
+  "render": "scatter_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% scatter_chart\n    data=\"demo.daily_orders\"\n    x=\"avg(avg_transaction_value)\"\n    y=\"sum(total_sales)\"\n    series=\"category\"\n/%}"
+   },
+   {
+    "title": "Scatter Chart with Formatting",
+    "source": "{% scatter_chart\n    data=\"demo.daily_orders\"\n    x=\"avg(avg_transaction_value)\"\n    y=\"sum(total_sales)\"\n    x_fmt=\"usd\"\n    y_fmt=\"usd\"\n    title=\"Sales vs Transaction Value\"\n    subtitle=\"Correlation between average transaction value and total sales\"\n    series=\"category\"\n/%}"
+   },
+   {
+    "title": "Scatter Chart with Point Titles",
+    "source": "{% scatter_chart\n    data=\"demo.daily_orders\"\n    x=\"avg(avg_transaction_value)\"\n    y=\"sum(total_sales)\"\n    point_title=\"category\"\n    x_fmt=\"usd\"\n    y_fmt=\"usd\"\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "series",
+  "category": "chart_slot",
+  "wrapper": "none",
+  "examples": []
+ },
+ {
+  "render": "slider",
+  "category": "input",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Using `filters`",
+    "source": "{% slider\n    id=\"sales_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"total_sales\"\n    title=\"Sales Amount\"\n/%}\n\n{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    filters=[\"sales_filter\"]\n    date_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "Using `where`",
+    "source": "{% slider\n    id=\"sales_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"total_sales\"\n    range=true\n/%}\n\n{% table\n    data=\"demo.daily_orders\"\n    where=\"total_sales {{sales_filter.between}}\"\n/%}"
+   },
+   {
+    "title": "Using Inline SQL",
+    "source": "{% slider\n    id=\"sales_filter\"\n    data=\"demo.daily_orders\"\n    value_column=\"total_sales\"\n    range=true\n/%}\n\n```sql filtered_orders\nselect * from demo.daily_orders\nwhere total_sales {{sales_filter.between}}\n```\n\n{% table data=\"filtered_orders\" /%}"
+   }
+  ]
+ },
+ {
+  "render": "slot",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Default slot — a component that wraps caller content",
+    "source": "<!-- components/warning_box.md -->\n---\ntype: component\nattributes:\n    tone:\n        type: string\n        default: info\n        options: [info, success, warning, error]\n---\n\n{% callout type=\"{{$tone}}\" %}\n{% slot /%}\n{% /callout %}\n\n<!-- On a page -->\n{% warning_box tone=\"warning\" %}\nRevenue fell **12%** in EMEA. {% big_value data=\"emea\" value=\"rev\" /%}\n{% /warning_box %}",
+    "skip": "reads data it does not define (emea)"
+   },
+   {
+    "title": "Named slots with fallback content",
+    "source": "<!-- components/metric_card.md -->\n{% grid cols=2 %}\n{% slot name=\"figure\" /%}\n{% slot name=\"detail\" %}_No detail provided._{% /slot %}\n{% /grid %}\n\n<!-- On a page -->\n{% metric_card %}\n{% fill slot=\"figure\" %}{% big_value data=\"kpis\" value=\"rev\" /%}{% /fill %}\n{% fill slot=\"detail\" %}{% line_chart data=\"monthly\" x=\"month\" y=\"rev\" /%}{% /fill %}\n{% /metric_card %}",
+    "skip": "reads data it does not define (kpis, monthly)"
+   }
+  ]
+ },
+ {
+  "render": "sparkline",
+  "category": "chart_slot",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% sparkline\n\tdata=\"demo.daily_orders\"\n\ty=\"total_sales\"\n\tx=\"date\"\n\tdate_grain=\"month\"\n\tdate_range={\n\t\tdate=\"date\"\n\t\trange=\"last 12 months\"\n\t}\n/%}"
+   },
+   {
+    "title": "Semantic metric",
+    "source": "{% sparkline metric=\"revenue\" /%}",
+    "skip": "uses the semantic metrics catalog, which Cupola reports do not configure"
+   },
+   {
+    "title": "Sparkline with Color",
+    "source": "{% sparkline\n    data=\"demo.daily_orders\"\n    y=\"total_sales\"\n    x=\"date\"\n    color=\"blue\"\n/%}"
+   },
+   {
+    "title": "Sparkline with Type",
+    "source": "{% sparkline\n    data=\"demo.daily_orders\"\n    y=\"total_sales\"\n    x=\"date\"\n    type=\"area\"\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "stack",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "<!-- 2 big values stacked vertically -->\n{% stack  %}\n    {% big_value\n        data=\"demo.daily_orders\"\n        value=\"sum(total_sales)\"\n    /%}\n    {% big_value\n        data=\"demo.daily_orders\"\n        value=\"avg(avg_transaction_value)\"\n    /%}\n{% /stack %}"
+   }
+  ]
+ },
+ {
+  "render": "tab",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Tabs with Content",
+    "source": "{% tabs %}\n    {% tab title=\"Overview\" %}\n        This is the overview content.\n    {% /tab %}\n    {% tab title=\"Details\" %}\n        This is the details content.\n    {% /tab %}\n    {% tab title=\"Settings\" icon=\"settings\" %}\n        This is the settings content.\n    {% /tab %}\n{% /tabs %}"
+   }
+  ]
+ },
+ {
+  "render": "table",
+  "category": "table",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% table\n    data=\"demo.daily_orders\"\n%}\n    {% dimension\n        value=\"category\"\n    /%}\n    {% pivot\n        value=\"date\"\n        date_grain=\"year\"\n    /%}\n    {% measure\n        value=\"sum(total_sales)\"\n        fmt=\"usd1m\"\n    /%}\n{% /table %}"
+   },
+   {
+    "title": "Date Range Filtering",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    date_range={\n      range=\"last 12 months\"\n      date=\"date\"\n    }\n    fmt=\"usd1m\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    date_range={\n      range=\"last 6 months\"\n      date=\"date\"\n    }\n    fmt=\"usd1m\"\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Pivoting",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% pivot\n    value=\"date\"\n    date_grain=\"year\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    fmt=\"usd1m\"\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Prior Year Comparison",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    date_range={\n      range=\"last 12 months\"\n      date=\"date\"\n    }\n    comparison={\n      compare_vs=\"prior year\"\n    }\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Calculated Measures",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% measure\n    value=\"sum(total_sales) / sum(transactions) as avg_price\" \n    fmt=\"usd2\"\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Custom Grouping",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"case when category in ('Home','Clothing') then 'Home & Clothing' else 'Other' end as group\"\n  /%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    fmt=\"usd1m\"\n  /%}\n  {% measure\n    value=\"sum(total_sales) / sum(transactions) as avg_price\"\n    fmt=\"usd2\"\n  /%}\n{% /table %}",
+    "skip": "fails in Evidence itself: aliases a dimension as the reserved word `group`, which Evidence does not quote"
+   },
+   {
+    "title": "Viz: Color Scale",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    fmt=\"usd1m\"\n    viz=\"color\"\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Color Scale with Custom Colors",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    fmt=\"usd1m\"\n    viz=\"color\"\n    color_options={\n      color_scale=[\"#c0392b\",\"#f4f4f4\",\"#27ae60\"]\n    }\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Bar",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    fmt=\"usd1m\"\n    viz=\"bar\"\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Bar with Custom Colors",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    fmt=\"usd1m\"\n    viz=\"bar\"\n    bar_options={\n      bar_color=\"#2c7d00\"\n    }\n  /%}\n  {% measure\n    value=\"sum(transactions)\"\n    viz=\"bar\"\n    bar_options={\n      bar_color=\"#339e9c\"\n    }\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Delta",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    date_range={\n      range=\"last 12 months\"\n      date=\"date\"\n    }\n    comparison={\n      compare_vs=\"prior year\"\n    }\n    viz=\"delta\"\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Viz: Sparkline",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% pivot\n    value=\"date\"\n    date_grain=\"year\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    fmt=\"usd1m\"\n    viz=\"sparkline\"\n    sparkline_options={\n      x=\"date\"\n      type=\"area\"\n    }\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Links",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n    link=\"concat('https://www.google.com/search?q=',category)\"\n    link_new_tab=true\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Column Info",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    fmt=\"usd1m\"\n    info=\"Includes all product sales\"\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Sorting",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    fmt=\"usd1m\"\n    viz=\"color\"\n    sort=\"asc\"\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Date Grains: Day of Week",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n%}\n  {% dimension\n    value=\"date\"\n    date_grain=\"day of week\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n  /%}\n{% /table %}"
+   },
+   {
+    "title": "Repeat Dimension Values",
+    "source": "{% table\n  data=\"demo.daily_orders\"\n  repeat_values=true\n%}\n  {% dimension\n    value=\"category\"\n  /%}\n  {% dimension\n    value=\"item\"\n  /%}\n  {% measure\n    value=\"sum(total_sales)\"\n    fmt=\"usd1m\"\n  /%}\n{% /table %}"
+   }
+  ]
+ },
+ {
+  "render": "table_filter",
+  "category": "input",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Using `filters`",
+    "source": "{% table_filter\n    id=\"my_filter\"\n    data=\"demo.daily_orders\"\n/%}\n\n{% bar_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    filters=[\"my_filter\"]\n    date_grain=\"month\"\n/%}"
+   },
+   {
+    "title": "Using Inline SQL",
+    "source": "{% table_filter\n    id=\"my_filter\"\n    data=\"demo.daily_orders\"\n/%}\n\n```sql filtered_orders\nselect * from demo.daily_orders\nwhere {{my_filter.filter}}\n```\n\n{% table data=\"filtered_orders\" /%}"
+   },
+   {
+    "title": "Custom Title",
+    "source": "{% table_filter\n    id=\"orders_filter\"\n    data=\"demo.daily_orders\"\n    title=\"Order Search\"\n/%}"
+   },
+   {
+    "title": "Mixed Single and Multi Select",
+    "source": "{% table_filter\n    id=\"mixed_filter\"\n    data=\"demo.daily_orders\"\n    columns=[\"category\", \"item\"]\n    single_select=[\"category\"]\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "tabs",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% tabs %}\n\t{% tab title=\"Tab 1\" icon=\"trending-up\" %}\n\t\tContent for tab 1\n\t{% /tab %}\n\t{% tab title=\"Tab 2\" icon=\"alert-circle\" %}\n\t\tContent for tab 2\n\t{% /tab %}\n{% /tabs %}"
+   },
+   {
+    "title": "Well Variant",
+    "source": "{% tabs variant=\"well\" %}\n\t{% tab title=\"Tab 1\" icon=\"trending-up\" %}\n\t\tContent for tab 1\n\t{% /tab %}\n\t{% tab title=\"Tab 2\" icon=\"alert-circle\" %}\n\t\tContent for tab 2\n\t{% /tab %}\n{% /tabs %}"
+   }
+  ]
+ },
+ {
+  "render": "target_comparison",
+  "category": "input",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "Compare vs Budget",
+    "source": "{% target_comparison \n    name=\"vs Budget\" \n    target=\"budget_amount\"\n/%}"
+   },
+   {
+    "title": "Compare vs Fixed Goal",
+    "source": "{% target_comparison \n    name=\"vs 100K Goal\" \n    target=\"100000\"\n/%}"
+   },
+   {
+    "title": "Compare vs Aggregated Target",
+    "source": "{% target_comparison \n    name=\"vs Target\" \n    target=\"sum(target_sales)\"\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "text_input",
+  "category": "input",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Using `where`",
+    "source": "{% text_input\n    id=\"search\"\n    title=\"Search\"\n    placeholder=\"Enter search term...\"\n/%}\n\n{% table\n    data=\"demo.daily_orders\"\n    where=\"category ilike '%{{search}}%'\"\n/%}"
+   },
+   {
+    "title": "Using Inline SQL",
+    "source": "{% text_input\n    id=\"search\"\n    title=\"Search\"\n    placeholder=\"Enter search term...\"\n/%}\n\n```sql search_results\nselect * from demo.daily_orders\n[[where category ilike '%{{search}}%']]\n```\n\n{% table data=\"search_results\" /%}"
+   }
+  ]
+ },
+ {
+  "render": "toggle",
+  "category": "input",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% toggle\n    id=\"show_legend\"\n    label=\"Show Legend\"\n/%}"
+   },
+   {
+    "title": "Using `where`",
+    "source": "{% toggle\n    id=\"active_only\"\n    label=\"Active Only\"\n/%}\n\n{% table\n    data=\"demo.daily_orders\"\n    where=\"{{active_only}} = false or total_sales > 1000\"\n/%}"
+   },
+   {
+    "title": "Using Inline SQL",
+    "source": "{% toggle\n    id=\"active_only\"\n    label=\"Active Only\"\n/%}\n\n```sql filtered_orders\nselect * from demo.daily_orders\nwhere {{active_only}} = false or total_sales > 1000\n```\n\n{% table data=\"filtered_orders\" /%}"
+   }
+  ]
+ },
+ {
+  "render": "treemap",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% treemap\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n/%}"
+   },
+   {
+    "title": "Grouped Treemap",
+    "source": "{% treemap\n    data=\"demo.order_details\"\n    group=\"category\"\n    category=\"item_name\"\n    value=\"sum(quantity)\"\n    title=\"Quantity by Category and Item\"\n/%}"
+   },
+   {
+    "title": "With Values on Labels",
+    "source": "{% treemap\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n    title=\"Sales by Category\"\n    value_fmt=\"usd\"\n    show_values=true\n/%}"
+   },
+   {
+    "title": "With Custom Colors",
+    "source": "{% treemap\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n    title=\"Sales by Category\"\n    chart_options={\n        color_palette = [\"#0d0887\", \"#6300a7\", \"#a62098\", \"#d5546e\", \"#f68d45\", \"#fcd225\", \"#f0f921\"]\n    }\n/%}"
+   },
+   {
+    "title": "With Raw ECharts Overrides",
+    "source": "{% treemap\n    data=\"demo.daily_orders\"\n    category=\"category\"\n    value=\"sum(total_sales)\"\n    echarts_series_options={\n        itemStyle={ borderRadius=8 gapWidth=4 }\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "value",
+  "category": "value",
+  "wrapper": "inline",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% value data=\"demo.daily_orders\" value=\"sum(total_sales)\" /%}"
+   }
+  ]
+ },
+ {
+  "render": "waterfall_chart",
+  "category": "chart",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "```sql revenue_bridge\nSELECT 1 AS step_order, 'Q1 Revenue' AS step, 1200000 AS amount, 'total' AS bar_type\nUNION ALL SELECT 2, 'New customers', 340000, 'change'\nUNION ALL SELECT 3, 'Expansion', 180000, 'change'\nUNION ALL SELECT 4, 'Price increase', 95000, 'change'\nUNION ALL SELECT 5, 'Churn', -260000, 'change'\nUNION ALL SELECT 6, 'Contraction', -85000, 'change'\nUNION ALL SELECT 7, 'Q2 Revenue', NULL, 'total'\n```\n\n{% waterfall_chart\n    data=\"revenue_bridge\"\n    x=\"step\"\n    y=\"amount\"\n    bar_type=\"bar_type\"\n    order=\"step_order\"\n    y_fmt=\"usd0k\"\n    title=\"Q1 to Q2 revenue bridge\"\n/%}"
+   },
+   {
+    "title": "Marking totals by label",
+    "source": "```sql headcount\nSELECT 1 AS step_order, 'Start of year' AS step, 210 AS people\nUNION ALL SELECT 2, 'Hires', 64\nUNION ALL SELECT 3, 'Transfers in', 12\nUNION ALL SELECT 4, 'Transfers out', -9\nUNION ALL SELECT 5, 'Attrition', -31\n```\n\n{% waterfall_chart\n    data=\"headcount\"\n    x=\"step\"\n    y=\"people\"\n    order=\"step_order\"\n    totals=[\"Start of year\"]\n    total_label=\"End of year\"\n    title=\"Headcount walk\"\n/%}"
+   },
+   {
+    "title": "From raw data",
+    "source": "{% waterfall_chart\n    data=\"demo.daily_orders\"\n    x=\"category\"\n    y=\"sum(total_sales)\"\n    y_fmt=\"usd\"\n    title=\"Sales by category\"\n    subtitle=\"Each bar is a category's contribution to total sales\"\n/%}"
+   },
+   {
+    "title": "Build-up over time",
+    "source": "{% waterfall_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    date_grain=\"month\"\n    x_sort=\"asc\"\n    y=\"sum(total_sales)\"\n    date_range={ date=\"date\" range=\"2024-07-01 to 2024-12-31\" }\n    y_fmt=\"usd0k\"\n    total_label=\"H2 total\"\n    title=\"Monthly sales build-up\"\n/%}"
+   },
+   {
+    "title": "Change between periods, by dimension",
+    "source": "{% waterfall_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    date_grain=\"year\"\n    y=\"sum(total_sales)\"\n    breakdown=\"category\"\n    date_range={ date=\"date\" range=\"2023-01-01 to 2024-12-31\" }\n    y_fmt=\"usd\"\n    title=\"What drove sales growth in 2024\"\n/%}"
+   },
+   {
+    "title": "Custom colors and no connectors",
+    "source": "```sql cash_flow\nSELECT 1 AS step_order, 'Opening cash' AS step, 500 AS amount, 'total' AS kind\nUNION ALL SELECT 2, 'Operating', 320, 'change'\nUNION ALL SELECT 3, 'Investing', -410, 'change'\nUNION ALL SELECT 4, 'Financing', 150, 'change'\n```\n\n{% waterfall_chart\n    data=\"cash_flow\"\n    x=\"step\"\n    y=\"amount\"\n    bar_type=\"kind\"\n    order=\"step_order\"\n    total_label=\"Closing cash\"\n    connectors=false\n    y_fmt=\"usd0\"\n    chart_options={\n        increase_color=\"#0ea5e9\"\n        decrease_color=\"#f97316\"\n        total_color=\"#334155\"\n    }\n/%}"
+   }
+  ]
+ },
+ {
+  "render": "workflow_period",
+  "category": "input",
+  "wrapper": "none",
+  "examples": []
+ }
+]

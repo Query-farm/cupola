@@ -1,7 +1,7 @@
 import { sessionCatalogs } from "@/lib/catalog-store";
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square, Printer } from 'lucide-react';
+import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square, Printer, FileDown } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { engine, waitForEngineReady } from '../../lib/shell-bridge';
@@ -80,6 +80,32 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   const [run, setRun] = useState<ReportRun | null>(null);
   const [updated, setUpdated] = useState('');
   useReportPrint(workspace, !library && Boolean(run));
+  const [exporting, setExporting] = useState(false);
+  async function exportPdf() {
+    const root = workspace.current?.querySelector('[data-testid="evidence-preview"]')?.shadowRoot?.querySelector('[data-markdoc-content]');
+    if (!run || !root) return;
+    setExporting(true); setError(''); setNotice('Preparing PDF…');
+    try {
+      const { exportReportPdf, pdfFileName } = await import('../../lib/evidence/typst/export-pdf');
+      const meta = [
+        ...(updated ? [{ label: 'Updated', value: updated }] : []),
+        ...run.report.parameters.map(parameter => ({ label: parameter.label, value: String(run.values[parameter.key] ?? '—') })),
+      ];
+      const { pdf, omitted } = await exportReportPdf({
+        root, title: report.title, meta, fonts: reportTheme.config.fonts,
+        accent: reportTheme.mode === 'light' ? (reportTheme.style as Record<string, string>)['--primary'] : undefined,
+      });
+      const url = URL.createObjectURL(pdf);
+      const link = Object.assign(document.createElement('a'), { href: url, download: pdfFileName(report.title) });
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      const skipped = [...new Set(omitted)].map(name => name.replaceAll('_', ' '));
+      setNotice(skipped.length ? `PDF exported. Not included: ${skipped.join(', ')}.` : 'PDF exported.');
+    } catch (cause) {
+      setNotice('');
+      setError(`PDF export failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally { setExporting(false); }
+  }
   const [logs, setLogs] = useState<QueryLogEntry[]>([]);
   const booted = useRef(false);
   const busyRef = useRef(false);
@@ -266,6 +292,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
             <Button variant="ghost" size="icon" disabled={busy} onClick={() => save(true)} aria-label="Save a copy" title="Save a copy"><Copy /></Button>
             <Button variant="field" disabled={refreshing} onClick={() => void refresh()} title="⌘ / Ctrl + Enter"><RefreshCw className={refreshing ? 'animate-spin' : ''} />{refreshing ? 'Refreshing…' : editing ? 'Update preview' : 'Refresh report'}</Button>
             <Button variant="outline" disabled={refreshing || !run} onClick={() => window.print()} title="Print the current report view or save as PDF · Selected tabs and table pages"><Printer />Print report</Button>
+            <Button variant="outline" disabled={refreshing || !run || exporting} onClick={() => void exportPdf()} title="Download the current report view as a typeset PDF · Selected tabs and table pages"><FileDown />{exporting ? 'Exporting…' : 'Export PDF'}</Button>
             {refreshing && <Button variant="outline" onClick={stopRefresh}><Square />Stop refresh</Button>}
             {editing && <Button variant="outline" onClick={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }}>{focused && editorOnly ? <Minimize2 /> : <Maximize2 />}{focused && editorOnly ? 'Exit full-screen editor' : 'Full-screen editor'}</Button>}
             <Button variant="ghost" size="icon" aria-label={focused ? 'Exit focus mode' : 'Focus report'} title={focused ? 'Exit focus mode · Esc' : 'Focus report'} aria-pressed={focused} onClick={() => { if (focused) setEditorOnly(false); setFocused(!focused); }}>{focused ? <Minimize2 /> : <Maximize2 />}</Button>
