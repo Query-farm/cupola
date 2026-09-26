@@ -22,6 +22,15 @@ export const VGI_VERSION = process.env.VGI_VERSION;
 // at whatever else is squatting on 4321 (and playwright's `baseURL` doesn't
 // apply — these specs navigate with absolute URLs).
 export const APP_ORIGIN = process.env.CUPOLA_APP_ORIGIN || "http://localhost:4321";
+// Evidence specs run against Cupola's test service (~/Development/vgi-cupola-test):
+// the weather example's functions replaying recorded Open-Meteo data, plus the
+// `demo` schema. The /evidence pages default to the real Open-Meteo worker.
+export const EVIDENCE_SERVICE_URL = process.env.CUPOLA_EVIDENCE_SERVICE || "https://vgi-cupola-test.rusty-bb6.workers.dev";
+/** An Evidence page path (`evidence`, `evidence/reports`, `evidence?evidence_report=x`)
+ *  with `service` set to the Evidence test service. */
+export function evidencePath(path: string): string {
+  return `${path}${path.includes("?") ? "&" : "?"}service=${encodeURIComponent(EVIDENCE_SERVICE_URL)}`;
+}
 export const APP_URL = `${APP_ORIGIN}${BASE}?service=${encodeURIComponent(SERVICE_URL)}${VGI_VERSION ? `&vgi_version=${encodeURIComponent(VGI_VERSION)}` : ""}`;
 
 // Tight timeouts: prefer fast failure over hanging. The real wait is the very

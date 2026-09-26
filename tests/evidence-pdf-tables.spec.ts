@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 import { test, expect } from '@playwright/test';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
@@ -20,9 +21,9 @@ async function pageTexts(path: string): Promise<string[]> {
 
 test('paged tables print every row, with the header on every page', async ({ page }, testInfo) => {
   test.setTimeout(180_000);
-  await page.addInitScript(() => {
+  await page.addInitScript((serviceUrl) => {
     const report = {
-      version: 1, id: 'pdf-tables', title: 'Long tables', serviceUrl: 'https://vgi-open-meteo.rusty-bb6.workers.dev',
+      version: 1, id: 'pdf-tables', title: 'Long tables', serviceUrl,
       setupSql: '', createdAt: 1, updatedAt: 1, parameters: [], values: {},
       source: '# Long tables\n\n'
         + '```sql regions\nSELECT range AS n, \'Region \' || range AS region, range * 10 AS revenue FROM range(1, 451)\n```\n\n'
@@ -31,8 +32,8 @@ test('paged tables print every row, with the header on every page', async ({ pag
         + '{% table data="items" title="Every item" page_size=200 /%}\n',
     };
     try { localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(report.serviceUrl)}:${report.id}`, JSON.stringify(report)); } catch { /* sandboxed frame */ }
-  });
-  await page.goto('evidence?evidence_report=pdf-tables');
+  }, EVIDENCE_SERVICE_URL);
+  await page.goto(evidencePath('evidence?evidence_report=pdf-tables'));
   const panel = page.getByTestId('evidence-panel');
   const regions = panel.locator('[data-render="table"]').filter({ hasText: 'Every region' });
   await expect(regions.getByText('1 - 10 of 450 rows')).toBeVisible({ timeout: 90_000 });

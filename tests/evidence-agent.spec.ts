@@ -1,6 +1,7 @@
+import { evidencePath } from './helpers';
 import { test, expect } from '@playwright/test';
 
-test.use({ channel: 'chrome', viewport: { width: 1500, height: 1100 } });
+test.use({ viewport: { width: 1500, height: 1100 } });
 function stream(tool?: { name: string; input: unknown }) {
   const events = [
     { type: 'message_start', message: { id: 'mock-message', usage: { input_tokens: 100 } } },
@@ -31,7 +32,7 @@ test('report agent grounds tools, reviews edits, protects newer drafts and share
     if (count === 3 || count === 5 || count === 7) tool = { name: 'propose_report_edit', input: { summary: 'Add a concise temperature overview', changes: { title: 'Agent overview', source } } };
     await route.fulfill({ status: 200, contentType: 'text/event-stream', body: stream(tool) });
   });
-  await page.goto('evidence/reports');
+  await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
@@ -84,7 +85,7 @@ test('report agent grounds tools, reviews edits, protects newer drafts and share
 test('agent explains missing credentials without issuing a request', async ({ page }) => {
   let requests = 0;
   await page.route('https://api.anthropic.com/v1/messages', route => { requests++; return route.abort(); });
-  await page.goto('evidence/reports');
+  await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
@@ -104,7 +105,7 @@ test('stopping an agent request leaves the draft and shared engine intact; API f
     await new Promise<void>(resolve => { release = resolve; });
     await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: { type: 'authentication_error', message: 'Invalid test API key' } }) }).catch(() => {});
   });
-  await page.goto('evidence/reports');
+  await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
@@ -131,7 +132,7 @@ test('asking about a pending proposal keeps it available in the conversation', a
     requests++;
     return route.fulfill({ status: 200, contentType: 'text/event-stream', body: stream(requests === 1 ? { name: 'propose_report_edit', input: { summary: 'Rename the report', changes: { title: 'Weather briefing' } } } : undefined) });
   });
-  await page.goto('evidence/reports');
+  await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
@@ -159,7 +160,7 @@ test('slow and interrupted requests show progress and can retry without losing t
     }
     return route.fulfill({ status: 200, contentType: 'text/event-stream', body: stream(requests.length === 2 ? { name: 'propose_report_edit', input: { summary: 'Rename report', changes: { title: 'Retry succeeded' } } } : undefined) });
   });
-  await page.goto('evidence/reports');
+  await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
@@ -205,7 +206,7 @@ test('keep-alives distinguish a live connection from waiting for output and stop
       return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
     }) as typeof window.fetch;
   });
-  await page.goto('evidence/reports');
+  await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });

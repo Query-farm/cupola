@@ -1,3 +1,4 @@
+import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 import { test, expect, type Page } from '@playwright/test';
 import { catalogComponentReports, DEMO_SETUP_SQL } from './fixtures/evidence-catalog-reports';
 
@@ -47,8 +48,8 @@ test('maps draw their basemap on screen and in the PDF', async ({ page }) => {
   await page.addInitScript(([saved]) => {
     try { localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(saved.serviceUrl)}:${saved.id}`, JSON.stringify(saved)); } catch { return; }
     (window as { __cupolaPdfDebug?: unknown }).__cupolaPdfDebug = true;
-  }, [{ version: 1, id: 'map-check', title: 'Map check', serviceUrl: 'https://vgi-open-meteo.rusty-bb6.workers.dev', setupSql: DEMO_SETUP_SQL, createdAt: 1, updatedAt: 1, parameters: [], values: {}, source: report.source }]);
-  await page.goto('evidence?evidence_report=map-check');
+  }, [{ version: 1, id: 'map-check', title: 'Map check', serviceUrl: EVIDENCE_SERVICE_URL, setupSql: DEMO_SETUP_SQL, createdAt: 1, updatedAt: 1, parameters: [], values: {}, source: report.source }]);
+  await page.goto(evidencePath('evidence?evidence_report=map-check'));
   const panel = page.getByTestId('evidence-panel');
   await expect(panel.getByTestId('evidence-document')).toBeVisible({ timeout: 90_000 });
 
@@ -79,8 +80,8 @@ test('the basemap check fails when tiles never load', async ({ page }) => {
   await page.route(/tiles\.openfreemap\.org/, route => route.abort());
   await page.addInitScript(([saved]) => {
     try { localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(saved.serviceUrl)}:${saved.id}`, JSON.stringify(saved)); } catch { return; }
-  }, [{ version: 1, id: 'map-blocked', title: 'Map blocked', serviceUrl: 'https://vgi-open-meteo.rusty-bb6.workers.dev', setupSql: DEMO_SETUP_SQL, createdAt: 1, updatedAt: 1, parameters: [], values: {}, source: report.source }]);
-  await page.goto('evidence?evidence_report=map-blocked');
+  }, [{ version: 1, id: 'map-blocked', title: 'Map blocked', serviceUrl: EVIDENCE_SERVICE_URL, setupSql: DEMO_SETUP_SQL, createdAt: 1, updatedAt: 1, parameters: [], values: {}, source: report.source }]);
+  await page.goto(evidencePath('evidence?evidence_report=map-blocked'));
   await expect(page.getByTestId('evidence-panel').getByTestId('evidence-document')).toBeVisible({ timeout: 90_000 });
   await expect(async () => expect((await colorVariety(page, 'screen')).length).toBe(report.examples)).toPass({ timeout: 60_000 });
   await page.waitForTimeout(3000);

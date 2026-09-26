@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { gotoApp, waitForShellBridge } from './helpers';
+import { gotoApp, waitForShellBridge, evidencePath } from './helpers';
 
-test.use({ channel: 'chrome', viewport: { width: 1500, height: 1100 } });
+test.use({ viewport: { width: 1500, height: 1100 } });
 test('Reports starts at the list and preserves an opened report across tab switches and saved links', async ({ page }) => {
   await gotoApp(page);
   await waitForShellBridge(page);
@@ -37,7 +37,7 @@ test('Reports starts at the list and preserves an opened report across tab switc
 
 test('editor navigation stays on one row and reveals the selected tab at variable widths', async ({ page }) => {
   test.setTimeout(120000);
-  await page.goto('evidence/reports');
+  await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report', exact: true }).click();
   const nav = panel.getByTestId('evidence-editor-navigation');

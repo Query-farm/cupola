@@ -6,32 +6,17 @@ export interface CatalogExample { title: string; source: string; skip?: string }
 export interface CatalogComponent { render: string; category: string; wrapper: string; examples: CatalogExample[] }
 export const CATALOG = catalog as CatalogComponent[];
 
-/** Deterministic stand-ins for the demo tables the examples read, on the scale the
- * examples assume: from 2021, monthly sales of roughly 2–4.5M (their reference lines
- * sit at 2.5–4.5M, their delta target at 120M), with seasonality and yearly growth.
- * It runs through 2026 so "last 12 months" examples have data relative to today. */
-// An in-memory database named `demo`: the engine's default database is the attached
-// VGI catalog, where CREATE SCHEMA would go to the remote server.
-export const DEMO_SETUP_SQL = `ATTACH IF NOT EXISTS ':memory:' AS demo;
--- Evidence documents some examples in ClickHouse SQL.
-CREATE OR REPLACE TEMP MACRO toStartOfMonth(d) AS date_trunc('month', d);
-CREATE OR REPLACE TABLE demo.main.daily_orders AS
-SELECT CAST(row_number() OVER (ORDER BY d, c.category) AS INTEGER) AS order_id,
-       CAST(d AS DATE) AS date, c.category,
-       round(c.base * (1 + 0.3 * sin(2 * pi() * dayofyear(d) / 365.0 + c.phase)) * (1 + 0.15 * (year(d) - 2021)) * (1 + 0.04 * sin(dayofyear(d) * 1.7 + c.phase)), 2) AS total_sales,
-       CAST(c.base / 60 * (1 + 0.1 * sin(dayofyear(d) * 0.9 + c.phase)) AS INTEGER) AS transactions,
-       round(total_sales / transactions, 2) AS avg_transaction_value,
-       -- Columns individual examples read: units sold, a product line, and an image.
-       CAST(transactions * 1.6 AS INTEGER) AS quantity,
-       ['Standard', 'Premium', 'Clearance'][1 + (dayofyear(d) % 3)] AS item,
-       'https://placehold.co/32x32/png?text=' || left(c.category, 1) AS image_url
-FROM range(DATE '2021-01-01', DATE '2027-01-01', INTERVAL 1 DAY) AS t(d),
-     (VALUES ('Electronics', 36000, 0.0), ('Clothing', 24000, 0.4), ('Home', 19000, 0.9), ('Sports', 14000, 1.5), ('Books', 7000, 2.2)) AS c(category, base, phase);
-CREATE OR REPLACE TABLE demo.main.order_details AS
-SELECT i.category, i.item_name, CAST(12 + (row_number() OVER ()) * 7 % 40 AS INTEGER) AS quantity, i.price
-FROM (VALUES ('Electronics', 'Headphones', 89.0), ('Electronics', 'Keyboard', 59.0), ('Electronics', 'Monitor', 239.0),
-             ('Clothing', 'Jacket', 120.0), ('Clothing', 'Sneakers', 95.0), ('Home', 'Lamp', 45.0), ('Home', 'Blender', 70.0),
-             ('Sports', 'Yoga mat', 30.0), ('Sports', 'Racket', 150.0), ('Books', 'Atlas', 40.0)) AS i(category, item_name, price);`;
+/** The examples read `demo.daily_orders` / `demo.order_details`, which Cupola's test
+ * service serves as its `demo` schema (~/Development/vgi-cupola-test, src/demo.ts): on
+ * the scale the examples assume, from 2021, monthly sales of roughly 2–4.5M (their
+ * reference lines sit at 2.5–4.5M, their delta target at 120M), with seasonality and
+ * yearly growth, through 2026 so "last 12 months" examples have data relative to today.
+ * The service is the attached (default) catalog, so `demo.<table>` resolves to it.
+ * These reports must run against that service (EVIDENCE_SERVICE_URL in helpers.ts).
+ * Seeding an in-memory database named `demo` here instead would make every
+ * `demo.<table>` an ambiguous catalog-or-schema reference. */
+// Evidence documents some examples in ClickHouse SQL.
+export const DEMO_SETUP_SQL = `CREATE OR REPLACE TEMP MACRO toStartOfMonth(d) AS date_trunc('month', d);`;
 
 /** Components whose documented examples cannot run on their own, with a fixture that does. */
 const EXTRA_EXAMPLES: Record<string, CatalogExample[]> = {

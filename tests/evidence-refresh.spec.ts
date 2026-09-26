@@ -1,9 +1,10 @@
+import { evidencePath } from './helpers';
 import { test, expect } from '@playwright/test';
 
-test.use({ channel: 'chrome', viewport: { width: 1500, height: 1100 } });
+test.use({ viewport: { width: 1500, height: 1100 } });
 test('report setup and renderer queries can be stopped, time out, and recover on the same worker', async ({ page }) => {
   test.setTimeout(180_000);
-  await page.goto('evidence/reports');
+  await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report', exact: true }).click({ timeout: 90_000 });
   await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });

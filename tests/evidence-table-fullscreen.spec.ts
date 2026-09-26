@@ -1,11 +1,12 @@
+import { evidencePath } from './helpers';
 import { test, expect } from '@playwright/test';
 
-test.use({ channel: 'chrome', viewport: { width: 1280, height: 900 } });
+test.use({ viewport: { width: 1280, height: 900 } });
 test('expanded tables remain visible, themed and keyboard accessible inside reports', async ({ page }) => {
   test.setTimeout(90000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto('evidence/reports');
+  await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report', exact: true }).click();
   const report = panel.getByTestId('evidence-document');
@@ -24,7 +25,8 @@ test('expanded tables remain visible, themed and keyboard accessible inside repo
   await panel.getByLabel('Report theme', { exact: true }).selectOption('forest');
   await panel.getByLabel('Report color mode').selectOption('dark');
   await panel.getByRole('button', { name: 'View report', exact: true }).click();
-  await panel.getByRole('button', { name: 'Focus report', exact: true }).click();
+  await panel.getByRole('button', { name: 'More report actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Focus report', exact: true }).click();
   await expand.click();
   await expect(dialog).toBeInViewport();
   await expect(dialog).toHaveCSS('background-color', 'rgb(23, 35, 27)');

@@ -25,7 +25,7 @@ const snippets: Record<string, string> = {
   'Two columns': '\n\n{% row %}\n\nAdd components here.\n\n{% /row %}\n',
 };
 
-export function EvidenceEditor({ report, onChange, issues, stale, editorOnly, onTogglePreview, onApplyPreview, previewBusy, dataContext, onRefreshData, reportTheme, catalogs, semanticStates }: { catalogs: readonly CatalogData[]; semanticStates: SemanticDatasetState[]; reportTheme: ReportTheme; dataContext: EvidenceDataContext | null; onRefreshData: () => Promise<void>; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; editorOnly: boolean; onTogglePreview: () => void; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
+export function EvidenceEditor({ fullScreen, onToggleFullScreen, report, onChange, issues, stale, editorOnly, onTogglePreview, onApplyPreview, previewBusy, dataContext, onRefreshData, reportTheme, catalogs, semanticStates }: { fullScreen: boolean; onToggleFullScreen: () => void; catalogs: readonly CatalogData[]; semanticStates: SemanticDatasetState[]; reportTheme: ReportTheme; dataContext: EvidenceDataContext | null; onRefreshData: () => Promise<void>; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; editorOnly: boolean; onTogglePreview: () => void; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
   const [tab, setTab] = useState('agent');
   const [agentOpened, setAgentOpened] = useState(true);
   const source = useRef<EvidenceCodeHandle>(null);
@@ -53,7 +53,11 @@ export function EvidenceEditor({ report, onChange, issues, stale, editorOnly, on
     <div className="space-y-3 border-b p-4">
       <div className="flex flex-wrap justify-between gap-2 text-xs">
         <div className="flex gap-3"><a href="https://docs.evidence.dev/core-concepts/markdown" target="_blank" rel="noopener noreferrer" className="text-primary underline">Evidence docs ↗</a><a href="https://docs.evidence.dev/core-concepts/components" target="_blank" rel="noopener noreferrer" className="text-primary underline">Component reference ↗</a></div>
-        <button type="button" className="text-primary underline" onClick={onTogglePreview}>{editorOnly ? 'Show preview' : 'Hide preview'}</button>
+        <div className="flex gap-3">
+          <button type="button" className="text-primary underline" onClick={onTogglePreview}>{editorOnly ? 'Show preview' : 'Hide preview'}</button>
+          {/* Editor layout controls live with the editor, not in the report toolbar. */}
+          <button type="button" className="text-primary underline" onClick={onToggleFullScreen}>{fullScreen ? 'Exit full-screen editor' : 'Full-screen editor'}</button>
+        </div>
       </div>
       <label className="block space-y-2 text-xs font-medium">Report title<Input aria-label="Report title" value={report.title} onChange={e => onChange({ ...report, title: e.target.value })} /></label>
     </div>

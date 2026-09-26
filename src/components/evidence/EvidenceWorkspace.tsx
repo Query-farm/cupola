@@ -1,14 +1,15 @@
 import { sessionCatalogs } from "@/lib/catalog-store";
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square, Printer, FileDown } from 'lucide-react';
-import { Button } from '../ui/button';
+import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square, FileDown, MoreHorizontal } from 'lucide-react';
+import { Button, buttonVariants } from '../ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu';
 import { Input } from '../ui/input';
 import { engine, waitForEngineReady } from '../../lib/shell-bridge';
 import { compileReportQuery } from '../../lib/reports/parameters';
 import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveParameters, saveEvidenceReport, STORAGE_PREFIX, LEGACY_STORAGE_PREFIX, type EvidenceReport } from '../../lib/evidence/reports';
 import { newEvidenceReport } from '../../lib/evidence/templates';
-import { WEATHER_SERVICE } from '../../lib/evidence/weather';
+import { isWeatherService } from '../../lib/evidence/weather';
 import { quoteIdentifier } from '../../lib/evidence/data-browser';
 import type { EvidenceDataContext } from '../../lib/evidence/data-browser';
 import type { QueryLogEntry } from '../../lib/evidence/haybarn-query-service';
@@ -32,7 +33,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     try { reports = listEvidenceReports(serviceUrl); } catch (e) { error = `Could not read saved reports: ${message(e)}`; }
     const id = new URLSearchParams(window.location.search).get('evidence_report');
     const found = reports.find(report => report.id === id);
-    const report = found ?? newEvidenceReport(serviceUrl, catalogName, serviceUrl === WEATHER_SERVICE);
+    const report = found ?? newEvidenceReport(serviceUrl, catalogName, isWeatherService(serviceUrl));
     return { reports, report, error, saved: found ? JSON.stringify(found) : '', library: isLibraryUrl() || (!found && (defaultToLibrary || Boolean(id))) };
   });
   const [promotion, setPromotion] = useState(consumeReportPromotion);
@@ -271,6 +272,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   }))];
 
   const errorCount = issues.filter(issue => issue.severity === 'error').length;
+  // "Connected" is the normal state: kept for assistive tech, shown only when it isn't.
+  const quietStatus = pendingQueries === 0 && status === 'Connected';
 
   return <div ref={workspace} className={`${focused ? 'fixed inset-0 z-50' : 'h-full'} flex min-h-0 flex-col overflow-hidden bg-background text-foreground`} onKeyDown={event => {
     if (event.defaultPrevented) return;
@@ -282,20 +285,49 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     <header className="z-10 flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-5 py-3">
       {library ? <><FolderOpen className="size-4 text-muted-foreground" /><h1 className="text-sm font-semibold">Saved reports</h1><span className="text-xs text-muted-foreground">{reports.length} {reports.length === 1 ? 'report' : 'reports'}</span>
         <div className="ml-auto flex gap-2">{hasOpenedReport && <Button variant="outline" disabled={busy} onClick={() => { navigate(false, saved ? report.id : undefined); if (!run) void refresh(); }}>Back to report</Button>}<Button onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName), true, true)} disabled={busy}><Plus />New report</Button></div></>
-        : <><Button variant="ghost" onClick={() => navigate(true)}><ArrowLeft />Saved reports</Button><div className="h-5 w-px bg-border" /><FileText className="size-4 text-muted-foreground" /><span className="max-w-64 truncate text-sm font-semibold">{report.title}</span><span role="status" className="text-xs text-muted-foreground">{dirty ? (saved ? 'Unsaved changes' : 'Not saved yet') : 'Saved locally'}</span>
+        : <>
+          <Button variant="ghost" size="sm" className="-ml-2" onClick={() => navigate(true)}><ArrowLeft />Saved reports</Button>
+          <span className="text-muted-foreground" aria-hidden>/</span>
+          <div className="flex min-w-0 flex-col">
+            <span className="max-w-72 truncate text-sm font-semibold">{report.title}</span>
+            <span className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+              <span role="status">{dirty ? (saved ? 'Unsaved changes' : 'Not saved yet') : 'Saved'}</span>
+              {(updated || !quietStatus) && <span aria-hidden>·</span>}
+              <span role="status" aria-label="Report refresh status">
+                <span className={quietStatus ? 'sr-only' : ''}>{pendingQueries > 0 ? 'Refreshing report…' : status}</span>
+                {updated && <span>{quietStatus ? '' : ' · '}Updated {updated}</span>}
+              </span>
+            </span>
+          </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <div className="flex rounded-lg bg-muted p-1" role="group" aria-label="Report mode">
-              <Button variant={editing ? 'ghost' : 'outline'} size="sm" aria-pressed={!editing} onClick={() => { setEditing(false); setEditorOnly(false); }}><Eye />View report</Button>
-              <Button variant={editing ? 'outline' : 'ghost'} size="sm" aria-pressed={editing} onClick={() => setEditing(true)}><Code2 />Edit report</Button>
+              <Button variant={editing ? 'ghost' : 'outline'} size="sm" aria-pressed={!editing} aria-label="View report" onClick={() => { setEditing(false); setEditorOnly(false); }}><Eye />View</Button>
+              <Button variant={editing ? 'outline' : 'ghost'} size="sm" aria-pressed={editing} aria-label="Edit report" title={errorCount ? `${errorCount} report problems` : undefined} onClick={() => setEditing(true)}>
+                <Code2 />Edit
+                {errorCount > 0 && <span className="rounded-full bg-destructive px-1.5 text-[10px] leading-4 font-semibold text-white" data-testid="report-problem-count">{errorCount}</span>}
+              </Button>
             </div>
-            <Button variant="outline" disabled={busy} onClick={() => save()} title="Save in this browser · ⌘ / Ctrl + S"><Save />Save report</Button>
-            <Button variant="ghost" size="icon" disabled={busy} onClick={() => save(true)} aria-label="Save a copy" title="Save a copy"><Copy /></Button>
-            <Button variant="field" disabled={refreshing} onClick={() => void refresh()} title="⌘ / Ctrl + Enter"><RefreshCw className={refreshing ? 'animate-spin' : ''} />{refreshing ? 'Refreshing…' : editing ? 'Update preview' : 'Refresh report'}</Button>
-            <Button variant="outline" disabled={refreshing || !run} onClick={() => window.print()} title="Print the current report view or save as PDF · Selected tabs and table pages"><Printer />Print report</Button>
-            <Button variant="outline" disabled={refreshing || !run || exporting} onClick={() => void exportPdf()} title="Download the current report view as a typeset PDF · Selected tabs and table pages"><FileDown />{exporting ? 'Exporting…' : 'Export PDF'}</Button>
-            {refreshing && <Button variant="outline" onClick={stopRefresh}><Square />Stop refresh</Button>}
-            {editing && <Button variant="outline" onClick={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }}>{focused && editorOnly ? <Minimize2 /> : <Maximize2 />}{focused && editorOnly ? 'Exit full-screen editor' : 'Full-screen editor'}</Button>}
-            <Button variant="ghost" size="icon" aria-label={focused ? 'Exit focus mode' : 'Focus report'} title={focused ? 'Exit focus mode · Esc' : 'Focus report'} aria-pressed={focused} onClick={() => { if (focused) setEditorOnly(false); setFocused(!focused); }}>{focused ? <Minimize2 /> : <Maximize2 />}</Button>
+            {/* One slot: Refresh while idle, Stop while a refresh runs. The dot says
+                edits are waiting to be applied (it replaced a "Changes not applied" banner). */}
+            {refreshing
+              ? <Button variant="outline" onClick={stopRefresh}><Square />Stop refresh</Button>
+              : <Button variant="field" aria-label={editing ? 'Update preview' : 'Refresh report'} title={`${pending ? 'Changes not applied · ' : ''}⌘ / Ctrl + Enter`} onClick={() => void refresh()}>
+                  <RefreshCw />{editing ? 'Update preview' : 'Refresh report'}
+                  {pending && <span role="status" aria-label="Changes not applied" className="size-2 rounded-full bg-amber-400" />}
+                </Button>}
+            {!editing && <Button variant="outline" disabled={refreshing || !run || exporting} onClick={() => void exportPdf()} title="Download the report as a typeset PDF · The selected tab of each tab group, and every table row"><FileDown />{exporting ? 'Exporting…' : 'Export PDF'}</Button>}
+            {dirty && <Button variant="outline" disabled={busy} onClick={() => save()} title="Save in this browser · ⌘ / Ctrl + S"><Save />Save report</Button>}
+            {focused
+              ? <Button variant="ghost" size="icon" aria-label="Exit focus mode" title="Exit focus mode · Esc" onClick={() => { setEditorOnly(false); setFocused(false); }}><Minimize2 /></Button>
+              : <DropdownMenu>
+                  <DropdownMenuTrigger aria-label="More report actions" className={buttonVariants({ variant: 'ghost', size: 'icon' })}><MoreHorizontal /></DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-44">
+                    {editing && <DropdownMenuItem disabled={refreshing || !run || exporting} onClick={() => void exportPdf()}><FileDown />Export PDF</DropdownMenuItem>}
+                    <DropdownMenuItem disabled={busy} onClick={() => save(true)}><Copy />Save a copy</DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => setFocused(true)}><Maximize2 />Focus report</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>}
           </div></>}
 
     </header>
@@ -313,17 +345,11 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
         </td><td className="px-4 py-3 text-xs text-muted-foreground">{item.parameters.map(p => p.label).join(', ') || 'None'}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">{new Date(item.updatedAt).toLocaleString()}</td>
         <td className="px-4 py-3"><div className="flex justify-end gap-2">{item.serviceUrl === serviceUrl ? <Button variant="outline" disabled={busy} onClick={() => openReport(item)}>Open report</Button> : <a className="text-xs text-primary underline" href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/evidence?service=${encodeURIComponent(item.serviceUrl)}&evidence_report=${encodeURIComponent(item.id)}`}>Open service</a>}<Button variant="ghost" size="icon" aria-label={`Copy ${item.title}`} title="Copy report" onClick={() => copySavedReport(item)}><Copy /></Button><Button variant="ghost" size="icon" aria-label={`Delete ${item.title}`} onClick={() => remove(item)}><Trash2 /></Button></div></td>
       </tr>)}</tbody></table></div> : <div className="rounded-lg border border-dashed p-12 text-center"><FileText className="mx-auto mb-3 size-7 text-muted-foreground" /><h2 className="text-sm font-semibold">{reports.length ? 'No matching reports' : 'No saved reports yet'}</h2><p className="mt-2 text-xs text-muted-foreground">{reports.length ? 'Try a different search.' : 'Save your current report or create a new one to start your library.'}</p></div>}
-      {serviceUrl === WEATHER_SERVICE && <Button variant="outline" disabled={busy} onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName, true), true, true)}>Use weather example</Button>}
+      {isWeatherService(serviceUrl) && <Button variant="outline" disabled={busy} onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName, true), true, true)}>Use weather example</Button>}
     </section>
     <main hidden={library} className="min-h-0 flex-1 flex-col" style={{ display: library ? 'none' : 'flex' }}>
       <div ref={split} style={{ '--evidence-editor-width': `clamp(280px, ${editorWidth}%, calc(100% - 288px))` } as CSSProperties} className={`grid min-h-0 flex-1 ${editing && !editorOnly ? 'grid-rows-[minmax(360px,1fr)_minmax(360px,1fr)] overflow-auto lg:grid-rows-1 lg:grid-cols-[minmax(0,1fr)_8px_var(--evidence-editor-width)] lg:overflow-hidden' : 'grid-rows-1'}`}>
         <section style={{ display: editing && editorOnly ? 'none' : undefined }} aria-label={editing ? 'Report preview' : 'Report viewer'} className="flex min-h-0 min-w-0 flex-col">
-          <div className="flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-5 py-2">
-            <span className="text-xs font-semibold">{editing ? 'Preview' : 'Report'}</span>
-            <div className="ml-auto text-xs text-muted-foreground" role="status" aria-label="Report refresh status">{pendingQueries > 0 ? 'Refreshing report…' : status}{updated && <span className="ml-2">· Updated {updated}</span>}</div>
-            {errorCount > 0 && <button type="button" className="text-xs text-destructive underline" onClick={() => setEditing(true)}>{errorCount} report problems</button>}
-            {pending && <span className="rounded bg-accent px-2 py-1 text-xs text-accent-foreground" role="status">Changes not applied · {editing ? 'Update preview' : 'Refresh to apply'}</span>}
-          </div>
           <div data-testid="evidence-viewer-scroll" className="min-h-0 flex-1 overflow-auto bg-muted/20 p-3 md:p-6">
             <article data-testid="evidence-report-surface" data-print-title={report.title} data-report-mode={reportTheme.mode} style={reportTheme.style} aria-busy={busy} className="mx-auto min-w-0 max-w-6xl rounded-lg border bg-card p-5 md:p-8">
               {run && <div className="evidence-print-heading">
@@ -365,7 +391,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
             resizeEditor(event.key === 'Home' ? 25 : event.key === 'End' ? 70 : editorWidth + (event.key === 'ArrowLeft' ? 2 : -2));
           }}
         ><span className="h-10 w-0.5 rounded-full bg-muted-foreground/40" /></div>}
-        <div style={{ display: editing ? 'contents' : 'none' }}><EvidenceEditor catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={() => refresh()} key={report.id} report={report} onChange={change} issues={issues} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => setEditorOnly(!editorOnly)} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); await refresh(next); }} /></div>
+        <div style={{ display: editing ? 'contents' : 'none' }}><EvidenceEditor fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={() => refresh()} key={report.id} report={report} onChange={change} issues={issues} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => setEditorOnly(!editorOnly)} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); await refresh(next); }} /></div>
       </div>
     </main>
   </div>;

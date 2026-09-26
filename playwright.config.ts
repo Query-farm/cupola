@@ -32,6 +32,11 @@ const config = {
   workers: Number(process.env.PLAYWRIGHT_WORKERS) || 4,
   use: {
     baseURL: BASE_URL,
+    // Bundled Chromium by default. Branded Chrome (`PW_CHANNEL=chrome`) spawns
+    // its updater on launch, and Playwright waits for those processes before a
+    // browser counts as closed: ~25s added to every test file that ran long
+    // enough for the updater to wake. The Evidence specs used to pin it.
+    channel: process.env.PW_CHANNEL || undefined,
     actionTimeout: 10_000,
     navigationTimeout: 20_000,
   },

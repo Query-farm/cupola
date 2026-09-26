@@ -1,6 +1,15 @@
 import { quoteIdent } from '../duckdb-query';
 
 export const WEATHER_SERVICE = 'https://vgi-open-meteo.rusty-bb6.workers.dev';
+/** Cupola's test service (~/Development/vgi-cupola-test): the same weather
+ *  functions, replaying recorded Open-Meteo responses, so the e2e suite never
+ *  calls the real API. */
+export const WEATHER_TEST_SERVICE = 'https://vgi-cupola-test.rusty-bb6.workers.dev';
+
+/** Services whose catalog has the Open-Meteo functions the weather example calls. */
+export function isWeatherService(url: string): boolean {
+  return url === WEATHER_SERVICE || url === WEATHER_TEST_SERVICE;
+}
 
 /** One prepared setup statement; all report datasets share this snapshot and engine. */
 export function weatherSetupSql(catalogName: string) {

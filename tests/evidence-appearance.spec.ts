@@ -1,12 +1,12 @@
-import { BASE } from './helpers';
+import { BASE, evidencePath } from './helpers';
 import { test, expect } from '@playwright/test';
 
-test.use({ channel: 'chrome', viewport: { width: 1500, height: 1100 } });
+test.use({ viewport: { width: 1500, height: 1100 } });
 test('report appearance updates without queries and survives save, copy and reopen', async ({ page }) => {
   test.setTimeout(150_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto('evidence/reports');
+  await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report', exact: true }).click();
   await expect(panel.getByTestId('evidence-document')).toContainText('My report', { timeout: 90000 });

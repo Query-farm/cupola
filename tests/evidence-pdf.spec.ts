@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 import { test, expect } from '@playwright/test';
 
 test.use({ viewport: { width: 1500, height: 1100 }, acceptDownloads: true });
@@ -10,10 +11,10 @@ test('Evidence exports a typeset PDF of the rendered report', async ({ page }, t
   test.setTimeout(120_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.addInitScript(() => {
+  await page.addInitScript((serviceUrl) => {
     const report = {
       version: 1, id: 'pdf-check', title: 'PDF check report',
-      serviceUrl: 'https://vgi-open-meteo.rusty-bb6.workers.dev',
+      serviceUrl,
       setupSql: '', createdAt: 1, updatedAt: 1,
       parameters: [{ id: 'region', key: 'region', label: 'Region', type: 'text', required: true, defaultValue: 'North & "South" #1' }],
       values: {},
@@ -32,8 +33,8 @@ test('Evidence exports a typeset PDF of the rendered report', async ({ page }, t
     };
     localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(report.serviceUrl)}:${report.id}`, JSON.stringify(report));
     (window as { __cupolaPdfDebug?: unknown }).__cupolaPdfDebug = true;
-  });
-  await page.goto('evidence?evidence_report=pdf-check');
+  }, EVIDENCE_SERVICE_URL);
+  await page.goto(evidencePath('evidence?evidence_report=pdf-check'));
   const panel = page.getByTestId('evidence-panel');
   const report = panel.getByTestId('evidence-document');
   await expect(report.locator('[data-echarts-ready="true"]')).toHaveCount(2, { timeout: 90_000 });

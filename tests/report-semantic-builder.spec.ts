@@ -9,7 +9,6 @@ import {
   customerRelationship,
 } from "./fixtures/report-semantic-catalogs";
 
-test.use({ channel: "chrome" });
 
 const fixtureUrl = `${BASE}tests/fixtures/report-semantic-browser.tsx`;
 async function setup(

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 import { test, expect, type Page } from '@playwright/test';
 import { catalogReports, DEMO_SETUP_SQL } from './fixtures/evidence-catalog-reports';
 
@@ -35,8 +36,8 @@ for (const report of catalogReports()) {
       // Init scripts also run inside Evidence's sandboxed iframes, which have no storage.
       try { localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(saved.serviceUrl)}:${saved.id}`, JSON.stringify(saved)); } catch { return; }
       (window as { __cupolaPdfDebug?: unknown }).__cupolaPdfDebug = true;
-    }, [{ version: 1, id: report.id, title: report.title, serviceUrl: 'https://vgi-open-meteo.rusty-bb6.workers.dev', setupSql: DEMO_SETUP_SQL, createdAt: 1, updatedAt: 1, parameters: [], values: {}, source: report.source }]);
-    await page.goto(`evidence?evidence_report=${report.id}`);
+    }, [{ version: 1, id: report.id, title: report.title, serviceUrl: EVIDENCE_SERVICE_URL, setupSql: DEMO_SETUP_SQL, createdAt: 1, updatedAt: 1, parameters: [], values: {}, source: report.source }]);
+    await page.goto(evidencePath(`evidence?evidence_report=${report.id}`));
     await settle(page);
 
     const onScreen = await page.evaluate(() => {

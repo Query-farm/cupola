@@ -1,10 +1,10 @@
-import { BASE } from './helpers';
+import { BASE, evidencePath } from './helpers';
 import { test, expect } from '@playwright/test';
 
-test.use({ channel: 'chrome', viewport: { width: 1500, height: 1100 } });
+test.use({ viewport: { width: 1500, height: 1100 } });
 test('semantic datasets feed Evidence and live pivots preserve configuration', async ({ page }) => {
   test.setTimeout(180000);
-  await page.goto('evidence/reports');
+  await page.goto(evidencePath('evidence/reports'));
   await expect.poll(() => page.evaluate(() => Boolean((window as any).__bridge?.queryPrepared)), { timeout: 90000 }).toBe(true);
   await page.evaluate(async fixtureUrl => {
     (window as any).__semanticWorker = (window as any).__bridge.worker;

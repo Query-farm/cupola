@@ -1,3 +1,4 @@
+import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 import { test, expect } from '@playwright/test';
 
 test.use({ viewport: { width: 1500, height: 1100 } });
@@ -6,10 +7,10 @@ test('Evidence prints a paginated document with charts, applied parameters and n
   test.setTimeout(120_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.addInitScript(() => {
+  await page.addInitScript((serviceUrl) => {
     const report = {
       version: 1, id: 'print-check', title: 'Printable sales report',
-      serviceUrl: 'https://vgi-open-meteo.rusty-bb6.workers.dev',
+      serviceUrl,
       setupSql: '', createdAt: 1, updatedAt: 1,
       parameters: [{ id: 'region', key: 'region', label: 'Region', type: 'text', required: true, defaultValue: 'Applied region' }],
       values: {},
@@ -20,14 +21,17 @@ test('Evidence prints a paginated document with charts, applied parameters and n
         '## End of printable report\n\nFinal report marker.',
     };
     localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(report.serviceUrl)}:${report.id}`, JSON.stringify(report));
-  });
-  await page.goto('evidence?evidence_report=print-check');
+  }, EVIDENCE_SERVICE_URL);
+  await page.goto(evidencePath('evidence?evidence_report=print-check'));
   const panel = page.getByTestId('evidence-panel');
-  const print = panel.getByRole('button', { name: 'Print report', exact: true });
+  // There is no Print button (Export PDF replaced it); ⌘P and the browser's Print
+  // menu still print through before/afterprint. The View/Edit switch, present in
+  // every mode, stands in for the app chrome printing must hide.
+  const toolbar = panel.getByRole('group', { name: 'Report mode', exact: true });
   const report = panel.getByTestId('evidence-document');
   await expect(report.locator('tbody tr')).toHaveCount(80, { timeout: 90_000 });
   await expect(report.locator('[data-echarts-ready="true"] canvas')).toBeVisible();
-  await expect(print).toBeEnabled();
+  await expect(toolbar).toBeVisible();
   const title = await page.title();
   // Draft parameters must not mislabel the data from the last applied run.
   await panel.getByLabel('Region', { exact: true }).fill('Unapplied region');
@@ -35,12 +39,11 @@ test('Evidence prints a paginated document with charts, applied parameters and n
   await panel.getByRole('button', { name: 'Full-screen editor', exact: true }).click();
   await expect(panel.getByRole('region', { name: 'Report preview', exact: true })).toBeHidden();
 
-  // Exercise the button and the same native events used by browser shortcuts.
-  await page.evaluate(() => { window.print = () => window.dispatchEvent(new Event('beforeprint')); });
-  await print.click();
+  // The native event ⌘P and the browser's Print menu fire.
+  await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
   await page.emulateMedia({ media: 'print' });
   await expect(panel.getByRole('complementary', { name: 'Report editor' })).toBeHidden();
-  await expect(print).toBeHidden();
+  await expect(toolbar).toBeHidden();
   await expect(panel.locator('.evidence-print-heading')).toContainText('Applied region');
   await expect(panel.locator('.evidence-print-heading')).not.toContainText('Unapplied region');
   await expect(report.getByRole('heading', { name: 'End of printable report' })).toBeVisible();
@@ -79,7 +82,7 @@ test('Evidence prints a paginated document with charts, applied parameters and n
   await expect(report.locator('[data-echarts-ready="true"] canvas')).toBeVisible();
   const viewerPdf = await page.pdf({ path: testInfo.outputPath('evidence-viewer.pdf'), format: 'A4', printBackground: true });
   expect((viewerPdf.toString('latin1').match(/\/Type\s*\/Page\b/g) ?? []).length).toBeGreaterThanOrEqual(3);
-  await expect(print).toBeVisible();
+  await expect(toolbar).toBeVisible();
   await page.getByTestId('tab-catalog').click();
   await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
   await expect(page.locator('[data-evidence-print-path]')).toHaveCount(0);

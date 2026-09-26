@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
+import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 import { test, expect } from '@playwright/test';
 
-test.use({ channel: 'chrome', viewport: { width: 1500, height: 1100 } });
+test.use({ viewport: { width: 1500, height: 1100 } });
 test('live Evidence report reuses the shell worker across refresh, editing and tabs', async ({ page }) => {
   test.setTimeout(180_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto('evidence');
+  await page.goto(evidencePath('evidence'));
   const panel = page.getByTestId('evidence-panel');
   const report = panel.getByTestId('evidence-document');
   await expect(report.getByRole('heading', { name: 'Your week outdoors', exact: true })).toBeVisible({ timeout: 120_000 });
@@ -87,7 +88,7 @@ test('live Evidence report reuses the shell worker across refresh, editing and t
   await panel.getByRole('tab', { name: 'Code', exact: true }).click();
   const source = panel.getByRole('textbox', { name: 'Evidence source', exact: true });
   await source.fill(readFileSync(new URL('../src/lib/evidence/open-meteo.md', import.meta.url), 'utf8').replace('# Your week outdoors', '# Shared engine forecast'));
-  await expect(panel.getByText('Changes not applied · Update preview', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('status', { name: 'Changes not applied' })).toBeVisible();
   await panel.getByRole('tab', { name: 'Parameters', exact: true }).click();
   await panel.getByRole('tab', { name: 'Code', exact: true }).click();
   await expect(source).toContainText('Shared engine forecast');
@@ -109,14 +110,15 @@ test('live Evidence report reuses the shell worker across refresh, editing and t
   await expect(panel.getByLabel('Report editor', { exact: true })).not.toBeVisible();
   await panel.getByRole('heading', { name: 'Day by day', exact: true }).scrollIntoViewIfNeeded();
   await expect.poll(() => panel.getByTestId('evidence-viewer-scroll').evaluate(el => el.scrollTop)).toBeGreaterThan(100);
-  await panel.getByRole('button', { name: 'Focus report', exact: true }).click();
+  await panel.getByRole('button', { name: 'More report actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Focus report', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Exit focus mode', exact: true })).toBeVisible();
   expect(await page.getByRole('tab', { name: 'Query Editor', exact: true }).evaluate(el => {
     (el as HTMLElement).focus();
     return !!el.closest('[inert]') && document.activeElement !== el;
   })).toBe(true);
   await panel.getByRole('button', { name: 'Exit focus mode', exact: true }).press('Escape');
-  await expect(panel.getByRole('button', { name: 'Focus report', exact: true })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'More report actions', exact: true })).toBeVisible();
   await page.setViewportSize({ width: 820, height: 900 });
   await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
   await expect(panel.getByRole('textbox', { name: 'Evidence source', exact: true })).toBeVisible();
@@ -143,7 +145,7 @@ test('saved report library restores typed parameters, source and selected values
   test.setTimeout(180_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto('evidence/reports');
+  await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await expect(panel.getByRole('heading', { name: 'Saved reports', exact: true })).toBeVisible({ timeout: 90_000 });
   await expect(panel.getByText('No saved reports yet')).toBeVisible();
@@ -175,7 +177,7 @@ test('saved report library restores typed parameters, source and selected values
   await panel.getByRole('button', { name: 'Update preview', exact: true }).click();
   await expect(panel.getByTestId('evidence-document')).toContainText(city, { timeout: 30_000 });
   await panel.getByRole('button', { name: 'Save report', exact: true }).click();
-  await expect(panel.getByRole('status').filter({ hasText: /^Saved locally$/ })).toBeVisible();
+  await expect(panel.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
   await expect(panel.getByText('Saved in this browser.', { exact: true })).toHaveCount(0);
   await page.evaluate(() => { (window as any).__savedReportWorker = (window as any).__bridge.worker; });
   await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
@@ -210,21 +212,21 @@ test('saved report library restores typed parameters, source and selected values
 });
 
 test('saved reports list and direct links are scoped to the active worker URL', async ({ page }) => {
-  await page.addInitScript(() => {
+  await page.addInitScript((serviceUrl) => {
     const base = { version: 1, source: '# Scoped report', setupSql: '', parameters: [], values: {}, createdAt: 1, updatedAt: 1 };
     const reports = [
-      { ...base, id: 'same-id', title: 'This worker report', serviceUrl: 'https://vgi-open-meteo.rusty-bb6.workers.dev' },
+      { ...base, id: 'same-id', title: 'This worker report', serviceUrl },
       { ...base, id: 'same-id', title: 'Other worker report', serviceUrl: 'https://other-worker.example' },
       { ...base, id: 'other-only', title: 'Other private report', serviceUrl: 'https://other-worker.example' },
     ];
     for (const report of reports) localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(report.serviceUrl)}:${encodeURIComponent(report.id)}`, JSON.stringify(report));
-  });
-  await page.goto('evidence/reports');
+  }, EVIDENCE_SERVICE_URL);
+  await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await expect(panel.getByRole('row').filter({ hasText: 'This worker report' })).toBeVisible({ timeout: 90_000 });
   await expect(panel.getByRole('row').filter({ hasText: 'Other worker report' })).toHaveCount(0);
   await expect(panel.getByRole('row').filter({ hasText: 'Other private report' })).toHaveCount(0);
-  await page.goto('evidence?evidence_report=other-only');
+  await page.goto(evidencePath('evidence?evidence_report=other-only'));
   await expect(page).toHaveURL(/reports\/saved/);
   await expect(panel.getByRole('row').filter({ hasText: 'This worker report' })).toBeVisible();
   await expect(panel.getByRole('row').filter({ hasText: 'Other private report' })).toHaveCount(0);

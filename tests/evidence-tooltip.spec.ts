@@ -1,6 +1,5 @@
 import { test, expect } from '@playwright/test';
 
-test.use({ channel: 'chrome' });
 test('report chart tooltips dismiss on scroll, hidden tabs, Escape and cleanup', async ({ page }) => {
   // A lightweight host avoids needing a live worker to test real ECharts portals.
   await page.route('**/tooltip-fixture', route => route.fulfill({ contentType: 'text/html', body: '<html><body></body></html>' }));
