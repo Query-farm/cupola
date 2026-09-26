@@ -44,7 +44,7 @@ test('editor navigation stays on one row and reveals the selected tab at variabl
   await expect(nav).toBeVisible({ timeout: 90000 });
   async function checkRow() {
     const boxes = await nav.getByRole('tab').evaluateAll(tabs => tabs.map(tab => { const r = tab.getBoundingClientRect(); return { top: r.top, height: r.height }; }));
-    expect(boxes).toHaveLength(7);
+    expect(boxes).toHaveLength(8);
     expect(new Set(boxes.map(box => Math.round(box.top))).size).toBe(1);
     expect(Math.max(...boxes.map(box => box.height))).toBeLessThanOrEqual(45);
     const selected = nav.getByRole('tab', { selected: true });

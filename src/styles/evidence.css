@@ -12,7 +12,7 @@
   --accent: inherit; --accent-foreground: inherit; --destructive: inherit; --border: inherit; --input: inherit; --ring: inherit;
   --chart-1: inherit; --chart-2: inherit; --chart-3: inherit; --chart-4: inherit; --chart-5: inherit;
   --radius: inherit;
-  --theme-font-body: 'Commissioner', ui-sans-serif, system-ui, sans-serif;
+  --theme-font-body: 'Noto Sans', ui-sans-serif, system-ui, sans-serif;
   --theme-font-heading: 'Petrona', Georgia, serif;
   --theme-font-mono: 'JetBrains Mono', ui-monospace, monospace;
   --theme-table-bar: var(--primary);

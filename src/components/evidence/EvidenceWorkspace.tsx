@@ -6,7 +6,7 @@ import { Button, buttonVariants } from '../ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu';
 import { Input } from '../ui/input';
 import { engine, waitForEngineReady } from '../../lib/shell-bridge';
-import { compileReportQuery } from '../../lib/reports/parameters';
+import { compileReportQuery, materializeReportQuery } from '../../lib/reports/parameters';
 import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveParameters, saveEvidenceReport, STORAGE_PREFIX, LEGACY_STORAGE_PREFIX, type EvidenceReport, type ParameterValues } from '../../lib/evidence/reports';
 import { newDrillExampleReport, newEvidenceReport } from '../../lib/evidence/templates';
 import { isWeatherService, WEATHER_TEST_SERVICE } from '../../lib/evidence/weather';
@@ -17,6 +17,7 @@ import { ParameterInput, useParameterChoices } from './EvidenceParameters';
 import { describeParameter, resolveChoices } from '../../lib/evidence/parameter-choices';
 import { summarizeFilters } from '../../lib/evidence/filter-summary';
 import { parameterLint } from '../../lib/evidence/parameter-lint';
+import { RefreshProfiler, type RefreshProfile } from '../../lib/evidence/refresh-profile';
 import { drillState, drillValues, matchDrillValue } from '../../lib/evidence/drill';
 import { completeValuesFromUrl, PARAMETER_URL_PREFIX, valuesFromUrl, withParameterValues } from '../../lib/evidence/parameter-url';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
@@ -194,6 +195,22 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     }
   }
   const [logs, setLogs] = useState<QueryLogEntry[]>([]);
+  const [profile, setProfile] = useState<RefreshProfile | null>(null);
+  const profiler = useRef<RefreshProfiler | null>(null);
+  // A refresh has finished rendering once its document has mounted (it reports its data context)
+  // and its queries have then been quiet for a moment; it ended when its last query did. Quiet
+  // alone isn't enough: the document loads and mounts before its first query starts.
+  const [mountedRevision, setMountedRevision] = useState(-1);
+  useEffect(() => {
+    const current = profiler.current;
+    if (!run || mountedRevision !== run.revision || busy || pendingQueries > 0 || !current || current.finished) return;
+    const timer = setTimeout(() => {
+      if (pendingRef.current > 0 || current.finished) return;
+      const ends = current.profile.queries.filter(query => query.phase === 'render').map(query => query.startedAt + query.durationMs);
+      current.finish('done', Math.max(current.profile.startedAt, ...current.profile.phases.map(span => span.end), ...ends));
+    }, 700);
+    return () => clearTimeout(timer);
+  }, [run, mountedRevision, busy, pendingQueries]);
   const booted = useRef(false);
   const busyRef = useRef(false);
   const revision = useRef(0);
@@ -271,15 +288,23 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     setPendingQueries(0);
     busyRef.current = true;
     setBusy(true); setSemanticStates([]); setDataContext(null); setError(''); setNotice(''); setLogs([]); setSpecIssues([]);
+    // Every refresh gets a fresh profile: phases and queries on one clock (the Performance tab).
+    profiler.current?.finish('stopped');
+    const profile = profiler.current = new RefreshProfiler(setProfile);
     try {
       if (next.serviceUrl !== serviceUrl) throw new Error('Open this report using its saved service connection.');
       resolveParameters(next);
       setStatus('Waiting for engine…');
+      profile.begin('engine');
       await current.wait(waitForEngineReady());
+      profile.end('engine');
       current.signal.throwIfAborted();
+      profile.begin('choices');
       // Fit every choice to its current options before binding, so a Refresh pressed
       // mid-cascade never runs with a child value its parent no longer offers.
-      const fitted = await current.wait(resolveChoices(next.parameters, next.values, choices.loader, { signal: current.signal }));
+      const fitted = await current.wait(resolveChoices(next.parameters, next.values, choices.loader, { signal: current.signal,
+        observe: load => profile.query({ phase: 'choices', name: load.parameter.label, sql: load.sql, rows: load.rows, startedAt: load.startedAt, durationMs: load.durationMs, error: load.error, cached: load.cached }) }));
+      profile.end('choices');
       const unavailable = next.parameters.find(parameter => fitted.states[parameter.key]?.status === 'error');
       if (unavailable) {
         const state = fitted.states[unavailable.key];
@@ -296,16 +321,25 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
         semanticTables.current.delete(name);
       }
       if (next.setupSql.trim()) {
+        profile.begin('setup');
         const compiled = compileReportQuery(next.setupSql, compilerParameters(next, values), values);
         const start = performance.now();
         const response = await current.query(compiled.sql, compiled.params);
-        setLogs([{ sql: next.setupSql, rows: 0, durationMs: performance.now() - start, error: response.ok ? null : response.error || 'Dataset setup failed' }]);
+        const entry = { sql: next.setupSql, rows: 0, durationMs: performance.now() - start, error: response.ok ? null : response.error || 'Dataset setup failed', startedAt: start };
+        setLogs([entry]);
+        profile.query({ ...entry, phase: 'setup', rows: undefined });
+        profile.end('setup');
         if (!response.ok) throw new Error(response.error || 'Dataset setup failed');
       }
+      if (next.semanticDatasets?.length) profile.begin('semantic');
       const semanticCatalogs = next.semanticDatasets?.length ? await current.wait(sessionCatalogs(catalogs)) : catalogs;
-      const semantic = await prepareEvidenceSemanticDatasets(next, values, semanticCatalogs, name => semanticTables.current.add(name), current);
+      const semantic = await prepareEvidenceSemanticDatasets(next, values, semanticCatalogs, name => semanticTables.current.add(name), current,
+        step => profile.query({ phase: 'semantic', ...step }));
+      profile.end('semantic');
       current.signal.throwIfAborted();
       setSemanticStates(semantic.states);
+      // Rendering runs on after this returns: it ends once the document's queries go quiet.
+      profile.begin('render');
       setRun({ execution: current, report: structuredClone(next), values, semanticQueries: semantic.queries, semanticStates: semantic.states, revision: ++revision.current });
       setUpdated(new Date().toLocaleTimeString());
       setStatus('Connected');
@@ -315,8 +349,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
       }
       return true;
     } catch (e) {
-      if (current.signal.aborted) setStatus('Refresh stopped');
-      else { setError(message(e)); setStatus('Refresh failed'); }
+      if (current.signal.aborted) { setStatus('Refresh stopped'); profile.finish('stopped'); }
+      else { setError(message(e)); setStatus('Refresh failed'); profile.finish('failed'); }
       return false;
     }
     finally { busyRef.current = false; setBusy(false); }
@@ -519,7 +553,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
                 </ol>
                 {drill.next && <span className="text-xs text-muted-foreground print:hidden">Click a chart bar or underlined value to drill into {drill.next.label.toLowerCase()}.</span>}
               </nav>)}
-              {run ? <EvidencePreview reportTheme={reportTheme} run={run} drill={previewDrill} onInputs={read => { readInputs.current = read; }} onData={setDataContext} onIssues={setSpecIssues} onQuery={entry => setLogs(current => [...current.slice(-99), entry])} onError={message => { setError(message); setSpecIssues(current => [...current, { message, severity: 'error', target: 'document' }]); }} /> : <p className="py-8 text-sm text-muted-foreground" role="status">{busy ? status : 'Refresh to render this report.'}</p>}
+              {run ? <EvidencePreview reportTheme={reportTheme} run={run} drill={previewDrill} onInputs={read => { readInputs.current = read; }} onData={context => { setDataContext(context); setMountedRevision(run.revision); }} onIssues={setSpecIssues} onQuery={entry => { setLogs(current => [...current.slice(-99), entry]); profiler.current?.query({ ...entry, phase: 'render' }); }} onError={message => { setError(message); setSpecIssues(current => [...current, { message, severity: 'error', target: 'document' }]); }} /> : <p className="py-8 text-sm text-muted-foreground" role="status">{busy ? status : 'Refresh to render this report.'}</p>}
               {dataContext && (report.pivots ?? []).map(pivot => <section key={pivot.id} className="mt-8 space-y-3" aria-label={pivot.title}>
                 <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg font-semibold">{pivot.title}</h2>{editing && <Button variant="ghost" size="sm" onClick={() => change({ ...report, pivots: report.pivots?.filter(item => item.id !== pivot.id) })}>Remove pivot</Button>}</div>
                 <EvidencePivot mode={reportTheme.mode} context={dataContext} datasetId={pivot.datasetId} config={pivot.config} onConfig={config => { if (editing) change({ ...reportRef.current, pivots: reportRef.current.pivots?.map(item => item.id === pivot.id ? { ...item, config } : item) }); }} />
@@ -548,7 +582,10 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
             resizeEditor(event.key === 'Home' ? 25 : event.key === 'End' ? 70 : editorWidth + (event.key === 'ArrowLeft' ? 2 : -2));
           }}
         ><span className="h-10 w-0.5 rounded-full bg-muted-foreground/40" /></div>}
-        <div style={{ display: editing ? 'contents' : 'none' }}><EvidenceEditor parameterChoices={{ states: choices.states, values: choices.values, loader: choices.loader }} fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={async () => { await refresh(); }} key={report.id} report={report} onChange={change} issues={issues} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => setEditorOnly(!editorOnly)} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); await refresh(next); }} /></div>
+        <div style={{ display: editing ? 'contents' : 'none' }}><EvidenceEditor performance={{ profile, namedQueries: dataContext?.queries ?? [], runnable: sql => {
+          if (!run) return sql;
+          try { return materializeReportQuery(sql, compilerParameters(run.report, run.values), run.values); } catch { return sql; }
+        } }} parameterChoices={{ states: choices.states, values: choices.values, loader: choices.loader }} fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={async () => { await refresh(); }} key={report.id} report={report} onChange={change} issues={issues} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => setEditorOnly(!editorOnly)} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); await refresh(next); }} /></div>
       </div>
     </main>
   </div>;

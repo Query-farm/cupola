@@ -11,7 +11,7 @@ const palettes = {
   accessible: ['#0072b2', '#e69f00', '#009e73', '#cc79a7', '#d55e00', '#56b4e9'],
 };
 const fonts = {
-  'sans-serif': "'Commissioner', ui-sans-serif, system-ui, sans-serif",
+  'sans-serif': "'Noto Sans', ui-sans-serif, system-ui, sans-serif",
   serif: "'Petrona', Georgia, serif",
   mono: "'JetBrains Mono', ui-monospace, monospace",
 };

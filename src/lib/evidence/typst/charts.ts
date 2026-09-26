@@ -4,7 +4,7 @@ import type { ChartRenderer } from './extract';
 
 /** Evidence's chart theme names Geist, which Cupola never loads (the screen falls
  * back to a system sans); print in the report's own sans instead. */
-const CHART_FONT = 'Commissioner';
+const CHART_FONT = 'Noto Sans';
 
 /** Re-render live ECharts instances as vector SVG at print size.
  *

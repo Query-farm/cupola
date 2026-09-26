@@ -15,7 +15,9 @@
     1. sun-400 as body text is 3.3:1 — never. sun-700 is the only gold that
        may carry text on a light ground.
     2. Code and the terminal always sit on rock-*, never on a coloured band.
-    3. Figures are Commissioner, tabular. Petrona ships no tabular set.
+    3. Figures are Noto Sans, tabular by default. Commissioner, the sans before it,
+       had no tabular figures at all (the brief once claimed it did), so table
+       columns never lined up. Petrona's tabular set needs `tnum` switched on.
 
   This replaces the earlier earth-/harvest-/duck-/grain-* scales, which were
   the pre-redesign Query.Farm palette. They are gone rather than aliased —
@@ -28,10 +30,12 @@
 */
 
 @theme inline {
-    /* Petrona sets words, Commissioner sets everything else, JetBrains Mono
-       sets code — the same three families query.farm uses. */
+    /* Petrona sets headings, Noto Sans sets everything else, JetBrains Mono
+       sets code. Noto Sans replaced Commissioner for data: tabular figures by
+       default (bold matching regular, so totals align), a slashed zero, true
+       italics, and Greek and Cyrillic, for catalog values in any language. */
     --font-heading: 'Petrona', Georgia, serif;
-    --font-sans: 'Commissioner', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-sans: 'Noto Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
 
     /* Named color scales — register as Tailwind utilities

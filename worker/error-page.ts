@@ -185,7 +185,7 @@ export function renderErrorPage(opts: ErrorPageOptions): string {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=Commissioner:wght@300;500;600&family=Petrona:wght@600;700&display=swap">
+<link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@300;500;600&family=Petrona:wght@600;700&display=swap">
 <script>${THEME_SCRIPT}</script>
 <style>
 :root{
@@ -211,7 +211,7 @@ export function renderErrorPage(opts: ErrorPageOptions): string {
 }
 *{margin:0;padding:0;box-sizing:border-box}
 body{
-  font-family:'Commissioner',ui-sans-serif,system-ui,-apple-system,sans-serif;
+  font-family:'Noto Sans',ui-sans-serif,system-ui,-apple-system,sans-serif;
   background:var(--background);
   background-image:var(--page-gradient);
   color:var(--foreground);
@@ -228,7 +228,7 @@ header{
 .brand{display:flex;align-items:center;gap:0.5rem;white-space:nowrap;text-decoration:none;color:inherit}
 header .mark{width:32px;height:32px;flex-shrink:0}
 .wordmark{font-family:'Petrona',Georgia,serif;font-weight:700;font-size:1rem;line-height:1;color:var(--foreground)}
-.byline{font-family:'Commissioner',ui-sans-serif,system-ui,sans-serif;font-size:0.875rem;line-height:1;color:var(--muted-foreground)}
+.byline{font-family:'Noto Sans',ui-sans-serif,system-ui,sans-serif;font-size:0.875rem;line-height:1;color:var(--muted-foreground)}
 @media (max-width:640px){.byline{display:none}}
 main{
   flex:1;display:flex;align-items:flex-start;justify-content:center;

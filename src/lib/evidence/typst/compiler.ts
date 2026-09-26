@@ -5,7 +5,8 @@ import type { TypstCompiler } from '@myriaddreamin/typst.ts/compiler';
  * bytes their own way, then compile through here. */
 
 export const PDF_FONT_FILES = [
-  'Commissioner-Regular.ttf', 'Commissioner-SemiBold.ttf', 'Commissioner-Bold.ttf',
+  // Static, subset cuts of the variable Noto Sans (scripts/make-pdf-fonts.py).
+  'NotoSans-Regular.ttf', 'NotoSans-SemiBold.ttf', 'NotoSans-Bold.ttf', 'NotoSans-Italic.ttf', 'NotoSans-BoldItalic.ttf',
   'Petrona-Regular.ttf', 'Petrona-SemiBold.ttf', 'Petrona-Bold.ttf', 'Petrona-Italic.ttf',
   'JetBrainsMono-Regular.ttf', 'JetBrainsMono-Bold.ttf',
 ] as const;

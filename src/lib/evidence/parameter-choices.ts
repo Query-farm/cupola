@@ -1,6 +1,6 @@
 import { engine, waitForEngineReady } from '../shell-bridge';
 import { decodeArrowBuffer } from '../duckdb-query';
-import { compileReportQuery } from '../reports/parameters';
+import { compileReportQuery, materializeReportQuery } from '../reports/parameters';
 import { evidenceResult } from './haybarn-query-service';
 import { REPORT_QUERY_TIMEOUT_MS } from './query-run';
 import { parameterOrder } from './parameter-graph';
@@ -8,21 +8,33 @@ import { currentValues, formatParameterValue, hasChoices, optionsFromRows, recon
 import { toReportParameters, validateEvidenceReport, type EvidenceParameter, type EvidenceReport, type ParameterValues } from './reports';
 
 type Loaded = { options: ParameterOption[]; truncated: boolean };
+export interface ChoicesLoad { parameter: EvidenceParameter; sql: string; rows?: number; startedAt: number; durationMs: number; error: string | null; cached: boolean }
 
 /** Runs choices queries on the shared engine, cached by the SQL and the values bound into it,
  *  so a parent change re-runs only the queries that read it. Failed loads are not cached. */
 export class ParameterChoicesLoader {
   private cache = new Map<string, Promise<Loaded>>();
+  /** Loads that have finished: joining one still in flight is a real wait, not a cache hit. */
+  private settled = new Set<string>();
 
-  load(parameter: EvidenceParameter, parameters: EvidenceParameter[], values: ParameterValues, signal?: AbortSignal): Promise<Loaded> {
+  /** `observe` hears each load: its SQL, how long it took, and whether the cache answered. */
+  load(parameter: EvidenceParameter, parameters: EvidenceParameter[], values: ParameterValues, signal?: AbortSignal, observe?: (load: ChoicesLoad) => void): Promise<Loaded> {
     if (parameter.options?.kind !== 'query') throw new Error(`${parameter.label} has no choices query.`);
     const compiled = compileReportQuery(parameter.options.sql, { parameters: toReportParameters(parameters, values) }, values);
     const key = JSON.stringify([parameter.key, parameter.options, compiled.sql, compiled.params]);
     let pending = this.cache.get(key);
+    const cached = this.settled.has(key);
     if (!pending) {
       pending = this.run(parameter, compiled.sql, compiled.params, signal);
       this.cache.set(key, pending);
-      pending.catch(() => { if (this.cache.get(key) === pending) this.cache.delete(key); });
+      pending.then(() => this.settled.add(key), () => { if (this.cache.get(key) === pending) this.cache.delete(key); });
+    }
+    if (observe) {
+      const startedAt = performance.now();
+      // Logged with its values filled in, so it can be run as is.
+      const runnable = materializeReportQuery(parameter.options.sql, { parameters: toReportParameters(parameters, values) }, values);
+      const report = (options: number | undefined, error: string | null) => observe({ parameter, sql: runnable, rows: options, startedAt, durationMs: performance.now() - startedAt, error, cached });
+      pending.then(result => report(result.options.length, null), error => report(undefined, error instanceof Error ? error.message : String(error)));
     }
     return pending;
   }
@@ -53,7 +65,7 @@ export async function resolveChoices(
   parameters: EvidenceParameter[],
   values: ParameterValues,
   loader: ParameterChoicesLoader,
-  { signal, previous = {}, onState }: { signal?: AbortSignal; previous?: Record<string, ParameterOptionsState>; onState?: (states: Record<string, ParameterOptionsState>) => void } = {},
+  { signal, previous = {}, onState, observe }: { signal?: AbortSignal; previous?: Record<string, ParameterOptionsState>; onState?: (states: Record<string, ParameterOptionsState>) => void; observe?: (load: ChoicesLoad) => void } = {},
 ): Promise<ChoicesResolution> {
   const byKey = new Map(parameters.map(parameter => [parameter.key, parameter]));
   const working = currentValues(parameters, values);
@@ -70,7 +82,7 @@ export async function resolveChoices(
       states[key] = { status: 'loading', options: previous[key]?.options ?? [] };
       onState?.({ ...states });
       try {
-        const loaded = await loader.load(parameter, parameters, working, signal);
+        const loaded = await loader.load(parameter, parameters, working, signal, observe);
         options = loaded.options;
         states[key] = { status: 'ready', ...loaded };
       } catch (error) {

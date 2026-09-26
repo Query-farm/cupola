@@ -8,7 +8,8 @@ import { getDuckDBExtensionType } from '../format';
 import { compileReportQuery } from '../reports/parameters';
 import type { ReportParameter, ReportParameterValue } from '../reports/types';
 
-export interface QueryLogEntry { sql: string; rows: number; durationMs: number; error: string | null }
+/** `startedAt` is `performance.now()`; `cached` marks a repeat served from this service's cache. */
+export interface QueryLogEntry { sql: string; rows: number; durationMs: number; error: string | null; startedAt: number; cached?: boolean }
 
 /** Normalize nested Arrow vectors too: Evidence sparklines expect ordinary arrays.
  *  DuckDB's lossless export sends HUGEINT/UUID/BIT/… as raw extension bytes;
@@ -81,6 +82,7 @@ export class HaybarnQueryService implements QueryService {
     if (opts?.signal?.aborted) throw new DOMException('Query cancelled', 'AbortError');
     this.run.signal.throwIfAborted();
     let pending = opts?.noCache || opts?.signal ? undefined : this.cache.get(sql);
+    const hit = Boolean(pending);
     if (!pending) {
       pending = this.execute(sql, opts?.signal);
       if (!opts?.signal) {
@@ -89,8 +91,11 @@ export class HaybarnQueryService implements QueryService {
         void pending.then(result => { if (result.error && this.cache.get(sql) === cached) this.cache.delete(sql); });
       }
     }
+    const requested = performance.now();
     const result = await pending;
     if (opts?.signal?.aborted) throw new DOMException('Query cancelled', 'AbortError');
+    // A repeat of a query this refresh already ran: logged, so the profile shows it was free.
+    if (hit && !this.run.signal.aborted) this.onQuery?.({ sql, rows: result.rows.length, durationMs: performance.now() - requested, error: result.error, startedAt: requested, cached: true });
     return result as QueryResult<RowType>;
   }
   async queryArrow(sql: string): Promise<ArrayBuffer> {
@@ -115,7 +120,7 @@ export class HaybarnQueryService implements QueryService {
     // A query cancelled because its refresh was stopped or superseded did not fail:
     // logging it made every in-flight query of a stopped run a "report problem".
     const cancelled = this.run.signal.aborted || Boolean(signal?.aborted);
-    if (!cancelled) this.onQuery?.({ sql, rows: result.rows.length, durationMs: result.queryDurationMs, error: result.error });
+    if (!cancelled) this.onQuery?.({ sql, rows: result.rows.length, durationMs: result.queryDurationMs, error: result.error, startedAt: start });
     return result;
   }
 }

@@ -16,7 +16,7 @@ beforeAll(async () => {
 // Every character with meaning in Typst markup, code or strings.
 const HOSTILE = 'a#b*c_d`e$f<g>h@i[j]k~l\\m"n//o/*p*/q= r- s+ t\n#set page(width: 1pt)\t\u0001\u{1F600}';
 
-const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#3366cc"/><text x="10" y="50" font-family="Commissioner" font-size="12">chart</text></svg>';
+const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#3366cc"/><text x="10" y="50" font-family="Noto Sans" font-size="12">chart</text></svg>';
 // A 1×1 PNG, standing in for an html-to-image capture.
 const PNG = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
 const icon = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 12 12"><path d="M6 2L10 9H2Z" fill="#16a34a"/></svg>';
@@ -249,5 +249,33 @@ describe('table column widths', () => {
     expect(squeezed.widths.reduce((a, b) => a + b)).toBeLessThanOrEqual(available + 0.5);
     expect(impossible.size).toBe(6);
     expect(impossible.overflow).toBe(true);
+  });
+});
+
+describe('table figures', () => {
+  test('the PDF sans has one digit width, the same in bold, so figures and totals align', async () => {
+    // fallback: false makes a missing family a compile error instead of a silent substitute.
+    const width = (digits: string, weight = 'regular') => `measure(text(font: "Noto Sans", weight: ${lit(weight)}, fallback: false, ${lit(digits)})).width`;
+    const main = `#context [#metadata((
+      regular: (${width('1111')}, ${width('0000')}, ${width('7777')}),
+      bold: (${width('1111', 'bold')}, ${width('0000', 'bold')}),
+    )) <digits>]`;
+    await compilePdf(compiler, main, {});
+    const [{ value }] = await compiler.runWithWorld({ mainFilePath: '/main.typ' }, async world => {
+      await world.compile();
+      return world.query({ selector: '<digits>' }) as Promise<{ value: Record<string, string[]> }[]>;
+    });
+    expect(new Set(value.regular).size).toBe(1);
+    expect(new Set(value.bold).size).toBe(1);
+    // Bold figures as wide as regular ones: a bold total row lines up with the rows above.
+    expect(value.bold[0]).toBe(value.regular[0]);
+  });
+  test('every PDF font file is a family Typst can find by name, in every cut the template uses', async () => {
+    const probe = (font: string, weight: string, style = 'normal') => `measure(text(font: ${lit(font)}, weight: ${lit(weight)}, style: ${lit(style)}, fallback: false, "Ag")).width`;
+    const main = `#context [#metadata((${[
+      probe('Noto Sans', 'regular'), probe('Noto Sans', 'semibold'), probe('Noto Sans', 'bold'), probe('Noto Sans', 'regular', 'italic'), probe('Noto Sans', 'bold', 'italic'),
+      probe('Petrona', 'regular'), probe('Petrona', 'semibold'), probe('JetBrains Mono', 'regular'),
+    ].join(', ')})) <fonts>]`;
+    await expect(compilePdf(compiler, main, {})).resolves.toBeDefined();
   });
 });

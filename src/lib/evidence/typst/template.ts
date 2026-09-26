@@ -4,7 +4,7 @@
 export const TEMPLATE_PATH = '/cupola-report.typ';
 
 export const REPORT_TEMPLATE = String.raw`
-#let fonts = (serif: "Petrona", sans-serif: "Commissioner", mono: "JetBrains Mono")
+#let fonts = (serif: "Petrona", sans-serif: "Noto Sans", mono: "JetBrains Mono")
 // Seeded with a real theme: Typst's first layout pass reads a state's initial
 // value before any update has been located, and a field access on none is fatal.
 #let palette = state("cupola-theme", (heading: "serif", body: "sans-serif", accent: black,
@@ -33,11 +33,6 @@ export const REPORT_TEMPLATE = String.raw`
   show raw: set text(font: fonts.mono, size: 0.9em)
   show link: set text(fill: theme.accent)
   show link: underline.with(stroke: 0.5pt + theme.accent.transparentize(40%), offset: 1.5pt)
-  // Commissioner has no italic face and Typst does not synthesize one, so slant
-  // it word by word (a single skewed box could not wrap across lines).
-  show emph: it => if theme.body != "sans-serif" { it } else if it.body.has("text") {
-    it.body.text.split(" ").map(word => box(skew(ax: -12deg, word))).join(" ")
-  } else { box(skew(ax: -12deg, it.body)) }
   show heading: set text(font: fonts.at(theme.heading), fill: theme.foreground, weight: 600)
   show heading.where(level: 1): set text(size: 17pt)
   show heading.where(level: 2): set text(size: 13.5pt)
@@ -200,6 +195,9 @@ export const REPORT_TEMPLATE = String.raw`
   // A short table stays on one page, so its total row is never stranded.
   block(width: 100%, above: 16pt, below: 16pt, breakable: rows.len() > 14, {
     chart-heading(title, subtitle)
+    // Figures line up by digit: Noto Sans is tabular by default, Petrona needs tnum switched on.
+    // Set before layout, so the column widths are measured with the figures the table prints.
+    set text(number-width: "tabular")
     layout(space => {
       let fitted = if sizing != none and sizing.len() == count { table-layout(sizing, widths, space.width, 8pt) } else { none }
       // For the unit tests: the widths and text size each table was given.

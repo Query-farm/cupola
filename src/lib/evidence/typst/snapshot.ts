@@ -38,12 +38,13 @@ export async function loadSnapshotRenderer(fonts: PdfFont[]): Promise<SnapshotRe
   };
 }
 
-const WEIGHTS: Record<string, number> = { Regular: 400, Italic: 400, SemiBold: 600, Bold: 700 };
+const WEIGHTS: Record<string, number> = { Regular: 400, Italic: 400, SemiBold: 600, Bold: 700, BoldItalic: 700 };
+const FAMILIES: Record<string, string> = { JetBrainsMono: 'JetBrains Mono', NotoSans: 'Noto Sans' };
 
 function fontFace({ file, bytes }: PdfFont): string {
   const [stem, cut] = file.replace(/\.ttf$/, '').split('-');
-  const family = stem === 'JetBrainsMono' ? 'JetBrains Mono' : stem;
+  const family = FAMILIES[stem] ?? stem;
   let binary = '';
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return `@font-face { font-family: '${family}'; font-weight: ${WEIGHTS[cut] ?? 400}; font-style: ${cut === 'Italic' ? 'italic' : 'normal'}; src: url(data:font/ttf;base64,${btoa(binary)}) format('truetype'); }`;
+  return `@font-face { font-family: '${family}'; font-weight: ${WEIGHTS[cut] ?? 400}; font-style: ${cut.endsWith('Italic') ? 'italic' : 'normal'}; src: url(data:font/ttf;base64,${btoa(binary)}) format('truetype'); }`;
 }

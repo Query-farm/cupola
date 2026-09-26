@@ -167,3 +167,30 @@ test('a PDF per value has one section per choice, links back to the view, and le
   await expect(rows(page)).toHaveCount(4);
   await expect(page.getByTestId('parameter-choices-state')).toHaveAccessibleName('State: All');
 });
+
+test('the Performance tab shows where the last refresh spent its time, query by query', async ({ page }) => {
+  test.setTimeout(120_000);
+  const panel = await openGeoReport(page);
+  await expect(rows(page)).toHaveCount(14);
+  await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Performance', exact: true }).click();
+  const performance = panel.getByRole('region', { name: 'Refresh performance' });
+  await expect(performance.getByRole('status', { name: 'Refresh timing' })).toHaveText(/^Refreshed in [\d.]+ m?s$/, { timeout: 30_000 });
+  const phases = performance.getByRole('list', { name: 'Time by phase' });
+  for (const phase of ['Waiting for the engine', 'Parameter choices', 'Rendering the report']) await expect(phases).toContainText(phase);
+  const queries = performance.getByRole('list', { name: 'Queries run by the last refresh' });
+  // Each parameter's choices query, and the report's own queries, by name.
+  for (const name of ['Country', 'State', 'City']) await expect(queries.getByRole('button', { name: new RegExp(`^${name}: `) })).toHaveCount(1);
+  // Evidence runs a report query only inside its components' queries, so they carry its name.
+  await expect(queries.getByRole('button', { name: /^by_city · component: / }).first()).toBeVisible();
+  await expect(queries.getByRole('button', { name: /^places · component: / }).first()).toBeVisible();
+
+  // A choices query opens with its parents' values filled in, ready to run elsewhere.
+  await queries.getByRole('button', { name: /^State: / }).click();
+  await expect(performance.getByLabel('Query SQL')).toContainText("WHERE (TRUE OR country_code = NULL)");
+  await expect(performance.getByRole('button', { name: 'Open in Query Editor' })).toBeEnabled();
+
+  // Slowest-first reorders the same rows.
+  await performance.getByRole('radio', { name: 'Slowest first' }).click();
+  await expect(performance.getByRole('radio', { name: 'Slowest first' })).toHaveAttribute('aria-checked', 'true');
+});

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Database, FileText, Network, Palette, SlidersHorizontal, Sparkles, Table2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Database, FileText, Gauge, Network, Palette, SlidersHorizontal, Sparkles, Table2 } from 'lucide-react';
 import { TabsList, TabsTrigger } from '../ui/tabs';
 
 const sections = [
@@ -10,6 +10,7 @@ const sections = [
   { value: 'browser', label: 'Browse data', icon: Table2 },
   { value: 'appearance', label: 'Appearance', icon: Palette },
   { value: 'parameters', label: 'Parameters', icon: SlidersHorizontal },
+  { value: 'performance', label: 'Performance', icon: Gauge },
 ];
 
 /** Keep every editor section reachable without making the toolbar taller. */
