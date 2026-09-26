@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { compileReportQuery, interpolateReportText, materializeReportQuery } from "../../src/lib/reports/parameters";
+import { compileReportQuery, hasSqlStatements, interpolateReportText, materializeReportQuery } from "../../src/lib/reports/parameters";
 import type { ReportParameter } from "../../src/lib/reports/types";
 
 const parameters: ReportParameter[] = [
@@ -76,5 +76,20 @@ describe("interpolateReportText", () => {
     }];
     expect(interpolateReportText("$city_label [$city_value] costs $$5", { parameters: withCity }, { city: "RIC" }))
       .toBe("Richmond, Virginia [RIC] costs $5");
+  });
+});
+
+describe('hasSqlStatements', () => {
+  test('comment-only, blank and semicolon-only SQL has nothing to run', () => {
+    for (const sql of ['', '  \n\t', ';', ' ; ;\n',
+      '-- Holdings, prices, and transaction history are now sourced live from the tastytrade\n-- catalog (tastytrade.main.positions / .equities / .transactions) instead of a static\n-- snapshot table, so no setup table is needed here.\n',
+      '/* disabled\nCREATE TABLE t AS SELECT 1; */', '-- no trailing newline', '/* unterminated', '-- a\n/* b */ ; -- c']) {
+      expect(hasSqlStatements(sql)).toBe(false);
+    }
+  });
+  test('any statement counts, including one after comments or inside what looks like a comment', () => {
+    for (const sql of ['SELECT 1', '-- note\nSELECT 1', '/* a */ CREATE TABLE t (x INT)', "SELECT '-- not a comment'", 'SELECT 1 -- trailing', 'select/* inline */1']) {
+      expect(hasSqlStatements(sql)).toBe(true);
+    }
   });
 });

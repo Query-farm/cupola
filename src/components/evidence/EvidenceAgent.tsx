@@ -158,6 +158,16 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
             else blocks.push({ type: 'text', id: uid(), content: chunk });
             return { ...m, blocks };
           })); },
+          // Summarized reasoning streams into its own block, so a reader can follow what the
+          // agent is working out between queries rather than a bare "processing" line.
+          onThinking: chunk => { if (!chunk || !active()) return; lastOutput.current = Date.now(); setWaiting(0); progress('Thinking…'); setMessages(previous => previous.map(m => {
+            if (m.id !== assistantId) return m;
+            const blocks = [...(m.blocks || [])];
+            const last = blocks.at(-1);
+            if (last?.type === 'reasoning') blocks[blocks.length - 1] = { ...last, content: last.content + chunk };
+            else blocks.push({ type: 'reasoning', id: uid(), content: chunk });
+            return { ...m, blocks };
+          })); },
           onToolInputStart: name => { if (active()) { setReceived(0); progress(toolInputLabel(name) + '…'); } },
           onToolCall: (name, input) => {
             if (!active()) return;

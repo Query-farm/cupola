@@ -5,6 +5,31 @@ export interface CompiledReportQuery {
   params: unknown[];
 }
 
+/** Whether SQL contains anything to run: text other than line and block comments,
+ *  whitespace and semicolons. DuckDB rejects comment-only SQL with "no statements", so a
+ *  setup script someone commented out entirely must be skipped, not executed. Quoted text
+ *  counts as SQL even when it looks like a comment (`SELECT '--'`). */
+export function hasSqlStatements(sql: string): boolean {
+  for (let i = 0; i < sql.length; i++) {
+    const char = sql[i];
+    if (char === "-" && sql[i + 1] === "-") {
+      const end = sql.indexOf("\n", i);
+      if (end === -1) return false;
+      i = end;
+      continue;
+    }
+    if (char === "/" && sql[i + 1] === "*") {
+      const end = sql.indexOf("*/", i + 2);
+      if (end === -1) return false;
+      i = end + 1;
+      continue;
+    }
+    if (char === ";" || /\s/.test(char)) continue;
+    return true;
+  }
+  return false;
+}
+
 /** True when a parameter is unset or set to All: null, empty text, or an empty list. */
 export function isAllValue(value: ReportParameterValue | undefined): boolean {
   return value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);

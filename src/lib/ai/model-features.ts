@@ -53,15 +53,17 @@ export function normalizeEffort(value: unknown): AIEffort {
  * The thinking-related request fields for `model`, or an empty object when it
  * supports neither. Spread into the request body.
  *
- * `display` is deliberately left at its default (`"omitted"` on these models):
- * the blocks still arrive — and still must be echoed back — but carry no text,
- * so nothing extra streams to a UI that has no place to show it. Thinking is
- * billed identically either way, so this costs nothing but the summary.
+ * `display` stays at its default (`"omitted"` on these models) unless the surface
+ * shows reasoning: omitted blocks still arrive — and still must be echoed back —
+ * but carry no text, so nothing extra streams to a UI with no place for it.
+ * `"summarized"` streams a readable summary of the model's reasoning. Thinking is
+ * billed identically either way. A surface keeps one setting for a whole
+ * conversation, so the request prefix, and the prompt cache, stay stable.
  */
-export function thinkingRequestFields(model: string, effort: AIEffort): Record<string, unknown> {
+export function thinkingRequestFields(model: string, effort: AIEffort, display: "omitted" | "summarized" = "omitted"): Record<string, unknown> {
   if (!supportsAdaptiveThinking(model)) return {};
   return {
-    thinking: { type: "adaptive" },
+    thinking: display === "summarized" ? { type: "adaptive", display } : { type: "adaptive" },
     output_config: { effort: normalizeEffort(effort) },
   };
 }

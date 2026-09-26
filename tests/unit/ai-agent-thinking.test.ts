@@ -139,3 +139,33 @@ describe("extended thinking", () => {
     expect(blocks.some((b) => b.type === "thinking" && b.signature === SIGNATURE)).toBe(true);
   });
 });
+
+describe("reasoning summaries", () => {
+  async function run(over: Partial<AgentCallbacks>) {
+    const requests: any[] = [];
+    const responses = [thinkingToolTurn(), finalTurn()];
+    globalThis.fetch = (async (_url: any, init: any) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return responses.shift()!;
+    }) as typeof fetch;
+    const history: MessageParam[] = [{ role: "user", content: "go" }];
+    await runAgentTurn({ apiKey: "k" }, "claude-sonnet-5", history, "sys", async () => "ok", callbacks(over), undefined, 5, TOOLS);
+    return requests;
+  }
+  test("a surface that shows reasoning asks for summaries, and receives the text", async () => {
+    const thoughts: string[] = [];
+    const requests = await run({ onThinking: chunk => thoughts.push(chunk) });
+    expect(requests.every(request => request.thinking?.display === "summarized")).toBe(true);
+    expect(thoughts.join("")).toBe("Check the table first.");
+  });
+  test("a surface that doesn't keeps thinking omitted, as before", async () => {
+    const requests = await run({});
+    expect(requests.every(request => request.thinking?.type === "adaptive" && request.thinking.display === undefined)).toBe(true);
+  });
+  test("models without adaptive thinking send no thinking field either way", async () => {
+    const requests: any[] = [];
+    globalThis.fetch = (async (_url: any, init: any) => { requests.push(JSON.parse(String(init?.body))); return finalTurn(); }) as typeof fetch;
+    await runAgentTurn({ apiKey: "k" }, "claude-haiku-4-5-20251001", [{ role: "user", content: "go" }], "sys", async () => "ok", callbacks({ onThinking: () => {} }), undefined, 5, TOOLS);
+    expect(requests[0].thinking).toBeUndefined();
+  });
+});

@@ -223,3 +223,49 @@ test('keep-alives distinguish a live connection from waiting for output and stop
   await expect(panel.getByRole('button', { name: 'Retry request' })).toBeEnabled();
   await expect(panel.getByRole('textbox', { name: 'Report title' })).toHaveValue('Untitled report');
 });
+
+test('the agent shows its reasoning between steps, folded once it moves on', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.addInitScript(() => {
+    localStorage.setItem('vgi-frontend-settings', JSON.stringify({ anthropicApiKey: 'test-key-not-real', aiModel: 'claude-sonnet-5' }));
+  });
+  const requests: any[] = [];
+  const sse = (events: unknown[]) => events.map(event => `event: ${(event as { type: string }).type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
+  const thinking = (text: string) => [
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: text } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig' } },
+    { type: 'content_block_stop', index: 0 },
+  ];
+  await page.route('https://api.anthropic.com/v1/messages', async route => {
+    requests.push(route.request().postDataJSON());
+    const first = requests.length === 1;
+    const body = sse([
+      { type: 'message_start', message: { id: 'mock', usage: { input_tokens: 100 } } },
+      ...thinking(first ? '**Checking components**\nThe report needs a table, so I should look at what is installed first.' : '**Settling on a table**\nA plain table fits the single value best.'),
+      { type: 'content_block_start', index: 1, content_block: first ? { type: 'tool_use', id: 'tool-1', name: 'list_components' } : { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 1, delta: first ? { type: 'input_json_delta', partial_json: '{}' } : { type: 'text_delta', text: 'A table is the clearest fit.' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'message_delta', delta: { stop_reason: first ? 'tool_use' : 'end_turn' }, usage: { output_tokens: 50 } },
+      { type: 'message_stop' },
+    ]);
+    await route.fulfill({ status: 200, contentType: 'text/event-stream', body });
+  });
+  await page.goto(evidencePath('evidence/reports'));
+  const panel = page.getByTestId('evidence-panel');
+  await panel.getByRole('button', { name: 'New report', exact: true }).click({ timeout: 90_000 });
+  const input = panel.getByRole('textbox', { name: 'Chat message input' });
+  await input.fill('What should this report show?'); await input.press('Enter');
+  await expect(panel.getByText('A table is the clearest fit.')).toBeVisible({ timeout: 30_000 });
+
+  // The request asked for reasoning summaries, and both steps' reasoning is in the chat.
+  expect(requests[0].thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+  const reasoning = panel.getByTestId('chat-reasoning');
+  await expect(reasoning).toHaveCount(2);
+  // Folded to a one-line preview once the turn moved on; a reader can open it.
+  await expect(reasoning.first()).not.toHaveAttribute('open');
+  await expect(reasoning.first()).toContainText('Reasoning');
+  await expect(reasoning.first()).toContainText('Checking components');
+  await reasoning.first().locator('summary').click();
+  await expect(reasoning.first()).toContainText('look at what is installed first');
+});

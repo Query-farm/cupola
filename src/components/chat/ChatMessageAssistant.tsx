@@ -100,6 +100,8 @@ export type ContentBlock =
   | { type: "text"; id: string; content: string }
   | { type: "tool_call"; id: string; toolCall: ToolCallEntry }
   | { type: "thinking"; id: string; label: string }
+  /** A summary of the model's reasoning, streamed as it thinks. */
+  | { type: "reasoning"; id: string; content: string }
   | { type: "ask_user"; id: string; askUser: AskUserState }
   | { type: "vega_chart"; id: string; chart: VegaChartContent };
 
@@ -115,6 +117,26 @@ interface Props {
   /** Override how a `run_sql` tool call renders (the editor panel uses this to
    *  add "apply to editor" actions). Defaults to the plain SqlToolCallBlock. */
   renderSqlToolCall?: (toolCall: ToolCallEntry, onCancel?: () => void) => React.ReactNode;
+}
+
+/** The model's reasoning summary: streaming and open while it thinks, then folded to its
+ *  first line so the answer and tool calls stay the focus. A reader can open it again. */
+function ReasoningBlock({ content, live }: { content: string; live: boolean }) {
+  const text = content.trim();
+  if (!text && !live) return null;
+  const preview = text.split("\n").find((line) => line.trim())?.replace(/^[#*\s]+|\*+$/g, "") ?? "";
+  return (
+    <details open={live || undefined} className="group border-l-2 border-border pl-3 text-xs text-muted-foreground" data-testid="chat-reasoning">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 py-0.5 [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90" aria-hidden />
+        <span className="font-medium">{live ? "Thinking" : "Reasoning"}</span>
+        {live && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
+        {!live && preview && <span className="min-w-0 truncate italic group-open:hidden">· {preview}</span>}
+      </summary>
+      {/* Summaries are Markdown (a bold lead line, then prose), set small and muted. */}
+      {text && <div className="mt-1 pb-1 text-xs leading-relaxed [&_*]:text-xs [&_*]:text-muted-foreground [&_p]:my-1" aria-live={live ? "polite" : undefined}><ChatMarkdown content={text} /></div>}
+    </details>
+  );
 }
 
 /** Small inline cancel button shown next to a running tool indicator. */
@@ -202,7 +224,7 @@ export function ChatMessageAssistant({
       </div>
       <div className="flex-1 min-w-0 space-y-3">
         {/* Render blocks in stream order */}
-        {blocks.map((block) => {
+        {blocks.map((block, index) => {
           if (block.type === "text") {
             return block.content ? <ChatMarkdown key={block.id} content={block.content} copyTables /> : null;
           }
@@ -246,6 +268,11 @@ export function ChatMessageAssistant({
             // extras, PNG render) with nothing on screen at all.
             if (tc.name === "ask_user") return null;
             return <ToolCallActivity key={block.id} toolCall={tc} onCancel={onCancel} />;
+          }
+          if (block.type === "reasoning") {
+            // Open while it's the newest block of a streaming turn; a one-line preview after.
+            const live = Boolean(isStreaming) && index === blocks.length - 1;
+            return <ReasoningBlock key={block.id} content={block.content} live={live} />;
           }
           if (block.type === "thinking") {
             return <ThinkingIndicator key={block.id} label={block.label} onCancel={onCancel} />;

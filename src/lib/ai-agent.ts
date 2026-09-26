@@ -147,9 +147,9 @@ export interface AgentCallbacks {
    *  surface that clears its indicator on the first text delta would otherwise
    *  show nothing at all for the duration. */
   onToolInputStart?: (name: string) => void;
-  /** Streamed thinking text. Empty under the default `display: "omitted"`,
-   *  so no surface renders it today — the hook exists so opting into
-   *  `display: "summarized"` is a one-line change rather than a parser change. */
+  /** Streamed thinking text. Supplying it asks for `display: "summarized"`, so the
+   *  model's reasoning arrives as a readable summary; without it, thinking stays
+   *  `"omitted"` (blocks with no text) and nothing extra streams. */
   onThinking?: (chunk: string) => void;
   onToolCall: (name: string, input: any) => void;
   onToolResult: (name: string, summary: string) => void;
@@ -951,7 +951,8 @@ async function streamOneRequestInner(
         // thinking blocks, so this is explicit rather than omitted — see
         // ai/model-features. Effort is pinned per turn, never varied per
         // request: an effort change invalidates the messages cache.
-        ...thinkingRequestFields(model, effort),
+        // A surface that renders reasoning (it supplies onThinking) gets summaries.
+        ...thinkingRequestFields(model, effort, callbacks.onThinking ? "summarized" : "omitted"),
         // Clamped per model: over the model's ceiling is a 400. Streaming is
         // on, so the usual non-streaming timeout argument for a small cap
         // doesn't apply — the old hardcoded 4096 truncated long tool_use

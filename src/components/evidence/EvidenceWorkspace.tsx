@@ -6,7 +6,7 @@ import { Button, buttonVariants } from '../ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu';
 import { Input } from '../ui/input';
 import { engine, waitForEngineReady } from '../../lib/shell-bridge';
-import { compileReportQuery, materializeReportQuery } from '../../lib/reports/parameters';
+import { compileReportQuery, hasSqlStatements, materializeReportQuery } from '../../lib/reports/parameters';
 import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveParameters, saveEvidenceReport, STORAGE_PREFIX, LEGACY_STORAGE_PREFIX, type EvidenceReport, type ParameterValues } from '../../lib/evidence/reports';
 import { newDrillExampleReport, newEvidenceReport } from '../../lib/evidence/templates';
 import { isWeatherService, WEATHER_TEST_SERVICE } from '../../lib/evidence/weather';
@@ -320,7 +320,9 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
         if (!dropped.ok) throw new Error(dropped.error || 'Could not replace semantic dataset');
         semanticTables.current.delete(name);
       }
-      if (next.setupSql.trim()) {
+      // Comment-only setup SQL (a script someone commented out) has nothing to run; DuckDB
+      // would reject it with "no statements".
+      if (hasSqlStatements(next.setupSql)) {
         profile.begin('setup');
         const compiled = compileReportQuery(next.setupSql, compilerParameters(next, values), values);
         const start = performance.now();

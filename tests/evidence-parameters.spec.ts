@@ -195,3 +195,13 @@ test('the Performance tab shows where the last refresh spent its time, query by 
   await performance.getByRole('radio', { name: 'Slowest first' }).click();
   await expect(performance.getByRole('radio', { name: 'Slowest first' })).toHaveAttribute('aria-checked', 'true');
 });
+
+test('setup SQL that is only comments is skipped, not run', async ({ page }) => {
+  test.setTimeout(120_000);
+  const panel = await openGeoReport(page, {
+    setupSql: '-- Holdings are now sourced live from the catalog instead of a static\n-- snapshot table, so no setup table is needed here.\n',
+  });
+  await expect(rows(page)).toHaveCount(14);
+  await expect(panel.getByTestId('report-problem-count')).toHaveCount(0);
+  await expect(panel.getByText(/no statements/i)).toHaveCount(0);
+});
