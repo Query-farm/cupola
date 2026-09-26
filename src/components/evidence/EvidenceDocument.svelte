@@ -12,7 +12,8 @@
   import { createPageFiltersContext } from '@evidence/core/page-filters-context';
   import { createInlineQueriesContext } from '@evidence/core/user-components/common/inline-queries';
   import { setShowErrorsContext } from '@evidence/core/show-errors.context';
-  import { Metadata, setMetadataContext } from '@evidence/core/metadata';
+  import { setMetadataContext } from '@evidence/core/metadata';
+  import { CupolaMetadata } from '../../lib/evidence/catalog-metadata.svelte';
   import { InlineQueryMetadata, setInlineQueryMetadataContext } from '@evidence/core/metadata/inline-query-metadata.svelte';
   import { createMetricsCatalogContext } from '@evidence/core/metrics/metrics-catalog';
   import type { SemanticDatasetState } from '../../lib/evidence/semantic-datasets';
@@ -30,7 +31,9 @@
   setProjectSettingsContext(() => ({ first_day_of_week: 'sunday' }));
   setPageSettingsContext(() => ({}));
   setAutoRefreshContext(() => ({}));
-  const metadata = new Metadata(service, { warehouseMode: 'motherduck' });
+  // Every attached catalog, keyed catalog.schema.table: the built-in DuckDB loader keys
+  // schema.table, which mixes up same-named tables across Cupola's catalogs.
+  const metadata = new CupolaMetadata(service, { warehouseMode: 'motherduck' });
   setMetadataContext(metadata);
   const filters = createPageFiltersContext({}, {
     url: () => new URL(window.location.href),
