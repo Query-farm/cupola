@@ -54,7 +54,7 @@ export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs
         {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
       </button>
       <span className="h-5 w-px bg-border mx-0.5 shrink-0" aria-hidden="true" />
-      <div className="flex items-center gap-1" role="tablist" aria-label="Workspace">
+      <div className="flex items-center gap-1.5" role="tablist" aria-label="Workspace">
       {TABS.map((tab) => {
         const active = activeTab === tab.id;
         const Icon = tab.icon;
@@ -67,10 +67,11 @@ export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs
             onClick={() => onSelect(tab.id)}
             data-testid={`tab-${tab.id}`}
             className={cn(
-              "inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md border border-transparent whitespace-nowrap transition-colors shrink-0",
+              "inline-flex items-center gap-1.5 px-3 py-1 text-sm font-medium rounded-md border whitespace-nowrap transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+              // Outlined, so each tab reads as a button, not a label.
               active
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border bg-background text-foreground/75 hover:border-foreground/25 hover:bg-foreground/5 hover:text-foreground",
             )}
           >
             {tab.img ? (
