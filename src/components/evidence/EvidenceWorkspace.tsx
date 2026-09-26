@@ -103,6 +103,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   const readInputs = useRef<(() => EvidenceInputState[]) | null>(null);
   const [run, setRun] = useState<ReportRun | null>(null);
   const [updated, setUpdated] = useState('');
+  /** When the report's data was last refreshed; the PDF prints it in full (date and time). */
+  const updatedAt = useRef<Date | null>(null);
   useReportPrint(workspace, !library && Boolean(run));
   // Export progress lives on the button: working, then "exported" for a moment.
   const [pdfExport, setPdfExport] = useState<{ state: 'idle' } | { state: 'exporting'; progress?: string } | { state: 'done'; omitted: string[] }>({ state: 'idle' });
@@ -115,7 +117,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     const view = saved && !isLibraryUrl() ? new URL(window.location.href) : null;
     if (view) view.hash = ''; // Never carry a fragment (auth tokens, keys) into a document.
     return {
-      title: report.title, meta: [...(updated ? [{ label: 'Updated', value: updated }] : []), ...extraMeta], fonts: reportTheme.config.fonts,
+      title: report.title, meta: extraMeta, fonts: reportTheme.config.fonts,
+      updated: updatedAt.current ? new Intl.DateTimeFormat(undefined, { dateStyle: 'long', timeStyle: 'short' }).format(updatedAt.current) : undefined,
       link: view ? { label: 'Open this view in Cupola', url: view.href } : undefined,
       accent: reportTheme.mode === 'light' ? (reportTheme.style as Record<string, string>)['--primary'] : undefined,
     };
@@ -341,7 +344,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
       // Rendering runs on after this returns: it ends once the document's queries go quiet.
       profile.begin('render');
       setRun({ execution: current, report: structuredClone(next), values, semanticQueries: semantic.queries, semanticStates: semantic.states, revision: ++revision.current });
-      setUpdated(new Date().toLocaleTimeString());
+      updatedAt.current = new Date();
+      setUpdated(updatedAt.current.toLocaleTimeString());
       setStatus('Connected');
       if (history !== 'none' && !isLibraryUrl()) {
         const url = withParameterValues(new URL(window.location.href), next.parameters, values);

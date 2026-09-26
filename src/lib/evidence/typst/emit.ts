@@ -14,7 +14,7 @@ export function emitTypst(doc: ReportDocument): { main: string; files: Record<st
     `#import "${TEMPLATE_PATH}": *`,
     `#show: report.with(`,
     `  title: ${lit(doc.title)},`,
-    `  subtitle: ${doc.subtitle ? lit(doc.subtitle) : 'none'},`,
+    `  updated: ${doc.updated ? lit(doc.updated) : 'none'},`,
     `  meta: ${pairs(doc.meta)},`,
     `  filters: ${pairs(doc.filters ?? [])},`,
     `  appendix: ${array((doc.appendix ?? []).map(item => `(${lit(item.label)}, ${array(item.values.map(lit))})`))},`,

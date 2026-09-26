@@ -1,7 +1,7 @@
 import { compilePdf } from './compiler';
 import { emitTypst } from './emit';
 import { extractReport } from './extract';
-import { contentWidthPx, defaultPaper, dropRepeatedTitle, type Block, type PdfFont, type PdfTheme } from './model';
+import { contentWidthPx, defaultPaper, type Block, type PdfFont, type PdfTheme } from './model';
 import { loadChartRenderer } from './charts';
 import { loadPdfFonts, loadTypstCompiler } from './load-compiler';
 import { loadSnapshotRenderer } from './snapshot';
@@ -11,7 +11,9 @@ import type { FilterSummary } from '../filter-summary';
 export interface PdfDocumentRequest {
   title: string;
   meta: { label: string; value: string }[];
-  /** Parameters and inputs in effect, for the header's Filters section. */
+  /** When the report's data was refreshed, in full (date and time). */
+  updated?: string;
+  /** Parameters and inputs in effect, listed after the content. */
   filters?: FilterSummary;
   /** A link back to the view, printed under the header metadata. */
   link?: { label: string; url: string };
@@ -53,14 +55,15 @@ export function createPdfExport(request: PdfDocumentRequest) {
         if (sections) blocks.push({ kind: 'pagebreak' });
         blocks.push({ kind: 'heading', level: 1, children: [{ kind: 'text', text: heading }] });
       }
-      blocks.push(...dropRepeatedTitle(extraction.blocks, request.title));
+      // The report's own content, its first heading included: the PDF prints no title of its own.
+      blocks.push(...extraction.blocks);
       Object.assign(files, extraction.files);
       omitted.push(...extraction.omitted);
       coverage.push(...extraction.coverage);
       sections++;
     },
     async finish(): Promise<PdfExportResult> {
-      const { main, files: all } = emitTypst({ title: request.title, meta: request.meta, filters: request.filters?.filters, appendix: request.filters?.appendix, link: request.link, theme, blocks, files });
+      const { main, files: all } = emitTypst({ title: request.title, meta: request.meta, updated: request.updated, filters: request.filters?.filters, appendix: request.filters?.appendix, link: request.link, theme, blocks, files });
       // `window.__cupolaPdfDebug = true` keeps the last export's Typst source and files for inspection.
       const debug = window as { __cupolaPdfDebug?: unknown };
       if (debug.__cupolaPdfDebug) debug.__cupolaPdfDebug = { main, files: all, coverage };

@@ -58,8 +58,10 @@ test('Evidence exports a typeset PDF of the rendered report', async ({ page }, t
 
   const { main, files } = await page.evaluate(() => (window as unknown as { __cupolaPdfDebug: { main: string; files: Record<string, string> } }).__cupolaPdfDebug);
   // The report's own "# PDF check report" is not repeated under the title block.
-  expect(main.match(/PDF check report/g)).toHaveLength(1);
-  // Every parameter and input in effect is listed in the header's Filters section.
+  // The report's own heading is printed; the title only names the document (no title block).
+  expect(main.match(/PDF check report/g)).toHaveLength(2);
+  expect(main).toContain('heading(level: 1, text("PDF check report"))');
+  // Every parameter and input in effect is listed in the Filters section after the content.
   expect(main).toContain('filters: (("Region", "North & \\"South\\" #1"), ("Region filter", "All")),');
   expect(main).toContain('text("780")');
   expect(main).not.toMatch(/12,3,0/);

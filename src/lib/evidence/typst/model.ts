@@ -62,8 +62,10 @@ export interface PdfTheme {
 
 export interface ReportDocument {
   title: string;
-  subtitle?: string;
+  /** Extra details listed after the content (e.g. "Sections" of a PDF per value). */
   meta: { label: string; value: string }[];
+  /** When the report's data was refreshed, in full; in every page's footer and after the content. */
+  updated?: string;
   /** Parameters and inputs in effect, printed as the header's Filters section. */
   filters?: { label: string; value: string }[];
   /** Lists too long for the header (a multi-select of many values), printed in full at the end. */
