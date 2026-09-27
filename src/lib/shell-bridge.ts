@@ -87,6 +87,9 @@ export const engine = {
   /** Parse SQL with DuckDB and return the relations it reads. Reports use
    *  this to infer dataset dependencies from ordinary FROM/JOIN references. */
   getTableNames: null as ((sql: string) => Promise<string[]>) | null,
+  /** Run statements as one exclusive unit inside a transaction that is always rolled
+   *  back: a dry run that leaves the session as it found it. See duckdb-worker-boot. */
+  rolledBack: null as (<T>(work: (run: (sql: string, params?: unknown[]) => Promise<QueryResult>) => Promise<T>, options?: QueryExecutionOptions) => Promise<T>) | null,
   querySync: null as ((sql: string, options?: QueryExecutionOptions) => Promise<QueryResult>) | null,
   cancelQuery: null as (() => void) | null,
   progress: null as ((pct: number) => void) | null,

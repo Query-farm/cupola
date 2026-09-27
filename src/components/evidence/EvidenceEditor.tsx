@@ -65,7 +65,7 @@ export function EvidenceEditor({ performance, parameterChoices, fullScreen, onTo
     </div>
     <Tabs value={tab} onValueChange={value => { setTab(String(value)); if (value === 'agent') setAgentOpened(true); }} className="min-h-0 flex-1 gap-0">
       <EvidenceEditorNavigation selected={tab} />
-      <TabsContent value="agent" keepMounted style={{ display: tab === 'agent' ? undefined : 'none' }} className="min-h-0 overflow-hidden"><Suspense fallback={<p className="p-4 text-sm" role="status">Loading report agent…</p>}>{agentOpened && <EvidenceAgent catalogs={catalogs} report={report} onChange={onChange} issues={issues} stale={stale} onApplyPreview={onApplyPreview} previewBusy={previewBusy} />}</Suspense></TabsContent>
+      <TabsContent value="agent" keepMounted style={{ display: tab === 'agent' ? undefined : 'none' }} className="min-h-0 overflow-hidden"><Suspense fallback={<p className="p-4 text-sm" role="status">Loading report agent…</p>}>{agentOpened && <EvidenceAgent catalogs={catalogs} report={report} onChange={onChange} issues={issues} stale={stale} onApplyPreview={onApplyPreview} previewBusy={previewBusy} performance={performance} />}</Suspense></TabsContent>
       <TabsContent value="document" className="min-h-0 overflow-auto px-4 pb-4">
         <div className="flex h-full min-h-80 flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">

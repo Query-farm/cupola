@@ -273,29 +273,54 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   };
   const parameterPrefix = `__cupola_params_${crypto.randomUUID().replaceAll('-', '')}_`;
   let parameterRun = 0;
+  // WASM has no pending prepared-statement API. Bind values through its
+  // prepared API into private variables, then execute foldable references
+  // using the pending API. Never interpolate parameter values into SQL.
+  // The variables it set are added to `bound`; the caller resets them.
+  const runBound = async (sql: string, params: unknown[], signal: AbortSignal, bound: string[]): Promise<QueryResult> => {
+    if (!params.length) return runQueryWrapped(sql, signal);
+    const prefix = `${parameterPrefix}${++parameterRun}_`;
+    const names = params.map((_, index) => `${prefix}${index}`);
+    const query = parameterVariableSql(sql, await db.tokenize(sql), names);
+    for (let index = 0; index < params.length; index++) {
+      signal.throwIfAborted();
+      const integer = typeof params[index] === 'number' && Number.isSafeInteger(params[index]);
+      const set = await runPrepared(`SET VARIABLE "${names[index]}" = ?${integer ? '::BIGINT' : ''}`, [params[index]], { signal });
+      if (!set.ok) return set;
+      bound.push(names[index]);
+    }
+    signal.throwIfAborted();
+    return runQueryWrapped(query, signal);
+  };
+  const resetVariables = async (names: string[]) => {
+    for (const name of names) { try { await db.runQuery(connId, `RESET VARIABLE "${name}"`); } catch { /* already gone */ } }
+  };
   engine.queryPrepared = (sql, params, options) => observeCatalogQuery(sql, () => execute(async signal => {
     if (!options) return runPrepared(sql, params);
-    // WASM has no pending prepared-statement API. Bind values through its
-    // prepared API into private variables, then execute foldable references
-    // using the pending API. Never interpolate parameter values into SQL.
     return interruptible(signal, async () => {
-      const prefix = `${parameterPrefix}${++parameterRun}_`;
-      const names = params.map((_, index) => `${prefix}${index}`);
-      const query = parameterVariableSql(sql, await db.tokenize(sql), names);
-      try {
-        for (let index = 0; index < params.length; index++) {
-          signal.throwIfAborted();
-          const integer = typeof params[index] === 'number' && Number.isSafeInteger(params[index]);
-          const bound = await runPrepared(`SET VARIABLE "${names[index]}" = ?${integer ? '::BIGINT' : ''}`, [params[index]], { signal });
-          if (!bound.ok) return bound;
-        }
-        signal.throwIfAborted();
-        return await runQueryWrapped(query, signal);
-      } finally {
-        for (const name of names) await db.runQuery(connId, `RESET VARIABLE "${name}"`);
-      }
+      const bound: string[] = [];
+      try { return await runBound(sql, params, signal, bound); }
+      finally { await resetVariables(bound); }
     });
   }, options));
+  // Run several statements as one exclusive, rolled-back unit: nothing else on
+  // the shared connection runs between BEGIN and ROLLBACK (the executor holds it),
+  // and the ROLLBACK runs whatever happens, so a failing statement can never leave
+  // the session inside an aborted transaction. SET, PRAGMA, INSTALL and the like
+  // are not transactional in DuckDB; callers must keep them out.
+  engine.rolledBack = <T,>(work: (run: (sql: string, params?: unknown[]) => Promise<QueryResult>) => Promise<T>, options?: QueryExecutionOptions) => execute(signal => interruptible(signal, async () => {
+    const bound: string[] = [];
+    const begun = await runQueryWrapped('BEGIN TRANSACTION', signal);
+    if (!begun.ok) throw new Error(begun.error || 'Could not start a transaction.');
+    try {
+      return await work((sql, params = []) => runBound(sql, params, signal, bound));
+    } finally {
+      // "No transaction is active" means the work rolled back itself; that's fine.
+      try { await db.runQuery(connId, 'ROLLBACK'); } catch { /* not in a transaction */ }
+      // Variables are session state, not transactional: clear them after the rollback.
+      await resetVariables(bound);
+    }
+  }), options ?? {});
   engine.getTableNames = (sql: string) => execute(() => conn.getTableNames(sql));
   // Keep the shell alias on the same connection queue.
   engine.querySync = engine.query;

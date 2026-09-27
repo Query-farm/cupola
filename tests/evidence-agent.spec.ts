@@ -82,6 +82,52 @@ test('report agent grounds tools, reviews edits, protects newer drafts and share
   expect(errors).toEqual([]);
 });
 
+test('report agent dry-runs setup SQL in a rolled-back transaction and keeps run_sql read-only', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.addInitScript(() => localStorage.setItem('vgi-frontend-settings', JSON.stringify({ anthropicApiKey: 'test-key-not-real', aiModel: 'claude-sonnet-4-6' })));
+  const calls = [
+    { name: 'test_setup_sql', input: { sql: '-- materialize once\nCREATE OR REPLACE TEMP TABLE agent_probe AS SELECT range AS n FROM range(3);\nINSERT INTO agent_probe VALUES (10);' } },
+    { name: 'test_setup_sql', input: { sql: 'CREATE TEMP TABLE agent_ok AS SELECT 1 AS a; SET threads = 1' } },
+    { name: 'test_setup_sql', input: { sql: 'CREATE TEMP TABLE agent_bad AS SELECT * FROM no_such_table_anywhere' } },
+    { name: 'run_sql', input: { sql: 'CREATE TEMP TABLE agent_write AS SELECT 1' } },
+    { name: 'run_sql', input: { sql: "SELECT count(*) AS n FROM duckdb_tables() WHERE table_name IN ('agent_probe', 'agent_ok', 'agent_bad', 'agent_write')" } },
+    { name: 'get_report', input: {} },
+  ];
+  const requests: any[] = [];
+  await page.route('https://api.anthropic.com/v1/messages', async route => {
+    requests.push(route.request().postDataJSON());
+    await route.fulfill({ status: 200, contentType: 'text/event-stream', body: stream(calls[requests.length - 1]) });
+  });
+  await page.goto(evidencePath('evidence/reports'));
+  const panel = page.getByTestId('evidence-panel');
+  await panel.getByRole('button', { name: 'New report', exact: true }).click();
+  await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
+  const input = panel.getByRole('textbox', { name: 'Chat message input' });
+  await input.fill('Check the setup SQL'); await input.press('Enter');
+  await expect(panel.getByRole('log')).toContainText('Review the proposed changes below.', { timeout: 60_000 });
+  expect(requests[0].tools.map((t: any) => t.name)).toContain('test_setup_sql');
+  const result = (index: number) => requests[index].messages.at(-1).content[0].content as string;
+
+  const created = JSON.parse(result(1));
+  expect(created).toMatchObject({ ok: true, statements: [{ index: 1, ok: true }, { index: 2, ok: true }] });
+  expect(created.tables).toEqual([expect.objectContaining({ name: 'agent_probe', kind: 'table', rowCount: 4, columns: [{ name: 'n', type: 'BIGINT' }] })]);
+  expect(created.tables[0].sample).toHaveLength(4);
+  expect(created.note).toContain('rolled back');
+
+  const refused = JSON.parse(result(2));
+  expect(refused).toMatchObject({ ok: false, refused: { index: 2 } });
+  expect(refused.refused.reason).toContain('SET');
+
+  const failed = JSON.parse(result(3));
+  expect(failed.ok).toBe(false);
+  expect(failed.statements[0].error).toMatch(/no_such_table_anywhere/);
+
+  expect(result(4)).toContain('read-only');
+  // Nothing the dry runs created survived, and the failed one left no aborted transaction behind.
+  expect(result(5)).toMatch(/"n":\s*"?0/);
+  expect(JSON.parse(result(6))).toHaveProperty('lastRefresh.totalMs');
+});
+
 test('agent explains missing credentials without issuing a request', async ({ page }) => {
   let requests = 0;
   await page.route('https://api.anthropic.com/v1/messages', route => { requests++; return route.abort(); });

@@ -19,6 +19,7 @@ export function toolInputLabel(name: string): string {
     case "list_components": return "Exploring Evidence components";
     case "get_component": return "Checking Evidence component options";
     case "propose_report_edit": return "Preparing report changes";
+    case "test_setup_sql": return "Writing setup SQL";
     case "run_sql":
       return "Writing query";
     case "compile_semantic_query":
@@ -68,6 +69,7 @@ export function toolActivityLabel(name: string, input?: any): string {
     case "list_components": return "Exploring Evidence components";
     case "get_component": return "Checking Evidence component options";
     case "propose_report_edit": return "Preparing report changes";
+    case "test_setup_sql": return "Dry-running setup SQL";
     case "describe_table":
       return `Looking up ${input?.catalog ? `${input.catalog}.` : ""}${input?.schema}.${input?.table}`;
     case "describe_function":

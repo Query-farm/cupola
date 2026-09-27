@@ -19,8 +19,10 @@ import { executeReportDataTool } from '../../lib/evidence/agent-data-tools';
 import { QueryResultCache } from '../../lib/query-results';
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { ParameterChoicesLoader, previewParameterOptions } from '../../lib/evidence/parameter-choices';
-import { waitForEngineReady, ui } from '../../lib/shell-bridge';
-import type { EvidenceReport } from '../../lib/evidence/reports';
+import { waitForEngineReady, engine, ui } from '../../lib/shell-bridge';
+import { resolveParameters, type EvidenceReport } from '../../lib/evidence/reports';
+import { refreshForAgent, type RefreshProfile } from '../../lib/evidence/refresh-profile';
+import { isReadOnlySql, testSetupSql } from '../../lib/evidence/setup-test';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
 
 type ProposalState = 'pending' | 'applied' | 'discarded' | 'superseded' | 'undone' | 'stopped';
@@ -28,7 +30,7 @@ type Message = { id: string; role: 'user' | 'assistant'; text: string; proposal?
 const uid = () => crypto.randomUUID();
 const fieldLabel = { title: 'Title', source: 'Document', setupSql: 'Dataset SQL', parameters: 'Parameters', values: 'Input values', drillPaths: 'Drill paths', appearance: 'Appearance', semanticDatasets: 'Semantic datasets', pivots: 'Pivot views' };
 const printable = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview, previewBusy, catalogs }: { catalogs: readonly CatalogData[]; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
+export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview, previewBusy, catalogs, performance }: { performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[] }; catalogs: readonly CatalogData[]; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
   const { settings } = useSettings();
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
@@ -52,6 +54,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
   const abort = useRef<AbortController | null>(null);
   const activeMessage = useRef<string | null>(null);
   const latest = useRef(report); latest.current = report;
+  const perf = useRef(performance); perf.current = performance;
   const bottom = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
@@ -81,7 +84,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
       return queryRun.query(sql, params);
     };
     const snapshot = structuredClone(latest.current);
-    const context = { report: snapshot, diagnostics: { fromPreviousDraft: stale, issues }, recentProposals: messages.filter(m => m.proposal).map(m => ({ summary: m.proposal!.summary, status: m.state })) };
+    const context = { report: snapshot, diagnostics: { fromPreviousDraft: stale, issues }, recentProposals: messages.filter(m => m.proposal).map(m => ({ summary: m.proposal!.summary, status: m.state })), lastRefresh: refreshForAgent(perf.current?.profile ?? null, perf.current?.namedQueries ?? []) };
     const assistantId = uid(); activeMessage.current = assistantId;
     follow.current = true;
     if (retry) history.current = structuredClone(retryHistory.current);
@@ -110,6 +113,20 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
         async (name, input) => {
           if (!active()) throw new DOMException('Aborted', 'AbortError');
           try {
+            // Exploration only reads: anything that changes the session belongs in the report's
+            // setup SQL, tried with test_setup_sql and proposed, so the report stays rerunnable.
+            if (name === 'run_sql' && typeof input?.sql === 'string' && !isReadOnlySql(input.sql)) {
+              return 'Error: run_sql is read-only in the report agent (SELECT, WITH, FROM, DESCRIBE, SUMMARIZE, EXPLAIN). To try statements that create tables or views, use test_setup_sql, which runs them in a rolled-back transaction; then put them in setupSql with propose_report_edit.';
+            }
+            if (name === 'test_setup_sql') {
+              const denied = deniedAIQueryToolResult(name, queryMode);
+              if (denied) return denied;
+              await queryRun.wait(waitForEngineReady());
+              if (!engine.rolledBack) throw new Error('The DuckDB engine is not ready.');
+              const sql = typeof input?.sql === 'string' ? input.sql : snapshot.setupSql ?? '';
+              const values = { ...resolveParameters(snapshot), ...(input?.values && typeof input.values === 'object' ? input.values : {}) };
+              return JSON.stringify(await testSetupSql(sql, snapshot, values, engine.rolledBack, { signal: controller.signal }), (_, value) => typeof value === 'bigint' ? value.toString() : value);
+            }
             const dataResult = await executeReportDataTool(name, input, catalogs, { query, queryPrepared: query, resultCache: resultCache.current }, queryMode);
             if (dataResult !== undefined) return dataResult;
             if (name === 'get_report') return JSON.stringify(context);

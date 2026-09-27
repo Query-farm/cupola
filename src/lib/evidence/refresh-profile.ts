@@ -124,3 +124,29 @@ export function formatMs(ms: number): string {
   if (ms < 1_000) return `${Math.round(ms)} ms`;
   return `${(ms / 1_000).toFixed(ms < 10_000 ? 2 : 1)} s`;
 }
+
+/** The last refresh as the report agent reads it: where the time went, the slowest queries,
+ *  and how often each named query ran. A name that ran many times for many seconds is a
+ *  source every component re-fetches, the case for materializing it once in setup SQL. */
+export function refreshForAgent(profile: RefreshProfile | null, namedQueries: { name: string; sql: string }[]) {
+  if (!profile) return null;
+  const summary = summarizeProfile({ ...profile, queries: nameRenderQueries(profile.queries, namedQueries) });
+  const byName = new Map<string, { runs: number; ms: number }>();
+  for (const query of nameRenderQueries(profile.queries, namedQueries)) {
+    if (query.cached || !query.name) continue;
+    const name = query.name.replace(/ · component$/, '');
+    const entry = byName.get(name) ?? { runs: 0, ms: 0 };
+    entry.runs++; entry.ms += query.durationMs;
+    byName.set(name, entry);
+  }
+  const round = (ms: number) => Math.round(ms);
+  return {
+    outcome: profile.outcome ?? 'running',
+    totalMs: round(summary.totalMs),
+    byPhase: summary.byPhase.map(({ phase, ms }) => ({ phase, ms: round(ms) })),
+    queryCount: summary.queryCount,
+    failed: summary.failed,
+    slowest: summary.slowest.map(query => ({ phase: query.phase, name: query.name, ms: round(query.durationMs), rows: query.rows, sql: query.sql.length > 300 ? `${query.sql.slice(0, 300)}…` : query.sql, ...(query.error ? { error: query.error } : {}) })),
+    byQuery: [...byName].map(([name, entry]) => ({ name, runs: entry.runs, ms: round(entry.ms) })).sort((a, b) => b.ms - a.ms).slice(0, 12),
+  };
+}
