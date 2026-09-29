@@ -196,6 +196,23 @@ test('the Performance tab shows where the last refresh spent its time, query by 
   await expect(performance.getByRole('radio', { name: 'Slowest first' })).toHaveAttribute('aria-checked', 'true');
 });
 
+test('the Performance tab lists each Dataset SQL statement on its own', async ({ page }) => {
+  test.setTimeout(120_000);
+  const panel = await openGeoReport(page, {
+    setupSql: 'CREATE OR REPLACE TEMP TABLE perf_a AS SELECT 1 AS n;\n-- a second step\nCREATE OR REPLACE TEMP VIEW perf_b AS SELECT n + 1 AS n FROM perf_a;\nSELECT 1;',
+  });
+  await expect(rows(page)).toHaveCount(14);
+  await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Performance', exact: true }).click();
+  const performance = panel.getByRole('region', { name: 'Refresh performance' });
+  await expect(performance.getByRole('status', { name: 'Refresh timing' })).toHaveText(/^Refreshed in /, { timeout: 30_000 });
+  await expect(performance.getByRole('list', { name: 'Time by phase' })).toContainText('Setup SQL');
+  const queries = performance.getByRole('list', { name: 'Queries run by the last refresh' });
+  for (const name of ['Dataset SQL · perf_a', 'Dataset SQL · perf_b', 'Dataset SQL · statement 3']) await expect(queries.getByRole('button', { name: new RegExp(`^${name}: `) })).toHaveCount(1);
+  await queries.getByRole('button', { name: /^Dataset SQL · perf_b: / }).click();
+  await expect(performance.getByLabel('Query SQL')).toHaveText('-- a second step\nCREATE OR REPLACE TEMP VIEW perf_b AS SELECT n + 1 AS n FROM perf_a');
+});
+
 test('setup SQL that is only comments is skipped, not run', async ({ page }) => {
   test.setTimeout(120_000);
   const panel = await openGeoReport(page, {

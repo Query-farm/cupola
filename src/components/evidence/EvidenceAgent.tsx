@@ -30,7 +30,9 @@ type Message = { id: string; role: 'user' | 'assistant'; text: string; proposal?
 const uid = () => crypto.randomUUID();
 const fieldLabel = { title: 'Title', source: 'Document', setupSql: 'Dataset SQL', parameters: 'Parameters', values: 'Input values', drillPaths: 'Drill paths', appearance: 'Appearance', semanticDatasets: 'Semantic datasets', pivots: 'Pivot views' };
 const printable = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview, previewBusy, catalogs, performance }: { performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[] }; catalogs: readonly CatalogData[]; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
+/** An agent proposal applied to the draft, or undone: the workspace labels the next saved revision with it. */
+export type ProposalEvent = { type: 'applied' | 'undone'; id: string; proposal: ReportProposal };
+export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview, previewBusy, catalogs, performance, onProposal }: { onProposal?: (event: ProposalEvent) => void; performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[] }; catalogs: readonly CatalogData[]; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
   const { settings } = useSettings();
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
@@ -116,7 +118,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
             // Exploration only reads: anything that changes the session belongs in the report's
             // setup SQL, tried with test_setup_sql and proposed, so the report stays rerunnable.
             if (name === 'run_sql' && typeof input?.sql === 'string' && !isReadOnlySql(input.sql)) {
-              return 'Error: run_sql is read-only in the report agent (SELECT, WITH, FROM, DESCRIBE, SUMMARIZE, EXPLAIN). To try statements that create tables or views, use test_setup_sql, which runs them in a rolled-back transaction; then put them in setupSql with propose_report_edit.';
+              return 'Error: run_sql is read-only in the report agent (SELECT, WITH, FROM, DESCRIBE, SUMMARIZE, EXPLAIN, and EXPLAIN ANALYZE of a read). To try statements that create tables or views, use test_setup_sql, which runs them in a rolled-back transaction; then put them in setupSql with propose_report_edit.';
             }
             if (name === 'test_setup_sql') {
               const denied = deniedAIQueryToolResult(name, queryMode);
@@ -223,6 +225,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
       const next = applyReportProposal(latest.current, message.proposal);
       setApplying(true); setError('');
       onChange(next);
+      onProposal?.({ type: 'applied', id: message.id, proposal: message.proposal });
       setUndo({ id: message.id, proposal: message.proposal });
       setMessages(previous => previous.map(m => m.id === message.id ? { ...m, state: 'applied' } : m));
       await onApplyPreview(next);
@@ -237,6 +240,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
     const next = { ...latest.current, ...Object.fromEntries(undo.proposal.fields.map(field => [field, undo.proposal.before[field]])) };
     setApplying(true); setError('');
     onChange(next);
+    onProposal?.({ type: 'undone', id: undo.id, proposal: undo.proposal });
     setMessages(previous => [...previous.map(m => m.id === undo.id ? { ...m, state: 'undone' as const } : m), { id: uid(), role: 'assistant', text: 'Undone. I restored the previous draft and requested a fresh preview. Save when you’re ready to keep it.' }]);
     setUndo(null);
     try { await onApplyPreview(next); } catch (e) { setError((e as Error).message); }

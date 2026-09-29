@@ -1,14 +1,17 @@
 import { sessionCatalogs } from "@/lib/catalog-store";
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square, FileDown, MoreHorizontal, Loader2, Check, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square, FileDown, MoreHorizontal, Loader2, Check, ChevronRight, Download, Upload } from 'lucide-react';
 import { Button, buttonVariants } from '../ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu';
 import { Input } from '../ui/input';
 import { engine, waitForEngineReady } from '../../lib/shell-bridge';
-import { compileReportQuery, hasSqlStatements, materializeReportQuery } from '../../lib/reports/parameters';
-import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveParameters, saveEvidenceReport, STORAGE_PREFIX, LEGACY_STORAGE_PREFIX, type EvidenceReport, type ParameterValues } from '../../lib/evidence/reports';
+import { hasSqlStatements, materializeReportQuery } from '../../lib/reports/parameters';
+import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveParameters, saveEvidenceReport, validateEvidenceReport, describeReportError, saveRecoveryDraft, clearRecoveryDraft, loadRecoveryDraft, STORAGE_PREFIX, LEGACY_STORAGE_PREFIX, type EvidenceReport, type ParameterValues } from '../../lib/evidence/reports';
 import { newDrillExampleReport, newEvidenceReport } from '../../lib/evidence/templates';
+import { parseReportFile, planImport, reportFileName, serializeReportFile, REPORT_FILE_EXTENSION } from '../../lib/evidence/report-file';
+import { emptyHistory, loadReportHistory, mergeHistories, recordRevision, revisionReport, saveReportHistory, specOf, type ReportHistory, type Revision, type RevisionMeta } from '../../lib/evidence/revisions';
+import type { ProposalEvent } from './EvidenceAgent';
 import { isWeatherService, WEATHER_TEST_SERVICE } from '../../lib/evidence/weather';
 import { quoteIdentifier } from '../../lib/evidence/data-browser';
 import type { EvidenceDataContext } from '../../lib/evidence/data-browser';
@@ -17,6 +20,7 @@ import { ParameterInput, useParameterChoices } from './EvidenceParameters';
 import { describeParameter, resolveChoices } from '../../lib/evidence/parameter-choices';
 import { summarizeFilters } from '../../lib/evidence/filter-summary';
 import { parameterLint } from '../../lib/evidence/parameter-lint';
+import { runSetupSql } from '../../lib/evidence/setup-test';
 import { RefreshProfiler, type RefreshProfile } from '../../lib/evidence/refresh-profile';
 import { drillState, drillValues, matchDrillValue } from '../../lib/evidence/drill';
 import { completeValuesFromUrl, PARAMETER_URL_PREFIX, valuesFromUrl, withParameterValues } from '../../lib/evidence/parameter-url';
@@ -33,6 +37,9 @@ import { useReportPrint } from './useReportPrint';
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 /** A PDF per parameter value re-renders the report once per section; past this, it stops. */
 const MAX_PDF_SECTIONS = 25;
+const RECOVERED_NOTICE = 'Recovered changes that could not be saved when this report was last open.';
+/** How long after the last edit a report saves itself. */
+const AUTOSAVE_DELAY_MS = 1_500;
 const isLibraryUrl = () => (window.location.pathname.endsWith('/evidence/reports') || window.location.pathname.endsWith('/reports/saved')) || new URLSearchParams(window.location.search).get('evidence_view') === 'library';
 
 export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultToLibrary = true }: { catalogName: string; serviceUrl: string; catalogs: readonly CatalogData[]; defaultToLibrary?: boolean }) {
@@ -44,7 +51,10 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     // A shared link's `p.<key>` values are the view it names; they win over the saved ones.
     const found = stored && { ...stored, values: { ...stored.values, ...valuesFromUrl(stored.parameters, new URLSearchParams(window.location.search)) } };
     const report = found ?? newEvidenceReport(serviceUrl, catalogName, isWeatherService(serviceUrl));
-    return { reports, report, error, saved: found ? JSON.stringify(found) : '', library: isLibraryUrl() || (!found && (defaultToLibrary || Boolean(id))) };
+    // Edits that could not be saved when this report was last open come back.
+    const recovered = found ? loadRecoveryDraft(serviceUrl, found.id) : null;
+    const draft = recovered && specOf(recovered) !== specOf(found!) ? recovered : null;
+    return { reports, report: draft ?? report, savedReport: report, recovered: Boolean(draft), error, saved: found ? JSON.stringify(found) : '', library: isLibraryUrl() || (!found && (defaultToLibrary || Boolean(id))) };
   });
   const [promotion, setPromotion] = useState(consumeReportPromotion);
   const [report, setReport] = useState(initial.report);
@@ -54,7 +64,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   const [library, setLibrary] = useState(initial.library);
   const [hasOpenedReport, setHasOpenedReport] = useState(!initial.library);
   const [search, setSearch] = useState('');
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(initial.recovered);
   const [focused, setFocused] = useState(false);
   const [editorOnly, setEditorOnly] = useState(false);
   const [editorWidth, setEditorWidth] = useState(() => {
@@ -75,6 +85,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   const workspace = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(initial.error);
   const [notice, setNotice] = useState('');
+  /** The draft on screen was recovered, not saved; said until it saves. */
+  const [recovered, setRecovered] = useState(initial.recovered);
   const [status, setStatus] = useState('Ready to run');
   const [busy, setBusy] = useState(false);
   const execution = useRef<EvidenceQueryRun | null>(null);
@@ -112,10 +124,20 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   const pdfDoneTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(pdfDoneTimer.current), []);
   const previewRoot = () => workspace.current?.querySelector('[data-testid="evidence-preview"]')?.shadowRoot?.querySelector('[data-markdoc-content]') ?? null;
+  /** After the PDF export opens a collapsed section: no report query in flight and no chart
+   *  still drawing, for several checks in a row (a section's queries start as it mounts). */
+  async function settleReport(root: Element) {
+    const deadline = Date.now() + 60_000;
+    let quiet = 0;
+    while (Date.now() < deadline && quiet < 5) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      quiet = pendingRef.current === 0 && !root.querySelector('[data-echarts-ready="false"]') ? quiet + 1 : 0;
+    }
+  }
   /** What every PDF of this report shares: title, update time, fonts. */
   function pdfDocument(extraMeta: { label: string; value: string }[] = []) {
     return {
-      title: report.title, meta: extraMeta, fonts: reportTheme.config.fonts,
+      title: report.title, meta: extraMeta, fonts: reportTheme.config.fonts, settle: settleReport,
       updated: updatedAt.current ? new Intl.DateTimeFormat(undefined, { dateStyle: 'long', timeStyle: 'short' }).format(updatedAt.current) : undefined,
       accent: reportTheme.mode === 'light' ? (reportTheme.style as Record<string, string>)['--primary'] : undefined,
     };
@@ -216,7 +238,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   const revision = useRef(0);
   const dirty = JSON.stringify(report) !== saved;
   const reportRef = useRef(report); reportRef.current = report;
-  const baseline = useRef(JSON.stringify(initial.report));
+  const baseline = useRef(JSON.stringify(initial.savedReport));
   const dirtyRef = useRef(false); dirtyRef.current = JSON.stringify(report) !== baseline.current;
 
   useEffect(() => {
@@ -324,14 +346,14 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
       // would reject it with "no statements".
       if (hasSqlStatements(next.setupSql)) {
         profile.begin('setup');
-        const compiled = compileReportQuery(next.setupSql, compilerParameters(next, values), values);
+        // Statement by statement, so the Performance tab times each one.
         const start = performance.now();
-        const response = await current.query(compiled.sql, compiled.params);
-        const entry = { sql: next.setupSql, rows: 0, durationMs: performance.now() - start, error: response.ok ? null : response.error || 'Dataset setup failed', startedAt: start };
-        setLogs([entry]);
-        profile.query({ ...entry, phase: 'setup', rows: undefined });
+        const setup = await runSetupSql(next.setupSql, next, values, (sql, params) => current.query(sql, params),
+          step => profile.query({ phase: 'setup', name: step.name, sql: step.sql, startedAt: step.startedAt, durationMs: step.durationMs, error: step.error }));
+        // Logged against the whole setup SQL, so an error points the editor at the Dataset SQL.
+        setLogs([{ sql: next.setupSql, rows: 0, durationMs: performance.now() - start, error: setup.ok ? null : setup.error, startedAt: start }]);
         profile.end('setup');
-        if (!response.ok) throw new Error(response.error || 'Dataset setup failed');
+        if (!setup.ok) throw new Error(setup.error);
       }
       if (next.semanticDatasets?.length) profile.begin('semantic');
       const semanticCatalogs = next.semanticDatasets?.length ? await current.wait(sessionCatalogs(catalogs)) : catalogs;
@@ -365,7 +387,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
       else if (!initial.library && !initial.error) void refresh(initial.report, 'replace');
     }
     const changed = (event: StorageEvent) => { if (event.key === null || event.key.startsWith(STORAGE_PREFIX) || event.key.startsWith(LEGACY_STORAGE_PREFIX)) reloadList(); };
-    const unload = (event: BeforeUnloadEvent) => { if (dirtyRef.current) { event.preventDefault(); event.returnValue = ''; } };
+    // Save on the way out; ask only when the draft can't be saved (it is kept for recovery either way).
+    const unload = (event: BeforeUnloadEvent) => { if (!exportingRef.current) autosaveRef.current(); if (unsavedRef.current()) { event.preventDefault(); event.returnValue = ''; } };
     const pop = () => {
       if (isLibraryUrl()) { setRun(null); setLibrary(true); reloadList(); return; }
       const id = new URLSearchParams(window.location.search).get('evidence_report');
@@ -405,28 +428,217 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   }, [promotion, busy]);
 
   function change(next: EvidenceReport) { reportRef.current = next; setReport(next); setNotice(''); }
-  function save(copy = false) {
+
+  // Revision history: every save keeps the saved version, labelled with who changed what.
+  const [history, setHistory] = useState<ReportHistory>(emptyHistory);
+  useEffect(() => {
+    try { setHistory(loadReportHistory(serviceUrl, report.id)); }
+    catch (e) { setHistory(emptyHistory()); setNotice(`Could not read this report's revision history: ${message(e)}`); }
+  }, [serviceUrl, report.id, saved]);
+  /** Add `next` to its history (a copy starts from its original's), and say so if that fails. */
+  function keepRevision(next: EvidenceReport, from: { history: ReportHistory; before: EvidenceReport | null }, meta: RevisionMeta): string {
     try {
-      const input = copy ? { ...report, id: crypto.randomUUID(), title: `${report.title} (copy)`, createdAt: Date.now() } : report;
-      const next = saveEvidenceReport(input);
-      setReport(next); setSaved(JSON.stringify(next)); baseline.current = JSON.stringify(next); reloadList();
-      setError(''); setNotice('');
+      let kept = from.history;
+      // A report saved before history was kept: its last saved version opens the history.
+      if (!kept.revisions.length && from.before && specOf(from.before) !== specOf(next)) kept = recordRevision(kept, from.before, { kind: 'baseline', savedAt: from.before.updatedAt });
+      kept = recordRevision(kept, next, meta);
+      saveReportHistory(serviceUrl, next.id, kept);
+      if (next.id === reportRef.current.id) setHistory(kept);
+      return '';
+    } catch (e) { return `Saved, but its revision history could not be stored: ${message(e)}`; }
+  }
+
+  // Autosave. A tab the browser closes to reclaim memory takes an unsaved draft with it, so the
+  // draft is saved shortly after each edit and at once when the tab is hidden or closing. The
+  // history stays readable: one editing session's edits grow one revision (`SESSION_WINDOW_MS`),
+  // while each applied agent proposal, undo, restore and ⌘S is a revision of its own.
+  const savedRef = useRef(initial.saved); savedRef.current = saved;
+  /** The editing session autosaves extend; a checkpoint (⌘S, the agent, a restore) starts a new one. */
+  const session = useRef(crypto.randomUUID());
+  const [saveError, setSaveError] = useState('');
+  /** Save the report, recording a revision. Null when it can't be saved; the draft is kept for recovery. */
+  function persist(next: EvidenceReport, meta: RevisionMeta): EvidenceReport | null {
+    const before = savedRef.current ? JSON.parse(savedRef.current) as EvidenceReport : null;
+    let stored: EvidenceReport;
+    try { stored = saveEvidenceReport(next); }
+    catch (e) {
+      saveRecoveryDraft(next);
+      setSaveError(describeReportError(e));
+      return null;
+    }
+    clearRecoveryDraft(serviceUrl, stored.id);
+    // A parameter pick is the reader's view, not a change to the report: saved, but not a revision.
+    const valuesOnly = before && meta.kind === 'edit' && !meta.label && specOf({ ...before, values: stored.values }) === specOf(stored);
+    let history = emptyHistory();
+    try { history = loadReportHistory(serviceUrl, stored.id); } catch { /* Starts again from this save. */ }
+    const problem = valuesOnly ? '' : keepRevision(stored, { history, before }, meta);
+    const first = !savedRef.current;
+    savedRef.current = JSON.stringify(stored);
+    baseline.current = savedRef.current;
+    // Only when nothing was typed since `next` was read (a save is synchronous, so that is always).
+    if (reportRef.current === next) { reportRef.current = stored; setReport(stored); }
+    setSaved(savedRef.current); setSaveError(''); setRecovered(false); reloadList();
+    if (problem) setNotice(problem);
+    if (first) navigate(false, stored.id, true);
+    return stored;
+  }
+  /** Whether the draft differs from what is saved (a new report: from the template it started as). */
+  const unsaved = () => JSON.stringify(reportRef.current) !== (savedRef.current || baseline.current);
+  function autosave() {
+    if (unsaved()) persist(reportRef.current, { kind: 'edit', session: session.current });
+  }
+  /** For listeners registered once (beforeunload). */
+  const autosaveRef = useRef(autosave); autosaveRef.current = autosave;
+  const unsavedRef = useRef(unsaved); unsavedRef.current = unsaved;
+  const exportingRef = useRef(false); exportingRef.current = exporting;
+  useEffect(() => {
+    // A PDF per value refreshes with each value in turn: its intermediate views aren't the reader's.
+    if (exporting || !unsaved()) return;
+    const timer = setTimeout(autosave, AUTOSAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [report, exporting]);
+  useEffect(() => {
+    const flush = () => { if (document.visibilityState === 'hidden' && !exportingRef.current) autosave(); };
+    const leaving = () => { if (!exportingRef.current) autosave(); };
+    document.addEventListener('visibilitychange', flush);
+    window.addEventListener('pagehide', leaving);
+    return () => { document.removeEventListener('visibilitychange', flush); window.removeEventListener('pagehide', leaving); };
+  });
+  /** ⌘S: save now, closing the session's revision so the next edits start another. */
+  function checkpoint() {
+    if (unsaved()) persist(reportRef.current, { kind: 'edit', session: session.current });
+    session.current = crypto.randomUUID();
+  }
+  /** An agent proposal is its own revision, labelled with its summary. Edits the reader made first
+   *  are saved before it, so the label never claims them. */
+  function proposalEvent(event: ProposalEvent) {
+    if (event.type === 'applied') {
+      const saved = savedRef.current ? JSON.parse(savedRef.current) as EvidenceReport : null;
+      const started = saved ?? JSON.parse(baseline.current) as EvidenceReport;
+      if (specOf(event.proposal.before) !== specOf(started)) persist({ ...event.proposal.before, updatedAt: saved?.updatedAt ?? event.proposal.before.updatedAt }, { kind: 'edit', session: session.current });
+      persist(reportRef.current, { kind: 'agent', agentSummaries: [event.proposal.summary] });
+    } else {
+      persist(reportRef.current, { kind: 'edit', label: `Undid “${event.proposal.summary}”` });
+    }
+    session.current = crypto.randomUUID();
+  }
+  function saveCopy() {
+    try {
+      const before = savedRef.current ? JSON.parse(savedRef.current) as EvidenceReport : null;
+      const next = saveEvidenceReport({ ...reportRef.current, id: crypto.randomUUID(), title: `${reportRef.current.title} (copy)`, createdAt: Date.now() });
+      let original = emptyHistory();
+      try { original = loadReportHistory(serviceUrl, reportRef.current.id); } catch { /* The copy starts its own history. */ }
+      const problem = keepRevision(next, { history: original, before }, { kind: 'edit', label: `Saved as a copy of “${reportRef.current.title}”` });
+      reportRef.current = next; setReport(next); setSaved(JSON.stringify(next)); savedRef.current = JSON.stringify(next); baseline.current = savedRef.current; reloadList();
+      session.current = crypto.randomUUID();
+      setError(''); setNotice(problem);
       navigate(false, next.id, true);
-    } catch (e) { setError(`Could not save report: ${message(e)}`); }
+    } catch (e) { setError(`Could not save a copy: ${describeReportError(e)}`); }
+  }
+  /** Put an earlier version back. It saves at once, as a revision saying so: nothing is lost,
+   *  since the version it replaced is in the history too. */
+  function restoreRevision(revision: Revision) {
+    try {
+      const next = revisionReport(history, revision, reportRef.current);
+      change(next);
+      const label = `Restored the version of ${new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(revision.savedAt)} (${revision.label})`;
+      if (persist(next, { kind: 'restore', label })) setNotice('Earlier version restored.');
+      session.current = crypto.randomUUID();
+      void refresh(reportRef.current);
+    } catch (e) { setError(`Could not restore that version: ${message(e)}`); }
   }
   function openReport(next: EvidenceReport, updateUrl = true, fresh = false, history: 'replace' | 'none' = 'replace') {
     if (busyRef.current) return;
-    if (next.id !== reportRef.current.id && dirtyRef.current && !window.confirm('Discard unsaved changes to the current report?')) return;
-    setReport(next); setHasOpenedReport(true); setSaved(fresh ? '' : JSON.stringify(next)); baseline.current = JSON.stringify(next); setEditing(fresh); setEditorOnly(false);
-    setError(''); setNotice(''); setRun(null); setUpdated(''); setLibrary(false);
+    if (next.id !== reportRef.current.id) {
+      autosave();
+      if (unsaved() && !window.confirm(`The current report could not be saved (${saveError || 'it has problems'}). Discard its unsaved changes?`)) return;
+    }
+    // Edits that could not be saved when this report was last open come back.
+    const recovered = fresh ? null : loadRecoveryDraft(serviceUrl, next.id);
+    const draft = recovered && specOf(recovered) !== specOf(next) ? recovered : null;
+    reportRef.current = draft ?? next;
+    setReport(draft ?? next); setHasOpenedReport(true); setSaved(fresh ? '' : JSON.stringify(next)); savedRef.current = fresh ? '' : JSON.stringify(next); baseline.current = JSON.stringify(next); setEditing(fresh || Boolean(draft)); setEditorOnly(false);
+    setError(''); setNotice(''); setRecovered(Boolean(draft)); setSaveError(''); setRun(null); setUpdated(''); setLibrary(false);
+    session.current = crypto.randomUUID();
     if (updateUrl) navigate(false, fresh ? undefined : next.id);
-    void refresh(next, history);
+    void refresh(draft ?? next, history);
   }
   function copySavedReport(item: EvidenceReport) {
     try {
-      saveEvidenceReport({ ...item, id: crypto.randomUUID(), title: `${item.title} (copy)`, createdAt: Date.now() });
-      setError(''); setNotice(''); reloadList();
+      const next = saveEvidenceReport({ ...item, id: crypto.randomUUID(), title: `${item.title} (copy)`, createdAt: Date.now() });
+      let original = emptyHistory();
+      try { original = loadReportHistory(serviceUrl, item.id); } catch { /* The copy starts its own history. */ }
+      const problem = keepRevision(next, { history: original, before: item }, { kind: 'edit', label: `Saved as a copy of “${item.title}”` });
+      setError(''); setNotice(problem); reloadList();
     } catch (e) { setError(`Could not copy report: ${message(e)}`); }
+  }
+  /** Download reports as a report file, to move them to another browser or person. */
+  function exportReports(items: EvidenceReport[]) {
+    try {
+      const valid = items.map(item => validateEvidenceReport(item));
+      // Each report with its full revision history.
+      const entries = valid.map(report => ({ report, history: loadReportHistory(serviceUrl, report.id) }));
+      const url = URL.createObjectURL(new Blob([serializeReportFile(entries)], { type: 'application/json' }));
+      Object.assign(document.createElement('a'), { href: url, download: reportFileName(valid) }).click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setError('');
+    } catch (e) { setError(`Could not export: ${message(e)}`); }
+  }
+  const importInput = useRef<HTMLInputElement>(null);
+  /** Save the reports in report files to this service's saved reports. */
+  async function importReportFiles(files: File[]) {
+    const problems: string[] = [];
+    const incoming: EvidenceReport[] = [];
+    const histories: ReportHistory[] = [];
+    const sources: string[] = [];
+    for (const file of files) {
+      try {
+        const parsed = parseReportFile(await file.text());
+        incoming.push(...parsed.reports);
+        histories.push(...parsed.histories);
+        sources.push(...parsed.reports.map(() => file.name));
+        problems.push(...parsed.errors.map(error => `${file.name}: ${error}`));
+      } catch (e) { problems.push(`${file.name}: ${message(e)}`); }
+    }
+    let current: EvidenceReport[] = [];
+    try { current = listEvidenceReports(serviceUrl); } catch (e) { problems.push(`Could not read saved reports: ${message(e)}`); }
+    const plans = planImport(incoming, current, serviceUrl, (existing, next) => window.confirm(
+      `“${existing.title}” is already saved in this browser, and the imported “${next.title}” differs from it.\n\nOK replaces the saved report. Cancel keeps both, saving the import as a copy.`));
+    const counts = { new: 0, replace: 0, copy: 0, unchanged: 0 };
+    for (const [index, plan] of plans.entries()) {
+      // The file's history joins the saved report's; a changed report is itself a revision.
+      const joined = (id: string) => {
+        let saved = emptyHistory();
+        if (plan.action === 'replace' || plan.action === 'unchanged') {
+          try { saved = loadReportHistory(serviceUrl, id); } catch { /* Replaced by the file's. */ }
+        }
+        return mergeHistories(saved, histories[index]);
+      };
+      if (plan.action === 'unchanged') {
+        counts.unchanged++;
+        try {
+          const merged = joined(plan.report.id);
+          saveReportHistory(serviceUrl, plan.report.id, merged);
+          if (plan.report.id === reportRef.current.id) setHistory(merged);
+        } catch (e) { problems.push(`“${plan.report.title}”: its revision history could not be stored: ${message(e)}`); }
+        continue;
+      }
+      try {
+        const next = saveEvidenceReport(plan.report);
+        const problem = keepRevision(next, { history: joined(next.id), before: null }, { kind: 'import', label: `Imported from ${sources[index]}` });
+        if (problem) problems.push(`“${next.title}”: ${problem}`);
+        counts[plan.action]++;
+        // The open report was replaced: show the imported version unless it has unsaved edits.
+        if (plan.action === 'replace' && next.id === reportRef.current.id && !dirtyRef.current) {
+          reportRef.current = next; setReport(next); setSaved(JSON.stringify(next)); savedRef.current = JSON.stringify(next); baseline.current = savedRef.current; setRun(null);
+        }
+      } catch (e) { problems.push(`“${plan.report.title}”: ${message(e)}`); }
+    }
+    reloadList();
+    const imported = counts.new + counts.replace + counts.copy;
+    const details = [counts.replace && `${counts.replace} replaced`, counts.copy && `${counts.copy} kept as a copy`, counts.unchanged && `${counts.unchanged} already saved`].filter(Boolean).join(', ');
+    setNotice(incoming.length ? `Imported ${imported} ${imported === 1 ? 'report' : 'reports'}${details ? ` (${details})` : ''}.` : '');
+    setError(problems.length ? `Could not import:\n${problems.join('\n')}` : '');
   }
   function remove(item: EvidenceReport) {
     if (!window.confirm(`Delete “${item.title}” from this browser?`)) return;
@@ -453,18 +665,25 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     if (event.key === 'Escape' && focused) { setFocused(false); setEditorOnly(false); event.stopPropagation(); }
     if (library || !(event.metaKey || event.ctrlKey)) return;
     if (event.key === 'Enter') { event.preventDefault(); void refresh(); }
-    if (event.key.toLowerCase() === 's') { event.preventDefault(); if (!busy) save(); }
+    if (event.key.toLowerCase() === 's') { event.preventDefault(); checkpoint(); }
   }}>
     <header className="z-10 flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-5 py-3">
       {library ? <><FolderOpen className="size-4 text-muted-foreground" /><h1 className="text-sm font-semibold">Saved reports</h1><span className="text-xs text-muted-foreground">{reports.length} {reports.length === 1 ? 'report' : 'reports'}</span>
-        <div className="ml-auto flex gap-2">{hasOpenedReport && <Button variant="outline" disabled={busy} onClick={() => { navigate(false, saved ? report.id : undefined); if (!run) void refresh(report, 'replace'); }}>Back to report</Button>}<Button onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName), true, true)} disabled={busy}><Plus />New report</Button></div></>
+        <div className="ml-auto flex gap-2">
+          <input ref={importInput} type="file" accept={`${REPORT_FILE_EXTENSION},.json,application/json`} multiple hidden aria-label="Report files to import"
+            onChange={event => { const files = [...event.target.files ?? []]; event.target.value = ''; if (files.length) void importReportFiles(files); }} />
+          <Button variant="outline" disabled={busy} onClick={() => importInput.current?.click()} title="Import reports from report files"><Upload />Import</Button>
+          <Button variant="outline" disabled={!reports.length} onClick={() => exportReports(reports)} title="Download every saved report for this worker as one report file"><Download />Export all</Button>
+          {hasOpenedReport && <Button variant="outline" disabled={busy} onClick={() => { navigate(false, saved ? report.id : undefined); if (!run) void refresh(report, 'replace'); }}>Back to report</Button>}<Button onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName), true, true)} disabled={busy}><Plus />New report</Button></div></>
         : <>
           <Button variant="ghost" size="sm" className="-ml-2" onClick={() => navigate(true)}><ArrowLeft />Saved reports</Button>
           <span className="text-muted-foreground" aria-hidden>/</span>
           <div className="flex min-w-0 flex-col">
             <span className="max-w-72 truncate text-sm font-semibold">{report.title}</span>
             <span className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-              <span role="status">{dirty ? (saved ? 'Unsaved changes' : 'Not saved yet') : 'Saved'}</span>
+              <span role="status" aria-label="Save status" className={saveError ? 'text-destructive' : undefined} title={saveError ? 'Your changes are kept in this browser, and saved once the report is valid again.' : 'Changes save automatically · ⌘ / Ctrl + S saves now'}>
+                {saveError ? `Not saved: ${saveError}` : !dirty ? 'Saved' : saved || JSON.stringify(report) !== baseline.current ? 'Saving…' : 'Not saved yet'}
+              </span>
               {(updated || !quietStatus) && <span aria-hidden>·</span>}
               <span role="status" aria-label="Report refresh status">
                 <span className={quietStatus ? 'sr-only' : ''}>{pendingQueries > 0 ? 'Refreshing report…' : status}</span>
@@ -494,7 +713,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
                 : pdfExport.state === 'done' ? <><Check />PDF exported{pdfExport.omitted.length ? ` · ${pdfExport.omitted.length} not included` : ''}</>
                 : <><FileDown />Export PDF</>}
             </Button>}
-            {dirty && <Button variant="outline" disabled={busy} onClick={() => save()} title="Save in this browser · ⌘ / Ctrl + S"><Save />Save report</Button>}
+            {saveError && <Button variant="outline" onClick={checkpoint} title={`Not saved: ${saveError}. Your changes are kept in this browser until they can be.`}><Save />Retry save</Button>}
             {focused
               ? <Button variant="ghost" size="icon" aria-label="Exit focus mode" title="Exit focus mode · Esc" onClick={() => { setEditorOnly(false); setFocused(false); }}><Minimize2 /></Button>
               : <DropdownMenu>
@@ -502,7 +721,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
                   <DropdownMenuContent align="end" className="min-w-44">
                     {editing && <DropdownMenuItem disabled={refreshing || !run || exporting} onClick={() => void exportPdf()}><FileDown />Export PDF</DropdownMenuItem>}
                     {run?.report.parameters.filter(item => item.type === 'select' || item.type === 'multi_select').map(item => <DropdownMenuItem key={item.key} disabled={refreshing || exporting} onClick={() => void exportPdfPerValue(item.key)}><FileDown />PDF per {item.label.toLowerCase()}</DropdownMenuItem>)}
-                    <DropdownMenuItem disabled={busy} onClick={() => save(true)}><Copy />Save a copy</DropdownMenuItem>
+                    <DropdownMenuItem onClick={saveCopy}><Copy />Save a copy</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => exportReports([report])}><Download />Export report file</DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => setFocused(true)}><Maximize2 />Focus report</DropdownMenuItem>
                   </DropdownMenuContent>
@@ -512,8 +732,9 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     </header>
     {error && <div role="alert" className="m-5 whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
     {notice && <p role="status" className="mx-5 mt-3 text-xs text-muted-foreground">{notice}</p>}
+    {recovered && !library && <p role="status" className="mx-5 mt-3 text-xs text-muted-foreground">{RECOVERED_NOTICE}</p>}
     <section hidden={!library} className="mx-auto w-full max-w-6xl flex-1 overflow-auto space-y-5 p-5" aria-label="Saved reports list">
-      <p className="text-sm text-muted-foreground">Reports for this worker are saved in this browser, including source, parameter definitions, and selected values. Data is refreshed when you open a report.</p>
+      <p className="text-sm text-muted-foreground">Reports for this worker are saved in this browser, including source, parameter definitions, and selected values. Data is refreshed when you open a report. Export report files to share reports or move them to another browser; an imported report runs its SQL with your connection when you open it, so import only reports you trust.</p>
       <div className="relative max-w-sm"><Search className="absolute left-2.5 top-2 size-4 text-muted-foreground" /><Input className="pl-8" aria-label="Search saved reports" placeholder="Search reports…" value={search} onChange={e => setSearch(e.target.value)} /></div>
       {visible.length ? <div className="overflow-x-auto rounded-lg border bg-card"><table className="w-full text-left text-sm"><thead className="border-b bg-muted/40 text-xs text-muted-foreground"><tr><th className="px-4 py-3">Report</th><th className="px-4 py-3">Parameters</th><th className="px-4 py-3">Last saved</th><th className="px-4 py-3"><span className="sr-only">Actions</span></th></tr></thead><tbody>{visible.map(item => <tr key={item.id} className="border-b last:border-0">
         <td className="px-4 py-3">
@@ -522,7 +743,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
             : <a className="font-medium text-primary underline-offset-4 hover:underline" href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/reports?service=${encodeURIComponent(item.serviceUrl)}&evidence_report=${encodeURIComponent(item.id)}`}>{item.title}</a>}
           <span className="mt-1 block max-w-sm truncate text-xs text-muted-foreground">{item.serviceUrl}</span>
         </td><td className="px-4 py-3 text-xs text-muted-foreground">{item.parameters.map(p => p.label).join(', ') || 'None'}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">{new Date(item.updatedAt).toLocaleString()}</td>
-        <td className="px-4 py-3"><div className="flex justify-end gap-2">{item.serviceUrl === serviceUrl ? <Button variant="outline" disabled={busy} onClick={() => openReport(item)}>Open report</Button> : <a className="text-xs text-primary underline" href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/evidence?service=${encodeURIComponent(item.serviceUrl)}&evidence_report=${encodeURIComponent(item.id)}`}>Open service</a>}<Button variant="ghost" size="icon" aria-label={`Copy ${item.title}`} title="Copy report" onClick={() => copySavedReport(item)}><Copy /></Button><Button variant="ghost" size="icon" aria-label={`Delete ${item.title}`} onClick={() => remove(item)}><Trash2 /></Button></div></td>
+        <td className="px-4 py-3"><div className="flex justify-end gap-2">{item.serviceUrl === serviceUrl ? <Button variant="outline" disabled={busy} onClick={() => openReport(item)}>Open report</Button> : <a className="text-xs text-primary underline" href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/evidence?service=${encodeURIComponent(item.serviceUrl)}&evidence_report=${encodeURIComponent(item.id)}`}>Open service</a>}<Button variant="ghost" size="icon" aria-label={`Export ${item.title}`} title="Export report file" onClick={() => exportReports([item])}><Download /></Button><Button variant="ghost" size="icon" aria-label={`Copy ${item.title}`} title="Copy report" onClick={() => copySavedReport(item)}><Copy /></Button><Button variant="ghost" size="icon" aria-label={`Delete ${item.title}`} onClick={() => remove(item)}><Trash2 /></Button></div></td>
       </tr>)}</tbody></table></div> : <div className="rounded-lg border border-dashed p-12 text-center"><FileText className="mx-auto mb-3 size-7 text-muted-foreground" /><h2 className="text-sm font-semibold">{reports.length ? 'No matching reports' : 'No saved reports yet'}</h2><p className="mt-2 text-xs text-muted-foreground">{reports.length ? 'Try a different search.' : 'Save your current report or create a new one to start your library.'}</p></div>}
       <div className="flex flex-wrap gap-2">
         {isWeatherService(serviceUrl) && <Button variant="outline" disabled={busy} onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName, true), true, true)}>Use weather example</Button>}
@@ -585,7 +806,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
             resizeEditor(event.key === 'Home' ? 25 : event.key === 'End' ? 70 : editorWidth + (event.key === 'ArrowLeft' ? 2 : -2));
           }}
         ><span className="h-10 w-0.5 rounded-full bg-muted-foreground/40" /></div>}
-        <div style={{ display: editing ? 'contents' : 'none' }}><EvidenceEditor performance={{ profile, namedQueries: dataContext?.queries ?? [], runnable: sql => {
+        <div style={{ display: editing ? 'contents' : 'none' }}><EvidenceEditor history={{ history, dirty, onRestore: restoreRevision }} onProposal={proposalEvent} performance={{ profile, namedQueries: dataContext?.queries ?? [], runnable: sql => {
           if (!run) return sql;
           try { return materializeReportQuery(sql, compilerParameters(run.report, run.values), run.values); } catch { return sql; }
         } }} parameterChoices={{ states: choices.states, values: choices.values, loader: choices.loader }} fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={async () => { await refresh(); }} key={report.id} report={report} onChange={change} issues={issues} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => setEditorOnly(!editorOnly)} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); await refresh(next); }} /></div>

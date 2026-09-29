@@ -1,6 +1,6 @@
 import { compilePdf } from './compiler';
 import { emitTypst } from './emit';
-import { extractReport } from './extract';
+import { extractReport, settleDom } from './extract';
 import { contentWidthPx, defaultPaper, type Block, type PdfFont, type PdfTheme } from './model';
 import { loadChartRenderer } from './charts';
 import { loadPdfFonts, loadTypstCompiler } from './load-compiler';
@@ -18,6 +18,9 @@ export interface PdfDocumentRequest {
   fonts: { heading: string; body: string };
   /** The report's accent color, when it suits white paper. */
   accent?: string;
+  /** Waits for the report to finish loading after the export opens a collapsed section,
+   *  once the DOM has gone quiet: the queries the section started. */
+  settle?: (root: Element) => Promise<void>;
 }
 export interface PdfExportRequest extends PdfDocumentRequest {
   /** The rendered report: Evidence's `[data-markdoc-content]` root. */
@@ -48,7 +51,8 @@ export function createPdfExport(request: PdfDocumentRequest) {
   return {
     async addSection(root: Element, heading?: string) {
       const [chartRenderer, snapshotRenderer] = await renderers;
-      const extraction = await extractReport(root, contentWidthPx(theme.paper), chartRenderer, snapshotRenderer, sections ? `s${sections}-` : '');
+      const settle = async () => { await settleDom(root); await request.settle?.(root); };
+      const extraction = await extractReport(root, contentWidthPx(theme.paper), chartRenderer, snapshotRenderer, sections ? `s${sections}-` : '', settle);
       if (heading) {
         if (sections) blocks.push({ kind: 'pagebreak' });
         blocks.push({ kind: 'heading', level: 1, children: [{ kind: 'text', text: heading }] });

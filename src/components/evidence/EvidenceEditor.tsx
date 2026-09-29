@@ -15,6 +15,9 @@ import { EvidenceParameters, type ParameterChoicesContext } from './EvidencePara
 import { EvidencePerformance } from './EvidencePerformance';
 import type { RefreshProfile } from '../../lib/evidence/refresh-profile';
 import type { EvidenceReport } from '../../lib/evidence/reports';
+import { EvidenceHistory } from './EvidenceHistory';
+import type { ProposalEvent } from './EvidenceAgent';
+import type { ReportHistory, Revision } from '../../lib/evidence/revisions';
 
 const EvidenceAgent = lazy(() => import('./EvidenceAgent').then(module => ({ default: module.EvidenceAgent })));
 
@@ -27,7 +30,7 @@ const snippets: Record<string, string> = {
   'Two columns': '\n\n{% row %}\n\nAdd components here.\n\n{% /row %}\n',
 };
 
-export function EvidenceEditor({ performance, parameterChoices, fullScreen, onToggleFullScreen, report, onChange, issues, stale, editorOnly, onTogglePreview, onApplyPreview, previewBusy, dataContext, onRefreshData, reportTheme, catalogs, semanticStates }: { performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[]; runnable: (sql: string) => string }; parameterChoices?: ParameterChoicesContext; fullScreen: boolean; onToggleFullScreen: () => void; catalogs: readonly CatalogData[]; semanticStates: SemanticDatasetState[]; reportTheme: ReportTheme; dataContext: EvidenceDataContext | null; onRefreshData: () => Promise<void>; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; editorOnly: boolean; onTogglePreview: () => void; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
+export function EvidenceEditor({ history, onProposal, performance, parameterChoices, fullScreen, onToggleFullScreen, report, onChange, issues, stale, editorOnly, onTogglePreview, onApplyPreview, previewBusy, dataContext, onRefreshData, reportTheme, catalogs, semanticStates }: { history?: { history: ReportHistory; dirty: boolean; onRestore: (revision: Revision) => void }; onProposal?: (event: ProposalEvent) => void; performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[]; runnable: (sql: string) => string }; parameterChoices?: ParameterChoicesContext; fullScreen: boolean; onToggleFullScreen: () => void; catalogs: readonly CatalogData[]; semanticStates: SemanticDatasetState[]; reportTheme: ReportTheme; dataContext: EvidenceDataContext | null; onRefreshData: () => Promise<void>; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; editorOnly: boolean; onTogglePreview: () => void; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
   const [tab, setTab] = useState('agent');
   const [agentOpened, setAgentOpened] = useState(true);
   const source = useRef<EvidenceCodeHandle>(null);
@@ -65,7 +68,7 @@ export function EvidenceEditor({ performance, parameterChoices, fullScreen, onTo
     </div>
     <Tabs value={tab} onValueChange={value => { setTab(String(value)); if (value === 'agent') setAgentOpened(true); }} className="min-h-0 flex-1 gap-0">
       <EvidenceEditorNavigation selected={tab} />
-      <TabsContent value="agent" keepMounted style={{ display: tab === 'agent' ? undefined : 'none' }} className="min-h-0 overflow-hidden"><Suspense fallback={<p className="p-4 text-sm" role="status">Loading report agent…</p>}>{agentOpened && <EvidenceAgent catalogs={catalogs} report={report} onChange={onChange} issues={issues} stale={stale} onApplyPreview={onApplyPreview} previewBusy={previewBusy} performance={performance} />}</Suspense></TabsContent>
+      <TabsContent value="agent" keepMounted style={{ display: tab === 'agent' ? undefined : 'none' }} className="min-h-0 overflow-hidden"><Suspense fallback={<p className="p-4 text-sm" role="status">Loading report agent…</p>}>{agentOpened && <EvidenceAgent onProposal={onProposal} catalogs={catalogs} report={report} onChange={onChange} issues={issues} stale={stale} onApplyPreview={onApplyPreview} previewBusy={previewBusy} performance={performance} />}</Suspense></TabsContent>
       <TabsContent value="document" className="min-h-0 overflow-auto px-4 pb-4">
         <div className="flex h-full min-h-80 flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -91,6 +94,7 @@ export function EvidenceEditor({ performance, parameterChoices, fullScreen, onTo
       <TabsContent value="appearance" className="min-h-0 overflow-auto px-4 pb-4"><EvidenceAppearance value={report.appearance} theme={reportTheme} onChange={appearance => onChange({ ...report, appearance })} /></TabsContent>
       <TabsContent value="parameters" className="min-h-0 overflow-auto px-4 pb-4"><EvidenceParameters report={report} onChange={onChange} choices={parameterChoices} /></TabsContent>
       <TabsContent value="performance" className="min-h-0 overflow-auto px-4 pb-4"><EvidencePerformance profile={performance?.profile ?? null} namedQueries={performance?.namedQueries ?? []} runnable={performance?.runnable} /></TabsContent>
+      <TabsContent value="history" className="min-h-0 overflow-auto px-4 pb-4">{history ? <EvidenceHistory history={history.history} dirty={history.dirty} onRestore={history.onRestore} /> : null}</TabsContent>
     </Tabs>
     <section aria-label="Report problems" className="max-h-48 shrink-0 overflow-auto border-t bg-background p-3 text-xs">
       <h3 className="font-semibold">Problems · {errors.length} errors{stale ? ' · previous preview' : ''}</h3>

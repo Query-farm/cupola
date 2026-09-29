@@ -176,7 +176,7 @@ test('saved report library restores typed parameters, source and selected values
   await panel.getByLabel('Include', { exact: true }).selectOption('false');
   await panel.getByRole('button', { name: 'Update preview', exact: true }).click();
   await expect(panel.getByTestId('evidence-document')).toContainText(city, { timeout: 30_000 });
-  await panel.getByRole('button', { name: 'Save report', exact: true }).click();
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   await expect(panel.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
   await expect(panel.getByText('Saved in this browser.', { exact: true })).toHaveCount(0);
   await page.evaluate(() => { (window as any).__savedReportWorker = (window as any).__bridge.worker; });
@@ -231,4 +231,212 @@ test('saved reports list and direct links are scoped to the active worker URL', 
   await expect(panel.getByRole('row').filter({ hasText: 'This worker report' })).toBeVisible();
   await expect(panel.getByRole('row').filter({ hasText: 'Other private report' })).toHaveCount(0);
   await expect(panel.getByRole('button', { name: 'Back to report', exact: true })).toHaveCount(0);
+});
+
+test('reports export to a file and import, from another worker, into the saved reports', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript((serviceUrl) => {
+    if (sessionStorage.getItem('seeded')) return;
+    sessionStorage.setItem('seeded', '1');
+    const report = { version: 1, id: 'shared', title: 'Shared report', serviceUrl, source: '# Shared report', setupSql: 'CREATE OR REPLACE TEMP TABLE shared_t AS SELECT 1 AS n',
+      parameters: [{ id: 'p', key: 'n', label: 'N', type: 'number', required: false, defaultValue: 3 }], values: { n: 4 }, drillPaths: [], createdAt: 1, updatedAt: 1 };
+    localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(serviceUrl)}:shared`, JSON.stringify(report));
+  }, EVIDENCE_SERVICE_URL);
+  await page.goto(evidencePath('evidence/reports'));
+  const panel = page.getByTestId('evidence-panel');
+  const row = (title: string) => panel.getByRole('row').filter({ hasText: title });
+  await expect(row('Shared report')).toBeVisible({ timeout: 90_000 });
+
+  const [download] = await Promise.all([page.waitForEvent('download'), panel.getByRole('button', { name: 'Export Shared report', exact: true }).click()]);
+  expect(download.suggestedFilename()).toBe('shared-report.cupola-reports.json');
+  const file = testInfo.outputPath(download.suggestedFilename());
+  await download.saveAs(file);
+  const exported = JSON.parse(readFileSync(file, 'utf8'));
+  expect(exported).toMatchObject({ format: 'cupola-evidence-reports', version: 2, reports: [{ id: 'shared', setupSql: 'CREATE OR REPLACE TEMP TABLE shared_t AS SELECT 1 AS n', values: { n: 4 } }] });
+
+  // As someone else would: from a file made on another worker, into an empty library.
+  page.once('dialog', dialog => dialog.accept());
+  await panel.getByRole('button', { name: 'Delete Shared report', exact: true }).click();
+  await expect(row('Shared report')).toHaveCount(0);
+  const input = panel.getByLabel('Report files to import');
+  const fromElsewhere = { ...exported, reports: exported.reports.map((item: object) => ({ ...item, serviceUrl: 'https://other-worker.example' })) };
+  await input.setInputFiles({ name: 'shared.cupola-reports.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(fromElsewhere)) });
+  await expect(panel.getByRole('status').filter({ hasText: 'Imported 1 report.' })).toBeVisible();
+  await expect(row('Shared report')).toHaveCount(1);
+  // Saved against this worker, so it opens here.
+  await panel.getByRole('button', { name: 'Open report', exact: true }).click();
+  await expect(panel.getByTestId('evidence-document')).toContainText('Shared report', { timeout: 60_000 });
+  await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
+
+  // The same file again changes nothing; a changed one replaces it, or is kept beside it.
+  await input.setInputFiles({ name: 'shared.cupola-reports.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(fromElsewhere)) });
+  await expect(panel.getByRole('status').filter({ hasText: 'Imported 0 reports (1 already saved).' })).toBeVisible();
+  const changed = { ...fromElsewhere, reports: [{ ...fromElsewhere.reports[0], source: '# Shared report v2' }] };
+  page.once('dialog', dialog => dialog.dismiss());
+  await input.setInputFiles({ name: 'changed.cupola-reports.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(changed)) });
+  await expect(panel.getByRole('status').filter({ hasText: 'Imported 1 report (1 kept as a copy).' })).toBeVisible();
+  await expect(row('Shared report (imported)')).toHaveCount(1);
+  page.once('dialog', dialog => dialog.accept());
+  await input.setInputFiles({ name: 'changed.cupola-reports.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(changed)) });
+  await expect(panel.getByRole('status').filter({ hasText: 'Imported 1 report (1 replaced).' })).toBeVisible();
+
+  // A file that isn't a report file says so.
+  await input.setInputFiles({ name: 'notes.json', mimeType: 'application/json', buffer: Buffer.from('{"hello": 1}') });
+  await expect(panel.getByRole('alert')).toContainText('notes.json: This is not a Cupola report file.');
+  expect(errors).toEqual([]);
+});
+
+test('saving keeps revisions: who changed what, a diff, restore, and the history travels in report files', async ({ page }, testInfo) => {
+  test.setTimeout(150_000);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript((serviceUrl) => {
+    if (sessionStorage.getItem('seeded')) return;
+    sessionStorage.setItem('seeded', '1');
+    const report = { version: 1, id: 'revised', title: 'Revised report', serviceUrl, source: '# Revised report\n\nFirst paragraph.', setupSql: '', parameters: [], values: {}, createdAt: 1, updatedAt: 1000 };
+    localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(serviceUrl)}:revised`, JSON.stringify(report));
+  }, EVIDENCE_SERVICE_URL);
+  await page.goto(evidencePath('evidence?evidence_report=revised'));
+  const panel = page.getByTestId('evidence-panel');
+  await expect(panel.getByTestId('evidence-document')).toContainText('First paragraph.', { timeout: 90_000 });
+  await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
+  await panel.getByLabel('Report title').fill('Revised report, retitled');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
+  await panel.getByRole('tab', { name: 'History', exact: true }).click();
+  const revisions = panel.getByRole('list', { name: 'Revisions, newest first' });
+  // The version saved before history began opens it; the save is labelled with what changed.
+  await expect(revisions.getByRole('listitem')).toHaveCount(2);
+  await expect(revisions.getByRole('listitem').nth(0)).toContainText('Changed Title');
+  await expect(revisions.getByRole('listitem').nth(0)).toContainText('You');
+  await expect(revisions.getByRole('listitem').nth(1)).toContainText('Saved before revision history began');
+  await revisions.getByRole('button', { name: /Changed Title/ }).click();
+  const diff = panel.getByLabel('Title changes');
+  await expect(diff).toContainText('- Revised report');
+  await expect(diff).toContainText('+ Revised report, retitled');
+
+  // Restore the first version, and save it: a revision saying so.
+  await revisions.getByRole('button', { name: /Saved before revision history began/ }).click();
+  await panel.getByRole('button', { name: 'Restore this version' }).click();
+  await expect(panel.getByLabel('Report title')).toHaveValue('Revised report');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
+  await expect(revisions.getByRole('listitem')).toHaveCount(3);
+  await expect(revisions.getByRole('listitem').nth(0)).toContainText(/Restored the version of .*\(Saved before revision history began\)/);
+
+  // The file carries the history, and importing it elsewhere brings the history back.
+  await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
+  const [download] = await Promise.all([page.waitForEvent('download'), panel.getByRole('button', { name: 'Export Revised report', exact: true }).click()]);
+  const file = testInfo.outputPath('revised.cupola-reports.json');
+  await download.saveAs(file);
+  const exported = JSON.parse(readFileSync(file, 'utf8'));
+  expect(exported.version).toBe(2);
+  expect(exported.reports[0].history.revisions.map((revision: { kind: string }) => revision.kind)).toEqual(['baseline', 'edit', 'restore']);
+  page.once('dialog', dialog => dialog.accept());
+  await panel.getByRole('button', { name: 'Delete Revised report', exact: true }).click();
+  expect(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('cupola.evidence.history.v1:')))).toEqual([]);
+  await panel.getByLabel('Report files to import').setInputFiles(file);
+  await expect(panel.getByRole('status').filter({ hasText: 'Imported 1 report.' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Open report', exact: true }).click();
+  await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
+  await panel.getByRole('tab', { name: 'History', exact: true }).click();
+  // Nothing changed on the way, so the import adds no revision of its own.
+  await expect(revisions.getByRole('listitem')).toHaveCount(3);
+  expect(errors).toEqual([]);
+});
+
+test('reports save themselves, on close too, and a draft that cannot be saved is recovered', async ({ page }) => {
+  test.setTimeout(150_000);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript((serviceUrl) => {
+    if (sessionStorage.getItem('seeded')) return;
+    sessionStorage.setItem('seeded', '1');
+    const report = { version: 1, id: 'autosaved', title: 'Autosaved report', serviceUrl, source: '# Autosaved report', setupSql: '', parameters: [], values: {}, createdAt: 1, updatedAt: 1000 };
+    localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(serviceUrl)}:autosaved`, JSON.stringify(report));
+  }, EVIDENCE_SERVICE_URL);
+  const stored = () => page.evaluate((serviceUrl) => JSON.parse(localStorage.getItem(`cupola.evidence.report.v2:${encodeURIComponent(serviceUrl)}:autosaved`)!).title, EVIDENCE_SERVICE_URL);
+  await page.goto(evidencePath('evidence?evidence_report=autosaved'));
+  const panel = page.getByTestId('evidence-panel');
+  const status = panel.getByRole('status', { name: 'Save status' });
+  await expect(panel.getByTestId('evidence-document')).toContainText('Autosaved report', { timeout: 90_000 });
+  await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
+  const title = panel.getByLabel('Report title');
+
+  // Shortly after an edit, with nothing pressed.
+  await title.fill('Autosaved once');
+  await expect(status).toHaveText('Saved');
+  expect(await stored()).toBe('Autosaved once');
+
+  // A tab closed straight after an edit, before the delay: saved on the way out.
+  await title.fill('Saved on close');
+  await page.reload();
+  await expect(panel.getByTestId('evidence-document')).toBeVisible({ timeout: 90_000 });
+  expect(await stored()).toBe('Saved on close');
+
+  // A blank title can't be saved; it says so, keeps the draft, and brings it back next time.
+  await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
+  await title.fill('');
+  await expect(status).toContainText('Not saved: title');
+  await expect(panel.getByRole('button', { name: 'Retry save' })).toBeVisible();
+  expect(await stored()).toBe('Saved on close');
+  page.once('dialog', dialog => dialog.accept());
+  await page.reload();
+  await expect(panel.getByText('Recovered changes that could not be saved when this report was last open.')).toBeVisible({ timeout: 90_000 });
+  await expect(title).toHaveValue('');
+  await title.fill('Fixed title');
+  await expect(status).toHaveText('Saved');
+  expect(await stored()).toBe('Fixed title');
+  expect(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('cupola.evidence.draft.v1:')))).toEqual([]);
+
+  // One editing session is one revision: the first page load's two titles are one, the fix after
+  // the reload another, after the version saved before history began.
+  await panel.getByRole('tab', { name: 'History', exact: true }).click();
+  const revisions = panel.getByRole('list', { name: 'Revisions, newest first' }).getByRole('listitem');
+  await expect(revisions).toHaveCount(3);
+  await revisions.nth(1).getByRole('button').first().click();
+  await expect(panel.getByLabel('Title changes')).toContainText('- Autosaved report');
+  await expect(panel.getByLabel('Title changes')).toContainText('+ Saved on close');
+  expect(errors).toEqual([]);
+});
+
+// Reports saved before revisions existed, in either storage format, keep working: the first change
+// saves them in the current format and opens their history with the version they were.
+test('reports saved before revision history migrate on their first change', async ({ page }) => {
+  test.setTimeout(120_000);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const updatedAt = Date.UTC(2025, 0, 15, 12);
+  await page.addInitScript(([serviceUrl, updatedAt]) => {
+    if (sessionStorage.getItem('seeded')) return;
+    sessionStorage.setItem('seeded', '1');
+    // The oldest format: keyed by id alone, without the fields added since (drill paths, appearance…).
+    localStorage.setItem('cupola.evidence.report.v1:legacy', JSON.stringify({ version: 1, id: 'legacy', title: 'Legacy report', serviceUrl, source: '# Legacy report', setupSql: '', parameters: [], values: {}, createdAt: 1, updatedAt }));
+  }, [EVIDENCE_SERVICE_URL, updatedAt] as const);
+  await page.goto(evidencePath('evidence?evidence_report=legacy'));
+  const panel = page.getByTestId('evidence-panel');
+  await expect(panel.getByTestId('evidence-document')).toContainText('Legacy report', { timeout: 90_000 });
+  // Opening it changes nothing: no save, no history.
+  await page.waitForTimeout(2_000);
+  const keys = () => page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('cupola.evidence.')).sort());
+  expect(await keys()).toEqual(['cupola.evidence.report.v1:legacy']);
+  await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
+  await panel.getByRole('tab', { name: 'History', exact: true }).click();
+  await expect(panel.getByText(/^No revisions yet/)).toBeVisible();
+
+  await panel.getByLabel('Report title').fill('Legacy report, edited');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
+  const encoded = encodeURIComponent(EVIDENCE_SERVICE_URL);
+  expect(await keys()).toEqual([`cupola.evidence.history.v1:${encoded}:legacy`, `cupola.evidence.report.v2:${encoded}:legacy`]);
+  const revisions = panel.getByRole('list', { name: 'Revisions, newest first' }).getByRole('listitem');
+  await expect(revisions).toHaveCount(2);
+  await expect(revisions.nth(0)).toContainText('Changed Title');
+  // The version it was, dated when it was last saved.
+  await expect(revisions.nth(1)).toContainText('Saved before revision history began');
+  await expect(revisions.nth(1).locator('time')).toHaveAttribute('datetime', new Date(updatedAt).toISOString());
+  await revisions.nth(1).getByRole('button').first().click();
+  await panel.getByRole('button', { name: 'Restore this version' }).click();
+  await expect(panel.getByLabel('Report title')).toHaveValue('Legacy report');
+  await expect(revisions).toHaveCount(3);
+  expect(errors).toEqual([]);
 });

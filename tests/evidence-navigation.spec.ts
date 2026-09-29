@@ -22,7 +22,7 @@ test('Reports starts at the list and preserves an opened report across tab switc
   await page.getByTestId('tab-catalog').click();
   await page.getByTestId('tab-reports').click();
   await expect(title).toHaveValue('Session report');
-  await panel.getByRole('button', { name: 'Save report', exact: true }).click();
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   await expect(page).toHaveURL(/evidence_report=/);
   await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
   await expect(list).toBeVisible();
@@ -44,7 +44,7 @@ test('editor navigation stays on one row and reveals the selected tab at variabl
   await expect(nav).toBeVisible({ timeout: 90000 });
   async function checkRow() {
     const boxes = await nav.getByRole('tab').evaluateAll(tabs => tabs.map(tab => { const r = tab.getBoundingClientRect(); return { top: r.top, height: r.height }; }));
-    expect(boxes).toHaveLength(8);
+    expect(boxes).toHaveLength(9);
     expect(new Set(boxes.map(box => Math.round(box.top))).size).toBe(1);
     expect(Math.max(...boxes.map(box => box.height))).toBeLessThanOrEqual(45);
     const selected = nav.getByRole('tab', { selected: true });

@@ -86,3 +86,58 @@ test('Evidence exports a typeset PDF of the rendered report', async ({ page }, t
   }
   expect(errors).toEqual([]);
 });
+
+// Collapsed content is not in the DOM, so the export opens each section to read it, then
+// puts the report back the way the reader left it.
+test('Evidence PDF export prints collapsed accordion and details sections', async ({ page }) => {
+  test.setTimeout(120_000);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript((serviceUrl) => {
+    const report = {
+      version: 1, id: 'pdf-sections', title: 'Sections report', serviceUrl, setupSql: '', createdAt: 1, updatedAt: 1, parameters: [], values: {},
+      source: '# Sections report\n\n'
+        + '```sql sales\nSELECT range AS period, range * 10 AS revenue FROM range(1, 7)\n```\n\n'
+        + '{% accordion %}\n{% accordion_item title="Open item" open=true %}\nOpen item text.\n{% /accordion_item %}\n'
+        + '{% accordion_item title="Closed item" %}\nClosed item text.\n\n{% bar_chart data="sales" x="period" y="revenue" title="Chart in a closed item" /%}\n{% /accordion_item %}\n{% /accordion %}\n\n'
+        + '{% accordion single=true %}\n{% accordion_item title="Single open" open=true %}\nSingle open text.\n{% /accordion_item %}\n'
+        + '{% accordion_item title="Single closed" %}\nSingle closed text.\n{% /accordion_item %}\n{% /accordion %}\n\n'
+        + '{% details title="More details" %}\nDetails body text.\n{% /details %}\n',
+    };
+    localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(report.serviceUrl)}:${report.id}`, JSON.stringify(report));
+    (window as { __cupolaPdfDebug?: unknown }).__cupolaPdfDebug = true;
+  }, EVIDENCE_SERVICE_URL);
+  await page.goto(evidencePath('evidence?evidence_report=pdf-sections'));
+  const panel = page.getByTestId('evidence-panel');
+  const report = panel.getByTestId('evidence-document');
+  const trigger = (name: string) => report.getByRole('button', { name, exact: true });
+  await expect(trigger('Open item')).toHaveAttribute('aria-expanded', 'true', { timeout: 90_000 });
+  await expect(trigger('Closed item')).toHaveAttribute('aria-expanded', 'false');
+  // Evidence keeps each item's source in a hidden div; only what is visible is open.
+  await expect(report.getByText('Closed item text.').filter({ visible: true })).toHaveCount(0);
+
+  await Promise.all([
+    page.waitForEvent('download', { timeout: 90_000 }),
+    panel.getByRole('button', { name: 'Export PDF', exact: true }).click(),
+  ]);
+  const { main, coverage } = await page.evaluate(() => (window as unknown as { __cupolaPdfDebug: { main: string; coverage: { render: string; outcome: string }[] } }).__cupolaPdfDebug);
+  // Each once: a section read while opened is not printed again from the screen.
+  for (const text of ['Open item text.', 'Closed item text.', 'Single open text.', 'Single closed text.', 'Details body text.']) expect(main.split(text).length - 1, text).toBe(1);
+  expect(main).toContain('cupola-chart(title: "Chart in a closed item"');
+  expect(main).not.toContain('collapsed on screen');
+  // Contents follow their own titles.
+  expect(main.indexOf('Closed item text.')).toBeGreaterThan(main.indexOf('"Closed item"'));
+  expect(main.indexOf('Single closed text.')).toBeGreaterThan(main.indexOf('"Single closed"'));
+  expect(main.indexOf('Details body text.')).toBeGreaterThan(main.indexOf('More details'));
+  expect(coverage.some(entry => entry.render === 'bar_chart' && entry.outcome === 'printed')).toBe(true);
+
+  // The reader's view is back as it was, a single accordion's open item included.
+  await expect(trigger('Open item')).toHaveAttribute('aria-expanded', 'true');
+  await expect(trigger('Closed item')).toHaveAttribute('aria-expanded', 'false');
+  await expect(trigger('Single open')).toHaveAttribute('aria-expanded', 'true');
+  await expect(trigger('Single closed')).toHaveAttribute('aria-expanded', 'false');
+  await expect(report.getByText('Closed item text.').filter({ visible: true })).toHaveCount(0);
+  await expect(report.getByText('Single closed text.').filter({ visible: true })).toHaveCount(0);
+  await expect(report.getByText('Details body text.').filter({ visible: true })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

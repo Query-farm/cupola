@@ -5,6 +5,7 @@ import { appearanceSchema } from './appearance';
 import type { ReportParameter } from '../reports/types';
 import { parameterGraphErrors } from './parameter-graph';
 import { initialValue, toReportParameters } from './parameters';
+import { historyStorageKey } from './revisions';
 // Re-exported for callers that already import from here; modules reports.ts depends on import it from ./parameters.
 export { toReportParameters };
 
@@ -159,6 +160,41 @@ export function saveEvidenceReport(input: EvidenceReport, storage: Storage = loc
 export function deleteEvidenceReport(serviceUrl: string, id: string, storage: Storage = localStorage) {
   const legacy = matchingLegacyKey(serviceUrl, id, storage);
   storage.removeItem(evidenceReportStorageKey(serviceUrl, id));
+  storage.removeItem(historyStorageKey(serviceUrl, id));
+  storage.removeItem(recoveryDraftKey(serviceUrl, id));
   if (legacy) storage.removeItem(legacy);
   if (typeof window !== 'undefined' && storage === window.localStorage) window.dispatchEvent(new Event(EVIDENCE_REPORTS_CHANGED));
+}
+
+/** One line for a report that fails validation: the first problem, not zod's JSON dump. */
+export function describeReportError(error: unknown): string {
+  if (error && typeof error === 'object' && 'issues' in error && Array.isArray((error as { issues: unknown[] }).issues)) {
+    const issue = (error as { issues: { path: PropertyKey[]; message: string }[] }).issues[0];
+    return issue ? `${issue.path.map(String).join('.') || 'report'}: ${issue.message}` : 'invalid report';
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** A draft autosave could not save (it doesn't validate: a blank title, a parameter mid-edit),
+ *  kept as it is so a closed tab doesn't lose it. The next successful save removes it; opening
+ *  the report brings it back. */
+export const RECOVERY_DRAFT_PREFIX = 'cupola.evidence.draft.v1:';
+export function recoveryDraftKey(serviceUrl: string, id: string) {
+  return `${RECOVERY_DRAFT_PREFIX}${encodeURIComponent(serviceUrl)}:${encodeURIComponent(id)}`;
+}
+export function saveRecoveryDraft(report: EvidenceReport, storage: Storage = localStorage) {
+  try { storage.setItem(recoveryDraftKey(report.serviceUrl, report.id), JSON.stringify({ savedAt: Date.now(), report })); }
+  catch { /* Storage full: the draft stays in the tab. */ }
+}
+export function clearRecoveryDraft(serviceUrl: string, id: string, storage: Storage = localStorage) {
+  storage.removeItem(recoveryDraftKey(serviceUrl, id));
+}
+/** The unsaved draft for a report, when there is one that differs from what is saved. */
+export function loadRecoveryDraft(serviceUrl: string, id: string, storage: Storage = localStorage): EvidenceReport | null {
+  try {
+    const text = storage.getItem(recoveryDraftKey(serviceUrl, id));
+    if (!text) return null;
+    const draft = JSON.parse(text).report;
+    return draft && typeof draft === 'object' && draft.id === id && draft.serviceUrl === serviceUrl ? draft as EvidenceReport : null;
+  } catch { return null; }
 }

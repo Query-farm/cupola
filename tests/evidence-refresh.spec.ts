@@ -61,8 +61,8 @@ test('report setup and renderer queries can be stopped, time out, and recover on
   await page.clock.install();
   await panel.getByRole('button', { name: 'Update preview', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Stop refresh', exact: true })).toBeVisible();
-  await page.clock.fastForward(60_001);
-  await expect(panel).toContainText('Query exceeded the 60-second time limit.');
+  await page.clock.fastForward(180_001);
+  await expect(panel).toContainText('Query exceeded the 180-second time limit.');
   await setup.fill('SELECT 1');
   await panel.getByRole('button', { name: 'Update preview', exact: true }).click();
   await expect(panel.getByTestId('evidence-document')).toContainText('42', { timeout: 15_000 });

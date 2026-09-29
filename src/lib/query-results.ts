@@ -91,6 +91,9 @@ export class QueryResultCache {
 /** Max length of a single cell string in the AI's JSON view — caps blobs/long text so a
  *  wide row can't blow the model's context window. */
 const AI_CELL_MAX_LEN = 200;
+/** EXPLAIN's plan arrives as one `explain_value` cell. Cut to 200 characters it is a header and
+ *  nothing else, so a plan gets room for a whole tree with its timings. */
+const AI_PLAN_MAX_LEN = 30_000;
 
 /**
  * Format one cell for the AI's JSON view.
@@ -104,7 +107,7 @@ const AI_CELL_MAX_LEN = 200;
  * but meaningful geometry (type + coordinates) instead of an opaque `[binary]`, matching what the
  * user sees in the shell/grid. Only genuine non-geo blobs collapse.
  */
-export function formatCellForAI(column: Vector | null, row: number, field: Field): string | null {
+export function formatCellForAI(column: Vector | null, row: number, field: Field, maxLen = AI_CELL_MAX_LEN): string | null {
   const raw = safeGetArrowValue(column, row, field);
   if (raw === null || raw === undefined) return null;
   // Genuine BLOBs arrive as bare bytes. Extension types (hugeint/uhugeint/uuid/time_tz) are
@@ -118,7 +121,7 @@ export function formatCellForAI(column: Vector | null, row: number, field: Field
     if (!(extName && extName.startsWith("geoarrow."))) return "[binary]";
   }
   const s = formatCellValue(raw, field?.name, field);
-  return s.length > AI_CELL_MAX_LEN ? s.slice(0, AI_CELL_MAX_LEN - 1) + "…" : s;
+  return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
 }
 
 /**
@@ -169,6 +172,8 @@ export function formatArrowTableAsJson(
   const cols = fields.map((_, index) => table.getChildAt(index));
   const numRows = table.numRows;
   const limit = Math.min(maxRows, numRows);
+  const isPlan = columns.includes("explain_key") && columns.includes("explain_value");
+  const maxLens = columns.map((name) => isPlan && name === "explain_value" ? AI_PLAN_MAX_LEN : AI_CELL_MAX_LEN);
 
   // Build up to CACHE_LIMIT rows once; the response shows the first `limit` of them.
   const CACHE_LIMIT = 10_000;
@@ -177,7 +182,7 @@ export function formatArrowTableAsJson(
   for (let r = 0; r < rowsToCache; r++) {
     const row: AiRow = {};
     for (let c = 0; c < fields.length; c++) {
-      row[columns[c]] = formatCellForAI(cols[c], r, fields[c]);
+      row[columns[c]] = formatCellForAI(cols[c], r, fields[c], maxLens[c]);
     }
     allRows.push(row);
   }

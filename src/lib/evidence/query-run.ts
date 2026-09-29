@@ -1,6 +1,6 @@
 import { engine } from '../shell-bridge';
 
-export const REPORT_QUERY_TIMEOUT_MS = 60_000;
+export const REPORT_QUERY_TIMEOUT_MS = 180_000;
 
 /** One refresh owns setup, semantic datasets, and all subsequent renderer queries. */
 export class EvidenceQueryRun {

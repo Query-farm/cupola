@@ -45,9 +45,34 @@ export const MAX_TABLE_ROWS = 2000;
  * queries; past the budget a table prints what it has, and its note says so. */
 export const PAGING_BUDGET_MS = 30_000;
 
+/** Time one export may spend opening collapsed sections; past it, the rest print as
+ * collapsed titles. Each opened section may run its components' queries. */
+export const OPEN_SECTIONS_BUDGET_MS = 60_000;
+
+/** Waits until the report has finished loading what just changed (queries, charts). */
+export type Settle = () => Promise<void>;
+
+/** Until the DOM under `root` has not changed for `quietMs` and no chart is still drawing.
+ *  A caller that can see the report's queries should wait for those as well. */
+export async function settleDom(root: Element, quietMs = 400, maxMs = 15_000): Promise<void> {
+  const deadline = Date.now() + maxMs;
+  let last = Date.now();
+  const observer = new MutationObserver(() => { last = Date.now(); });
+  observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+  try {
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      if (Date.now() - last >= quietMs && !root.querySelector('[data-echarts-ready="false"]')) return;
+    }
+  } finally {
+    observer.disconnect();
+  }
+}
+
 /** `filePrefix` keeps several extractions' files apart when they share one PDF. */
-export async function extractReport(root: Element, widthPx: number, renderChart: ChartRenderer, snapshot: SnapshotRenderer, filePrefix = ''): Promise<Extraction> {
+export async function extractReport(root: Element, widthPx: number, renderChart: ChartRenderer, snapshot: SnapshotRenderer, filePrefix = '', settle: Settle = () => settleDom(root)): Promise<Extraction> {
   const extractor = new Extractor(renderChart, filePrefix);
+  await extractor.openSections(root, widthPx, settle, snapshot);
   await extractor.collectPagedTables(root);
   const blocks = extractor.blocks(root, widthPx);
   await extractor.captureSnapshots(snapshot);
@@ -64,6 +89,10 @@ class Extractor {
   /** Every page's rows of each paged table, keyed by its component element. */
   private pagedRows = new Map<Element, { rows: Cell[][]; total: number; capped: boolean }>();
   private snapshots: { el: HTMLElement; exclude: Element[]; width: number; block: Extract<Block, { kind: 'image' }> }[] = [];
+  /** Collapsed sections' contents, read while `openSections` had them open, keyed by the
+   * element the contents follow (an accordion item's header, a `details` button). */
+  private opened = new Map<Element, Block[]>();
+  private openedTriggers = new WeakSet<Element>();
   private count = 0;
   constructor(private renderChart: ChartRenderer, private filePrefix = '') {}
 
@@ -103,18 +132,24 @@ class Extractor {
       if (children.length) out.push({ kind: 'paragraph', children });
       run = [];
     };
-    for (const node of el.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) { run.push({ kind: 'text', text: node.textContent ?? '' }); continue; }
-      if (!(node instanceof Element)) continue;
-      if (isDisclosure(node) && !this.consumed.has(node)) { flush(); out.push(this.disclosure(node)); continue; }
-      if (this.hidden(node)) continue;
-      if (this.inlineLevel(node) && node.tagName !== 'TABLE') { run.push(...this.inlineNode(node)); continue; }
+    const element = (node: Element) => {
+      if (isDisclosure(node) && !this.consumed.has(node)) { flush(); out.push(this.disclosure(node)); return; }
+      if (this.hidden(node)) return;
+      if (this.inlineLevel(node) && node.tagName !== 'TABLE') { run.push(...this.inlineNode(node)); return; }
       flush();
       // Print CSS page breaks: `{% page_break %}` is a bare `break-after-page` div.
       const style = getComputedStyle(node);
       if (style.breakBefore === 'page') out.push({ kind: 'pagebreak' });
       out.push(...this.block(node, width));
       if (style.breakAfter === 'page') out.push({ kind: 'pagebreak' });
+    };
+    for (const node of el.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) { run.push({ kind: 'text', text: node.textContent ?? '' }); continue; }
+      if (!(node instanceof Element)) continue;
+      element(node);
+      // A section that is collapsed on screen prints the contents read while it was open.
+      const opened = this.opened.get(node);
+      if (opened) { flush(); out.push(...opened); }
     }
     flush();
     return out;
@@ -233,7 +268,7 @@ class Extractor {
     // other icons in the title (a settings gear) are content.
     for (const chevron of button.querySelectorAll('svg[class*="chevron"]')) this.consumed.add(chevron);
     const title = normalizeInlines(this.inlines(button));
-    const collapsed = button.getAttribute('aria-expanded') === 'false' || button.hasAttribute('data-collapsed');
+    const collapsed = (button.getAttribute('aria-expanded') === 'false' || button.hasAttribute('data-collapsed')) && !this.openedTriggers.has(button);
     return { kind: 'paragraph', children: [
       { kind: 'text', text: collapsed ? '▸ ' : '▾ ' },
       ...title.map(inline => inline.kind === 'text' ? { ...inline, bold: true } : inline),
@@ -428,6 +463,48 @@ class Extractor {
     return [...this.tableRows(table, 'tbody'), ...this.tableRows(table, 'tfoot')].map(tr => cells(tr, true));
   }
 
+  /** A document prints what a collapsed section holds, not just its title. Collapsed content
+   * is not in the DOM, so each collapsed accordion item and `details` is opened in turn,
+   * read once its queries and charts settle (sections inside it first), and closed again.
+   * One at a time, because a `single` accordion closes an item when another opens; for the
+   * same reason, sections the reader had open are reopened afterwards. */
+  async openSections(root: Element, width: number, settle: Settle, snapshot: SnapshotRenderer): Promise<void> {
+    const wasOpen = collapsibles(root).filter(item => item.isOpen());
+    // The walk reads these as they are; opening another item may close one for now.
+    const readerOpened = new Set(wasOpen.map(item => item.trigger));
+    const budgetEnds = Date.now() + OPEN_SECTIONS_BUDGET_MS;
+    let changed = false;
+    const read = async (scope: Element, depth: number) => {
+      for (const item of collapsibles(scope)) {
+        if (Date.now() > budgetEnds) return;
+        if (item.isOpen() || readerOpened.has(item.trigger) || !item.trigger.isConnected || !item.trigger.checkVisibility() || item.trigger.closest('.print\\:hidden')) continue;
+        changed = true;
+        item.trigger.click();
+        try {
+          await settle();
+          const body = item.body();
+          if (!body) continue;
+          if (depth < 5) await read(body, depth + 1);
+          await this.collectPagedTables(body);
+          const blocks = this.blocks(body, width);
+          // Captured now: the body leaves the DOM when the section closes.
+          await this.captureSnapshots(snapshot);
+          this.opened.set(item.anchor, blocks);
+          this.openedTriggers.add(item.trigger);
+        } finally {
+          if (item.isOpen()) item.trigger.click();
+        }
+      }
+    };
+    try {
+      await read(root, 0);
+    } finally {
+      for (const item of wasOpen) if (item.trigger.isConnected && !item.isOpen()) item.trigger.click();
+      // Closing transitions end, and reopened sections load, before the walk reads the report.
+      if (changed) await settle();
+    }
+  }
+
   /** A paged table prints every row, not the page on screen: step through its own
    * pager (so every value keeps Evidence's formatting, fills and bars), collect each
    * page, then put the pager back where the reader left it. */
@@ -521,7 +598,7 @@ class Extractor {
 
   async captureSnapshots(render: SnapshotRenderer): Promise<void> {
     // One at a time: a capture may re-lay-out its element at print width.
-    for (const { el, exclude, width, block } of this.snapshots) {
+    for (const { el, exclude, width, block } of this.snapshots.splice(0)) {
       const shot = await render(el, exclude, width).catch(() => null);
       if (shot) {
         block.graphic = { file: this.file('png', shot.png), width: shot.width, height: shot.height };
@@ -532,6 +609,33 @@ class Extractor {
       }
     }
   }
+}
+
+/** A section the reader can open and close: its trigger, the element its contents follow,
+ * and the contents while open. */
+interface Collapsible { trigger: HTMLElement; anchor: Element; isOpen(): boolean; body(): Element | null }
+
+/** Accordion items and `details` under `scope`, in document order. */
+function collapsibles(scope: Element): Collapsible[] {
+  const out: Collapsible[] = [];
+  for (const trigger of scope.querySelectorAll<HTMLElement>('[data-accordion-trigger]')) {
+    const header = trigger.closest('[data-accordion-header]') ?? trigger;
+    out.push({
+      trigger, anchor: header,
+      isOpen: () => trigger.getAttribute('aria-expanded') === 'true',
+      body: () => {
+        const next = header.nextElementSibling;
+        return next?.matches('[data-accordion-content]') && next.getAttribute('data-state') === 'open' ? next : null;
+      },
+    });
+  }
+  // `{% details %}`: a plain button whose next sibling is the body, rendered only while open.
+  for (const component of scope.querySelectorAll('[data-render="details"]')) {
+    const trigger = component.querySelector<HTMLElement>('button');
+    if (!trigger) continue;
+    out.push({ trigger, anchor: trigger, isOpen: () => Boolean(trigger.nextElementSibling), body: () => trigger.nextElementSibling });
+  }
+  return out.sort((a, b) => a.trigger.compareDocumentPosition(b.trigger) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
 }
 
 /** Buttons that open and close report sections (accordion items, `details`):

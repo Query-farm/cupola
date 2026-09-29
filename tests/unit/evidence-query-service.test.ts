@@ -95,7 +95,7 @@ test('normalizes DuckDB JSON sparkline tuples using the Evidence row contract', 
   expect(evidenceResult(table).rows as unknown).toEqual([{ __ev_sparkline_high: [['2026-09-23 23:00:00', 72.5]], ordinary_json: '[1,2]' }]);
 });
 
-test('report scope applies the 60-second limit to prepared, regular and Arrow queries', async () => {
+test('report scope applies the 3-minute limit to prepared, regular and Arrow queries', async () => {
   const { EvidenceQueryRun, REPORT_QUERY_TIMEOUT_MS } = await import('../../src/lib/evidence/query-run');
   const calls: any[] = [];
   const bytes = tableToIPC(tableFromArrays({ value: [1] }));
@@ -108,8 +108,8 @@ test('report scope applies the 60-second limit to prepared, regular and Arrow qu
   await service.query('select 1');
   await service.queryArrow('select 2');
   expect(calls).toHaveLength(3);
-  expect(calls.every(call => call.timeoutMs === 60_000 && call.signal === run.signal)).toBe(true);
-  expect(REPORT_QUERY_TIMEOUT_MS).toBe(60_000);
+  expect(calls.every(call => call.timeoutMs === 180_000 && call.signal === run.signal)).toBe(true);
+  expect(REPORT_QUERY_TIMEOUT_MS).toBe(180_000);
   expect(activity).toEqual([1, 0, 1, 0, 1, 0]);
   run.stop();
   await expect(service.query('select 1')).rejects.toThrow('Report refresh stopped');

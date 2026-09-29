@@ -103,11 +103,34 @@ export function classifySetupStatement(statement: string, local: Set<string>): S
   return { kind: 'refused', reason: `${first || 'This statement'} isn't something the dry run knows how to undo safely.` };
 }
 
+/** Whether one statement only reads. EXPLAIN ANALYZE runs the statement it explains, so it
+ *  reads only when that statement does; plain EXPLAIN runs nothing. */
+function isReadStatement(statement: string): boolean {
+  const w = words(statement);
+  const first = upper(w[0]);
+  if (!READ.has(first)) return false;
+  if (first !== 'EXPLAIN') return true;
+  // EXPLAIN ANALYZE <statement>, or EXPLAIN (ANALYZE[, FORMAT json]) <statement>.
+  let at = 1;
+  let analyze = false;
+  if (w[at] === '(') {
+    const close = w.indexOf(')', at);
+    if (close === -1) return false;
+    analyze = w.slice(at + 1, close).some(word => /^ANALY[SZ]E$/i.test(word));
+    at = close + 1;
+  } else if (/^ANALY[SZ]E$/i.test(w[at] ?? '')) {
+    analyze = true;
+    at++;
+  }
+  const inner = upper(w[at]);
+  return !analyze || (READ.has(inner) && inner !== 'EXPLAIN');
+}
+
 /** Whether SQL only reads: every statement is a SELECT-like query. The report agent's
  *  run_sql is held to this, so exploring data can never change the report's session. */
 export function isReadOnlySql(sql: string): boolean {
   const statements = splitStatements(sql);
-  return statements.length > 0 && statements.every(statement => READ.has(upper(words(statement)[0])) && !/\bEXPLAIN\s+ANALY[SZ]E\b/i.test(statement));
+  return statements.length > 0 && statements.every(isReadStatement);
 }
 
 export interface SetupTestResult {
@@ -174,4 +197,30 @@ export async function testSetupSql(sql: string, report: Pick<EvidenceReport, 'pa
     result.durationMs = Math.round(performance.now() - started);
     return result;
   }, { timeoutMs: 120_000, ...options });
+}
+
+export interface SetupStatementRun { index: number; sql: string; name: string; startedAt: number; durationMs: number; error: string | null }
+
+/** Run a report's setup SQL for a refresh, one statement at a time with parameters bound, so
+ *  each statement can be timed on its own (the Performance tab). Stops at the first failure. */
+export async function runSetupSql(sql: string, report: Pick<EvidenceReport, 'parameters'>, values: ParameterValues,
+  query: (sql: string, params: unknown[]) => Promise<QueryResult>, observe: (run: SetupStatementRun) => void = () => {}): Promise<{ ok: true } | { ok: false; error: string }> {
+  for (const [index, statement] of splitStatements(sql).entries()) {
+    const kind = classifySetupStatement(statement, new Set());
+    const name = `Dataset SQL · ${kind.kind === 'create' ? kind.name : `statement ${index + 1}`}`;
+    const startedAt = performance.now();
+    let error: string | null;
+    try {
+      const compiled = compileReportQuery(statement, compilerParameters(report, values), values);
+      const outcome = await query(compiled.sql, compiled.params);
+      error = outcome.ok ? null : outcome.error || 'Dataset setup failed';
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      observe({ index: index + 1, sql: statement, name, startedAt, durationMs: performance.now() - startedAt, error });
+      throw e;
+    }
+    observe({ index: index + 1, sql: statement, name, startedAt, durationMs: performance.now() - startedAt, error });
+    if (error) return { ok: false, error: `Statement ${index + 1}: ${error}` };
+  }
+  return { ok: true };
 }

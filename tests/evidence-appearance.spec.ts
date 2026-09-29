@@ -44,7 +44,7 @@ test('report appearance updates without queries and survives save, copy and reop
   expect(await panel.locator('header').first().evaluate(el => getComputedStyle(el).backgroundColor)).toBe(chrome);
   expect(await page.evaluate(() => (window as any).__themeCalls)).toBe(0);
   expect(await page.evaluate(() => (window as any).__themeWorker === (window as any).__bridge.worker)).toBe(true);
-  await panel.getByRole('button', { name: 'Save report', exact: true }).click();
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   await page.reload();
   await expect(panel.getByTestId('evidence-document')).toContainText('My report', { timeout: 90000 });
   await panel.getByRole('button', { name: 'Edit report', exact: true }).click();

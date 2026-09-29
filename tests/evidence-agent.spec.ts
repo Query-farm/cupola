@@ -1,4 +1,4 @@
-import { evidencePath } from './helpers';
+import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 import { test, expect } from '@playwright/test';
 
 test.use({ viewport: { width: 1500, height: 1100 } });
@@ -314,4 +314,57 @@ test('the agent shows its reasoning between steps, folded once it moves on', asy
   await expect(reasoning.first()).toContainText('Checking components');
   await reasoning.first().locator('summary').click();
   await expect(reasoning.first()).toContainText('look at what is installed first');
+});
+
+// Each applied proposal saves at once as its own revision, labelled with the agent's summary; edits
+// the reader made first are saved before it, and an undo is a revision too.
+test('applied agent proposals are saved as labelled revisions', async ({ page }) => {
+  test.setTimeout(150_000);
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.addInitScript((serviceUrl) => {
+    localStorage.setItem('vgi-frontend-settings', JSON.stringify({ anthropicApiKey: 'test-key-not-real', aiModel: 'claude-sonnet-4-6' }));
+    if (sessionStorage.getItem('seeded')) return;
+    sessionStorage.setItem('seeded', '1');
+    const report = { version: 1, id: 'agent-revisions', title: 'Temperatures', serviceUrl, source: '# Temperatures', setupSql: '', parameters: [], values: {}, createdAt: 1, updatedAt: 1000 };
+    localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(serviceUrl)}:agent-revisions`, JSON.stringify(report));
+  }, EVIDENCE_SERVICE_URL);
+  let requests = 0;
+  await page.route('https://api.anthropic.com/v1/messages', async route => {
+    requests++;
+    // Proposed against the draft as the agent read it: the reader's title edit included.
+    const draft = route.request().postDataJSON().messages.at(-1).content;
+    const title = /"title":"([^"]*)"/.exec(typeof draft === 'string' ? draft : JSON.stringify(draft))?.[1] ?? 'Temperatures';
+    const tool = requests === 1 ? { name: 'propose_report_edit', input: { summary: 'Add a note on data freshness', changes: { title, source: '# Temperatures\n\nData refreshes daily.' } } } : undefined;
+    await route.fulfill({ status: 200, contentType: 'text/event-stream', body: stream(tool) });
+  });
+  await page.goto(evidencePath('evidence?evidence_report=agent-revisions'));
+  const panel = page.getByTestId('evidence-panel');
+  await expect(panel.getByTestId('evidence-document')).toContainText('Temperatures', { timeout: 90_000 });
+  await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
+  // An edit of the reader's own, not yet saved when the agent's proposal is applied.
+  await panel.getByLabel('Report title').fill('Daily temperatures');
+  await panel.getByRole('textbox', { name: 'Chat message input' }).fill('Add a note that the data refreshes daily.');
+  await panel.getByRole('textbox', { name: 'Chat message input' }).press('Enter');
+  await panel.getByRole('button', { name: 'Apply and preview', exact: true }).click({ timeout: 30_000 });
+  await expect(panel.getByTestId('evidence-document')).toContainText('Data refreshes daily.', { timeout: 30_000 });
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
+
+  await panel.getByRole('tab', { name: 'History', exact: true }).click();
+  const revisions = panel.getByRole('list', { name: 'Revisions, newest first' }).getByRole('listitem');
+  await expect(revisions).toHaveCount(3);
+  await expect(revisions.nth(0)).toContainText('Add a note on data freshness');
+  await expect(revisions.nth(0)).toContainText('Report agent');
+  await expect(revisions.nth(0)).toContainText('Document');
+  await expect(revisions.nth(0)).not.toContainText('and you');
+  await expect(revisions.nth(1)).toContainText('Changed Title');
+  await expect(revisions.nth(1)).toContainText('You');
+
+  await panel.getByRole('tab', { name: 'Chat', exact: true }).click();
+  await panel.getByRole('button', { name: 'Undo last agent edit', exact: true }).click();
+  await expect(panel.getByTestId('evidence-document')).not.toContainText('Data refreshes daily.', { timeout: 30_000 });
+  await panel.getByRole('tab', { name: 'History', exact: true }).click();
+  await expect(revisions).toHaveCount(4);
+  await expect(revisions.nth(0)).toContainText('Undid “Add a note on data freshness”');
+  expect(errors).toEqual([]);
 });

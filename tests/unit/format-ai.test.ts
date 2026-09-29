@@ -155,3 +155,12 @@ describe("no double-escaping anywhere in the JSON", () => {
     expect(json).not.toContain('\\\\');   // no escaped backslashes => no nested stringify
   });
 });
+
+describe("EXPLAIN plans", () => {
+  test("keep the whole plan, while other long strings are still capped", () => {
+    const plan = "┌───┐\n│ SEQ_SCAN │\n".repeat(200);
+    const explained = new Table({ explain_key: vectorFromArray(["analyzed_plan"]), explain_value: vectorFromArray([plan]) });
+    expect(JSON.parse(formatArrowTableAsJson(explained, cache()).json).rows[0].explain_value).toBe(plan);
+    expect(cellFromArray("explain_value", [plan])).toHaveLength(200);
+  });
+});

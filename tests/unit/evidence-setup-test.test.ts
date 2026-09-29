@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { classifySetupStatement, isReadOnlySql, normalizeName, splitStatements, testSetupSql } from '../../src/lib/evidence/setup-test';
+import { classifySetupStatement, isReadOnlySql, normalizeName, runSetupSql, splitStatements, testSetupSql } from '../../src/lib/evidence/setup-test';
 import { refreshForAgent, type RefreshProfile } from '../../src/lib/evidence/refresh-profile';
 
 const kind = (sql: string, local = new Set<string>()) => classifySetupStatement(sql, local).kind;
@@ -53,7 +53,17 @@ describe('isReadOnlySql', () => {
     expect(isReadOnlySql('SELECT 1; FROM t; DESCRIBE t; SUMMARIZE t')).toBe(true);
     expect(isReadOnlySql("SELECT 'DROP TABLE x'")).toBe(true);
     expect(isReadOnlySql('SELECT 1; CREATE TEMP TABLE t AS SELECT 1')).toBe(false);
-    expect(isReadOnlySql('EXPLAIN ANALYZE SELECT 1')).toBe(false);
+    expect(isReadOnlySql('-- nothing')).toBe(false);
+  });
+  test('EXPLAIN ANALYZE is a read only when the statement it runs is', () => {
+    expect(isReadOnlySql('EXPLAIN ANALYZE SELECT 1')).toBe(true);
+    expect(isReadOnlySql('explain analyse with t AS (SELECT 1) SELECT * FROM t')).toBe(true);
+    expect(isReadOnlySql('EXPLAIN (ANALYZE, FORMAT json) FROM t')).toBe(true);
+    expect(isReadOnlySql('EXPLAIN CREATE TEMP TABLE t AS SELECT 1')).toBe(true);
+    expect(isReadOnlySql('EXPLAIN ANALYZE CREATE TEMP TABLE t AS SELECT 1')).toBe(false);
+    expect(isReadOnlySql('EXPLAIN ANALYZE INSERT INTO t VALUES (1)')).toBe(false);
+    expect(isReadOnlySql('EXPLAIN (FORMAT json, ANALYZE) DELETE FROM t')).toBe(false);
+    expect(isReadOnlySql('EXPLAIN ANALYZE EXPLAIN ANALYZE DELETE FROM t')).toBe(false);
     expect(isReadOnlySql('-- nothing')).toBe(false);
   });
 });
@@ -84,5 +94,27 @@ describe('refreshForAgent', () => {
     expect(summary.byQuery).toEqual([{ name: 'orders', runs: 2, ms: 700 }]);
     expect(summary.totalMs).toBe(900);
     expect(refreshForAgent(null, [])).toBeNull();
+  });
+});
+
+describe('runSetupSql', () => {
+  const report = { parameters: [{ id: 'n', key: 'n', label: 'N', type: 'number' as const, required: false, defaultValue: 3 }] };
+  test('runs and reports each statement on its own, with parameters bound', async () => {
+    const sent: [string, unknown[]][] = [];
+    const steps: { name: string; sql: string; error: string | null }[] = [];
+    const result = await runSetupSql('CREATE OR REPLACE TEMP TABLE a AS SELECT $n AS n;\n-- then\nINSERT INTO a VALUES ($n + 1);', report, { n: 7 },
+      async (sql, params) => { sent.push([sql, params]); return { ok: true }; }, step => steps.push(step));
+    expect(result).toEqual({ ok: true });
+    expect(sent).toEqual([['CREATE OR REPLACE TEMP TABLE a AS SELECT ? AS n', [7]], ['-- then\nINSERT INTO a VALUES (? + 1)', [7]]]);
+    expect(steps.map(step => [step.name, step.error])).toEqual([['Dataset SQL · a', null], ['Dataset SQL · statement 2', null]]);
+  });
+  test('stops at the first failing statement and reports it', async () => {
+    const steps: string[] = [];
+    let calls = 0;
+    const result = await runSetupSql('SELECT 1; SELECT boom; SELECT 3', report, {},
+      async () => ++calls === 2 ? { ok: false, error: 'Binder Error' } : { ok: true }, step => steps.push(`${step.index}:${step.error}`));
+    expect(result).toEqual({ ok: false, error: 'Statement 2: Binder Error' });
+    expect(calls).toBe(2);
+    expect(steps).toEqual(['1:null', '2:Binder Error']);
   });
 });
