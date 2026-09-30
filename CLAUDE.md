@@ -429,7 +429,7 @@ When a VGI server has OAuth PKCE enabled:
 
 ## Testing
 
-Unit tests are pure-logic bun tests in `tests/unit/` (`bun run test`); the AI agent's helper modules (`ai-fetch`, `ai-history`, `ai-telemetry`, `sentry-scrub`, etc.) are deliberately free of service/VGI imports so they stay unit-testable.
+Unit tests are pure-logic bun tests in `tests/unit/` (`bun run test`); the AI agent's helper modules (`ai-fetch`, `ai-history`, `ai-telemetry`, `sentry-scrub`, etc.) are deliberately free of service/VGI imports so they stay unit-testable. **Bun runs every unit test file in one global scope, in an order that differs by platform**, so a file that stubs a global (`window`, `history`, `fetch`) must restore it in `afterAll`/`afterEach`. `auth.test.ts` and `url-params.test.ts` once leaked a `window` with a `location`, which made `posthog-js` (imported by the Evidence core) throw `location is not defined` in `evidence-typst-catalog.test.ts`. That happened only on Linux, where they ran first, and it failed CI for four days while every local run passed.
 
 For end-to-end work, test with Playwright (or Playwright MCP) against a running VGI server. The repo carries its own — `test-worker/` serves the synthetic `cupola_test` catalog on the suite's default port, with small report-friendly tables, 100k–2M-row stress tables (`large.orders_400k` is the size that killed the tab), type/shape edge cases, and slow/failing/rate-limited table functions:
 ```bash

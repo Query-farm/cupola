@@ -6,7 +6,7 @@
  * `if (_cachedToken) return _cachedToken` short-circuit. This test asserts
  * the cache is invalidated when a fresh #token= is present in the hash.
  */
-import { test, expect, describe, beforeEach } from "bun:test";
+import { test, expect, describe, beforeEach, afterAll } from "bun:test";
 
 // Minimal window stub so auth.ts's `if (typeof window === "undefined")` check
 // resolves to the test-provided location/history surface. Bun has no DOM by default.
@@ -22,6 +22,15 @@ const fakeHistory = {
     currentHash = u.hash;
   },
 };
+// Bun runs every test file in one global scope, so the stubs are removed when this file is done.
+// A leaked `window` with a `location` (but no global `location`) breaks posthog-js's import in any
+// later file that loads the Evidence core: it ran before evidence-typst-catalog on Linux CI only.
+const realWindow = (globalThis as any).window;
+const realHistory = (globalThis as any).history;
+afterAll(() => {
+  if (realWindow === undefined) delete (globalThis as any).window; else (globalThis as any).window = realWindow;
+  if (realHistory === undefined) delete (globalThis as any).history; else (globalThis as any).history = realHistory;
+});
 (globalThis as any).window = {
   get location() {
     return {

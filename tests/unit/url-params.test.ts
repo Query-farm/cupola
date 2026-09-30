@@ -6,7 +6,7 @@
  * neither one's rewrite clobbers the other's preserved keys. The order they
  * run in must not matter — selection-routing fragments must also survive.
  */
-import { test, expect, describe, beforeEach } from "bun:test";
+import { test, expect, describe, beforeEach, afterAll } from "bun:test";
 
 let currentHash = "";
 let currentPath = "/";
@@ -27,6 +27,15 @@ const fakeSessionStorage = {
   removeItem: (k: string) => { store.delete(k); },
 };
 
+// Bun runs every test file in one global scope, so the stubs are removed when this file is done.
+// A leaked `window` with a `location` (but no global `location`) breaks posthog-js's import in any
+// later file that loads the Evidence core: it ran before evidence-typst-catalog on Linux CI only.
+const realWindow = (globalThis as any).window;
+const realHistory = (globalThis as any).history;
+afterAll(() => {
+  if (realWindow === undefined) delete (globalThis as any).window; else (globalThis as any).window = realWindow;
+  if (realHistory === undefined) delete (globalThis as any).history; else (globalThis as any).history = realHistory;
+});
 (globalThis as any).window = {
   get location() { return { hash: currentHash, pathname: currentPath, search: currentSearch }; },
   history: fakeHistory,
