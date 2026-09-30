@@ -3,7 +3,8 @@
  * header "Catalog / Query Editor" toggle and the bottom shell drawer's own tab
  * strip — one place to drive the whole UI.
  */
-import { Database, FileCode2, Sparkles, History, BarChart3, PanelLeftClose, PanelLeftOpen, FileChartColumn } from "lucide-react";
+import { Database, FileCode2, Sparkles, History, BarChart3, PanelLeftClose, PanelLeftOpen, FileChartColumn, X } from "lucide-react";
+import { Fragment } from "react";
 import { cn } from "@/lib/utils";
 
 export type TabId = "catalog" | "editor" | "shell" | "askai" | "reports" | "evidence" | "queries" | "perspective";
@@ -16,6 +17,8 @@ interface TabDef {
   accent?: "editor" | "ai";
   /** Use the DuckDB logo image instead of a lucide icon. */
   img?: boolean;
+  /** Shown only while it has something in it, with its own close button. */
+  closable?: boolean;
 }
 
 const TABS: TabDef[] = [
@@ -25,7 +28,7 @@ const TABS: TabDef[] = [
   { id: "shell", label: "SQL Shell", img: true },
   { id: "catalog", label: "Catalog", icon: Database },
   { id: "queries", label: "Query History", icon: History },
-  { id: "perspective", label: "Perspective", icon: BarChart3 },
+  { id: "perspective", label: "Perspective", icon: BarChart3, closable: true },
 ];
 
 interface Props {
@@ -38,9 +41,13 @@ interface Props {
   busyTabs?: Partial<Record<TabId, boolean>>;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  /** Closable tabs currently open. Perspective opens when a table, query or
+   *  shell result is pivoted; an empty one had nothing to offer. */
+  openTabs?: Partial<Record<TabId, boolean>>;
+  onCloseTab?: (tab: TabId) => void;
 }
 
-export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs, sidebarCollapsed, onToggleSidebar }: Props) {
+export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs, sidebarCollapsed, onToggleSidebar, openTabs, onCloseTab }: Props) {
   return (
     <div className="flex items-center gap-1 px-2 h-10 border-b border-border bg-card shrink-0 overflow-x-auto">
       <button
@@ -54,12 +61,12 @@ export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs
       </button>
       <span className="h-5 w-px bg-border mx-0.5 shrink-0" aria-hidden="true" />
       <div className="flex items-center gap-1.5" role="tablist" aria-label="Workspace">
-      {TABS.map((tab) => {
+      {TABS.filter((tab) => !tab.closable || openTabs?.[tab.id] || activeTab === tab.id).map((tab) => {
         const active = activeTab === tab.id;
         const Icon = tab.icon;
         return (
+          <Fragment key={tab.id}>
           <button
-            key={tab.id}
             role="tab"
             aria-selected={active}
             aria-label={tab.label}
@@ -102,6 +109,19 @@ export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs
               </span>
             )}
           </button>
+          {tab.closable && onCloseTab && (
+            <button
+              type="button"
+              onClick={() => onCloseTab(tab.id)}
+              className="-ml-1 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-foreground/5 shrink-0 focus-visible:outline-2 focus-visible:outline-ring"
+              title={`Close ${tab.label}`}
+              aria-label={`Close ${tab.label}`}
+              data-testid={`tab-${tab.id}-close`}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+          </Fragment>
         );
       })}
       </div>

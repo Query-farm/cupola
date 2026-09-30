@@ -170,6 +170,12 @@ export const ui = {
   /** Open the last shell result (Arrow IPC) in the detached results window.
    *  Invoked by the `.preview` dot-command; false when the pop-up was blocked. */
   showPreview: null as ((arrowBuf: ArrayBuffer, sql?: string) => boolean) | null,
+  /** Pivot the sidebar's selected table on the next switch to the Perspective
+   *  tab, even if a snapshot or query pivot has replaced it since. */
+  pivotSelectedTable: null as (() => void) | null,
+  /** Empty the Perspective tab: its viewer, snapshot table and any query
+   *  pivot's scratch view or table. Called when the tab is closed. */
+  closePerspective: null as (() => Promise<void>) | null,
   addQueryHistoryEntry: null as ((entry: QueryHistoryEntry) => void) | null,
 };
 

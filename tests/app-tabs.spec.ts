@@ -3,7 +3,17 @@
  * column-comment tooltips, drag-insert into the editor, download .sql.
  */
 import { test, expect } from "@playwright/test";
-import { gotoApp, openEditor, typeInEditor, waitForShellBridge, T_NORMAL } from "./helpers";
+import { gotoApp, openEditor, typeInEditor, waitForShellBridge, T_NORMAL, T_SHELL_BOOT } from "./helpers";
+
+/** Run a query in the editor and pivot its result as a snapshot. */
+async function pivotSnapshot(page: import("@playwright/test").Page) {
+  await openEditor(page);
+  await typeInEditor(page, "SELECT 1 AS one");
+  await page.getByTestId("editor-run").click();
+  await page.getByTestId("editor-open-perspective").click({ timeout: T_SHELL_BOOT });
+  await page.getByTestId("editor-pivot-snapshot").click();
+  await expect(page.getByTestId("tab-perspective")).toHaveAttribute("aria-selected", "true", { timeout: T_SHELL_BOOT });
+}
 
 test.beforeEach(async ({ page }) => {
   await gotoApp(page);
@@ -11,8 +21,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("Unified tab bar", () => {
-  test("all seven tabs are present and switch", async ({ page }) => {
-    for (const id of ["catalog", "editor", "askai", "reports", "shell", "queries", "perspective"]) {
+  test("all six tabs are present and switch; Perspective is not one until it is opened", async ({ page }) => {
+    for (const id of ["catalog", "editor", "askai", "reports", "shell", "queries"]) {
       await expect(page.getByTestId(`tab-${id}`)).toBeVisible();
     }
     await expect(page.getByRole("tablist", { name: "Workspace" }).getByRole("tab")).toHaveText([
@@ -22,22 +32,30 @@ test.describe("Unified tab bar", () => {
       "SQL Shell",
       "Catalog",
       "Query History",
-      "Perspective",
     ]);
+    await expect(page.getByTestId("tab-perspective")).toHaveCount(0);
     await page.getByTestId("tab-shell").click();
     await expect(page.getByTestId("tab-shell")).toHaveAttribute("aria-selected", "true");
-    await page.getByTestId("tab-perspective").click();
-    await expect(page.getByTestId("tab-perspective")).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("a pivot opens the Perspective tab; closing it empties it and returns to the editor", async ({ page }) => {
+    await pivotSnapshot(page);
+    await expect(page.locator("perspective-viewer")).toBeAttached({ timeout: T_SHELL_BOOT });
+
+    await page.getByTestId("tab-perspective-close").click();
+    await expect(page.getByTestId("tab-perspective")).toHaveCount(0);
+    await expect(page.getByTestId("tab-editor")).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("perspective-viewer")).toHaveCount(0);
   });
 
   test("does not restore the transient Perspective tab after a reload", async ({ page }) => {
-    await page.getByTestId("tab-perspective").click();
-    await expect(page.getByTestId("tab-perspective")).toHaveAttribute("aria-selected", "true");
+    await pivotSnapshot(page);
     await expect.poll(() => page.evaluate(() => localStorage.getItem("vgi-active-tab"))).toBe("perspective");
 
     await page.reload();
 
     await expect(page.getByTestId("tab-catalog")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("tab-perspective")).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => localStorage.getItem("vgi-active-tab"))).toBe("catalog");
   });
 

@@ -207,6 +207,10 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
       // clicked the Perspective tab" — see that effect for why it matters.
       perspectiveSnapshotEntryRef.current = true;
       handledSelectionRef.current = selectedTableIdRef.current;
+      // The snapshot replaces the table on screen. Left set, the next table
+      // mount saved the snapshot's layout as that table's, and pivoting the
+      // same table again was skipped as "already showing".
+      perspectiveTableRef.current = null;
       setActiveTab("perspective");
       setPerspectiveLoading(true);
       try {
@@ -277,9 +281,27 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         setPerspectiveLoading(false);
       }
     };
+    ui.pivotSelectedTable = () => {
+      handledSelectionRef.current = null;
+      perspectiveSnapshotEntryRef.current = false;
+    };
+
+    ui.closePerspective = async () => {
+      const container = perspectiveRef.current;
+      handledSelectionRef.current = null;
+      if (!container) return;
+      await unmountPerspective(container, () => {
+        const previous = perspectiveTableRef.current;
+        perspectiveTableRef.current = null;
+        return previous;
+      });
+      await releaseQueryPivotSource();
+    };
     return () => {
       ui.showPerspective = null;
       ui.showPerspectiveQuery = null;
+      ui.pivotSelectedTable = null;
+      ui.closePerspective = null;
     };
   }, [setActiveTab]);
 
@@ -411,6 +433,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     handledSelectionRef.current = tableId;
 
     let cancelled = false;
+    let mountedTable = false;
     setPerspectiveLoading(true);
 
     (async () => {
@@ -445,6 +468,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
 
         const mounted = await mountVirtualPerspective(() => perspectiveRef.current, tableId, perspectiveTableRef.current, defaultConfig, () => cancelled);
         if (!mounted) return;
+        mountedTable = true;
         perspectiveTableRef.current = tableId;
         await releaseQueryPivotSource();
       } catch (e: unknown) {
@@ -458,7 +482,14 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // A re-render hands this effect a new `selectedTable` object for the same
+      // table (the catalog inventory refreshes after a page load), which cancels
+      // the mount in flight. Left marked as handled, the re-run skipped it and
+      // the tab sat on "Loading Perspective..." with nothing mounted.
+      if (!mountedTable && handledSelectionRef.current === tableId) handledSelectionRef.current = null;
+    };
   }, [activeTab, selectedTable, selectedTableId]);
 
   return (
@@ -508,7 +539,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
           <div className="flex items-center justify-center h-full text-terminal-fg/40 text-sm font-mono">
             {selectedTable
               ? "Loading table into Perspective..."
-              : "Run a query then type .perspective to view results here"}
+              : "Pivot a table from its catalog page, or a query from the editor's Pivot menu"}
           </div>
         )}
       </div>
@@ -844,6 +875,30 @@ async function mountVirtualPerspectiveNow(
   await viewer.restore(cachedConfig ? { ...cachedConfig, table: tableId } : await defaultConfig());
   await viewer.toggleConfig(true);
   return true;
+}
+
+/**
+ * Remove whatever viewer the container holds: a virtual-server view (its
+ * layout saved under the table it showed, so pivoting that table again
+ * restores it) or a static snapshot and its Table. Queued behind any mount in
+ * flight, which would otherwise put a viewer back after this ran.
+ */
+function unmountPerspective(container: HTMLElement, takeTableId: () => string | null): Promise<void> {
+  const run = perspectiveMountQueue.then(async () => {
+    const tableId = takeTableId();
+    const viewer = container.querySelector("perspective-viewer") as any;
+    if (viewer && tableId) {
+      try { perspectiveConfigCache.set(tableId, await viewer.save()); } catch { /* keep the old layout */ }
+    }
+    await releasePerspective(container);
+    const remaining = container.querySelector("perspective-viewer") as any;
+    if (remaining) {
+      try { await remaining.delete(); } catch { /* already released */ }
+      remaining.remove();
+    }
+  });
+  perspectiveMountQueue = run.catch(() => {});
+  return run;
 }
 
 /**

@@ -177,6 +177,25 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
     if (activeTab === "editor") setEditorMounted(true);
     if (activeTab === "reports") setReportsMounted(true);
   }, [activeTab]);
+  // The Perspective tab is shown only while it holds something: every way in
+  // (a table's Pivot button, the editor's Pivot menu, `.perspective`) switches
+  // to it, and closing it empties it and goes back where the reader was.
+  const [perspectiveOpen, setPerspectiveOpen] = useState(false);
+  const lastTabRef = useRef<TabId>("catalog");
+  useEffect(() => {
+    if (activeTab === "perspective") setPerspectiveOpen(true);
+    else lastTabRef.current = activeTab;
+  }, [activeTab]);
+  const closeTab = useCallback((tab: TabId) => {
+    if (tab !== "perspective") return;
+    setPerspectiveOpen(false);
+    setActiveTab((current) => current === "perspective" ? lastTabRef.current : current);
+    void ui.closePerspective?.();
+  }, []);
+  const pivotTable = useCallback(() => {
+    ui.pivotSelectedTable?.();
+    setActiveTab("perspective");
+  }, []);
   useEffect(() => {
     const openReports = () => setActiveTab("reports");
     window.addEventListener("cupola:promote-report", openReports);
@@ -627,6 +646,8 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
         busyTabs={{ askai: askAiBusy, editor: editorAiBusy }}
         sidebarCollapsed={!sidebarVisible}
         onToggleSidebar={() => isNarrow ? setMobileSidebarOpen((open) => !open) : setSidebarCollapsed((c) => !c)}
+        openTabs={{ perspective: perspectiveOpen }}
+        onCloseTab={closeTab}
       />
       <EngineStatusRibbon />
       <div className="relative flex flex-1 overflow-hidden">
@@ -690,7 +711,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
               : "absolute inset-0 overflow-y-auto p-3 sm:p-6"}
             >
               <ErrorBoundary>
-                <ContentPanel catalogs={catalogs} defaultCatalogName={data.catalogName} selection={selection} attachOptions={attachOptions} onNavigate={navigate} onOpenShell={() => setActiveTab("shell")} />
+                <ContentPanel catalogs={catalogs} defaultCatalogName={data.catalogName} selection={selection} attachOptions={attachOptions} onNavigate={navigate} onOpenShell={() => setActiveTab("shell")} onPivotTable={pivotTable} />
               </ErrorBoundary>
             </main>
           )}
@@ -1259,7 +1280,7 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
 }
 
 function ContentPanel({
-  catalogs, defaultCatalogName, selection, attachOptions, onNavigate, onOpenShell,
+  catalogs, defaultCatalogName, selection, attachOptions, onNavigate, onOpenShell, onPivotTable,
 }: {
   catalogs: CatalogData[];
   defaultCatalogName: string;
@@ -1267,6 +1288,8 @@ function ContentPanel({
   attachOptions?: string;
   onNavigate: (selection: Selection) => void;
   onOpenShell?: () => void;
+  /** Pivot the selected table in the Perspective tab. */
+  onPivotTable?: () => void;
 }) {
   const selectedName = selection?.catalog ?? defaultCatalogName;
   const catalog = catalogs.find(c => c.catalogName === selectedName);
@@ -1300,7 +1323,7 @@ function ContentPanel({
 
   if (selection.type === "table") {
     const table = schema.tables.find((t) => t.name === selection.name);
-    if (table) return <TableDetail table={table} catalogName={catalog.catalogName} onNavigate={onCatalogNavigate} onOpenShell={onOpenShell} />;
+    if (table) return <TableDetail table={table} catalogName={catalog.catalogName} onNavigate={onCatalogNavigate} onOpenShell={onOpenShell} onPivot={onPivotTable} />;
   }
 
   if (selection.type === "view") {

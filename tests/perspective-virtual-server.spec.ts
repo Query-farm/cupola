@@ -81,7 +81,7 @@ test.describe("Perspective virtual server", () => {
     await page.goto(`${APP_URL}${hash}`);
     await waitForShellBridge(page);
 
-    await page.getByTestId("tab-perspective").click();
+    await page.getByTestId("table-pivot").click();
     await expect(page.getByTestId("tab-perspective")).toHaveAttribute(
       "aria-selected",
       "true",
@@ -137,6 +137,28 @@ test.describe("Perspective virtual server", () => {
     ).toEqual([]);
   });
 
+  test("closing the tab empties it, and the table's Pivot button opens it again", async ({ page }) => {
+    await gotoApp(page);
+    await waitForShellBridge(page);
+    const target = await findTable(page);
+    test.skip(!target, "no table in the attached catalog to pivot");
+
+    await page.goto(`${APP_URL}#/schema/${encodeURIComponent(target!.table_schema)}/table/${encodeURIComponent(target!.table_name)}`);
+    await waitForShellBridge(page);
+    await page.getByTestId("table-pivot").click();
+    await expect(page.locator("perspective-viewer")).toBeAttached({ timeout: T_SHELL_BOOT });
+
+    await page.getByTestId("tab-perspective-close").click();
+    await expect(page.getByTestId("tab-perspective")).toHaveCount(0);
+    await expect(page.getByTestId("tab-catalog")).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("perspective-viewer")).toHaveCount(0);
+
+    // The same table again: closing must not leave it marked as already shown.
+    await page.getByTestId("table-pivot").click();
+    await expect(page.getByTestId("tab-perspective")).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("perspective-viewer")).toBeAttached({ timeout: T_SHELL_BOOT });
+  });
+
   test("grouping pivots through DuckDB and supports collapse/expand", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
@@ -153,7 +175,7 @@ test.describe("Perspective virtual server", () => {
     const hash = `#/schema/${encodeURIComponent(target!.table_schema)}/table/${encodeURIComponent(target!.table_name)}`;
     await page.goto(`${APP_URL}${hash}`);
     await waitForShellBridge(page);
-    await page.getByTestId("tab-perspective").click();
+    await page.getByTestId("table-pivot").click();
     await expect(page.locator("perspective-viewer")).toBeAttached({
       timeout: T_SHELL_BOOT,
     });

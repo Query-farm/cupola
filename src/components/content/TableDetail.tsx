@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { Key, Link2, Network, ShieldCheck } from "lucide-react";
+import { BarChart3, Key, Link2, Network, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { TableInfo } from "@/lib/vgi-catalog-types";
 import { getColumns, getForeignKeys, fetchColumnStats, type ForeignKeyInfo, type ColumnStats } from "@/lib/service";
@@ -19,9 +19,11 @@ interface Props {
   catalogName: string;
   onNavigate?: (selection: Selection) => void;
   onOpenShell?: () => void;
+  /** Pivot this table in the Perspective tab (live: DuckDB answers each pivot). */
+  onPivot?: () => void;
 }
 
-export function TableDetail({ table, catalogName, onNavigate, onOpenShell }: Props) {
+export function TableDetail({ table, catalogName, onNavigate, onOpenShell, onPivot }: Props) {
   const columns = getColumns(table);
   const foreignKeys = getForeignKeys(table);
   const defaultSql = `SELECT * FROM ${catalogName}.${table.schema_name}.${table.name} LIMIT 100;`;
@@ -88,6 +90,17 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell }: Pro
             >
               <Network /> Relationships
             </Button>
+            {onPivot && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onPivot}
+                title="Explore this table in Perspective: group, filter and sort run as SQL, without copying the table"
+                data-testid="table-pivot"
+              >
+                <BarChart3 /> Pivot
+              </Button>
+            )}
             <TableQueryButton sql={defaultSql} onOpenShell={onOpenShell} withMenu />
           </span>
         }
