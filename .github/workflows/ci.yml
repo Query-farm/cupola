@@ -72,6 +72,14 @@ jobs:
           VGI_VERSION: latest
         run: bun run test:e2e:smoke
 
+      - name: Upload smoke-test traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-results
+          path: cupola/test-results/
+          retention-days: 7
+
       - name: Build self-hosted bundle
         working-directory: cupola
         env:

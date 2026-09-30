@@ -38,6 +38,9 @@ const config = {
     // enough for the updater to wake. The Evidence specs used to pin it.
     channel: process.env.PW_CHANNEL || undefined,
     actionTimeout: 10_000,
+    // CI keeps a trace of each failed test (uploaded as an artifact), so a timeout there can be
+    // diagnosed instead of guessed at; locally they cost time for nothing.
+    trace: process.env.CI ? "retain-on-failure" : "off",
     navigationTimeout: 20_000,
   },
   webServer: {
