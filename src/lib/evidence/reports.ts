@@ -5,7 +5,7 @@ import { appearanceSchema } from './appearance';
 import type { ReportParameter } from '../reports/types';
 import { parameterGraphErrors } from './parameter-graph';
 import { initialValue, toReportParameters } from './parameters';
-import { historyStorageKey } from './revisions';
+import { historyStorageKey, isQuotaError } from './revisions';
 // Re-exported for callers that already import from here; modules reports.ts depends on import it from ./parameters.
 export { toReportParameters };
 
@@ -168,6 +168,7 @@ export function deleteEvidenceReport(serviceUrl: string, id: string, storage: St
 
 /** One line for a report that fails validation: the first problem, not zod's JSON dump. */
 export function describeReportError(error: unknown): string {
+  if (isQuotaError(error)) return STORAGE_FULL_MESSAGE;
   if (error && typeof error === 'object' && 'issues' in error && Array.isArray((error as { issues: unknown[] }).issues)) {
     const issue = (error as { issues: { path: PropertyKey[]; message: string }[] }).issues[0];
     return issue ? `${issue.path.map(String).join('.') || 'report'}: ${issue.message}` : 'invalid report';
@@ -182,9 +183,10 @@ export const RECOVERY_DRAFT_PREFIX = 'cupola.evidence.draft.v1:';
 export function recoveryDraftKey(serviceUrl: string, id: string) {
   return `${RECOVERY_DRAFT_PREFIX}${encodeURIComponent(serviceUrl)}:${encodeURIComponent(id)}`;
 }
-export function saveRecoveryDraft(report: EvidenceReport, storage: Storage = localStorage) {
-  try { storage.setItem(recoveryDraftKey(report.serviceUrl, report.id), JSON.stringify({ savedAt: Date.now(), report })); }
-  catch { /* Storage full: the draft stays in the tab. */ }
+/** False when it could not be kept either (storage full): the draft is then only in the tab. */
+export function saveRecoveryDraft(report: EvidenceReport, storage: Storage = localStorage): boolean {
+  try { storage.setItem(recoveryDraftKey(report.serviceUrl, report.id), JSON.stringify({ savedAt: Date.now(), report })); return true; }
+  catch { return false; }
 }
 export function clearRecoveryDraft(serviceUrl: string, id: string, storage: Storage = localStorage) {
   storage.removeItem(recoveryDraftKey(serviceUrl, id));
@@ -198,3 +200,30 @@ export function loadRecoveryDraft(serviceUrl: string, id: string, storage: Stora
     return draft && typeof draft === 'object' && draft.id === id && draft.serviceUrl === serviceUrl ? draft as EvidenceReport : null;
   } catch { return null; }
 }
+/** Drafts of reports that were never saved (a new report that didn't validate, or storage was
+ *  full): no saved report opens them, so the library lists them. Newest first. */
+export function listUnsavedDrafts(serviceUrl: string, savedIds: ReadonlySet<string>, storage: Storage = localStorage): { report: EvidenceReport; savedAt: number }[] {
+  const prefix = recoveryDraftKey(serviceUrl, '');
+  const drafts: { report: EvidenceReport; savedAt: number }[] = [];
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    if (!key?.startsWith(prefix)) continue;
+    const id = decodeURIComponent(key.slice(prefix.length));
+    if (savedIds.has(id)) continue;
+    const report = loadRecoveryDraft(serviceUrl, id, storage);
+    if (!report) continue;
+    let savedAt = 0;
+    try { savedAt = Number(JSON.parse(storage.getItem(key)!).savedAt) || 0; } catch { /* Unknown age. */ }
+    drafts.push({ report, savedAt });
+  }
+  return drafts.sort((a, b) => b.savedAt - a.savedAt);
+}
+
+/** A blank title is a title being retyped, not a problem: it saves as "Untitled report". */
+export const UNTITLED_REPORT = 'Untitled report';
+export function titled<T extends { title: string }>(report: T): T {
+  return report.title.trim() ? report : { ...report, title: UNTITLED_REPORT };
+}
+
+export { isQuotaError };
+export const STORAGE_FULL_MESSAGE = 'this browser’s storage for Cupola is full. Export report files, then delete reports you no longer need';

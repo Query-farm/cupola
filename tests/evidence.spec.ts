@@ -374,29 +374,84 @@ test('reports save themselves, on close too, and a draft that cannot be saved is
   await expect(panel.getByTestId('evidence-document')).toBeVisible({ timeout: 90_000 });
   expect(await stored()).toBe('Saved on close');
 
-  // A blank title can't be saved; it says so, keeps the draft, and brings it back next time.
+  // A blank title is a title being retyped: it saves as "Untitled report" and the field stays blank.
   await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
   await title.fill('');
-  await expect(status).toContainText('Not saved: title');
+  await expect(status).toHaveText('Saved');
+  expect(await stored()).toBe('Untitled report');
+  await expect(title).toHaveValue('');
+
+  // A draft that can't be saved (a parameter with no name) says so, keeps the draft, and brings it back next time.
+  await panel.getByRole('tab', { name: 'Parameters', exact: true }).click();
+  await panel.getByRole('button', { name: 'Add parameter', exact: true }).click();
+  await panel.getByLabel('Parameter 1 name').fill('');
+  await expect(status).toContainText('Not saved: parameters');
   await expect(panel.getByRole('button', { name: 'Retry save' })).toBeVisible();
-  expect(await stored()).toBe('Saved on close');
   page.once('dialog', dialog => dialog.accept());
   await page.reload();
   await expect(panel.getByText('Recovered changes that could not be saved when this report was last open.')).toBeVisible({ timeout: 90_000 });
-  await expect(title).toHaveValue('');
+  await panel.getByRole('tab', { name: 'Parameters', exact: true }).click();
+  await expect(panel.getByLabel('Parameter 1 name')).toHaveValue('');
+  await panel.getByLabel('Parameter 1 name').fill('fixed');
+  await expect(status).toHaveText('Saved');
   await title.fill('Fixed title');
   await expect(status).toHaveText('Saved');
   expect(await stored()).toBe('Fixed title');
   expect(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('cupola.evidence.draft.v1:')))).toEqual([]);
 
-  // One editing session is one revision: the first page load's two titles are one, the fix after
-  // the reload another, after the version saved before history began.
+  // One editing session is one revision: the first page load's two titles are one, the second
+  // page load's edits another, the fix after the reload a third, after the version saved before
+  // history began.
   await panel.getByRole('tab', { name: 'History', exact: true }).click();
   const revisions = panel.getByRole('list', { name: 'Revisions, newest first' }).getByRole('listitem');
-  await expect(revisions).toHaveCount(3);
-  await revisions.nth(1).getByRole('button').first().click();
+  await expect(revisions).toHaveCount(4);
+  await revisions.nth(2).getByRole('button').first().click();
   await expect(panel.getByLabel('Title changes')).toContainText('- Autosaved report');
   await expect(panel.getByLabel('Title changes')).toContainText('+ Saved on close');
+  expect(errors).toEqual([]);
+});
+
+// A new report that never saved (it didn't validate) isn't lost with its tab: its URL names it, so
+// a reload reopens the draft, and the library lists it until it saves.
+test('a new report that never saved comes back after its tab closes', async ({ page }) => {
+  test.setTimeout(150_000);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const savedKeys = () => page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('cupola.evidence.report.')));
+  await page.goto(evidencePath('evidence/reports'));
+  const panel = page.getByTestId('evidence-panel');
+  await panel.getByRole('button', { name: 'New report', exact: true }).click();
+  await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
+  const id = new URL(page.url()).searchParams.get('evidence_report');
+  expect(id).toBeTruthy();
+  const status = panel.getByRole('status', { name: 'Save status' });
+  await panel.getByRole('tab', { name: 'Parameters', exact: true }).click();
+  await panel.getByRole('button', { name: 'Add parameter', exact: true }).click();
+  await panel.getByLabel('Parameter 1 name').fill('');
+  await expect(status).toContainText('Not saved: parameters');
+  expect(await savedKeys()).toEqual([]);
+
+  page.once('dialog', dialog => dialog.accept());
+  await page.reload();
+  await expect(panel.getByText('Recovered changes that could not be saved when this report was last open.')).toBeVisible({ timeout: 90_000 });
+  await panel.getByRole('tab', { name: 'Parameters', exact: true }).click();
+  await expect(panel.getByLabel('Parameter 1 name')).toHaveValue('');
+
+  // Opened without its URL: the library offers it.
+  page.once('dialog', dialog => dialog.accept());
+  await page.goto(evidencePath('evidence/reports'));
+  const unsaved = panel.getByRole('region', { name: 'Unsaved reports' });
+  await expect(unsaved).toContainText('Untitled report', { timeout: 90_000 });
+  await unsaved.getByRole('button', { name: 'Continue editing', exact: true }).click();
+  expect(new URL(page.url()).searchParams.get('evidence_report')).toBe(id);
+  await panel.getByRole('tab', { name: 'Parameters', exact: true }).click();
+  await panel.getByLabel('Parameter 1 name').fill('fixed');
+  await expect(status).toHaveText('Saved');
+  expect(await savedKeys()).toHaveLength(1);
+  expect(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('cupola.evidence.draft.v1:')))).toEqual([]);
+  await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
+  await expect(panel.getByRole('region', { name: 'Unsaved reports' })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Open report', exact: true })).toHaveCount(1);
   expect(errors).toEqual([]);
 });
 

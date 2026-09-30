@@ -185,8 +185,33 @@ export function loadReportHistory(serviceUrl: string, id: string, storage: Stora
   if (!text) return emptyHistory();
   return validateHistory(JSON.parse(text));
 }
-export function saveReportHistory(serviceUrl: string, id: string, history: ReportHistory, storage: Storage = localStorage) {
-  storage.setItem(historyStorageKey(serviceUrl, id), JSON.stringify(compactHistory(history)));
+/** Saves the history; when storage is full, drops its oldest revisions until it fits (always
+ *  keeping the latest), and returns how many were dropped. */
+export function saveReportHistory(serviceUrl: string, id: string, history: ReportHistory, storage: Storage = localStorage): number {
+  let kept = compactHistory(history);
+  for (;;) {
+    try { storage.setItem(historyStorageKey(serviceUrl, id), JSON.stringify(kept)); return history.revisions.length - kept.revisions.length; }
+    catch (e) {
+      if (!isQuotaError(e) || kept.revisions.length <= 1) throw e;
+      kept = trimHistory(kept, Math.ceil(kept.revisions.length / 2));
+    }
+  }
+}
+/** The history with only its newest `keep` revisions, and the blobs they use. */
+export function trimHistory(history: ReportHistory, keep: number): ReportHistory {
+  return compactHistory({ revisions: history.revisions.slice(-Math.max(1, keep)), blobs: history.blobs });
+}
+/** Frees space by halving a report's stored history (oldest first). False when there was nothing to drop. */
+export function shrinkStoredHistory(serviceUrl: string, id: string, storage: Storage = localStorage): boolean {
+  let history: ReportHistory;
+  try { history = loadReportHistory(serviceUrl, id, storage); } catch { return false; }
+  if (history.revisions.length <= 1) return false;
+  storage.setItem(historyStorageKey(serviceUrl, id), JSON.stringify(trimHistory(history, Math.floor(history.revisions.length / 2))));
+  return true;
+}
+/** localStorage is full (each browser allows a few MB per origin). */
+export function isQuotaError(error: unknown): boolean {
+  return error instanceof DOMException && (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED' || error.code === 22);
 }
 export function deleteReportHistory(serviceUrl: string, id: string, storage: Storage = localStorage) {
   storage.removeItem(historyStorageKey(serviceUrl, id));

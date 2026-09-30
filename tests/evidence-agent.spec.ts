@@ -64,7 +64,7 @@ test('report agent grounds tools, reviews edits, protects newer drafts and share
   expect(JSON.stringify(requests[4].messages)).toContain('Manual edit');
   await review.getByRole('button', { name: 'Apply and preview' }).click();
   await expect(panel.getByRole('textbox', { name: 'Report title' })).toHaveValue('Agent overview');
-  await expect(review).toContainText('Applied to draft');
+  await expect(review).toContainText('Applied and saved');
   await expect(panel.getByTestId('evidence-document')).toContainText('Agent weather overview', { timeout: 30_000 });
   await expect(panel.getByTestId('evidence-document')).toContainText('24');
   await panel.getByRole('button', { name: 'View report', exact: true }).click();

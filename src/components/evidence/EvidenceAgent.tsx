@@ -241,7 +241,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
     setApplying(true); setError('');
     onChange(next);
     onProposal?.({ type: 'undone', id: undo.id, proposal: undo.proposal });
-    setMessages(previous => [...previous.map(m => m.id === undo.id ? { ...m, state: 'undone' as const } : m), { id: uid(), role: 'assistant', text: 'Undone. I restored the previous draft and requested a fresh preview. Save when you’re ready to keep it.' }]);
+    setMessages(previous => [...previous.map(m => m.id === undo.id ? { ...m, state: 'undone' as const } : m), { id: uid(), role: 'assistant', text: 'Undone. I restored the previous draft and requested a fresh preview. The report saved itself; the History tab has every version.' }]);
     setUndo(null);
     try { await onApplyPreview(next); } catch (e) { setError((e as Error).message); }
     finally { setApplying(false); }
@@ -257,7 +257,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
       {m.state === 'pending' ? <>
         {outdated && <p role="alert" className="text-xs text-destructive">Your draft changed. Ask me to revise this proposal before applying it.</p>}
         <div className="flex flex-wrap gap-2"><Button size="sm" disabled={locked || outdated} onClick={() => void apply(m)}>Apply and preview</Button><Button size="sm" variant="ghost" disabled={locked} onClick={() => setMessages(previous => previous.map(item => item.id === m.id ? { ...item, state: 'discarded' } : item))}>Discard</Button></div>
-      </> : <p className="text-xs text-muted-foreground">{({ applied: 'Applied to draft · preview requested. Check Problems for errors; Save to keep your changes.', discarded: 'Discarded · your report was not changed.', superseded: 'Replaced by your follow-up request.', undone: 'Undone · previous draft restored.', stopped: 'Stopped · your report was not changed.' } as Record<string, string>)[m.state!]}</p>}
+      </> : <p className="text-xs text-muted-foreground">{({ applied: 'Applied and saved · preview requested. Check Problems for errors; Undo or the History tab brings back the previous version.', discarded: 'Discarded · your report was not changed.', superseded: 'Replaced by your follow-up request.', undone: 'Undone · previous draft restored.', stopped: 'Stopped · your report was not changed.' } as Record<string, string>)[m.state!]}</p>}
       {m.state === 'applied' && undo?.id === m.id && <Button size="sm" variant="outline" disabled={locked || reportFingerprint(report) !== reportFingerprint(proposal.after)} onClick={() => void undoEdit()}>Undo last agent edit</Button>}
     </section>;
   }
