@@ -194,6 +194,17 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   const selectedTable = selection?.type === "table" ? findInCatalogs("table", selection.name, selection.schema, selection.catalog) : null;
   const selectedView = selection?.type === "view" ? findInCatalogs("view", selection.name, selection.schema, selection.catalog) : null;
   const hasSelectedTableOrView = !!(selectedTable || selectedView || (selection && (selection.type === "table" || selection.type === "view")));
+  // Every catalog source now exposes `schema_name` (VGI wire format; the
+  // memory + attached builders match it). The active selection always has it
+  // as `schema`, so prefer that and fall back for safety.
+  const selectedTableId = selectedTable ? `${selection?.catalog || catalogName}.${selection?.schema ?? selectedTable.schema_name}.${selectedTable.name}` : null;
+  const selectedTableIdRef = useRef(selectedTableId);
+  selectedTableIdRef.current = selectedTableId;
+  /** The sidebar table the Perspective tab last showed, or that an explicit
+   *  snapshot or query pivot replaced on purpose. The auto-load effect below
+   *  mounts a sidebar table only when the selection is a different one, so a
+   *  re-render can't bring back a table the user pivoted away from. */
+  const handledSelectionRef = useRef<string | null>(null);
 
   // Expose a function to switch to the shell tab.
   useEffect(() => {
@@ -209,6 +220,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
       // switched to Perspective because of this call" apart from "the user
       // clicked the Perspective tab" — see that effect for why it matters.
       perspectiveSnapshotEntryRef.current = true;
+      handledSelectionRef.current = selectedTableIdRef.current;
       setActiveTab("perspective");
       setPerspectiveLoading(true);
       try {
@@ -241,6 +253,11 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
       perspectiveSnapshotEntryRef.current = true;
+      // The pivot supersedes whatever sidebar table is selected: without this,
+      // any re-render before the pivot finished mounting started a second
+      // mount of that table, which deleted the pivot's viewer mid-restore
+      // ("null pointer passed to rust") or replaced it outright.
+      handledSelectionRef.current = selectedTableIdRef.current;
       setActiveTab("perspective");
       setPerspectiveLoading(true);
       try {
@@ -407,14 +424,13 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     }
     perspectiveSnapshotEntryRef.current = false;
 
-    if (activeTab !== "perspective" || !selectedTable) return;
-    // Every catalog source now exposes `schema_name` (VGI wire format; the
-    // memory + attached builders match it). The active selection always has it
-    // as `schema`, so prefer that and fall back for safety.
-    const schemaName = selection?.schema ?? selectedTable.schema_name;
-    const tableId = `${selection?.catalog || catalogName}.${schemaName}.${selectedTable.name}`;
+    if (activeTab !== "perspective" || !selectedTable || !selectedTableId) return;
+    const tableId = selectedTableId;
     // Don't reload if already showing this table
     if (perspectiveTableRef.current === tableId) return;
+    // Nor if a snapshot or query pivot replaced it: only a new selection does.
+    if (handledSelectionRef.current === tableId) return;
+    handledSelectionRef.current = tableId;
 
     let cancelled = false;
     setPerspectiveLoading(true);
@@ -465,7 +481,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     })();
 
     return () => { cancelled = true; };
-  }, [activeTab, selectedTable, selection, catalogName]);
+  }, [activeTab, selectedTable, selectedTableId]);
 
   return (
     <div ref={rootRef} className="flex flex-col h-full bg-terminal-bg">
@@ -797,13 +813,24 @@ let queryPivotSource: QueryPivotSource | null = null;
  * under `previousTableId`, so returning to it restores the layout). Shared by
  * the sidebar-selection path and editor query pivots. False if cancelled.
  */
-async function mountVirtualPerspective(
+/** Mounts run one at a time. Each one deletes the viewer before it, so two in
+ *  flight together deleted each other's viewer while it was still restoring,
+ *  and the survivor's `restore()` reached freed wasm ("null pointer passed to
+ *  rust"). A queued mount that has been cancelled meanwhile does nothing. */
+let perspectiveMountQueue: Promise<unknown> = Promise.resolve();
+function mountVirtualPerspective(...args: Parameters<typeof mountVirtualPerspectiveNow>): Promise<boolean> {
+  const mount = perspectiveMountQueue.then(() => mountVirtualPerspectiveNow(...args));
+  perspectiveMountQueue = mount.catch(() => {});
+  return mount;
+}
+async function mountVirtualPerspectiveNow(
   getContainer: () => HTMLElement | null,
   tableId: string,
   previousTableId: string | null,
   defaultConfig: () => Record<string, unknown> | Promise<Record<string, unknown>>,
   isCancelled: () => boolean = () => false,
 ): Promise<boolean> {
+  if (isCancelled()) return false;
   await ensurePerspectiveLoaded();
   if (isCancelled()) return false;
 

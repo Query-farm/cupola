@@ -217,3 +217,42 @@ test("column names keep their underscores through a live view", async ({ page })
   // A rollup total plus one row per region.
   expect(grouped.rows).toBe(3);
 });
+
+// A table selected in the sidebar, then a query pivoted from the editor: switching to the Perspective
+// tab used to mount the sidebar table as well, and the two mounts tore down each other's viewer
+// mid-restore ("null pointer passed to rust"). The pivot is what was asked for, so it wins.
+test("pivoting a query while a sidebar table is selected shows the pivot, once", async ({ page }) => {
+  test.setTimeout(90_000);
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
+  const table = await shellQuery(page, `
+    SELECT table_schema, table_name FROM information_schema.tables
+     WHERE table_catalog NOT IN ('memory', 'system', 'temp') AND table_schema NOT IN ('information_schema', 'pg_catalog') AND table_type = 'BASE TABLE'
+     ORDER BY 1, 2 LIMIT 1`);
+  const target = table.rows?.[0] as { table_schema: string; table_name: string } | undefined;
+  test.skip(!target, "no catalog table to select");
+  await page.evaluate((hash) => { window.location.hash = hash; }, `#/schema/${encodeURIComponent(target!.table_schema)}/table/${encodeURIComponent(target!.table_name)}`);
+
+  await runInEditor(page, QUERY);
+  await pivot(page, "table");
+  const shown = await viewerState(page);
+  expect(shown.table).toMatch(/^temp\.main\.__cupola_pivot_\d+$/);
+  expect(shown.rows).toBe(10);
+  // Give a second mount time to start, then check nothing replaced or broke the pivot.
+  await page.waitForTimeout(3_000);
+  expect((await viewerState(page)).table).toBe(shown.table);
+  expect(await page.locator("perspective-viewer").count()).toBe(1);
+  expect(errors.filter((text) => /perspective|null pointer/i.test(text))).toEqual([]);
+
+  // Choosing a table in the sidebar afterwards still switches the viewer to it.
+  const other = await shellQuery(page, `
+    SELECT table_schema, table_name FROM information_schema.tables
+     WHERE table_catalog NOT IN ('memory', 'system', 'temp') AND table_schema NOT IN ('information_schema', 'pg_catalog') AND table_type = 'BASE TABLE'
+     ORDER BY 1, 2 LIMIT 1 OFFSET 1`);
+  const next = other.rows?.[0] as { table_schema: string; table_name: string } | undefined;
+  if (next) {
+    await page.evaluate((hash) => { window.location.hash = hash; }, `#/schema/${encodeURIComponent(next.table_schema)}/table/${encodeURIComponent(next.table_name)}`);
+    await expect.poll(async () => (await viewerState(page)).table, { timeout: 30_000 }).toMatch(new RegExp(`\\.${next.table_name}$`));
+  }
+});
