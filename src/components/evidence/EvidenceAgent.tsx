@@ -24,6 +24,7 @@ import { resolveParameters, type EvidenceReport } from '../../lib/evidence/repor
 import { refreshForAgent, type RefreshProfile } from '../../lib/evidence/refresh-profile';
 import { isReadOnlySql, testSetupSql } from '../../lib/evidence/setup-test';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
+import { describeIssues, introducedIssues, sourceValidationIssues } from '../../lib/evidence/source-check';
 
 type ProposalState = 'pending' | 'applied' | 'discarded' | 'superseded' | 'undone' | 'stopped';
 type Message = { id: string; role: 'user' | 'assistant'; text: string; proposal?: ReportProposal; state?: ProposalState; blocks?: ContentBlock[] };
@@ -144,8 +145,21 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
                 (next.after.setupSql !== snapshot.setupSql || JSON.stringify(sourceQueries(next.after.source)) !== JSON.stringify(sourceQueries(snapshot.source)))) {
                 throw new Error('Semantic-only mode does not allow creating or modifying raw SQL. Use semanticDatasets and reference them directly in Evidence components.');
               }
+              let checked = '', warnings = '';
+              if (next.fields.includes('source')) {
+                // Catch a broken document before the user applies it, not after. Only what this
+                // edit introduces counts: a report that was already broken can still be edited.
+                const introduced = await sourceValidationIssues(next.after.source)
+                  .then(async after => introducedIssues(await sourceValidationIssues(snapshot.source), after))
+                  .then(issues => { checked = ' Its source passed Evidence\'s structural validation (tags, attributes, nesting), but data references and query errors show only in the preview.'; return issues; })
+                  .catch(e => { console.warn('[evidence agent] source validation unavailable', e); return []; });
+                const errors = introduced.filter(issue => issue.severity === 'error');
+                if (errors.length) throw new Error(`The proposal was not staged: Evidence validation found ${errors.length === 1 ? 'an error' : `${errors.length} errors`} this edit introduces into the source. Fix ${errors.length === 1 ? 'it' : 'them'} and propose again.\n${describeIssues(errors)}`);
+                const found = introduced.filter(issue => issue.severity === 'warning');
+                if (found.length) warnings = `\nEvidence validation warnings this edit introduces (staged anyway; fix them if they matter):\n${describeIssues(found)}`;
+              }
               if (active()) setMessages(previous => previous.map(m => m.id === assistantId ? { ...m, proposal: next, state: 'pending' } : m.state === 'pending' ? { ...m, state: 'superseded' } : m));
-              return 'Proposal staged for review. It has NOT been applied, executed, validated by the renderer, or saved.';
+              return 'Proposal staged for review. It has NOT been applied, executed, rendered, or saved.' + checked + warnings;
             }
             return 'Error: Unknown report tool';
           } catch (e) {
