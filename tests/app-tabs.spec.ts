@@ -11,8 +11,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("Unified tab bar", () => {
-  test("all eight tabs are present and switch", async ({ page }) => {
-    for (const id of ["catalog", "editor", "askai", "reports", "shell", "preview", "queries", "perspective"]) {
+  test("all seven tabs are present and switch", async ({ page }) => {
+    for (const id of ["catalog", "editor", "askai", "reports", "shell", "queries", "perspective"]) {
       await expect(page.getByTestId(`tab-${id}`)).toBeVisible();
     }
     await expect(page.getByRole("tablist", { name: "Workspace" }).getByRole("tab")).toHaveText([
@@ -20,7 +20,6 @@ test.describe("Unified tab bar", () => {
       "Ask AI",
       "Reports",
       "SQL Shell",
-      "Data Viewer",
       "Catalog",
       "Query History",
       "Perspective",
@@ -48,12 +47,6 @@ test.describe("Unified tab bar", () => {
     await expect(page.getByRole("tree").first()).toBeHidden();
     await page.getByTestId("toggle-sidebar").click();
     await expect(page.getByRole("tree").first()).toBeVisible();
-  });
-
-  test("Data Viewer tab shows an empty state with no selection/result", async ({ page }) => {
-    await page.getByTestId("tab-preview").click();
-    await expect(page.getByRole("tab", { name: "Data Viewer" })).toBeVisible();
-    await expect(page.getByText(/Select a table in the sidebar, or run a query/i)).toBeVisible({ timeout: T_NORMAL });
   });
 
   test("download .sql triggers a download", async ({ page }) => {

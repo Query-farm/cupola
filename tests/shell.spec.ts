@@ -348,6 +348,25 @@ test.describe("DuckDB WASM Shell", () => {
       await shellRun(page, ".maxrows 20");
       await shellRun(page, ".maxrows 40");
     });
+
+    test(".preview opens the last result in the results window", async ({ page }) => {
+      // Through the terminal, not the engine: `.preview` shows the shell's own last result.
+      // Visible, so the terminal has a real width and the result row isn't wrapped.
+      await page.getByTestId("tab-shell").click();
+      await shellRun(page, "SELECT 42 AS answer, 'cupola_preview' AS name;");
+      await page.waitForFunction(() => {
+        const buf = (window as any).__bridge.shellTerm.buffer.active;
+        // The result row, not the echoed statement (where it is quoted).
+        for (let i = 0; i < buf.length; i++) if (/[^']cupola_preview[^']/.test(buf.getLine(i)?.translateToString() ?? "")) return true;
+        return false;
+      }, undefined, { timeout: 15_000 });
+      const popup = page.waitForEvent("popup");
+      await shellRun(page, ".preview");
+      const win = await popup;
+      await expect(win.getByText("Snapshot")).toBeVisible({ timeout: 10_000 });
+      await expect(win.getByText("cupola_preview", { exact: true })).toBeVisible();
+      await expect(win.getByText("Rows 1–1 of 1")).toBeVisible();
+    });
   });
 
   test.describe("query features", () => {

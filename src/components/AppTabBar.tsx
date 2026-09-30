@@ -3,10 +3,10 @@
  * header "Catalog / Query Editor" toggle and the bottom shell drawer's own tab
  * strip — one place to drive the whole UI.
  */
-import { Database, FileCode2, Sparkles, Table2, History, BarChart3, PanelLeftClose, PanelLeftOpen, FileChartColumn } from "lucide-react";
+import { Database, FileCode2, Sparkles, History, BarChart3, PanelLeftClose, PanelLeftOpen, FileChartColumn } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type TabId = "catalog" | "editor" | "shell" | "askai" | "reports" | "evidence" | "preview" | "queries" | "perspective";
+export type TabId = "catalog" | "editor" | "shell" | "askai" | "reports" | "evidence" | "queries" | "perspective";
 
 interface TabDef {
   id: TabId;
@@ -23,7 +23,6 @@ const TABS: TabDef[] = [
   { id: "askai", label: "Ask AI", icon: Sparkles, accent: "ai" },
   { id: "reports", label: "Reports", icon: FileChartColumn },
   { id: "shell", label: "SQL Shell", img: true },
-  { id: "preview", label: "Data Viewer", icon: Table2 },
   { id: "catalog", label: "Catalog", icon: Database },
   { id: "queries", label: "Query History", icon: History },
   { id: "perspective", label: "Perspective", icon: BarChart3 },

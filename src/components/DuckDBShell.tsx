@@ -5,18 +5,18 @@ import { useCatalogInventory } from "@/lib/use-catalog-inventory";
  * Shell logic adapted from public/shell/index.html.
  */
 import { useEffect, useRef, useState, lazy, Suspense } from "react";
-import { Loader2, Table2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import type { TabId } from "./AppTabBar";
 const AskAIChat = lazy(() => import("./AskAIChat").then(m => ({ default: m.AskAIChat })));
-import { DataPreview } from "./content/DataPreview";
 import { getColumns } from "@/lib/service";
 import { treeIdToShellText } from "@/lib/tree";
 import { VgiDuckDBHandler, perspectiveServeMode, runPerspectiveQuery, type PerspectiveServeMode } from "@/lib/perspective-duckdb-handler";
 import { createQueryPivotSource, dropQueryPivotSource, type QueryPivotSource } from "@/lib/pivot-source";
 import { getAuthToken, getAuthTokenForService } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
-import { tableFromIPC, Table as ArrowTable } from "@query-farm/apache-arrow";
+import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import { tableFromIPCWithDictionaries } from "@/lib/duckdb-query";
+import { openPopout } from "@/lib/editor/result-popout";
 import { coerceArrowBufferForPerspective } from "@/lib/perspective-extension-coerce";
 import { engine, terminal, ui, setBootPhase, setEngineLifecycleError } from "@/lib/shell-bridge";
 import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
@@ -27,7 +27,7 @@ import { initShell } from "@/lib/shell-init";
 import { describePerspectiveArrowInput } from "@/lib/perspective-diagnostics";
 
 import type { CatalogData } from "@/lib/service";
-import type { TableInfo, ViewInfo } from "@/lib/vgi-catalog-types";
+import type { TableInfo } from "@/lib/vgi-catalog-types";
 
 // Imported (not just re-exported) because this module uses the type itself —
 // `export type { X } from "..."` forwards the name without binding it locally,
@@ -53,7 +53,7 @@ interface Props {
   catalogData?: CatalogData;
   /** Metadata for every additional VGI catalog attached through this shell. */
   attachedCatalogs?: CatalogData[];
-  /** Current selection — used for Data Viewer tab when a table is selected. */
+  /** Current selection — used for the Perspective tab when a table is selected. */
   selection?: import("@/lib/tree").Selection | null;
   /**
    * Called when ATTACH fails with an unrecoverable OAuth error (e.g. the IdP
@@ -149,10 +149,6 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   const [error, setError] = useState<string | null>(null);
   const displayedError = error ?? (engineLifecycle.status === "error" ? engineLifecycle.error : null);
   const cleanupRef = useRef<(() => void) | null>(null);
-  // In-memory Arrow table to show in the Data Viewer tab when the user runs
-  // `.preview` in the shell. Takes precedence over the selection-driven table
-  // preview, and is cleared when the sidebar selection changes (see below).
-  const [resultPreview, setResultPreview] = useState<ArrowTable | null>(null);
   const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
 
   // CatalogApp only mounts this component once an engine-backed tab has been
@@ -171,29 +167,19 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   }, [onQueryHistoryCountChange]);
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
 
-  // Resolve selected table or view for Data Viewer and Perspective tabs
+  // Resolve the selected table for the Perspective tab.
   // Search the primary, every secondary VGI worker, and the memory catalog.
   const allCatalogs = inventory.catalogs;
-  function findInCatalogs(type: "table", name?: string, schema?: string, catalog?: string): TableInfo | null;
-  function findInCatalogs(type: "view", name?: string, schema?: string, catalog?: string): ViewInfo | null;
-  function findInCatalogs(type: "table" | "view", name?: string, schema?: string, catalog?: string): TableInfo | ViewInfo | null {
+  function findTable(name?: string, schema?: string, catalog?: string): TableInfo | null {
     if (!name || !schema) return null;
     for (const cat of allCatalogs) {
       if (catalog && cat.catalogName !== catalog) continue;
-      const resolvedSchema = cat.schemas.find((candidate) => candidate.info.name === schema);
-      if (type === "table") {
-        const table = resolvedSchema?.tables.find((candidate) => candidate.name === name);
-        if (table) return table;
-      } else {
-        const view = resolvedSchema?.views.find((candidate) => candidate.name === name);
-        if (view) return view;
-      }
+      const table = cat.schemas.find((candidate) => candidate.info.name === schema)?.tables.find((candidate) => candidate.name === name);
+      if (table) return table;
     }
     return null;
   }
-  const selectedTable = selection?.type === "table" ? findInCatalogs("table", selection.name, selection.schema, selection.catalog) : null;
-  const selectedView = selection?.type === "view" ? findInCatalogs("view", selection.name, selection.schema, selection.catalog) : null;
-  const hasSelectedTableOrView = !!(selectedTable || selectedView || (selection && (selection.type === "table" || selection.type === "view")));
+  const selectedTable = selection?.type === "table" ? findTable(selection.name, selection.schema, selection.catalog) : null;
   // Every catalog source now exposes `schema_name` (VGI wire format; the
   // memory + attached builders match it). The active selection always has it
   // as `schema`, so prefer that and fall back for safety.
@@ -297,28 +283,20 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     };
   }, [setActiveTab]);
 
-  // Expose a callback for the shell's `.preview` command to open the last
-  // query result in the Data Viewer tab. The Arrow IPC buffer is decoded
-  // here and handed to DataPreview's client-side (result) pagination mode.
+  // The shell's `.preview` opens the last result in the editor's detached
+  // results window, the same client-paginated grid, as a snapshot. It is
+  // decoded dictionary-safe, like every other Arrow decode.
   useEffect(() => {
-    ui.showPreview = (arrowBuffer: ArrayBuffer) => {
+    ui.showPreview = (arrowBuffer: ArrayBuffer, sql = "") => {
       try {
-        setResultPreview(tableFromIPC(arrowBuffer));
-        setActiveTab("preview");
+        return openPopout({ table: tableFromIPCWithDictionaries(arrowBuffer), sql, capturedAt: new Date() });
       } catch (e: unknown) {
-        console.error("Preview decode error:", e);
         Sentry.captureException(e, { tags: { component: "preview", path: "showPreview" } });
+        throw e;
       }
     };
     return () => { ui.showPreview = null; };
-  }, [setActiveTab]);
-
-  // A result preview belongs to a specific query, not to the sidebar. When the
-  // user navigates to a different table/view, drop it so Data Viewer falls
-  // back to previewing that selection.
-  useEffect(() => {
-    setResultPreview(null);
-  }, [selection?.type, selection?.catalog, selection?.schema, selection?.name]);
+  }, []);
 
   useEffect(() => {
     if (!shellActivated) return;
@@ -514,28 +492,6 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
       >
         <div ref={containerRef} className="h-full w-full overflow-hidden" />
       </div>
-
-      {/* Data Viewer — a `.preview`/editor result (client-paginated,
-          in-memory) takes precedence over the selection-driven table preview.
-          The key forces a clean remount when switching between the two
-          sources. Shows an empty state when there's nothing to preview. */}
-      {activeTab === "preview" && (
-        <div className="flex-1 min-h-0 overflow-hidden bg-card">
-          {resultPreview ? (
-            <DataPreview key="result" result={resultPreview} />
-          ) : hasSelectedTableOrView ? (
-            <DataPreview
-              key="table"
-              tablePath={`${selection?.catalog || catalogName}.${selection?.schema || (selectedTable || selectedView)?.schema_name || "main"}.${selection?.name || (selectedTable || selectedView)?.name}`}
-            />
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full text-center p-8">
-              <Table2 className="h-8 w-8 text-muted-foreground/30 mb-3" />
-              <p className="text-sm text-muted-foreground">Select a table in the sidebar, or run a query, to view it here.</p>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Perspective viewer */}
       <div

@@ -167,9 +167,9 @@ export const ui = {
    *  table (see `pivot-source.ts`). Resolves with an error, rather than
    *  switching tabs, when the query cannot be wrapped. */
   showPerspectiveQuery: null as ((sql: string, mode: QueryPivotMode) => Promise<{ ok: true } | { ok: false; error: string }>) | null,
-  /** Open the last shell result (Arrow IPC) in the Data Viewer tab. Invoked by
-   *  the `.preview` dot-command. */
-  showPreview: null as ((arrowBuf: ArrayBuffer) => void) | null,
+  /** Open the last shell result (Arrow IPC) in the detached results window.
+   *  Invoked by the `.preview` dot-command; false when the pop-up was blocked. */
+  showPreview: null as ((arrowBuf: ArrayBuffer, sql?: string) => boolean) | null,
   addQueryHistoryEntry: null as ((entry: QueryHistoryEntry) => void) | null,
 };
 

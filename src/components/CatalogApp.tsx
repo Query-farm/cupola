@@ -132,7 +132,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
       // surface; start on the safe Catalog tab instead.
       if (stored === "evidence") return "reports";
       if (stored === "perspective") return "catalog";
-      if (stored && ["catalog", "editor", "shell", "askai", "reports", "evidence", "preview", "queries"].includes(stored)) return stored;
+      if (stored && ["catalog", "editor", "shell", "askai", "reports", "evidence", "queries"].includes(stored)) return stored;
       if (localStorage.getItem("vgi-app-view") === "editor") return "editor";
     } catch {}
     return "catalog";

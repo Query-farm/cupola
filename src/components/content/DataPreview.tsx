@@ -12,106 +12,18 @@ import { DataGrid } from "./DataGrid";
 import type { ColumnInfo } from "@/lib/service";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 import { safeGetArrowValue } from "@/lib/format";
-import { engine } from "@/lib/shell-bridge";
-import { quoteLiteral, decodeArrowBuffer } from "@/lib/duckdb-query";
-import { waitForTableReady } from "@/lib/table-ready";
 import { useSettings } from "@/lib/settings";
 
 const PAGE_SIZES = [25, 50, 100, 200];
 const DEFAULT_PAGE_SIZE = 50;
 
 interface Props {
-  /** Fully qualified table path: catalog.schema.table. Server-paginated. */
-  tablePath?: string;
   /**
-   * An already-materialized Arrow table (e.g. the last shell query result)
-   * to preview instead of a tablePath. Paginated client-side by slicing the
-   * in-memory table — no re-execution, so it shows exactly what produced it.
+   * An already-materialized Arrow table (an editor or shell result).
+   * Paginated client-side by slicing the in-memory table — no re-execution,
+   * so it shows exactly what produced it.
    */
-  result?: any;
-}
-
-async function queryDuckDB(sql: string): Promise<{ table: any; error?: string }> {
-  // DataPreview needs to distinguish three states that the generic readTable
-  // collapses: bridge not ready (UX hint), query failed (surface error
-  // verbatim), and empty success (table: null with no error). Decode is
-  // the same single-buffer / Uint8Array dance — using the static
-  // tableFromIPC import standardized in duckdb-query.ts.
-  const queryFn = engine.query;
-  if (!queryFn) return { table: null, error: "DuckDB shell not initialized. Open the SQL Shell tab first." };
-  const result = await queryFn(sql);
-  if (!result.ok) return { table: null, error: result.error || "Query failed" };
-  const buf = result.arrowBuffers?.[0];
-  if (!buf) return { table: null };
-  return { table: decodeArrowBuffer(buf) };
-}
-
-/**
- * Resolve a deterministic ORDER BY expression for stable LIMIT/OFFSET
- * pagination on the given tablePath. Walks the ladder:
- *
- *   1. `rowid`         — try `SELECT rowid FROM <t> LIMIT 1`. DuckDB's
- *                        rowid pseudo-column is stable on physical tables;
- *                        the VGI extension exposes it for sources that
- *                        provide a stable identity.
- *   2. PK columns      — fall back to the primary-key columns from
- *                        `PRAGMA table_info('<t>')`. Skip this rung if no
- *                        column is marked pk > 0.
- *   3. `ALL`           — final fallback. `ORDER BY ALL` sorts by every
- *                        output column. Always works on a non-empty schema.
- *
- * Returns a string ready to splice after `ORDER BY`. Result is cached by
- * caller per tablePath so the probe only fires once per selection.
- */
-async function resolveOrderBy(tablePath: string): Promise<string> {
-  // Each rung returns a complete ORDER BY clause body (everything after
-  // the words "ORDER BY"), including ASC NULLS LAST modifiers, so the
-  // caller can splice it without per-rung knowledge.
-
-  // Rung 1: rowid. The caller is responsible for ensuring engine.query is
-  // set before invoking us — otherwise the probe can't actually run and the
-  // ladder will cascade to ALL incorrectly.
-  if (!engine.query) {
-    throw new Error("resolveOrderBy called before engine.query was ready");
-  }
-  const probe = await engine.query(`SELECT rowid FROM ${tablePath} LIMIT 1`);
-  if (probe?.ok) {
-    console.log("[preview] orderBy resolved to rowid for", tablePath);
-    return "rowid ASC NULLS LAST";
-  }
-
-  // Rung 2: primary-key columns from PRAGMA table_info. The PRAGMA returns
-  // one row per column with a `pk` field that is the 1-based ordinal in
-  // the PK (0 = not part of PK). Sort by ordinal to compose the ORDER BY
-  // in PK-declaration order.
-  try {
-    const { table, error } = await queryDuckDB(`PRAGMA table_info(${quoteLiteral(tablePath)})`);
-    if (!error && table && table.numRows > 0) {
-      const nameCol = table.getChild("name");
-      const pkCol = table.getChild("pk");
-      const pkCols: Array<{ name: string; ord: number }> = [];
-      for (let i = 0; i < table.numRows; i++) {
-        const ord = Number(pkCol?.get(i) ?? 0);
-        if (ord > 0) {
-          pkCols.push({ name: String(nameCol?.get(i) ?? ""), ord });
-        }
-      }
-      if (pkCols.length > 0) {
-        pkCols.sort((a, b) => a.ord - b.ord);
-        const expr = pkCols
-          .map((c) => `"${c.name.replace(/"/g, '""')}" ASC NULLS LAST`)
-          .join(", ");
-        console.log("[preview] orderBy resolved to PK columns for", tablePath, ":", expr);
-        return expr;
-      }
-    }
-  } catch {
-    // table_info itself can throw on some VGI sources; fall through to ALL.
-  }
-
-  // Rung 3: ORDER BY ALL.
-  console.log("[preview] orderBy fell back to ALL for", tablePath);
-  return "ALL ASC NULLS LAST";
+  result: any;
 }
 
 function arrowTableMeta(table: any): { columns: string[]; columnInfo: ColumnInfo[]; arrowFields: any[] } {
@@ -194,22 +106,14 @@ function makeIndexComparator(table: any, col: string, dir: "asc" | "desc"): (a: 
   };
 }
 
-/** ORDER BY body for a server-side sort on a single column. */
-function sortOrderByClause(sort: NonNullable<SortState>): string {
-  const ident = `"${sort.col.replace(/"/g, '""')}"`;
-  return `${ident} ${sort.dir === "desc" ? "DESC" : "ASC"} NULLS LAST`;
-}
-
-export function DataPreview({ tablePath, result }: Props) {
+export function DataPreview({ result }: Props) {
   const { settings, updateSettings } = useSettings();
   const [columns, setColumns] = useState<string[]>([]);
   const [columnInfo, setColumnInfo] = useState<ColumnInfo[]>([]);
   const [arrowFields, setArrowFields] = useState<any[]>([]);
   const [rows, setRows] = useState<Record<string, any>[]>([]);
   const [hasMore, setHasMore] = useState(false);
-  // Known total row count. Available for client-side `result` previews
-  // (the whole table is in memory); null for server-paginated tablePaths
-  // where we deliberately avoid a COUNT(*).
+  // Total row count (the whole table is in memory).
   const [totalRows, setTotalRows] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   // Infinite-scroll append in progress (distinct from the initial/window
@@ -224,8 +128,8 @@ export function DataPreview({ tablePath, result }: Props) {
   );
   // Active column sort. null = source's natural/stable order.
   const [sort, setSort] = useState<SortState>(null);
-  // Cached sort permutation for the in-memory `result` path (computed once per
-  // table+column+direction so paging doesn't re-sort every window).
+  // Cached sort permutation (computed once per table+column+direction so
+  // paging doesn't re-sort every window).
   const sortedIndicesRef = useRef<{ table: any; col: string; dir: string; indices: number[] } | null>(null);
   const requestIdRef = useRef(0);
   // Live row count for async append offset math, kept off `rows` so loadMore
@@ -233,22 +137,7 @@ export function DataPreview({ tablePath, result }: Props) {
   const rowsCountRef = useRef(0);
   // Guards against overlapping appends (scroll + arrow can both fire).
   const appendingRef = useRef(false);
-  // Cache resolved ORDER BY expression per tablePath so the probe ladder
-  // only runs once per selection.
-  const orderByCacheRef = useRef<Map<string, string>>(new Map());
-
   useEffect(() => { rowsCountRef.current = rows.length; }, [rows]);
-
-  // Resolve (and cache) the deterministic ORDER BY for a tablePath. Shared by
-  // window loads and appends so both page through the same stable ordering.
-  const ensureOrderBy = useCallback(async (path: string): Promise<string> => {
-    let orderBy = orderByCacheRef.current.get(path);
-    if (!orderBy) {
-      orderBy = await resolveOrderBy(path);
-      orderByCacheRef.current.set(path, orderBy);
-    }
-    return orderBy;
-  }, []);
 
   // Sorted row-index permutation for the in-memory result, cached per
   // (table, column, direction).
@@ -272,118 +161,55 @@ export function DataPreview({ tablePath, result }: Props) {
     setLoading(true);
     setError(null);
     try {
-      // Client-side preview of an in-memory Arrow result: slice the table.
-      // No bridge/ATTACH/ORDER BY — the result is already materialized.
-      if (result) {
-        const total = result.numRows as number;
-        const offset = pageNum * size;
-        const { columns: cols, columnInfo: info, arrowFields: fields } = arrowTableMeta(result);
-        let data: Record<string, any>[];
-        if (sort) {
-          // Page over the sorted permutation, gathering rows by index.
-          const pageIdx = getSortedIndices(result, sort).slice(offset, offset + size);
-          data = arrowRowsByIndices(result, pageIdx);
-        } else {
-          // Natural order — slice the contiguous Arrow table (fast path).
-          data = arrowTableToRows(result.slice(offset, Math.min(offset + size, total))).rows;
-        }
-        setColumns(cols);
-        setColumnInfo(info);
-        setArrowFields(fields);
-        setRows(data);
-        setHasMore(offset + size < total);
-        setTotalRows(total);
-        return;
-      }
-      if (!tablePath) return;
-      // Wait for the shell to be ready to query this specific table — for
-      // VGI-catalog tables this awaits ATTACH+USE, not just engine.query.
-      // The orderBy probe must NOT run pre-ATTACH or it cascades to the ALL
-      // fallback and caches that wrong choice for the table's lifetime.
-      await waitForTableReady(tablePath);
-      if (thisRequest !== requestIdRef.current) return; // stale, tablePath changed while waiting
-
-      const orderBy = sort ? sortOrderByClause(sort) : await ensureOrderBy(tablePath);
-      if (thisRequest !== requestIdRef.current) return; // stale, changed mid-resolve
-
+      const total = result.numRows as number;
       const offset = pageNum * size;
-      // Fetch N+1 rows: more than `size` back means at least one more chunk
-      // exists below (we trim the extra row before display).
-      const { table, error: queryError } = await queryDuckDB(
-        `SELECT * FROM ${tablePath} ORDER BY ${orderBy} LIMIT ${size + 1} OFFSET ${offset}`
-      );
-      if (thisRequest !== requestIdRef.current) return; // stale response
-      if (queryError) {
-        setError(queryError);
-        return;
+      const { columns: cols, columnInfo: info, arrowFields: fields } = arrowTableMeta(result);
+      let data: Record<string, any>[];
+      if (sort) {
+        // Page over the sorted permutation, gathering rows by index.
+        const pageIdx = getSortedIndices(result, sort).slice(offset, offset + size);
+        data = arrowRowsByIndices(result, pageIdx);
+      } else {
+        // Natural order — slice the contiguous Arrow table (fast path).
+        data = arrowTableToRows(result.slice(offset, Math.min(offset + size, total))).rows;
       }
-      if (!table || table.numRows === 0) {
-        if (pageNum === 0) {
-          setColumns([]);
-          setColumnInfo([]);
-          setRows([]);
-        }
-        setHasMore(false);
-        return;
-      }
-      const { columns: cols, columnInfo: info, arrowFields: fields, rows: data } = arrowTableToRows(table);
-      const more = data.length > size;
-      const visible = more ? data.slice(0, size) : data;
       setColumns(cols);
       setColumnInfo(info);
       setArrowFields(fields);
-      setRows(visible);
-      setHasMore(more);
+      setRows(data);
+      setHasMore(offset + size < total);
+      setTotalRows(total);
     } catch (err: any) {
       if (thisRequest !== requestIdRef.current) return;
       setError(err.message || "Failed to load data");
     } finally {
       if (thisRequest === requestIdRef.current) setLoading(false);
     }
-  }, [tablePath, result, ensureOrderBy, sort, getSortedIndices]);
+  }, [result, sort, getSortedIndices]);
 
   // Infinite scroll: APPEND the next `pageSize` rows below the loaded window.
   // Offset = base chunk (page*pageSize) + rows already loaded. Guarded so
-  // scroll + arrow can't double-fire, and tied to the current window's
-  // requestId so a window reset mid-flight discards the late append.
+  // scroll + arrow can't double-fire.
   const loadMore = useCallback(async () => {
     if (appendingRef.current) return;
-    const windowRequest = requestIdRef.current;
     const offset = page * pageSize + rowsCountRef.current;
     appendingRef.current = true;
     setAppending(true);
     try {
-      if (result) {
-        const total = result.numRows as number;
-        if (offset >= total) { setHasMore(false); return; }
-        const data = sort
-          ? arrowRowsByIndices(result, getSortedIndices(result, sort).slice(offset, offset + pageSize))
-          : arrowTableToRows(result.slice(offset, Math.min(offset + pageSize, total))).rows;
-        setRows((prev) => [...prev, ...data]);
-        setHasMore(offset + pageSize < total);
-        return;
-      }
-      if (!tablePath) return;
-      const orderBy = sort ? sortOrderByClause(sort) : orderByCacheRef.current.get(tablePath);
-      if (!orderBy) return; // window not loaded yet; nothing to extend
-      const { table, error: queryError } = await queryDuckDB(
-        `SELECT * FROM ${tablePath} ORDER BY ${orderBy} LIMIT ${pageSize + 1} OFFSET ${offset}`
-      );
-      if (windowRequest !== requestIdRef.current) return; // window changed; drop
-      if (queryError) { setError(queryError); return; }
-      if (!table || table.numRows === 0) { setHasMore(false); return; }
-      const { rows: data } = arrowTableToRows(table);
-      const more = data.length > pageSize;
-      const visible = more ? data.slice(0, pageSize) : data;
-      setRows((prev) => [...prev, ...visible]);
-      setHasMore(more);
+      const total = result.numRows as number;
+      if (offset >= total) { setHasMore(false); return; }
+      const data = sort
+        ? arrowRowsByIndices(result, getSortedIndices(result, sort).slice(offset, offset + pageSize))
+        : arrowTableToRows(result.slice(offset, Math.min(offset + pageSize, total))).rows;
+      setRows((prev) => [...prev, ...data]);
+      setHasMore(offset + pageSize < total);
     } catch (err: any) {
       setError(err.message || "Failed to load more rows");
     } finally {
       appendingRef.current = false;
       setAppending(false);
     }
-  }, [tablePath, result, page, pageSize, sort, getSortedIndices]);
+  }, [result, page, pageSize, sort, getSortedIndices]);
 
   // Reset and load the first window when the source or pageSize changes.
   useEffect(() => {
@@ -393,7 +219,7 @@ export function DataPreview({ tablePath, result }: Props) {
     setHasMore(false);
     setTotalRows(null);
     void loadWindow(0, pageSize);
-  }, [tablePath, result, loadWindow, pageSize]);
+  }, [result, loadWindow, pageSize]);
 
   // Pager jump — replace the loaded window with a fresh chunk at newPage.
   const handlePageChange = useCallback((newPage: number) => {
@@ -451,16 +277,12 @@ export function DataPreview({ tablePath, result }: Props) {
     );
   }
 
-  // Empty state — only show when the FIRST page's fetch returned nothing.
-  // Without COUNT(*) we can't distinguish "table is empty" from "user
-  // navigated past the last page" except by the page index. The
-  // happens-after-page-zero case shouldn't occur in practice because
-  // `hasMore` disables Next at the boundary, but guard against it anyway.
+  // Empty state — only for an empty result, not a page past the end.
   if (!loading && rows.length === 0 && page === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-8">
         <Database className="h-8 w-8 text-muted-foreground/30 mb-3" />
-        <p className="text-sm text-muted-foreground">{result ? "No rows in this result" : "No rows in this table"}</p>
+        <p className="text-sm text-muted-foreground">No rows in this result</p>
       </div>
     );
   }

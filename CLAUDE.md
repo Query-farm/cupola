@@ -149,7 +149,6 @@ src/
     shell-input.ts           # Tab completion and Ctrl+R reverse history search
     shell-table-renderer.ts  # Terminal table rendering (box-mode, line-mode, cell formatting)
     shell-ai-mode.ts         # AI conversation loop in terminal with streaming ANSI
-    table-ready.ts           # Wait until DuckDB can serve a given table path
 
     # Evidence report parameters (see "Evidence report parameters" below)
     evidence/                # parameters.ts, parameter-graph.ts, parameter-choices.ts,
@@ -380,7 +379,7 @@ Stored in localStorage (`vgi-frontend-settings` — key name predates the Cupola
 | `hideDollarTables` | `true` | Hide tables whose name contains `$` |
 | `shellFontSize` | `13` | Terminal font size |
 | `shellThreads` | `0` | DuckDB WASM thread count (0 = auto) |
-| `previewRowsPerPage` | `50` | Remembered rows-per-page for the data preview grid (editor results + catalog Preview Data). One of DataPreview's `PAGE_SIZES`. |
+| `previewRowsPerPage` | `50` | Remembered rows-per-page for the data preview grid (editor results, the pop-out results window and the shell's `.preview`). One of DataPreview's `PAGE_SIZES`. |
 | `geometryAsText` | `false` | Render geometry columns as WKT text instead of a clickable map preview (`GeometryViewer`) |
 | `numberGrouping` | `false` | Group digits in numeric grid cells using the browser's locale (`1,234,567`). Applied via `formatCellValue`'s opt-in `grouping` option and passed only from `DataGrid`/`DataPreview` — CSV/XLSX export, clipboard copy, the AI agent's view (`query-results.ts`) and the terminal deliberately stay ungrouped, since a grouped number lands in Excel as text, pastes across two cells, and is not arithmetic the agent can do. Swaps the decimal separator too: in `de-DE` the group separator is `.`, so grouping alone would make `1234567.89` ambiguous. Type-gated because DuckDB's `BIT` renders as a digit string |
 | `anthropicApiKey` | `""` | Claude API key for AI features |
