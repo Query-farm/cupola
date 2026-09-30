@@ -58,11 +58,62 @@ export function color(value: string): string {
 
 const SAFE_LINK = /^(https?:|mailto:)/i;
 
+/** A figure: a number with its sign, currency, grouping and unit (`-$1,234.56`, `(1,234)`,
+ *  `+12.5%`, `US$3.2M`, `1.5e-3`). Unicode line breaking allows a break between a minus sign
+ *  and a currency symbol, so a figure in a narrow column printed as "-" over "$1,234". */
+const FIGURE = /^[([]?[+\-\u2212]?(?:[A-Z]{0,3}[^\p{L}\p{N}\s]{0,2})?[+\-\u2212]?\p{N}[\p{N}.,'\u2019\u00a0\u202f]*(?:[eE][+\-\u2212]?\p{N}+)?(?:[%\u2030]|[^\p{L}\p{N}\s]{1,2}|[a-zA-Z]{1,2})?[)\]]?$/u;
+/** A currency or unit written apart from its figure: `12,90 €`, `USD 1,234`, `12 %`. */
+const SYMBOL = /^(?:[^\p{L}\p{N}\s]{1,3}|[A-Z]{3})$/u;
+/** Text as the pieces a line may not break inside: each figure, with a currency or unit set
+ *  apart from it by a space, is one piece; everything else is left to Typst. */
+export function figureUnits(text: string): { text: string; figure: boolean }[] {
+  const tokens = text.split(/([ \t\r\n]+)/);
+  const out: { text: string; figure: boolean }[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (!token) continue;
+    if (!FIGURE.test(token)) { out.push({ text: token, figure: false }); continue; }
+    let unit = token;
+    // "USD 1,234": the symbol before it joins the figure.
+    const last = out.at(-1), space = out.at(-2);
+    if (last && !last.figure && /^ $/.test(last.text) && space && !space.figure && SYMBOL.test(space.text)) {
+      out.splice(-2, 2);
+      unit = `${space.text} ${unit}`;
+    }
+    // "12,90 €": so does the symbol after it.
+    if (tokens[i + 1] === ' ' && tokens[i + 2] && SYMBOL.test(tokens[i + 2])) { unit = `${unit} ${tokens[i + 2]}`; i += 2; }
+    out.push({ text: unit, figure: true });
+  }
+  // Adjacent plain pieces rejoin, so text without figures stays one run.
+  return out.reduce<{ text: string; figure: boolean }[]>((merged, piece) => {
+    const previous = merged.at(-1);
+    if (previous && !previous.figure && !piece.figure) previous.text += piece.text;
+    else merged.push({ ...piece });
+    return merged;
+  }, []);
+}
+/** Digits, grouping and a percent sign alone never break; a sign, currency, letter, bracket or
+ *  space in a figure might. Only those figures are boxed, since a box also splits the PDF's text
+ *  into separate runs. */
+const BREAKABLE = /[^\p{N}.,'\u2019\u00a0\u202f%\u2030]/u;
+/** A run of text, with each figure that could break boxed so no line breaks inside it. */
+function textWithFigures(text: string): string {
+  const units = figureUnits(text).map(unit => ({ ...unit, figure: unit.figure && BREAKABLE.test(unit.text) }));
+  if (!units.some(unit => unit.figure)) return `text(${lit(text)})`;
+  const merged = units.reduce<typeof units>((out, unit) => {
+    const previous = out.at(-1);
+    if (previous && !previous.figure && !unit.figure) previous.text += unit.text; else out.push({ ...unit });
+    return out;
+  }, []);
+  const parts = merged.map(unit => unit.figure ? `box(text(${lit(unit.text)}))` : `text(${lit(unit.text)})`);
+  return parts.length === 1 ? parts[0] : `(${parts.join(' + ')})`;
+}
+
 export function inlineExpr(inlines: Inline[]): string {
   const parts = inlines.map(inline => {
     switch (inline.kind) {
       case 'text': {
-        let expr = inline.code ? `raw(${lit(inline.text)})` : `text(${lit(inline.text)})`;
+        let expr = inline.code ? `raw(${lit(inline.text)})` : textWithFigures(inline.text);
         if (inline.bold) expr = `strong(${expr})`;
         if (inline.italic) expr = `emph(${expr})`;
         if (inline.strike) expr = `strike(${expr})`;
@@ -101,6 +152,11 @@ function cellExpr(cell: Cell): string {
 function plainText(inlines: Inline[]): string {
   return inlines.map(inline => inline.kind === 'text' ? inline.text : inline.kind === 'link' ? plainText(inline.children) : inline.kind === 'linebreak' ? '\n' : '').join('');
 }
+/** A cell whose text is all bold (a total row, by CSS or `<strong>`). */
+function isBoldCell(cell: Cell): boolean {
+  const texts = cell.children.filter((inline): inline is Extract<Inline, { kind: 'text' }> => inline.kind === 'text' && Boolean(inline.text.trim()));
+  return texts.length > 0 && texts.every(inline => inline.bold);
+}
 /** The `n` longest strings (by characters) of a list, without duplicates. */
 function longest(values: Iterable<string>, n: number): string[] {
   return [...new Set(values)].filter(Boolean).sort((a, b) => b.length - a.length).slice(0, n);
@@ -116,11 +172,16 @@ function sizingExpr(block: Extract<Block, { kind: 'table' }>): string {
   const head = block.header.map(plain).filter((row): row is string[] => row !== null);
   const count = Math.max(0, ...[...head, ...body].map(row => row.length));
   if (!count) return 'none';
-  const words = (text: string) => text.split(/\s+/);
+  // The pieces a line can't break inside, as the emitter boxes them: a figure with its currency is one.
+  const words = (text: string) => figureUnits(text).flatMap(unit => unit.figure ? [unit.text] : unit.text.split(/\s+/));
+  // Bold cells (total rows) are measured bold: wider than the same figures in regular weight.
+  const boldText = (row: Cell[], i: number) => row[i] && isBoldCell(row[i]) ? plainText(row[i].children) : '';
+  const boldRows = block.rows.filter(row => row.every(cell => !(cell.colspan && cell.colspan > 1)));
   return array(Array.from({ length: count }, (_, i) => {
     const cells = body.map(row => row[i] ?? '');
     const headers = head.map(row => row[i] ?? '');
-    return `(words: ${array(longest(cells.flatMap(words), 3).map(lit))}, lines: ${array(longest(cells.flatMap(text => text.split('\n')), 3).map(lit))}, head-words: ${array(longest(headers.flatMap(words), 2).map(lit))}, head: ${array(longest(headers, 1).map(lit))})`;
+    const bold = boldRows.map(row => boldText(row, i));
+    return `(words: ${array(longest(cells.flatMap(words), 3).map(lit))}, bold-words: ${array(longest(bold.flatMap(words), 2).map(lit))}, lines: ${array(longest(cells.flatMap(text => text.split('\n')), 3).map(lit))}, head-words: ${array(longest(headers.flatMap(words), 2).map(lit))}, head: ${array(longest(headers, 1).map(lit))})`;
   }));
 }
 

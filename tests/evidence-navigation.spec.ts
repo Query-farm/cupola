@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { gotoApp, waitForShellBridge, evidencePath } from './helpers';
+import { gotoApp, waitForShellBridge, evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 
 test.use({ viewport: { width: 1500, height: 1100 } });
 test('Reports starts at the list and preserves an opened report across tab switches and saved links', async ({ page }) => {
@@ -75,4 +75,53 @@ test('editor navigation stays on one row and reveals the selected tab at variabl
   await nav.getByRole('tab', { name: 'Chat', exact: true }).click();
   await checkRow();
   await expect(panel.getByRole('textbox', { name: 'Chat message input' })).toBeVisible();
+});
+
+// The sidebar's report links open reports inside the app: no page load, so the engine, the
+// catalog and every other tab keep their state. Back still steps between them.
+test('sidebar report links open reports without reloading the page', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.addInitScript((serviceUrl) => {
+    if (sessionStorage.getItem('seeded')) return;
+    sessionStorage.setItem('seeded', '1');
+    for (const [id, title] of [['first', 'First report'], ['second', 'Second report']]) {
+      const report = { version: 1, id, title, serviceUrl, source: `# ${title}`, setupSql: '', parameters: [], values: {}, createdAt: 1, updatedAt: id === 'first' ? 2 : 1 };
+      localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(serviceUrl)}:${id}`, JSON.stringify(report));
+    }
+  }, EVIDENCE_SERVICE_URL);
+  // The catalog page, before the Reports tab has ever been opened.
+  await page.goto(evidencePath(''));
+  const sidebar = page.getByRole('navigation', { name: 'Saved reports' });
+  await expect(sidebar.getByRole('link', { name: 'First report' })).toBeVisible({ timeout: 90_000 });
+  await page.evaluate(() => { (window as { __sameDocument?: boolean }).__sameDocument = true; });
+  const sameDocument = () => page.evaluate(() => (window as { __sameDocument?: boolean }).__sameDocument === true);
+  const panel = page.getByTestId('evidence-panel');
+  const document = panel.getByTestId('evidence-document');
+
+  await sidebar.getByRole('link', { name: 'First report' }).click();
+  await expect(document.getByRole('heading', { name: 'First report' })).toBeVisible({ timeout: 90_000 });
+  await expect(page).toHaveURL(/evidence_report=first/);
+  expect(await sameDocument()).toBe(true);
+
+  // From one report to another, and from another tab.
+  await sidebar.getByRole('link', { name: 'Second report' }).click();
+  await expect(document.getByRole('heading', { name: 'Second report' })).toBeVisible({ timeout: 60_000 });
+  await expect(page).toHaveURL(/evidence_report=second/);
+  await page.getByTestId('tab-catalog').click();
+  await sidebar.getByRole('link', { name: 'First report' }).click();
+  await expect(document.getByRole('heading', { name: 'First report' })).toBeVisible({ timeout: 60_000 });
+  await expect(page).toHaveURL(/evidence_report=first/);
+
+  // The list, and Back to the report it left.
+  await sidebar.getByRole('link', { name: 'All reports' }).click();
+  await expect(page).toHaveURL(/reports\/saved/);
+  await expect(panel.getByRole('row').filter({ hasText: 'Second report' })).toBeVisible();
+  await page.goBack();
+  await expect(document.getByRole('heading', { name: 'First report' })).toBeVisible({ timeout: 60_000 });
+  expect(await sameDocument()).toBe(true);
+
+  // A modified click is still the browser's: a new tab, not an in-app switch.
+  const [popup] = await Promise.all([page.context().waitForEvent('page'), sidebar.getByRole('link', { name: 'Second report' }).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })]);
+  await expect(popup).toHaveURL(/evidence_report=second/);
+  await expect(page).toHaveURL(/evidence_report=first/);
 });

@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
 import { fetchCatalog, type CatalogData } from "@/lib/service";
 import { useMediaQuery } from "@/lib/use-media-query";
+import { OPEN_REPORT_EVENT, type OpenReportDetail } from "@/lib/evidence/open-report";
 import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql, clearSharedSql } from "@/lib/url-params";
 import type { PendingEditorSql } from "./editor/SqlEditorView";
 import { catalogInventory } from "@/lib/catalog-store";
@@ -180,6 +181,20 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
     const openReports = () => setActiveTab("reports");
     window.addEventListener("cupola:promote-report", openReports);
     return () => window.removeEventListener("cupola:promote-report", openReports);
+  }, []);
+  // A saved report opened from the sidebar. A mounted workspace opens it itself; one that isn't
+  // mounted yet reads the report from the URL on its first render, so the URL goes first. The
+  // catalog selection in the hash is kept.
+  const reportsMountedRef = useRef(reportsMounted);
+  reportsMountedRef.current = reportsMounted;
+  useEffect(() => {
+    const openReport = (event: Event) => {
+      const { href } = (event as CustomEvent<OpenReportDetail>).detail;
+      if (!reportsMountedRef.current) window.history.pushState(window.history.state, "", href + window.location.hash);
+      setActiveTab("reports");
+    };
+    window.addEventListener(OPEN_REPORT_EVENT, openReport);
+    return () => window.removeEventListener(OPEN_REPORT_EVENT, openReport);
   }, []);
   // SQL pushed into the editor from elsewhere (example queries, shell history,
   // shared query links). `autoRun` is false for shared links: the recipient

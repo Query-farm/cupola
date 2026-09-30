@@ -158,7 +158,7 @@ export const REPORT_TEMPLATE = String.raw`
   let m(value, bold: false) = measure(text(size: size, if bold { strong(value) } else { value })).width
   let widest(values, bold: false) = calc.max(0pt, ..values.map(value => m(value, bold: bold)))
   // A single enormous word (a URL) may take a third of the width, not all of it.
-  let mins = sizing.map(c => calc.min(calc.max(widest(c.words), widest(c.at("head-words"), bold: true)) + pad, available / 3))
+  let mins = sizing.map(c => calc.min(calc.max(widest(c.words), widest(c.at("bold-words", default: ()), bold: true), widest(c.at("head-words"), bold: true)) + pad, available / 3))
   let fulls = sizing.enumerate().map(((i, c)) => calc.max(mins.at(i), calc.max(widest(c.lines), widest(c.head, bold: true)) + pad))
   let total-full = fulls.sum(default: 0pt)
   let total-min = mins.sum(default: 0pt)

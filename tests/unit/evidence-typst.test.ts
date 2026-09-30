@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import type { TypstCompiler } from '@myriaddreamin/typst.ts/compiler';
 import { compilePdf, createCompiler, PDF_FONT_FILES, TypstCompileError } from '../../src/lib/evidence/typst/compiler';
-import { blockExpr, color, emitTypst, inlineExpr, lit } from '../../src/lib/evidence/typst/emit';
+import { blockExpr, color, emitTypst, figureUnits, inlineExpr, lit } from '../../src/lib/evidence/typst/emit';
 import { contentWidthPx, defaultPaper, dropRepeatedTitle, normalizeInlines, type ReportDocument } from '../../src/lib/evidence/typst/model';
 import { REPORT_TEMPLATE } from '../../src/lib/evidence/typst/template';
 
@@ -249,6 +249,51 @@ describe('table column widths', () => {
     expect(squeezed.widths.reduce((a, b) => a + b)).toBeLessThanOrEqual(available + 0.5);
     expect(impossible.size).toBe(6);
     expect(impossible.overflow).toBe(true);
+  });
+});
+
+describe('figures never break across lines', () => {
+  const figures = (text: string) => figureUnits(text).filter(unit => unit.figure).map(unit => unit.text);
+  test('a figure is one piece with its sign, currency, grouping and unit', () => {
+    for (const value of ['-$12,345,678.90', '−$1,234', '($1,234.56)', '+12.5%', '-0.3‰', 'US$3.2M', '1.5e-3', '-12.345.678,90', '12 345,90', '42', '$1.2k', '[−7]'])
+      expect(figures(value)).toEqual([value]);
+    // A currency or unit set apart by a space stays with its figure.
+    expect(figures('-12.345.678,90 €')).toEqual(['-12.345.678,90 €']);
+    expect(figures('USD 1,234.00')).toEqual(['USD 1,234.00']);
+    expect(figures('Revenue fell -$1,234 (-12%) in Q3')).toEqual(['-$1,234', '(-12%)', 'Q3']);
+    // Words stay words, and text without figures is one run.
+    expect(figures('West region')).toEqual([]);
+    expect(figureUnits('West region')).toEqual([{ text: 'West region', figure: false }]);
+    expect(figureUnits('down -$5 today').map(unit => unit.text).join('')).toBe('down -$5 today');
+  });
+  test('figures are boxed in the Typst source, other text is not', () => {
+    expect(inlineExpr([{ kind: 'text', text: '-$1,234' }])).toBe('box(text("-$1,234"))');
+    expect(inlineExpr([{ kind: 'text', text: 'Total -$1,234', bold: true }])).toBe('strong((text("Total ") + box(text("-$1,234"))))');
+    expect(inlineExpr([{ kind: 'text', text: 'West' }])).toBe('text("West")');
+    // Plain digits can't break, and stay one run of text.
+    expect(inlineExpr([{ kind: 'text', text: 'Region 1 up 12.5%' }])).toBe('text("Region 1 up 12.5%")');
+    expect(inlineExpr([{ kind: 'text', text: '-1', code: true }])).toBe('raw("-1")');
+  });
+  test('in a table squeezed to its smallest text, a negative amount stays on one line', async () => {
+    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const t = (text: string, bold = false) => [{ kind: 'text' as const, text, bold }];
+    const columns = 9;
+    const row = (value: string, bold = false) => Array.from({ length: columns }, () => ({ children: t(value, bold), align: 'right' as const }));
+    const doc = sampleDocument('plain');
+    doc.blocks = [{ kind: 'table', header: [Array.from({ length: columns }, (_, i) => ({ children: t(`C${i}`) }))],
+      rows: [row('-$12,345,678.90'), row('($1,234,567.89)'), row('-$98,765,432.10', true)] }];
+    const pdf = await getDocument({ data: await compile(doc) }).promise;
+    const items = (await (await pdf.getPage(1)).getTextContent()).items.map(item => ('str' in item ? item.str : '')).filter(text => text.trim());
+    // Before, every cell printed as "-" over "$12,345,678.90".
+    expect(items.filter(text => /^[-−(]$/.test(text))).toEqual([]);
+    expect(items.filter(text => text === '-$12,345,678.90')).toHaveLength(columns);
+    expect(items.filter(text => text === '-$98,765,432.10')).toHaveLength(columns);
+    // And it fits: the bold total row is measured bold, so its column has room for it.
+    const [layout] = await compiler.runWithWorld({ mainFilePath: '/main.typ' }, async world => {
+      await world.compile();
+      return world.query({ selector: '<cupola-table-layout>' }) as Promise<{ value: { widths: string[]; size: string; overflow: boolean } }[]>;
+    });
+    expect(layout.value.overflow).toBe(false);
   });
 });
 

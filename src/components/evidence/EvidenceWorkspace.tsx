@@ -9,6 +9,7 @@ import { engine, waitForEngineReady } from '../../lib/shell-bridge';
 import { hasSqlStatements, materializeReportQuery } from '../../lib/reports/parameters';
 import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveParameters, saveEvidenceReport, validateEvidenceReport, describeReportError, saveRecoveryDraft, clearRecoveryDraft, loadRecoveryDraft, STORAGE_PREFIX, LEGACY_STORAGE_PREFIX, type EvidenceReport, type ParameterValues } from '../../lib/evidence/reports';
 import { newDrillExampleReport, newEvidenceReport } from '../../lib/evidence/templates';
+import { OPEN_REPORT_EVENT, type OpenReportDetail } from '../../lib/evidence/open-report';
 import { parseReportFile, planImport, reportFileName, serializeReportFile, REPORT_FILE_EXTENSION } from '../../lib/evidence/report-file';
 import { emptyHistory, loadReportHistory, mergeHistories, recordRevision, revisionReport, saveReportHistory, specOf, type ReportHistory, type Revision, type RevisionMeta } from '../../lib/evidence/revisions';
 import type { ProposalEvent } from './EvidenceAgent';
@@ -410,6 +411,31 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     return () => { execution.current?.stop(); window.removeEventListener('storage', changed); window.removeEventListener('beforeunload', unload); window.removeEventListener('popstate', pop); };
   }, []);
 
+  // A report opened from the sidebar: no page load. Clicking the open report only leaves the list.
+  const openFromSidebar = useRef<(detail: OpenReportDetail) => Promise<void>>(async () => {});
+  openFromSidebar.current = async detail => {
+    if (detail.serviceUrl !== serviceUrl) return;
+    if (!detail.id) { if (!library) navigate(true); return; }
+    if (detail.id === reportRef.current.id && savedRef.current) {
+      if (library) { navigate(false, detail.id); if (!run) void refresh(reportRef.current, 'replace'); }
+      return;
+    }
+    // A refresh in progress would refuse the switch: stop it, and wait for it to wind down.
+    if (busyRef.current) {
+      execution.current?.stop();
+      for (let waited = 0; busyRef.current && waited < 5_000; waited += 50) await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    try {
+      const found = listEvidenceReports(serviceUrl).find(item => item.id === detail.id);
+      if (found) openReport(found);
+      else setError('That report is no longer saved in this browser.');
+    } catch (e) { setError(`Could not open that report: ${message(e)}`); }
+  };
+  useEffect(() => {
+    const open = (event: Event) => void openFromSidebar.current((event as CustomEvent<OpenReportDetail>).detail);
+    window.addEventListener(OPEN_REPORT_EVENT, open);
+    return () => window.removeEventListener(OPEN_REPORT_EVENT, open);
+  }, []);
   useEffect(() => {
     const promoted = () => setPromotion(consumeReportPromotion());
     window.addEventListener('cupola:promote-report', promoted);
