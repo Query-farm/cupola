@@ -22,7 +22,8 @@ import { describeParameter, resolveChoices } from '../../lib/evidence/parameter-
 import { summarizeFilters } from '../../lib/evidence/filter-summary';
 import { parameterLint } from '../../lib/evidence/parameter-lint';
 import { runSetupSql } from '../../lib/evidence/setup-test';
-import { RefreshProfiler, type RefreshProfile } from '../../lib/evidence/refresh-profile';
+import { RefreshProfiler, type RefreshPhase, type RefreshProfile } from '../../lib/evidence/refresh-profile';
+import { EvidenceRefreshProgress } from './EvidenceRefreshProgress';
 import { drillState, drillValues, matchDrillValue } from '../../lib/evidence/drill';
 import { completeValuesFromUrl, PARAMETER_URL_PREFIX, valuesFromUrl, withParameterValues } from '../../lib/evidence/parameter-url';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
@@ -223,6 +224,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   const [logs, setLogs] = useState<QueryLogEntry[]>([]);
   const [profile, setProfile] = useState<RefreshProfile | null>(null);
   const profiler = useRef<RefreshProfiler | null>(null);
+  /** The phases the running refresh will pass through, for its progress list. */
+  const [refreshPhases, setRefreshPhases] = useState<RefreshPhase[]>([]);
   // A refresh has finished rendering once its document has mounted (it reports its data context)
   // and its queries have then been quiet for a moment; it ended when its last query did. Quiet
   // alone isn't enough: the document loads and mounts before its first query starts.
@@ -323,6 +326,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     // Every refresh gets a fresh profile: phases and queries on one clock (the Performance tab).
     profiler.current?.finish('stopped');
     const profile = profiler.current = new RefreshProfiler(setProfile);
+    setRefreshPhases(['engine', ...(next.parameters.length ? ['choices' as const] : []), ...(hasSqlStatements(next.setupSql) ? ['setup' as const] : []),
+      ...(next.semanticDatasets?.length ? ['semantic' as const] : []), 'render']);
     try {
       if (next.serviceUrl !== serviceUrl) throw new Error('Open this report using its saved service connection.');
       resolveParameters(next);
@@ -359,7 +364,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
         // Statement by statement, so the Performance tab times each one.
         const start = performance.now();
         const setup = await runSetupSql(next.setupSql, next, values, (sql, params) => current.query(sql, params),
-          step => profile.query({ phase: 'setup', name: step.name, sql: step.sql, startedAt: step.startedAt, durationMs: step.durationMs, error: step.error }));
+          step => profile.query({ phase: 'setup', name: step.name, sql: step.sql, startedAt: step.startedAt, durationMs: step.durationMs, error: step.error }),
+          step => profile.start({ phase: 'setup', ...step }));
         // Logged against the whole setup SQL, so an error points the editor at the Dataset SQL.
         setLogs([{ sql: next.setupSql, rows: 0, durationMs: performance.now() - start, error: setup.ok ? null : setup.error, startedAt: start }]);
         profile.end('setup');
@@ -368,7 +374,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
       if (next.semanticDatasets?.length) profile.begin('semantic');
       const semanticCatalogs = next.semanticDatasets?.length ? await current.wait(sessionCatalogs(catalogs)) : catalogs;
       const semantic = await prepareEvidenceSemanticDatasets(next, values, semanticCatalogs, name => semanticTables.current.add(name), current,
-        step => profile.query({ phase: 'semantic', ...step }));
+        step => profile.query({ phase: 'semantic', ...step }), step => profile.start({ phase: 'semantic', ...step }));
       profile.end('semantic');
       current.signal.throwIfAborted();
       setSemanticStates(semantic.states);
@@ -852,7 +858,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
                 </ol>
                 {drill.next && <span className="text-xs text-muted-foreground print:hidden">Click a chart bar or underlined value to drill into {drill.next.label.toLowerCase()}.</span>}
               </nav>)}
-              {run ? <EvidencePreview reportTheme={reportTheme} run={run} drill={previewDrill} onInputs={read => { readInputs.current = read; }} onData={context => { setDataContext(context); setMountedRevision(run.revision); }} onIssues={setSpecIssues} onQuery={entry => { setLogs(current => [...current.slice(-99), entry]); profiler.current?.query({ ...entry, phase: 'render' }); }} onError={message => { setError(message); setSpecIssues(current => [...current, { message, severity: 'error', target: 'document' }]); }} /> : <p className="py-8 text-sm text-muted-foreground" role="status">{busy ? status : 'Refresh to render this report.'}</p>}
+              {run ? <EvidencePreview reportTheme={reportTheme} run={run} drill={previewDrill} onInputs={read => { readInputs.current = read; }} onData={context => { setDataContext(context); setMountedRevision(run.revision); }} onIssues={setSpecIssues} onQuery={entry => { setLogs(current => [...current.slice(-99), entry]); profiler.current?.query({ ...entry, phase: 'render' }); }} onError={message => { setError(message); setSpecIssues(current => [...current, { message, severity: 'error', target: 'document' }]); }} /> : busy ? <EvidenceRefreshProgress profile={profile} phases={refreshPhases} fallback={status} /> : <p className="py-8 text-sm text-muted-foreground" role="status">Refresh to render this report.</p>}
               {dataContext && (report.pivots ?? []).map(pivot => <section key={pivot.id} className="mt-8 space-y-3" aria-label={pivot.title}>
                 <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg font-semibold">{pivot.title}</h2>{editing && <Button variant="ghost" size="sm" onClick={() => change({ ...report, pivots: report.pivots?.filter(item => item.id !== pivot.id) })}>Remove pivot</Button>}</div>
                 <EvidencePivot mode={reportTheme.mode} context={dataContext} datasetId={pivot.datasetId} config={pivot.config} onConfig={config => { if (editing) change({ ...reportRef.current, pivots: reportRef.current.pivots?.map(item => item.id === pivot.id ? { ...item, config } : item) }); }} />

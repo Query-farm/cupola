@@ -16,6 +16,20 @@ describe('refresh profiles', () => {
       phases: [{ phase: 'engine', start: 100, end: 400 }, { phase: 'render', start: 450, end: 600 }] });
     expect(seen).not.toBeNull();
   });
+  test('the profile names open phases and the step in flight, and a step\'s completion clears it', () => {
+    let seen: RefreshProfile | null = null;
+    const profiler = new RefreshProfiler(profile => { seen = profile; }, 0);
+    profiler.begin('setup', 10);
+    profiler.start({ phase: 'setup', name: 'Dataset SQL · a', sql: 'CREATE TEMP TABLE a AS SELECT 1', startedAt: 20, index: 1, total: 2 });
+    expect(seen!.open).toEqual([{ phase: 'setup', start: 10 }]);
+    expect(seen!.running).toMatchObject({ name: 'Dataset SQL · a', index: 1, total: 2 });
+    profiler.query({ phase: 'setup', name: 'Dataset SQL · a', sql: 'CREATE TEMP TABLE a AS SELECT 1', startedAt: 20, durationMs: 5, error: null });
+    expect(seen!.running).toBeNull();
+    profiler.start({ phase: 'setup', sql: 'INSERT INTO a VALUES (2)', startedAt: 30 });
+    profiler.end('setup', 40); // Ending the phase clears its step too.
+    expect(seen!.open).toEqual([]);
+    expect(seen!.running).toBeNull();
+  });
   test('the summary splits time by phase, counts only queries that ran, and names the slowest', () => {
     const profile: RefreshProfile = { startedAt: 0, finishedAt: 1000, outcome: 'done',
       phases: [{ phase: 'engine', start: 0, end: 300 }, { phase: 'setup', start: 300, end: 500 }, { phase: 'render', start: 500, end: 1000 }],

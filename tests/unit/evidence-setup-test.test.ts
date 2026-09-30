@@ -102,8 +102,10 @@ describe('runSetupSql', () => {
   test('runs and reports each statement on its own, with parameters bound', async () => {
     const sent: [string, unknown[]][] = [];
     const steps: { name: string; sql: string; error: string | null }[] = [];
+    const started: string[] = [];
     const result = await runSetupSql('CREATE OR REPLACE TEMP TABLE a AS SELECT $n AS n;\n-- then\nINSERT INTO a VALUES ($n + 1);', report, { n: 7 },
-      async (sql, params) => { sent.push([sql, params]); return { ok: true }; }, step => steps.push(step));
+      async (sql, params) => { sent.push([sql, params]); return { ok: true }; }, step => steps.push(step), step => started.push(`${step.index}/${step.total} ${step.name}`));
+    expect(started).toEqual(['1/2 Dataset SQL · a', '2/2 Dataset SQL · statement 2']);
     expect(result).toEqual({ ok: true });
     expect(sent).toEqual([['CREATE OR REPLACE TEMP TABLE a AS SELECT ? AS n', [7]], ['-- then\nINSERT INTO a VALUES (? + 1)', [7]]]);
     expect(steps.map(step => [step.name, step.error])).toEqual([['Dataset SQL · a', null], ['Dataset SQL · statement 2', null]]);

@@ -15,11 +15,14 @@ export const semanticDatasetSchema = z.object({
 export type SemanticDatasetState = { name: string; plan: SemanticPlan; fingerprint?: string; modelChanged: boolean };
 /** One timed step of preparing a dataset (its compile, or the query that materializes it). */
 export interface SemanticStep { name: string; sql: string; startedAt: number; durationMs: number; error: string | null }
-export async function prepareEvidenceSemanticDatasets(report: EvidenceReport, values: ParameterValues, catalogs: readonly CatalogData[], onTable?: (name: string) => void, run = new EvidenceQueryRun(), observe?: (step: SemanticStep) => void) {
+export async function prepareEvidenceSemanticDatasets(report: EvidenceReport, values: ParameterValues, catalogs: readonly CatalogData[], onTable?: (name: string) => void, run = new EvidenceQueryRun(), observe?: (step: SemanticStep) => void,
+  onStart?: (step: { name: string; sql: string; startedAt: number; index: number; total: number }) => void) {
   const queries: Record<string, string> = {};
   const states: SemanticDatasetState[] = [];
-  for (const dataset of report.semanticDatasets ?? []) {
+  const datasets = report.semanticDatasets ?? [];
+  for (const [index, dataset] of datasets.entries()) {
     const compileStart = performance.now();
+    onStart?.({ name: dataset.name, sql: 'Compile the semantic query', startedAt: compileStart, index: index + 1, total: datasets.length });
     const prepared = await prepareSemanticReportDataset(dataset, { parameters: toReportParameters(report.parameters, values) }, values, catalogs);
     const compileError = prepared.compilation.ok ? null : prepared.compilation.diagnostics.map(item => item.message).join('\n');
     observe?.({ name: dataset.name, sql: 'Compile the semantic query', startedAt: compileStart, durationMs: performance.now() - compileStart, error: compileError });
@@ -29,6 +32,7 @@ export async function prepareEvidenceSemanticDatasets(report: EvidenceReport, va
     onTable?.(table); // Track ownership even if cancellation races with table creation.
     const create = `CREATE OR REPLACE TEMP TABLE ${quoteIdentifier(table)} AS ${prepared.compilation.plan.sql}`;
     const createStart = performance.now();
+    onStart?.({ name: dataset.name, sql: create, startedAt: createStart, index: index + 1, total: datasets.length });
     const response = await run.query(create, prepared.compilation.plan.parameters);
     observe?.({ name: dataset.name, sql: create, startedAt: createStart, durationMs: performance.now() - createStart, error: response.ok ? null : response.error || 'Semantic dataset failed' });
     if (!response.ok) throw new Error(`${dataset.name}: ${response.error || 'Semantic dataset failed'}`);

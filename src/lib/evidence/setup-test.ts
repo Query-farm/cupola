@@ -204,11 +204,14 @@ export interface SetupStatementRun { index: number; sql: string; name: string; s
 /** Run a report's setup SQL for a refresh, one statement at a time with parameters bound, so
  *  each statement can be timed on its own (the Performance tab). Stops at the first failure. */
 export async function runSetupSql(sql: string, report: Pick<EvidenceReport, 'parameters'>, values: ParameterValues,
-  query: (sql: string, params: unknown[]) => Promise<QueryResult>, observe: (run: SetupStatementRun) => void = () => {}): Promise<{ ok: true } | { ok: false; error: string }> {
-  for (const [index, statement] of splitStatements(sql).entries()) {
+  query: (sql: string, params: unknown[]) => Promise<QueryResult>, observe: (run: SetupStatementRun) => void = () => {},
+  onStart: (step: { index: number; total: number; sql: string; name: string; startedAt: number }) => void = () => {}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const statements = splitStatements(sql);
+  for (const [index, statement] of statements.entries()) {
     const kind = classifySetupStatement(statement, new Set());
     const name = `Dataset SQL · ${kind.kind === 'create' ? kind.name : `statement ${index + 1}`}`;
     const startedAt = performance.now();
+    onStart({ index: index + 1, total: statements.length, sql: statement, name, startedAt });
     let error: string | null;
     try {
       const compiled = compileReportQuery(statement, compilerParameters(report, values), values);

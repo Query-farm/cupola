@@ -21,12 +21,25 @@ export interface ProfiledQuery {
   cached?: boolean;
 }
 export interface PhaseSpan { phase: RefreshPhase; start: number; end: number }
+/** A step that has started and not finished: what the refresh is waiting on right now. */
+export interface RunningStep {
+  phase: RefreshPhase;
+  sql: string;
+  name?: string;
+  startedAt: number;
+  /** 1-based position among the phase's steps, when the phase knows how many it has. */
+  index?: number;
+  total?: number;
+}
 export interface RefreshProfile {
   startedAt: number;
   finishedAt?: number;
   outcome?: 'done' | 'failed' | 'stopped';
   phases: PhaseSpan[];
   queries: ProfiledQuery[];
+  /** Phases begun and not yet ended, with when each began. */
+  open?: { phase: RefreshPhase; start: number }[];
+  running?: RunningStep | null;
 }
 
 /** Queries a profile keeps; a report with thousands of component queries keeps the first ones. */
@@ -40,21 +53,29 @@ export class RefreshProfiler {
   private frame = 0;
   private open = new Map<RefreshPhase, number>();
   constructor(private onChange: (profile: RefreshProfile) => void, now = performance.now()) {
-    this.profile = { startedAt: now, phases: [], queries: [] };
+    this.profile = { startedAt: now, phases: [], queries: [], open: [], running: null };
     this.emit();
   }
   begin(phase: RefreshPhase, at = performance.now()) {
     this.open.set(phase, at);
+    this.emit();
   }
   end(phase: RefreshPhase, at = performance.now()) {
     const start = this.open.get(phase);
     if (start === undefined) return;
     this.open.delete(phase);
     this.profile.phases.push({ phase, start, end: at });
+    if (this.profile.running?.phase === phase) this.profile.running = null;
+    this.emit();
+  }
+  /** A step has started; the next `query` of its phase (its completion) clears it. */
+  start(step: RunningStep) {
+    this.profile.running = step;
     this.emit();
   }
   query(entry: Omit<ProfiledQuery, 'id'>) {
-    if (this.profile.queries.length >= MAX_PROFILED_QUERIES) return;
+    if (this.profile.running?.phase === entry.phase) this.profile.running = null;
+    if (this.profile.queries.length >= MAX_PROFILED_QUERIES) { this.emit(); return; }
     this.profile.queries.push({ ...entry, id: ++this.next });
     this.emit();
   }
@@ -64,12 +85,13 @@ export class RefreshProfiler {
     for (const phase of [...this.open.keys()]) this.end(phase, at);
     this.profile.finishedAt = at;
     this.profile.outcome = outcome;
+    this.profile.running = null;
     this.emit();
   }
   get finished() { return this.profile.finishedAt !== undefined; }
   private emit() {
     if (this.frame) return;
-    const flush = () => { this.frame = 0; this.onChange({ ...this.profile, phases: [...this.profile.phases], queries: [...this.profile.queries] }); };
+    const flush = () => { this.frame = 0; this.onChange({ ...this.profile, phases: [...this.profile.phases], queries: [...this.profile.queries], open: [...this.open].map(([phase, start]) => ({ phase, start })) }); };
     if (typeof requestAnimationFrame === 'function') this.frame = requestAnimationFrame(flush);
     else flush();
   }
