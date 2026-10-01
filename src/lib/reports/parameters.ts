@@ -1,4 +1,4 @@
-import type { ReportDocumentV1, ReportParameterValue } from "./types";
+import type { ReportParameterScope, ReportParameterValue } from "./types";
 
 export interface CompiledReportQuery {
   sql: string;
@@ -44,7 +44,7 @@ interface TransformHooks {
 
 function transformReportQuery(
   source: string,
-  report: Pick<ReportDocumentV1, "parameters">,
+  report: ReportParameterScope,
   values: Record<string, ReportParameterValue>,
   renderValue: (value: unknown) => string,
   hooks: TransformHooks = {},
@@ -126,7 +126,7 @@ function transformReportQuery(
 /** Compile $parameter references outside strings/comments to prepared `?`s. */
 export function compileReportQuery(
   source: string,
-  report: Pick<ReportDocumentV1, "parameters">,
+  report: ReportParameterScope,
   values: Record<string, ReportParameterValue>,
 ): CompiledReportQuery {
   const params: unknown[] = [];
@@ -141,7 +141,7 @@ export function compileReportQuery(
  *  Never throws for unknown tokens, so it can drive dependency graphs and lint. */
 export function scanReportQuery(
   source: string,
-  report: Pick<ReportDocumentV1, "parameters">,
+  report: ReportParameterScope,
 ): { references: string[]; unknown: string[] } {
   const references = new Set<string>();
   const unknown = new Set<string>();
@@ -171,59 +171,8 @@ function sqlLiteral(value: unknown): string {
 /** Produce a runnable snapshot of a parameterized dataset for the SQL editor. */
 export function materializeReportQuery(
   source: string,
-  report: Pick<ReportDocumentV1, "parameters">,
+  report: ReportParameterScope,
   values: Record<string, ReportParameterValue>,
 ): string {
   return transformReportQuery(source, report, values, sqlLiteral);
-}
-
-function displayParameterValue(value: ReportParameterValue, part?: "start" | "end"): string {
-  if (value == null) return "";
-  if (Array.isArray(value)) return value.join(", ");
-  if (typeof value === "object") {
-    if (part) return value[part] ?? "";
-    const start = value.start ?? "";
-    const end = value.end ?? "";
-    return start && end ? `${start} – ${end}` : start || end;
-  }
-  return String(value);
-}
-
-/** Replace report parameter tokens in reader-facing text without changing the
- * stored template. Unknown tokens are preserved so ordinary dollar-prefixed
- * text is not silently removed. Date ranges accept both `$key` (a readable
- * range) and the same `$key_start` / `$key_end` tokens used by SQL. */
-export function interpolateReportText(
-  source: string,
-  report: Pick<ReportDocumentV1, "parameters">,
-  values: Record<string, ReportParameterValue>,
-): string {
-  const byKey = new Map(report.parameters.map((parameter) => [parameter.key, parameter]));
-  const escapedDollar = "\u0000cupola-dollar\u0000";
-  return source.replaceAll("$$", escapedDollar).replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (token, tokenName: string) => {
-    let key = tokenName;
-    let part: "start" | "end" | "label" | "value" | undefined;
-    if (!byKey.has(tokenName) && tokenName.endsWith("_start") && byKey.get(tokenName.slice(0, -6))?.type === "date_range") {
-      key = tokenName.slice(0, -6);
-      part = "start";
-    } else if (!byKey.has(tokenName) && tokenName.endsWith("_end") && byKey.get(tokenName.slice(0, -4))?.type === "date_range") {
-      key = tokenName.slice(0, -4);
-      part = "end";
-    } else if (!byKey.has(tokenName) && tokenName.endsWith("_label") && byKey.has(tokenName.slice(0, -6))) {
-      key = tokenName.slice(0, -6);
-      part = "label";
-    } else if (!byKey.has(tokenName) && tokenName.endsWith("_value") && byKey.has(tokenName.slice(0, -6))) {
-      key = tokenName.slice(0, -6);
-      part = "value";
-    }
-    const parameter = byKey.get(key);
-    if (!parameter) return token;
-    const value = values[key] ?? parameter.defaultValue;
-    const staticOptions = parameter.options?.kind === "static" ? parameter.options.values : undefined;
-    if (part === "label" && staticOptions) {
-      const selected = Array.isArray(value) ? value : [value];
-      return selected.map((item) => staticOptions.find((option) => String(option.value) === String(item))?.label ?? String(item ?? "")).join(", ");
-    }
-    return displayParameterValue(value, part === "start" || part === "end" ? part : undefined);
-  }).replaceAll(escapedDollar, "$");
 }

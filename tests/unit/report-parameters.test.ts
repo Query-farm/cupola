@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { compileReportQuery, hasSqlStatements, interpolateReportText, materializeReportQuery } from "../../src/lib/reports/parameters";
+import { compileReportQuery, hasSqlStatements, materializeReportQuery } from "../../src/lib/reports/parameters";
 import type { ReportParameter } from "../../src/lib/reports/types";
 
 const parameters: ReportParameter[] = [
@@ -53,29 +53,6 @@ describe("materializeReportQuery", () => {
     const parameters: any[] = [{ id: "value", key: "value", label: "Value", type: "number", defaultValue: 1 }];
     expect(materializeReportQuery("SELECT '$value' AS label, $value AS value -- $value", { parameters }, { value: 2 }))
       .toBe("SELECT '$value' AS label, 2 AS value -- $value");
-  });
-});
-
-describe("interpolateReportText", () => {
-  test("renders current scalar, list, and date-range values in display text", () => {
-    expect(interpolateReportText(
-      "48-Hour Forecast — $region · $period ($period_start to $period_end) · $categories",
-      { parameters },
-      { region: "Glen Allen", period: { start: "2026-08-19", end: "2026-08-21" }, categories: ["Weather", "Air quality"] },
-    )).toBe("48-Hour Forecast — Glen Allen · 2026-08-19 – 2026-08-21 (2026-08-19 to 2026-08-21) · Weather, Air quality");
-  });
-
-  test("uses defaults and preserves unknown tokens", () => {
-    expect(interpolateReportText("$region · $unknown", { parameters }, {})).toBe("East · $unknown");
-  });
-
-  test("supports option labels, exact values, and escaped dollar signs", () => {
-    const withCity: ReportParameter[] = [...parameters, {
-      id: "p4", key: "city", label: "City", type: "select", defaultValue: "RIC",
-      options: { kind: "static", values: [{ label: "Richmond, Virginia", value: "RIC" }] },
-    }];
-    expect(interpolateReportText("$city_label [$city_value] costs $$5", { parameters: withCity }, { city: "RIC" }))
-      .toBe("Richmond, Virginia [RIC] costs $5");
   });
 });
 

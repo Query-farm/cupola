@@ -5,9 +5,8 @@ import {
   fingerprintSemanticPlan,
   prepareSemanticReportDataset,
   resolveReportSemanticQuery,
-  semanticParameterReferences,
 } from "@/lib/reports/semantic";
-import type { ReportDocumentV1, ReportSemanticDataset } from "@/lib/reports/types";
+import type { ReportParameterScope, ReportSemanticDataset } from "@/lib/reports/types";
 
 const semanticDataset: ReportSemanticDataset = {
   id: "revenue",
@@ -24,7 +23,7 @@ const semanticDataset: ReportSemanticDataset = {
   },
 };
 
-const report: Pick<ReportDocumentV1, "parameters"> = {
+const report: ReportParameterScope = {
   parameters: [
     { id: "country", key: "country", label: "Country", type: "select", defaultValue: "US" },
     { id: "period", key: "period", label: "Period", type: "date_range", defaultValue: { start: "2026-01-01", end: "2026-01-31" } },
@@ -78,10 +77,6 @@ describe("semantic report datasets", () => {
     expect(resolved.filters.and[0].value).toBe("DE");
     expect(resolved.filters.and[1].value).toBe("2026-02-01");
     expect((semanticDataset.query.filters as any).and[0].value).toEqual({ report_parameter: "country" });
-    expect(semanticParameterReferences(semanticDataset.query)).toEqual([
-      { report_parameter: "country" },
-      { report_parameter: "period", part: "start" },
-    ]);
   });
 
   test("compiles through the public compiler and retains parameterized SQL", async () => {

@@ -99,24 +99,14 @@ function beginLoginFlow(serviceUrl: string, path: string): boolean {
 }
 
 interface CatalogAppProps {
-  showcase?: "report-guide";
   initialTab?: TabId;
   defaultServiceUrl?: string;
 }
 
-const REPORT_SHOWCASE_CATALOG: CatalogData = {
-  catalogName: "Report examples",
-  catalogComment: "Local canned data used by the report block gallery.",
-  catalogTags: {},
-  defaultSchema: null,
-  schemas: [],
-};
-
-export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogAppProps = {}) {
-  const showcaseMode = showcase === "report-guide";
-  const [data, setData] = useState<CatalogData | null>(() => showcaseMode ? REPORT_SHOWCASE_CATALOG : null);
+export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = {}) {
+  const [data, setData] = useState<CatalogData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(!showcaseMode);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const shellInsertRef = useRef<((text: string) => void) | null>(null);
@@ -125,7 +115,6 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
   // vgi-app-view key) so a reload returns to the same tab.
   const [activeTab, setActiveTab] = useState<TabId>(() => {
     if (initialTab) return initialTab === "evidence" ? "reports" : initialTab;
-    if (showcaseMode) return "reports";
     try {
       const stored = localStorage.getItem("vgi-active-tab") as TabId | null;
       // Perspective is backed by transient query/table data that does not
@@ -142,7 +131,6 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
   });
   // Collapsible catalog sidebar (persisted).
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
-    if (showcaseMode) return true;
     try { return localStorage.getItem("vgi-sidebar-collapsed") === "1"; } catch { return false; }
   });
   const isNarrow = useMediaQuery("(max-width: 767px)");
@@ -222,7 +210,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
   // gets the query staged and ready, but chooses when to execute it.
   const [pendingEditorSql, setPendingEditorSql] = useState<PendingEditorSql | null>(null);
   const inventory = useCatalogInventory();
-  const catalogs = showcaseMode && !inventory.ready ? [REPORT_SHOWCASE_CATALOG] : inventory.catalogs;
+  const catalogs = inventory.catalogs;
   const attachedCatalogs = catalogs.filter(c => !c.primary && c.catalogName !== "memory");
   // Brand mark for the welcome / connecting / error screens. Defaults to the
   // Cupola mark and is replaced when a `?theme=` config supplies its own logo.
@@ -245,15 +233,13 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
 
   // Persist the active tab.
   useEffect(() => {
-    if (showcaseMode) return;
     try { localStorage.setItem("vgi-active-tab", activeTab); } catch {}
-  }, [activeTab, showcaseMode]);
+  }, [activeTab]);
 
   // Persist sidebar collapse.
   useEffect(() => {
-    if (showcaseMode) return;
     try { localStorage.setItem("vgi-sidebar-collapsed", sidebarCollapsed ? "1" : "0"); } catch {}
-  }, [sidebarCollapsed, showcaseMode]);
+  }, [sidebarCollapsed]);
 
   // ui.openInEditor: switch to the editor tab and queue the SQL.
   // Invoked by ExampleQueries' Run button and the AI panels' "open in new tab".
@@ -301,19 +287,17 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
     });
   }, [activeTab]);
 
-  const serviceUrl = useMemo(() => showcaseMode ? "" : (hasExplicitService() ? getServiceUrl() : defaultServiceUrl || getServiceUrl()), [showcaseMode, defaultServiceUrl]);
+  const serviceUrl = useMemo(() => hasExplicitService() ? getServiceUrl() : defaultServiceUrl || getServiceUrl(), [defaultServiceUrl]);
   // Every surface records its queries through this slot; they are kept per server
   // and read in the editor's History menu.
   useEffect(() => {
-    if (showcaseMode) return;
     ui.addQueryHistoryEntry = (entry) => addQueryHistoryEntry(serviceUrl, entry);
     return () => { ui.addQueryHistoryEntry = null; };
-  }, [serviceUrl, showcaseMode]);
+  }, [serviceUrl]);
   // `?attach_options=` URL param wins over the localStorage value and is
   // persisted so a future visit without the param keeps the same options.
   // An explicit empty value clears them.
   const attachOptions = useMemo(() => {
-    if (showcaseMode) return undefined;
     const fromUrl = getAttachOptionsFromUrl();
     let base: string | undefined;
     if (fromUrl !== undefined && hasExplicitService()) {
@@ -331,7 +315,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
       return base ? `${base}, ${opt}` : opt;
     }
     return base;
-  }, [serviceUrl, showcaseMode]);
+  }, [serviceUrl]);
 
   // Tag every Sentry event with the service URL and (when known) the catalog
   // name. Lets us slice errors by tenant without putting URLs in messages.
@@ -434,13 +418,6 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
         await catalogInventory.refresh();
         return;
       }
-      if (showcaseMode) {
-        setData(REPORT_SHOWCASE_CATALOG);
-        setError(null);
-        setLoading(false);
-        setRefreshing(false);
-        return;
-      }
       // No ?service= — don't try to fetchCatalog against cupola's own origin
       // (which would 404 on /__describe__). The render path below detects
       // "no data + no error + not loading + !hasExplicitService" and shows
@@ -508,7 +485,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
         setRefreshing(false);
       }
     },
-    [serviceUrl, showcaseMode, defaultServiceUrl]
+    [serviceUrl, defaultServiceUrl]
   );
 
   // Process any pending SPA OAuth callback before the first catalog fetch.
@@ -595,7 +572,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
   // SSR. On the client, ?service=... makes it true. Without the gate the
   // SSR output (WelcomePage) and the first client render (loading spinner)
   // disagree. After mount we're allowed to diverge from the SSR snapshot.
-  if (mounted && !showcaseMode && !defaultServiceUrl && !hasExplicitService()) {
+  if (mounted && !defaultServiceUrl && !hasExplicitService()) {
     return <WelcomePage logoUrl={logoUrl} />;
   }
 
@@ -609,7 +586,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
   // getServiceUrl()) before the effect flipped `mounted` and the welcome page
   // above took over. With no service there is nothing to connect to, so there
   // is nothing to report progress on.
-  if (loading && (!mounted || showcaseMode || defaultServiceUrl || hasExplicitService())) {
+  if (loading && (!mounted || defaultServiceUrl || hasExplicitService())) {
     // Pre-mount (SSR + first client paint) we can't read window.location, so
     // we don't yet know whether a service was named. Say something true and
     // neutral; the heading firms up to "Connecting to <service>" one commit
@@ -646,7 +623,6 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
       <Header
         catalogName={data.catalogName}
         serviceUrl={serviceUrl}
-        showServiceSwitcher={!showcaseMode}
       />
       <AppTabBar
         activeTab={activeTab}
@@ -745,7 +721,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
           {reportsMounted && (
             <div className="absolute inset-0 overflow-hidden" style={activeTab === "reports" ? undefined : { visibility: "hidden", zIndex: -1 }}>
               <ErrorBoundary><Suspense fallback={<div className="p-6">Loading reports…</div>}>
-                <EvidencePanel catalogName={data.catalogName} serviceUrl={serviceUrl} catalogs={catalogs} defaultToLibrary={!showcaseMode && initialTab !== "evidence"} />
+                <EvidencePanel catalogName={data.catalogName} serviceUrl={serviceUrl} catalogs={catalogs} defaultToLibrary={initialTab !== "evidence"} />
               </Suspense></ErrorBoundary>
             </div>
           )}

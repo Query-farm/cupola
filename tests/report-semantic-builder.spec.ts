@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { APP_ORIGIN, BASE, T_SHELL_BOOT, waitForShellBridge } from "./helpers";
+import { APP_ORIGIN, BASE } from "./helpers";
 import type { ReportParameter } from "../src/lib/reports/types";
 import type { SemanticCompileResult } from "../src/lib/semantic-compiler";
 import {
@@ -17,7 +17,8 @@ async function setup(
   functions: boolean | "pipeline" = false,
   parameters: ReportParameter[] = [],
 ) {
-  await page.goto(`${APP_ORIGIN}${BASE}report-guide/`);
+  // Any page the dev server serves can host the fixture.
+  await page.goto(`${APP_ORIGIN}${BASE}`);
   await page.evaluate(
     async ({ url, query, functions, parameters }) =>
       (await import(/* @vite-ignore */ url)).mountBuilder(
@@ -280,81 +281,6 @@ test("function pipelines compile chained entity drivers and retain filters and b
     expect(result.plan.fact_branches[0].invocations).toHaveLength(2);
     expect(result.plan.sql).toContain("LATERAL");
   }
-});
-
-test("new report → KPI → governed dataset → live test → apply preserves model labels and units", async ({
-  page,
-}) => {
-  test.setTimeout(60_000);
-  const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`${APP_ORIGIN}${BASE}report-guide/`);
-  await waitForShellBridge(page);
-  await page.evaluate(
-    async (url) => (await import(/* @vite-ignore */ url)).mountWorkspace(),
-    fixtureUrl,
-  );
-  const workspace = page.locator("#semantic-test-host");
-  await workspace.getByTestId("report-add-block").click();
-  // Menus are rendered in a portal outside the workspace.
-  await page.getByTestId("report-add-kpi").click();
-  const editor = workspace.getByTestId("report-block-editor");
-  await expect(
-    editor.getByText("This report has no datasets for blocks yet."),
-  ).toBeVisible();
-  await editor.getByRole("button", { name: "Add governed metrics" }).click();
-  await expect(
-    workspace.getByTestId("semantic-query-validation"),
-  ).toContainText("Model validation passed");
-  await workspace.getByText("Advanced semantic JSON", { exact: true }).click();
-  const jsonEditor = workspace.getByTestId("report-dataset-semantic-editor");
-  // Catalog order comes from the session inventory. Select the intended
-  // measure explicitly instead of depending on which catalog sorts first.
-  await jsonEditor.fill(JSON.stringify({ measures: [{ ...salesRef, member_id: 'revenue' }], limit: 1000 }));
-  const validQuery = await jsonEditor.inputValue();
-  await jsonEditor.fill('{"measures":[null]}');
-  await expect(
-    workspace.getByText(/Repair it in Advanced semantic JSON/),
-  ).toBeVisible();
-  await jsonEditor.fill(validQuery);
-  await expect(
-    workspace.getByTestId("semantic-query-validation"),
-  ).toContainText("Model validation passed");
-  await workspace
-    .getByRole("button", { name: "Test query", exact: true })
-    .click();
-  await expect(workspace.getByTestId("report-apply-dataset")).toBeEnabled({
-    timeout: T_SHELL_BOOT,
-  });
-  await workspace.getByTestId("report-apply-dataset").click();
-  await expect(editor).toBeVisible();
-  await editor.getByLabel("Value", { exact: true }).selectOption("revenue");
-  await expect(
-    editor
-      .getByLabel("Value", { exact: true })
-      .locator('option[value="revenue"]'),
-  ).toHaveText("Net revenue (USD) · revenue");
-  await expect(editor.getByLabel("Title", { exact: true })).toHaveAttribute(
-    "placeholder",
-    "Net revenue",
-  );
-  await expect(
-    editor.getByText("Revenue after discounts.", { exact: false }),
-  ).toBeVisible();
-  await editor.getByTestId("report-block-apply").click();
-  await expect(workspace.getByTestId("report-kpi-value")).toHaveText("120 USD");
-  await workspace.getByRole("button", { name: "Save report draft" }).click();
-  await expect(
-    workspace.getByRole("button", { name: "Save report draft" }),
-  ).toBeDisabled();
-  const saved = await page.evaluate(
-    async (url) => (await import(/* @vite-ignore */ url)).getSavedReport(),
-    fixtureUrl,
-  );
-  expect(saved.document.datasets[0].kind).toBe("semantic");
-  expect(saved.document.blocks[0].valueColumn).toBe("revenue");
-  expect(saved.document.blocks[0].title).toBeUndefined();
-  expect(errors).toEqual([]);
 });
 
 test('semantic field tree keeps selections, supplies names and disambiguates duplicate outputs', async ({ page }) => {

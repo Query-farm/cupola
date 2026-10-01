@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { CHART_TOOL, TOOLS, runAgentTurn, type Tool } from "../../src/lib/ai-agent";
-import { REPORT_TOOLS } from "../../src/lib/reports/agent-tools";
+import { EVIDENCE_AGENT_TOOLS } from "../../src/lib/evidence/agent";
 
 const realFetch = globalThis.fetch;
 
@@ -12,7 +12,7 @@ describe("Anthropic tool schema compatibility", () => {
   test.each<{ surface: string; tools: Tool[] }>([
     { surface: "editor and terminal", tools: TOOLS },
     { surface: "Ask AI chat", tools: [...TOOLS, CHART_TOOL] },
-    { surface: "report authoring", tools: REPORT_TOOLS },
+    { surface: "report authoring", tools: EVIDENCE_AGENT_TOOLS },
   ])("$surface sends object schemas without top-level combinators", async ({ tools }) => {
     const requests: Array<{ tools: Tool[] }> = [];
     globalThis.fetch = (async (_url, init) => {

@@ -1,13 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-  semanticBlockDefaults,
-  semanticChartSpec,
-  semanticOutput,
-  formatSemanticValue,
-  type SemanticPresentation,
-} from "../../src/lib/reports/semantic-presentation";
-import { createReportBlock } from "../../src/lib/reports/direct-editor";
-import { createReportShowcase } from "../../src/lib/reports/showcase";
+import { semanticOutputLabel } from "../../src/lib/reports/semantic-presentation";
 import {
   semanticBuilderShapeError,
   renameSemanticOutput,
@@ -19,127 +11,10 @@ import {
   salesRef,
 } from "../fixtures/report-semantic-catalogs";
 
-const plan: SemanticPresentation = {
-  outputs: [
-    {
-      name: "day",
-      kind: "dimension",
-      title: "Observation date",
-      data_type: "DATE",
-    },
-    {
-      name: "temperature",
-      kind: "measure",
-      title: "Average temperature",
-      data_type: "DOUBLE",
-      unit: "Cel",
-      description: "Daily average.",
-    },
-  ],
-  output_units: { temperature: "[degF]" },
-};
-
-test("chart and tooltip defaults use effective output metadata without mutating saved specs", () => {
-  const spec = {
-    layer: [
-      {
-        mark: "line",
-        encoding: {
-          x: { field: "day" },
-          y: { field: "temperature" },
-          tooltip: [{ field: "temperature" }],
-        },
-      },
-    ],
-  };
-  const original = structuredClone(spec);
-  const decorated = semanticChartSpec(spec, plan);
-  expect(decorated.layer[0].encoding.x).toEqual({
-    field: "day",
-    title: "Observation date",
-    type: "temporal",
-  });
-  expect(decorated.layer[0].encoding.y).toEqual({
-    field: "temperature",
-    title: "Average temperature ([degF])",
-    type: "quantitative",
-  });
-  expect(decorated.layer[0].encoding.tooltip[0]).toEqual(
-    decorated.layer[0].encoding.y,
-  );
-  expect(spec).toEqual(original);
-});
-
-test("explicit chart encodings and titles override model defaults, including intentionally hidden titles", () => {
-  const spec = {
-    mark: "bar",
-    encoding: {
-      x: { field: "day", type: "ordinal", title: "Week" },
-      y: {
-        field: "temperature",
-        type: "quantitative",
-        title: null,
-        axis: { format: ".2f" },
-      },
-    },
-  };
-  expect(semanticChartSpec(spec, plan)).toEqual(spec);
-  expect(semanticChartSpec(spec)).toBe(spec);
-  const count = {
-    mark: "bar",
-    encoding: { y: { field: "temperature", aggregate: "count" } },
-  };
-  expect(semanticChartSpec(count, plan)).toEqual(count);
-  const transformed = {
-    ...spec,
-    transform: [{ calculate: "datum.temperature / 100", as: "temperature" }],
-  };
-  expect(semanticChartSpec(transformed, plan)).toBe(transformed);
-});
-
-test("KPI and chart creation select semantic measures even when result dimensions come first", () => {
-  const report = createReportShowcase();
-  const kpi = createReportBlock(
-    report,
-    "kpi",
-    "weather",
-    ["day", "temperature"],
-    plan,
-  );
-  expect(kpi.type === "kpi" && kpi.valueColumn).toBe("temperature");
-  const chart = createReportBlock(
-    report,
-    "chart",
-    "weather",
-    ["temperature", "day"],
-    plan,
-  );
-  expect(chart.type === "chart" && chart.spec.encoding.x.field).toBe("day");
-  expect(chart.type === "chart" && chart.spec.encoding.y.field).toBe(
-    "temperature",
-  );
-  expect(semanticBlockDefaults(kpi, plan).title).toBe("Average temperature");
-  expect(
-    semanticBlockDefaults({ ...kpi, title: "Custom title" }, plan).title,
-  ).toBe("Custom title");
-  expect(kpi.title).toBeUndefined();
-});
-
-test("units annotate values without scaling percentages or attaching units to nulls", () => {
-  const format = (value: unknown) => (value == null ? "—" : String(value));
-  expect(formatSemanticValue(68, "%", format)).toBe("68%");
-  expect(formatSemanticValue(0.68, "%", format)).toBe("0.68%");
-  expect(formatSemanticValue(20, "Cel", format)).toBe("20 °C");
-  expect(formatSemanticValue(68, "[degF]", format)).toBe("68 °F");
-  expect(formatSemanticValue(42, "EUR", format)).toBe("42 EUR");
-  expect(formatSemanticValue(null, "USD", format)).toBe("—");
-  expect(formatSemanticValue(2, "1", format)).toBe("2");
-  expect(
-    semanticOutput(
-      { ...plan, output_units: { temperature: null } },
-      "temperature",
-    )?.unit,
-  ).toBeNull();
+test("output labels use the model title and unit, falling back to the column name", () => {
+  expect(semanticOutputLabel({ name: "temperature", kind: "measure", title: "Average temperature", unit: "Cel" }, "temperature")).toBe("Average temperature (Cel)");
+  expect(semanticOutputLabel({ name: "ratio", kind: "measure", unit: "1" }, "ratio")).toBe("ratio");
+  expect(semanticOutputLabel(undefined, "net_revenue")).toBe("net revenue");
 });
 
 test("alias changes affect output references but leave model members and literals intact", () => {

@@ -8,7 +8,7 @@ import {
   type SemanticMember,
 } from "@/lib/semantic-model";
 import type {
-  ReportDocumentV1,
+  ReportParameterScope,
   ReportSemanticDataset,
 } from "@/lib/reports/types";
 import { Input } from "@/components/ui/input";
@@ -36,7 +36,7 @@ import {
 
 interface Props {
   dataset: ReportSemanticDataset;
-  report: Pick<ReportDocumentV1, "parameters">;
+  report: ReportParameterScope;
   catalogs: readonly CatalogData[];
   onChange: (dataset: ReportSemanticDataset) => void;
 }

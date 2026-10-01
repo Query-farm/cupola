@@ -3,7 +3,7 @@ import { buildSemanticEnvironment } from "../semantic-model";
 import type { SemanticCompileResult, SemanticPlan, SemanticQuery } from "../semantic-compiler";
 import { compileSemanticQuery } from "../semantic-compiler";
 import type {
-  ReportDocumentV1,
+  ReportParameterScope,
   ReportParameter,
   ReportParameterValue,
   ReportSemanticDataset,
@@ -43,7 +43,7 @@ function parameterValue(
  * request independently. */
 export function resolveReportSemanticQuery(
   template: ReportSemanticQueryTemplate,
-  report: Pick<ReportDocumentV1, "parameters">,
+  report: ReportParameterScope,
   values: Record<string, ReportParameterValue>,
 ): SemanticQuery {
   const byKey = new Map(report.parameters.map((parameter) => [parameter.key, parameter]));
@@ -62,17 +62,6 @@ export function resolveReportSemanticQuery(
     return value;
   };
   return visit(template) as SemanticQuery;
-}
-
-export function semanticParameterReferences(template: ReportSemanticQueryTemplate): ReportSemanticParameterRef[] {
-  const references: ReportSemanticParameterRef[] = [];
-  const visit = (value: unknown) => {
-    if (isReportSemanticParameterRef(value)) { references.push(value); return; }
-    if (Array.isArray(value)) { value.forEach(visit); return; }
-    if (isRecord(value)) Object.values(value).forEach(visit);
-  };
-  visit(template);
-  return references;
 }
 
 function normalizedMember(member: any) {
@@ -143,7 +132,7 @@ export interface PreparedSemanticReportDataset {
 
 export async function prepareSemanticReportDataset(
   dataset: ReportSemanticDataset,
-  report: Pick<ReportDocumentV1, "parameters">,
+  report: ReportParameterScope,
   values: Record<string, ReportParameterValue>,
   catalogs: readonly CatalogData[],
 ): Promise<PreparedSemanticReportDataset> {

@@ -7,8 +7,6 @@ import type { ReportParameter } from "./types";
 
 export const semanticEntityKey = (ref: SemanticRef) =>
   `${ref.catalog_id}::${ref.entity_id}`;
-export const semanticMemberKey = (ref: SemanticRef & { member_id: string }) =>
-  `${semanticEntityKey(ref)}::${ref.member_id}`;
 export const semanticEntityRef = (entity: SemanticEntity): SemanticRef => ({
   catalog_id: entity.catalogId,
   entity_id: entity.entityId,

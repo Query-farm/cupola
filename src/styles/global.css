@@ -305,29 +305,6 @@
   white-space: nowrap;
 }
 
-/* Report export/query actions stay out of the visual hierarchy until the
- * reader engages with a block. Keep them available on keyboard focus and on
- * touch devices, where hover does not exist. */
-.report-block-actions {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 150ms ease;
-}
-.report-canvas .react-grid-item:hover .report-block-actions,
-.report-block-actions:focus-within {
-  opacity: 1;
-  pointer-events: auto;
-}
-@media (hover: none) {
-  .report-block-actions {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-@page report {
-  size: landscape;
-  margin: 12mm;
-}
 .evidence-print-heading { display: none; }
 @page evidence-report {
   size: auto;
@@ -335,41 +312,6 @@
 }
 @media print {
   body * { visibility: hidden !important; }
-  .report-canvas, .report-canvas * { visibility: visible !important; }
-  .report-canvas {
-    position: absolute !important;
-    inset: 0 !important;
-    overflow: visible !important;
-    padding: 0 !important;
-    background: white !important;
-    color: black !important;
-    width: 100% !important;
-    page: report;
-    print-color-adjust: exact;
-  }
-  .report-authoring-control { display: none !important; }
-  .report-authoring-group-layer { display: none !important; }
-  .print-only { display: block !important; }
-  .report-drag-handle { cursor: default !important; }
-  .report-canvas .react-grid-layout {
-    height: auto !important;
-    display: grid !important;
-    grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
-    grid-auto-rows: 56px !important;
-    gap: 12px !important;
-  }
-  .report-canvas .react-grid-item {
-    position: relative !important;
-    transform: none !important;
-    inset: auto !important;
-    width: auto !important;
-    height: auto !important;
-    min-height: 0 !important;
-    break-inside: avoid;
-    grid-column: var(--report-grid-column) / span var(--report-grid-width);
-    grid-row: var(--report-grid-row) / span var(--report-grid-height);
-  }
-
   /* Evidence lives inside the fixed-height app and renders into a shadow root.
      The native print handler marks just the active report's ancestor chain. */
   [data-evidence-print-path] {
