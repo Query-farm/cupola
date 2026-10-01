@@ -19,7 +19,7 @@ import {
   extractOrigin,
 } from "@/lib/oauth-client";
 import { SettingsProvider } from "@/lib/settings";
-import { terminal, ui, setShellWorkerSentryUser } from "@/lib/shell-bridge";
+import { engine, terminal, ui, setShellWorkerSentryUser } from "@/lib/shell-bridge";
 import { addQueryHistoryEntry } from "@/lib/editor/query-history";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
 import { loadTheme } from "@/lib/theme";
@@ -467,6 +467,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   const loadCatalog = useCallback(
     async (isRefresh = false) => {
       if (isRefresh && catalogInventory.getSnapshot().ready) {
+        await clearGrainliftCaches();
         await catalogInventory.refresh();
         return;
       }
@@ -1395,5 +1396,20 @@ async function advertisesOAuth(httpUrl: string): Promise<boolean> {
     return response.ok;
   } catch {
     return false;
+  }
+}
+
+/** The grainlift extension caches each attached gateway's schemas and tables;
+ *  an explicit refresh drops that cache so tables created, dropped or altered
+ *  on the gateway since the ATTACH show up. Best effort: a failure leaves the
+ *  cached catalog in place. */
+async function clearGrainliftCaches(): Promise<void> {
+  const attached = catalogInventory.getSnapshot().catalogs.some((c) => c.databaseType === "grainlift");
+  if (!attached || !engine.query) return;
+  try {
+    const result = await engine.query("SELECT * FROM grainlift_clear_cache()");
+    if (!result.ok) console.warn("[catalog] grainlift_clear_cache failed:", result.error);
+  } catch (error) {
+    console.warn("[catalog] grainlift_clear_cache failed:", error);
   }
 }
