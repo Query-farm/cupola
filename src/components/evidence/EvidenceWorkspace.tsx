@@ -467,7 +467,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
       next.semanticDatasets = [{ id: crypto.randomUUID(), kind: 'semantic', name: 'model_data', query: promotion.query }];
       next.source = `# ${next.title}\n\n${promotion.markdown || ''}\n\n{% table data="model_data" /%}`;
     } else next.source = `# ${next.title}\n\n${promotion.markdown || ''}\n\n\`\`\`sql query_data\n${promotion.sql}\n\`\`\`\n\n{% table data="query_data" /%}`;
-    openReport(next, true, true);
+    // It carries the reader's query, so it saves at once; a blank new report waits for an edit.
+    openReport(next, true, true, 'replace', true);
   }, [promotion, busy]);
 
   function change(next: EvidenceReport) { reportRef.current = next; setReport(next); setNotice(''); }
@@ -603,7 +604,9 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
       void refresh(reportRef.current);
     } catch (e) { setError(`Could not restore that version: ${message(e)}`); }
   }
-  function openReport(next: EvidenceReport, updateUrl = true, fresh = false, history: 'replace' | 'none' = 'replace') {
+  /** `saveNow`: a new report whose content the reader brought (Add to report) saves at once. A blank
+   *  one from a template doesn't, so one opened and abandoned never lands in the list. */
+  function openReport(next: EvidenceReport, updateUrl = true, fresh = false, history: 'replace' | 'none' = 'replace', saveNow = false) {
     if (busyRef.current) return;
     if (next.id !== reportRef.current.id) {
       autosave();
@@ -618,6 +621,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     session.current = crypto.randomUUID();
     // A new report is named in the URL too, so a reload finds its draft if it never saved.
     if (updateUrl) navigate(false, next.id);
+    if (saveNow && fresh) persist(next, { kind: 'edit', session: session.current });
     void refresh(draft ?? next, history);
   }
   /** Reopen a new report that never saved, from its recovery draft; it saves as soon as it can. */
@@ -752,8 +756,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
           <div className="flex min-w-0 flex-col">
             <span className="max-w-72 truncate text-sm font-semibold">{report.title.trim() || UNTITLED_REPORT}</span>
             <span className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-              <span role="status" aria-label="Save status" className={saveError ? 'text-destructive' : undefined} title={saveError ? 'Your changes are kept in this browser, and saved once the report is valid again.' : 'Changes save automatically · ⌘ / Ctrl + S saves now'}>
-                {saveError ? `Not saved: ${saveError}` : !dirty ? 'Saved' : saved || asSaved(report) !== baseline.current ? 'Saving…' : 'Not saved yet'}
+              <span role="status" aria-label="Save status" className={saveError ? 'text-destructive' : undefined} title={saveError ? 'Your changes are kept in this browser, and saved once the report is valid again.' : 'Changes save automatically'}>
+                {saveError ? `Not saved: ${saveError}` : !dirty ? 'Saved' : saved || asSaved(report) !== baseline.current ? 'Saving…' : 'Not saved yet · saves when you edit it'}
               </span>
               {(updated || !quietStatus) && <span aria-hidden>·</span>}
               <span role="status" aria-label="Report refresh status">
