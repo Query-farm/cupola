@@ -33,7 +33,7 @@ async function mockAnthropic(page: Page) {
   return { requests, release: (index: number) => expect.poll(() => typeof gates[index]).toBe("function").then(() => gates[index]()) };
 }
 
-async function exercise(page: Page, panel: Locator, mock: Awaited<ReturnType<typeof mockAnthropic>>) {
+async function exercise(panel: Locator, mock: Awaited<ReturnType<typeof mockAnthropic>>) {
   const { requests, release } = mock;
   const input = panel.getByRole("textbox", { name: "Chat message input" });
 
@@ -87,7 +87,7 @@ test("Ask AI takes messages sent while it works", async ({ page }) => {
   await gotoApp(page);
   await waitForShellBridge(page);
   await page.getByTestId("tab-askai").click();
-  await exercise(page, page.locator("body"), mock);
+  await exercise(page.locator("body"), mock);
 });
 
 test("the editor's Ask AI panel takes messages sent while it works", async ({ page }) => {
@@ -96,5 +96,5 @@ test("the editor's Ask AI panel takes messages sent while it works", async ({ pa
   await waitForShellBridge(page);
   await openEditor(page);
   await page.getByTestId("editor-ask-ai").click();
-  await exercise(page, page.getByTestId("editor-ai-panel"), mock);
+  await exercise(page.getByTestId("editor-ai-panel"), mock);
 });

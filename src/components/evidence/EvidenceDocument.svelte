@@ -12,6 +12,7 @@
   import { createPageFiltersContext } from '@evidence/core/page-filters-context';
   import { createInlineQueriesContext } from '@evidence/core/user-components/common/inline-queries';
   import { setShowErrorsContext } from '@evidence/core/show-errors.context';
+  import * as Tooltip from '@evidence/core/shadcn/components/ui/tooltip';
   import { setMetadataContext } from '@evidence/core/metadata';
   import { CupolaMetadata } from '../../lib/evidence/catalog-metadata.svelte';
   import { InlineQueryMetadata, setInlineQueryMetadataContext } from '@evidence/core/metadata/inline-query-metadata.svelte';
@@ -88,7 +89,14 @@
 
 <div class="prose max-w-none evidence-document" data-testid="evidence-document">
   <svelte:boundary onerror={(error) => props.onError(error instanceof Error ? error.message : String(error))}>
-    <Renderer tree={processed.tree} validationErrors={checkedErrors} />
+    <!-- Evidence's app wraps every page in a Tooltip.Provider, and its components assume one:
+         SamplingIndicator (on 14 components) opens a Tooltip.Root whenever a result is sampled.
+         Without it that throws "Context Tooltip.Provider not found", and the component's error
+         boundary removes the component without a trace. Imported through the core, so it is
+         the same bits-ui copy as the core's tooltips. -->
+    <Tooltip.Provider>
+      <Renderer tree={processed.tree} validationErrors={checkedErrors} />
+    </Tooltip.Provider>
     {#snippet failed(error)}
       <p role="alert">This preview could not render: {error instanceof Error ? error.message : String(error)}. Correct the document and update the preview.</p>
     {/snippet}

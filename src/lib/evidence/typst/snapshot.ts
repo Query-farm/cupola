@@ -1,7 +1,8 @@
+import { getSandboxFrameCapture } from '@evidence/core/user-components/sandbox/png-capture-registry';
 import type { SnapshotRenderer } from './extract';
 import type { PdfFont } from './load-compiler';
 
-/** Capture custom HTML (maps, progress bars, heat grids, images) as PNG.
+/** Capture custom HTML (maps, progress bars, heat grids, images, sandboxed blocks) as PNG.
  *
  * html-to-image redraws the element inside an SVG `foreignObject`, which cannot
  * see the page's fonts, so the PDF's own fonts go in as embedded CSS: captured
@@ -16,7 +17,8 @@ export async function loadSnapshotRenderer(fonts: PdfFont[]): Promise<SnapshotRe
     // Lay HTML out at the printed width first, so it wraps like a page rather than
     // shrinking a screen-wide capture to unreadable type. Canvas content (maps)
     // would have to re-render at the new size, so it is captured as it is.
-    const reflow = !el.querySelector('canvas') && Math.abs(el.getBoundingClientRect().width - width) > 1;
+    const frames = sandboxFrames(el);
+    const reflow = !el.querySelector('canvas') && !frames.length && Math.abs(el.getBoundingClientRect().width - width) > 1;
     const previous = el.style.cssText;
     if (reflow) {
       el.style.width = `${width}px`;
@@ -24,6 +26,7 @@ export async function loadSnapshotRenderer(fonts: PdfFont[]): Promise<SnapshotRe
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     }
     let canvas: HTMLCanvasElement;
+    const overlays = await overlaySandboxFrames(frames);
     try {
       canvas = await toCanvas(el, {
         pixelRatio: 2, fontEmbedCSS, cacheBust: false,
@@ -31,11 +34,58 @@ export async function loadSnapshotRenderer(fonts: PdfFont[]): Promise<SnapshotRe
       });
     } finally {
       if (reflow) el.style.cssText = previous;
+      for (const restore of overlays) restore();
     }
     const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
     if (!blob || !canvas.width || !canvas.height) return null;
     return { png: new Uint8Array(await blob.arrayBuffer()), width: canvas.width / 2, height: canvas.height / 2 };
   };
+}
+
+/** Sandboxed iframes (html, custom_map, JS-mode custom_echart) that can draw themselves. */
+function sandboxFrames(el: Element): HTMLIFrameElement[] {
+  return [...el.querySelectorAll('iframe')].filter(frame => getSandboxFrameCapture(frame));
+}
+
+/** How long a sandbox gets to finish its first render before the export gives up on it. */
+const SANDBOX_RENDER_WAIT_MS = 20_000;
+
+/** Cover each sandboxed iframe with a picture of itself, so the capture shows its contents.
+ *
+ * The iframe runs at an opaque origin, which html-to-image cannot read: on its own it captures
+ * a blank box. Each sandbox can rasterize itself on request (the core's capture-png protocol,
+ * as Evidence's own PNG download uses), so its PNG goes over the iframe while the element is
+ * captured. The iframe stays in place: moving it would reload its document. A sandbox that
+ * hasn't rendered yet (one in a section just opened for the export) is asked again until it
+ * has. Returns the cleanup for each overlay. */
+async function overlaySandboxFrames(frames: HTMLIFrameElement[]): Promise<(() => void)[]> {
+  const restores: (() => void)[] = [];
+  for (const frame of frames) {
+    const parent = frame.parentElement;
+    const capture = getSandboxFrameCapture(frame);
+    if (!parent || !capture) continue;
+    let dataUrl: string | null = null;
+    for (const deadline = performance.now() + SANDBOX_RENDER_WAIT_MS; ;) {
+      try { dataUrl = await capture(2); break; } catch (error) {
+        if (performance.now() > deadline) { console.warn('[pdf] sandbox could not be captured; it prints blank', error); break; }
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+    }
+    if (!dataUrl) continue;
+    const img = new Image();
+    img.src = dataUrl;
+    await img.decode().catch(() => {});
+    const position = parent.style.position;
+    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+    const frameBox = frame.getBoundingClientRect(), parentBox = parent.getBoundingClientRect();
+    Object.assign(img.style, {
+      position: 'absolute', left: `${frameBox.left - parentBox.left}px`, top: `${frameBox.top - parentBox.top}px`,
+      width: `${frameBox.width}px`, height: `${frameBox.height}px`, zIndex: '2147483647', pointerEvents: 'none',
+    });
+    parent.appendChild(img);
+    restores.push(() => { img.remove(); parent.style.position = position; });
+  }
+  return restores;
 }
 
 const WEIGHTS: Record<string, number> = { Regular: 400, Italic: 400, SemiBold: 600, Bold: 700, BoldItalic: 700 };

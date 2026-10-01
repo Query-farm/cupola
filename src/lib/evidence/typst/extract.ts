@@ -332,6 +332,9 @@ class Extractor {
     }
     const chart = own(content.querySelector<HTMLElement>('[_echarts_instance_]'));
     if (chart) return this.chart(content, chart, width, title);
+    // JS-mode custom_echart draws inside its sandbox iframe, where the page can't reach the
+    // ECharts instance; the iframe draws itself for the snapshot instead.
+    if (own(content.querySelector('iframe[sandbox]'))) return this.snapshot(content as HTMLElement, title, width);
     return this.blocks(content, width);
   }
 

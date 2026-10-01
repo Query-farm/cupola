@@ -8,8 +8,9 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
+    "dev": "bun run build:sandbox && astro dev",
+    "build": "bun run build:sandbox && astro build",
+    "build:sandbox": "bun scripts/build-sandbox-runtimes.ts",
     "preview": "astro preview",
     "image:build": "./build-image.sh",
     "image:test": "./scripts/test-container.sh cupola:flat",

@@ -40,7 +40,10 @@ function skipReason(source: string, key?: string): string | undefined {
   if (/\bmetric\s*=|\bmetrics\s*=/.test(source)) return 'uses the semantic metrics catalog, which Cupola reports do not configure';
   if (/\{%\s*partial\b/.test(source)) return 'includes a partial file';
   const defined = new Set([...source.matchAll(/```sql\s+(\w+)/g)].map(m => m[1]));
-  const missing = [...source.matchAll(/\bdata="([^"]+)"/g)].map(m => m[1]).filter(name => !DEMO_DATASETS.includes(name) && !defined.has(name));
+  // Components read a query through `data="…"`; scripts in a sandboxed component (html,
+  // custom_map, custom_echart) through `evidence.query("…")`.
+  const read = [...source.matchAll(/\bdata="([^"]+)"|\bevidence\.query\(\s*["'`]([^"'`]+)["'`]/g)].map(m => m[1] ?? m[2]);
+  const missing = read.filter(name => !DEMO_DATASETS.includes(name) && !defined.has(name));
   if (missing.length) return `reads data it does not define (${[...new Set(missing)].join(', ')})`;
   return undefined;
 }

@@ -85,6 +85,50 @@ export default defineConfig({
     },
     plugins: [
       {
+        // Evidence's sandboxed components (html, custom_map, JS-mode custom_echart) load their
+        // iframe runtime from `${origin}/sandbox/…`, the origin root. Cupola serves each release
+        // under its own base (/v{version}/), and `build:sandbox` builds the runtimes into
+        // public/sandbox, so point the core at the base: each release then loads its own copy.
+        name: 'evidence-sandbox-runtime-base',
+        enforce: 'pre',
+        transform(code, id) {
+          if (!/\/@evidence\/core\/src\/user-components\/tags\/[^/]+\/sandbox\/sandbox-srcdoc\.ts(\?.*)?$/.test(id)) return;
+          const rebased = code.replace(/= '\/sandbox\//, "= import.meta.env.BASE_URL + 'sandbox/");
+          if (rebased === code) throw new Error(`evidence-sandbox-runtime-base: no runtime path in ${id}; the core changed how it names its sandbox runtime`);
+          return rebased;
+        },
+      },
+      {
+        // Dev only. The sandbox iframe has an opaque origin, so its request for the runtime is a
+        // cross-site no-cors script load, which Astro's dev server refuses with a 403 (its
+        // sec-fetch guard, which it unshifts to the front of the middleware stack from a post
+        // hook). These bundles are public build output, so serve them ahead of that guard.
+        // Production serves them as plain static files.
+        name: 'evidence-sandbox-runtime-dev',
+        apply: 'serve',
+        configureServer(server) {
+          const dir = resolve('public/sandbox');
+          /** @type {import('vite').Connect.NextHandleFunction} */
+          const handle = (req, res, next) => {
+            const path = (req.url || '').split('?')[0];
+            const match = path.match(/\/sandbox\/([\w-]+\.js)$/);
+            if (!match) return next();
+            const file = resolve(dir, match[1]);
+            if (!existsSync(file)) return next();
+            res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-cache');
+            // Answered ahead of the isolation headers below, so set the one this needs: the
+            // iframe inherits the page's COEP, and to its opaque origin the runtime is
+            // cross-origin. The Worker and Caddy send it on every response.
+            res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+            res.end(readFileSync(file));
+          };
+          // Inserted once the server listens, after every plugin's post hook (Astro's included)
+          // has arranged the stack, so the plugins' relative order doesn't matter.
+          server.httpServer?.once('listening', () => server.middlewares.stack.unshift({ route: '', handle }));
+        },
+      },
+      {
         name: 'evidence-table-fullscreen',
         enforce: 'pre',
         resolveId(source, importer) {
