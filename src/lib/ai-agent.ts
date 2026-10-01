@@ -160,6 +160,12 @@ export interface AgentCallbacks {
   onCacheDiagnostics?: (diagnostics: AgentCacheDiagnostics) => void;
   /** Called during retry countdowns with the status message, or null when countdown ends. */
   onRetry?: (message: string | null) => void;
+  /** Messages the user sent while the turn was running. Polled once per tool round, just
+   *  before that round's results go back: whatever it returns rides in the same user message,
+   *  as a text block after the tool_result blocks, so the model reads it at its next step
+   *  without the turn being interrupted. Not polled when the model ends its turn; the caller
+   *  sends anything still queued as a new turn. */
+  takeUserMessages?: () => string | null;
 }
 
 // Query-result serialization + caching lives in ./query-results (depends only on the pure
@@ -1415,7 +1421,10 @@ async function runAgentTurnInner(
       return;
     }
 
-    messages.push({ role: "user", content: toolResults });
+    // Skipped on the last round: no request follows it, so a message taken here would sit
+    // unanswered in history while the caller believed it delivered.
+    const steering = round < MAX_TOOL_ROUNDS - 1 ? callbacks.takeUserMessages?.() : null;
+    messages.push({ role: "user", content: steering ? [...toolResults, { type: "text", text: steering }] : toolResults });
   }
 
   recordTurnUsage();

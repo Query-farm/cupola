@@ -368,3 +368,70 @@ test('applied agent proposals are saved as labelled revisions', async ({ page })
   await expect(revisions.nth(0)).toContainText('Undid “Add a note on data freshness”');
   expect(errors).toEqual([]);
 });
+
+test('messages sent while the agent works reach it after its current step, or as the next turn', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('vgi-frontend-settings', JSON.stringify({ anthropicApiKey: 'test-key-not-real', aiModel: 'claude-sonnet-4-6' })));
+  const requests: any[] = [];
+  const gates: (() => void)[] = [];
+  const replies = [stream({ name: 'list_components', input: {} }), stream(), stream(), stream()];
+  await page.route('https://api.anthropic.com/v1/messages', async route => {
+    const index = requests.push(route.request().postDataJSON()) - 1;
+    // The first request of each turn waits, so the test can type while the agent is busy.
+    if (index === 0 || index === 2) await new Promise<void>(resolve => { gates[index] = resolve; });
+    await route.fulfill({ status: 200, contentType: 'text/event-stream', body: replies[index] });
+  });
+  await page.goto(evidencePath('evidence/reports'));
+  const panel = page.getByTestId('evidence-panel');
+  await panel.getByRole('button', { name: 'New report', exact: true }).click();
+  await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
+  const input = panel.getByRole('textbox', { name: 'Chat message input' });
+  const log = panel.getByRole('log');
+
+  // Mid-turn: the agent is about to call a tool, so the follow-up rides with that tool's result.
+  await input.fill('Build a weather report'); await input.press('Enter');
+  await expect.poll(() => requests.length).toBe(1);
+  await input.fill('Use Celsius'); await input.press('Enter');
+  await expect(log).toContainText('Queued · the agent reads this after its current step');
+  await expect(input).toHaveValue('');
+  gates[0]();
+  await expect.poll(() => requests.length).toBe(2);
+  const delivered = requests[1].messages.at(-1).content;
+  expect(delivered[0].type).toBe('tool_result');
+  expect(delivered.at(-1)).toMatchObject({ type: 'text' });
+  expect(delivered.at(-1).text).toContain('Use Celsius');
+  await expect(log).not.toContainText('Queued');
+  await expect(panel.getByRole('status', { name: 'Agent progress' })).toHaveCount(0);
+  // The reply to the follow-up reads below it.
+  const order = await log.locator('article').allInnerTexts();
+  expect(order.findIndex(text => text.includes('Use Celsius'))).toBeLessThan(order.findLastIndex(text => text.includes('Review the proposed changes below.')));
+
+  // The agent finishes without another tool call: the queued message is sent as the next turn.
+  await input.fill('Add a chart'); await input.press('Enter');
+  await expect.poll(() => requests.length).toBe(3);
+  await input.fill('And a table'); await input.press('Enter');
+  gates[2]();
+  await expect.poll(() => requests.length).toBe(4);
+  expect(requests[3].messages.at(-1).content).toContain('User request:\nAnd a table');
+  await expect(log.getByText('And a table', { exact: true })).toHaveCount(1);
+  await expect(log).not.toContainText('Queued');
+});
+
+test('stopping the agent hands queued messages back to the composer', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('vgi-frontend-settings', JSON.stringify({ anthropicApiKey: 'test-key-not-real', aiModel: 'claude-sonnet-4-6' })));
+  let requests = 0;
+  await page.route('https://api.anthropic.com/v1/messages', async route => { requests++; await new Promise(() => {}); });
+  await page.goto(evidencePath('evidence/reports'));
+  const panel = page.getByTestId('evidence-panel');
+  await panel.getByRole('button', { name: 'New report', exact: true }).click();
+  await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
+  const input = panel.getByRole('textbox', { name: 'Chat message input' });
+  await input.fill('Build a weather report'); await input.press('Enter');
+  await expect.poll(() => requests).toBe(1);
+  await input.fill('Use Celsius'); await input.press('Enter');
+  await expect(panel.getByRole('log')).toContainText('Queued');
+  await input.fill('and metres');
+  await panel.getByRole('button', { name: 'Stop generation' }).click();
+  await expect(input).toHaveValue('Use Celsius\n\nand metres');
+  await expect(panel.getByRole('log')).not.toContainText('Use Celsius');
+  expect(requests).toBe(1);
+});

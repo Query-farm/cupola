@@ -1,4 +1,4 @@
-import { useRef, useEffect, type KeyboardEvent } from "react";
+import { useRef, useEffect, useImperativeHandle, useState, type KeyboardEvent, type Ref } from "react";
 import { SendHorizontal, Square } from "lucide-react";
 
 interface Props {
@@ -8,10 +8,31 @@ interface Props {
   disabled?: boolean;
   placeholder?: string;
   focused?: boolean;
+  /** Accept messages while `isLoading`: they go to `onSend` as usual, and the caller queues
+   *  them for the running agent. Stop stays available beside Send. */
+  queueWhileLoading?: boolean;
+  ref?: Ref<ChatInputHandle>;
 }
 
-export function ChatInput({ onSend, onStop, isLoading, disabled, placeholder = "Ask a question about your data...", focused }: Props) {
+export interface ChatInputHandle {
+  /** Put text back in the box ahead of anything typed since, e.g. queued messages a stop never delivered. */
+  restore: (text: string) => void;
+}
+
+export function ChatInput({ onSend, onStop, isLoading, disabled, placeholder = "Ask a question about your data...", focused, queueWhileLoading, ref: handle }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const [hasText, setHasText] = useState(false);
+  useImperativeHandle(handle, () => ({
+    restore: (text: string) => {
+      const el = ref.current;
+      if (!el || !text) return;
+      el.value = el.value.trim() ? `${text}\n\n${el.value}` : text;
+      setHasText(true);
+      autoResize();
+      el.focus();
+    },
+  }), []);
+  const queueing = Boolean(isLoading && queueWhileLoading);
 
   // Focus when tab becomes active
   useEffect(() => {
@@ -31,9 +52,10 @@ export function ChatInput({ onSend, onStop, isLoading, disabled, placeholder = "
 
   const submit = () => {
     const val = ref.current?.value.trim();
-    if (!val || isLoading) return;
+    if (!val || (isLoading && !queueWhileLoading)) return;
     onSend(val);
     if (ref.current) ref.current.value = "";
+    setHasText(false);
     autoResize();
   };
 
@@ -42,6 +64,7 @@ export function ChatInput({ onSend, onStop, isLoading, disabled, placeholder = "
     if (!el) return;
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 120) + "px";
+    setHasText(Boolean(el.value.trim()));
   };
 
   return (
@@ -50,13 +73,24 @@ export function ChatInput({ onSend, onStop, isLoading, disabled, placeholder = "
         <textarea
           ref={ref}
           className="flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground/50 min-h-[36px] max-h-[120px] py-1.5"
-          placeholder={placeholder}
+          placeholder={queueing ? "Add to the request — the agent reads it after its current step" : placeholder}
           aria-label="Chat message input"
           rows={1}
           disabled={disabled}
           onKeyDown={handleKeyDown}
           onInput={autoResize}
         />
+      {queueing && hasText && (
+        <button
+          onClick={submit}
+          disabled={disabled}
+          className="shrink-0 p-2 rounded-md bg-primary text-primary-foreground hover:bg-accent transition-colors disabled:opacity-30"
+          title="Send to the running agent (Enter)"
+          aria-label="Send message to the running agent"
+        >
+          <SendHorizontal className="h-4 w-4" />
+        </button>
+      )}
       {isLoading ? (
         <button
           onClick={onStop}
