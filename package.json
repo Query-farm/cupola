@@ -2,7 +2,7 @@
   "name": "@query-farm/cupola",
   "private": true,
   "type": "module",
-  "version": "0.4.197",
+  "version": "0.4.198",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.12.0"
