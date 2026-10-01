@@ -3,7 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { extensionInstallSql, shellExtensionsForVgiVersion } from "@/lib/duckdb-engine";
-import { getVgiExtensionVersionSetting } from "@/lib/url-params";
+import { getVgiExtensionVersionSetting, isGrainliftService } from "@/lib/url-params";
 
 interface Props {
   catalogName: string;
@@ -38,6 +38,7 @@ const LANGS: { id: LangId; label: string }[] = [
  * these snippets get pasted.
  */
 function buildSnippets(catalogName: string, serviceUrl: string, opts: string) {
+  if (isGrainliftService(serviceUrl)) return buildGrainliftSnippets(catalogName, serviceUrl, opts);
   const optsFragment = opts ? `, ${opts}` : "";
   const setting = getVgiExtensionVersionSetting();
   const vgi = shellExtensionsForVgiVersion(setting.error ? undefined : setting.value)
@@ -87,6 +88,52 @@ function buildSnippets(catalogName: string, serviceUrl: string, opts: string) {
   } satisfies Record<LangId, string>;
 }
 
+/**
+ * Snippets for a Grainlift gateway. Outside the browser the grainlift DuckDB
+ * extension is not published, so DuckDB (and Haybarn's Node client) attach it
+ * through adbc_scanner with the native Grainlift ADBC driver, which signs in
+ * by itself (browser or device code) when the gateway uses OAuth; Python uses
+ * the driver directly.
+ */
+function buildGrainliftSnippets(catalogName: string, serviceUrl: string, opts: string) {
+  const target = /\btarget\s+'((?:[^']|'')*)'/i.exec(opts)?.[1] ?? "<target>";
+  const driver = [
+    "-- The Grainlift ADBC driver: pip install adbc-driver-grainlift, then",
+    "-- export GRAINLIFT_DRIVER=$(python -c 'import adbc_driver_grainlift as g; print(g.driver_path())')",
+  ];
+  const attach = `ATTACH '' AS ${catalogName} (TYPE adbc, driver getenv('GRAINLIFT_DRIVER'), entrypoint 'AdbcDriverGrainliftInit', "grainlift.uri" '${serviceUrl}', "grainlift.target" '${target}');`;
+  const attachInline = attach.replace(/;$/, "").replaceAll('"', '\\"');
+  return {
+    duckdb: [...driver, "INSTALL adbc_scanner FROM community;", "LOAD adbc_scanner;", "", attach, "", "SHOW ALL TABLES;"].join("\n"),
+
+    python: [
+      "# pip install adbc-driver-grainlift pyarrow",
+      "import adbc_driver_grainlift.dbapi",
+      "",
+      "with adbc_driver_grainlift.dbapi.connect(",
+      `    db_kwargs={"grainlift.uri": "${serviceUrl}", "grainlift.target": "${target}"},`,
+      "    autocommit=True,",
+      ") as connection:",
+      '    print(connection.adbc_get_objects(depth="tables").read_all())',
+    ].join("\n"),
+
+    typescript: [
+      "// npm install @haybarn/node-api   (and GRAINLIFT_DRIVER, as for DuckDB)",
+      'import { DuckDBInstance } from "@haybarn/node-api";',
+      "",
+      'const instance = await DuckDBInstance.create(":memory:");',
+      "const connection = await instance.connect();",
+      "",
+      'await connection.run("INSTALL adbc_scanner FROM community");',
+      'await connection.run("LOAD adbc_scanner");',
+      `await connection.run("${attachInline}");`,
+      "",
+      'const reader = await connection.runAndReadAll("SHOW ALL TABLES");',
+      "console.log(reader.getRows());",
+    ].join("\n"),
+  } satisfies Record<LangId, string>;
+}
+
 /*
   Code colours, copied verbatim from query.farm's Shiki `farmTheme`
   (astro.config.mjs) so a snippet here and a snippet on the marketing site are
@@ -120,6 +167,7 @@ interface Rule { t: TokType; re: RegExp; call?: true }
 */
 const RULES: Record<LangId, Rule[]> = {
   duckdb: [
+    { t: "comment", re: /--.*/y },
     { t: "string", re: /'[^']*'|"[^"]*"/y },
     { t: "keyword", re: /\b(?:INSTALL|LOAD|ATTACH|AS|TYPE|LOCATION|FROM|VERSION|SHOW|ALL|TABLES|SELECT|WHERE|LIMIT|ORDER|BY|GROUP)\b/iy },
     { t: "num", re: /\d+(?:\.\d+)?/y },

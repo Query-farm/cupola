@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImper
 import { fetchCatalog, type CatalogData } from "@/lib/service";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { OPEN_REPORT_EVENT, type OpenReportDetail } from "@/lib/evidence/open-report";
-import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql, clearSharedSql } from "@/lib/url-params";
+import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql, clearSharedSql, isGrainliftService, grainliftHttpUrl, getTargetFromUrl, getCatalogNameFromUrl } from "@/lib/url-params";
 import type { PendingEditorSql } from "./editor/SqlEditorView";
 import { catalogInventory } from "@/lib/catalog-store";
 import { useCatalogInventory } from "@/lib/use-catalog-inventory";
@@ -16,6 +16,7 @@ import {
   consumePendingCallback,
   startLoginFlow,
   hasTokens as hasOAuthTokens,
+  extractOrigin,
 } from "@/lib/oauth-client";
 import { SettingsProvider } from "@/lib/settings";
 import { terminal, ui, setShellWorkerSentryUser } from "@/lib/shell-bridge";
@@ -309,6 +310,13 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     // `?data_version_spec=` pins the catalog's data version at ATTACH time
     // (the VGI extension reads a `data_version_spec` ATTACH option). The worker
     // landing page emits it when a user selects a non-latest version.
+    // A Grainlift service's `?target=` is an ATTACH option, saved with the
+    // service so a later visit (e.g. from the recent list) needs no URL params.
+    const target = isGrainliftService(serviceUrl) ? getTargetFromUrl() : undefined;
+    if (target && !grainliftTarget(base)) {
+      base = base ? `target ${quoteLiteral(target)}, ${base}` : `target ${quoteLiteral(target)}`;
+      if (hasExplicitService()) saveRecentService(serviceUrl, "", base);
+    }
     const dvs = getDataVersionSpecFromUrl();
     if (dvs) {
       const opt = `data_version_spec ${quoteLiteral(dvs)}`;
@@ -412,6 +420,50 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     return () => { ui.navigateToSelection = null; };
   }, [navigate]);
 
+  // A Grainlift gateway has no VGI catalog to fetch: seed an empty catalog
+  // under its ATTACH alias so the app (and the engine) start, and the
+  // inventory fills it in from DuckDB once the shell has attached it. A
+  // gateway that advertises OAuth gets a sign-in first, so the ATTACH can
+  // carry the token.
+  const loadGrainliftCatalog = useCallback(
+    async (isRefresh: boolean) => {
+      const alias = getCatalogNameFromUrl() ?? grainliftTarget(attachOptions);
+      if (!alias) {
+        setError("A Grainlift service needs ?target= naming the gateway's target, e.g. ?service=grainlift+https://host&target=sqlite");
+        setLoading(false);
+        return;
+      }
+      const httpUrl = grainliftHttpUrl(serviceUrl);
+      if (httpUrl && !(await getAuthTokenForService(serviceUrl)) && (await advertisesOAuth(httpUrl))) {
+        if (!beginLoginFlow(serviceUrl, "grainlift-precheck")) {
+          setError("Sign-in did not complete. Please try connecting again.");
+          setLoading(false);
+          return;
+        }
+        startLoginFlow(serviceUrl).catch((err) => {
+          console.error("[catalog] startLoginFlow failed:", err);
+          setError(err instanceof Error ? err.message : "Failed to start login");
+          setLoading(false);
+        });
+        return;
+      }
+      const catalog: CatalogData = { catalogName: alias, catalogComment: null, catalogTags: {}, defaultSchema: "main", schemas: [] };
+      setData(catalog);
+      catalogInventory.seed(catalog, serviceUrl, "grainlift");
+      setError(null);
+      if (hasExplicitService()) saveRecentService(serviceUrl, alias, attachOptions);
+      if (!isRefresh) {
+        const initialSel = hashToSelection(window.location.hash)
+          ?? { type: "catalog" as const, name: alias, catalog: alias };
+        setSelection(initialSel);
+        updatePageTitle(initialSel, alias);
+      }
+      setLoading(false);
+      setRefreshing(false);
+    },
+    [serviceUrl, attachOptions]
+  );
+
   const loadCatalog = useCallback(
     async (isRefresh = false) => {
       if (isRefresh && catalogInventory.getSnapshot().ready) {
@@ -433,6 +485,10 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       // they're gone now (e.g. tokens revoked remotely). A missing token
       // on first visit is fine — fetchCatalog will get 401 and the error
       // branch will start the login flow.
+      if (isGrainliftService(serviceUrl)) {
+        await loadGrainliftCatalog(isRefresh);
+        return;
+      }
       const haveTokenNow = await getAuthTokenForService(serviceUrl);
       if (!haveTokenNow && hadAuthToken() && hasOAuthTokens(serviceUrl)) {
         console.log("[catalog] Token expired but SPA tokens existed for this service, re-auth");
@@ -485,7 +541,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
         setRefreshing(false);
       }
     },
-    [serviceUrl, defaultServiceUrl]
+    [serviceUrl, defaultServiceUrl, loadGrainliftCatalog]
   );
 
   // Process any pending SPA OAuth callback before the first catalog fetch.
@@ -1324,4 +1380,20 @@ function ContentPanel({
   }
 
   return overview;
+}
+
+/** The `target '...'` ATTACH option of a Grainlift service, if set. */
+function grainliftTarget(attachOptions: string | undefined): string | undefined {
+  const match = /\btarget\s+'((?:[^']|'')*)'/i.exec(attachOptions ?? "");
+  return match ? match[1].replaceAll("''", "'") : undefined;
+}
+
+/** Whether a Grainlift gateway publishes OAuth discovery (RFC 9728). */
+async function advertisesOAuth(httpUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${extractOrigin(httpUrl)}/.well-known/oauth-protected-resource`);
+    return response.ok;
+  } catch {
+    return false;
+  }
 }

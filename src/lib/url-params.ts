@@ -88,6 +88,45 @@ export function getServiceUrl(): string {
   return params.get("service") || window.location.origin;
 }
 
+// ---------------------------------------------------------------------------
+// Grainlift services
+// ---------------------------------------------------------------------------
+//
+// `?service=grainlift+https://host` (or `grainlift+http://`, `grainlift://`
+// for HTTPS, `grainlift+iroh://<endpoint-id>`) names a Grainlift ADBC gateway
+// instead of a VGI service. Its catalog is read from DuckDB after
+// `ATTACH ... (TYPE grainlift, target '...')`; `?target=` names the
+// gateway's server-side target and `?name=` the catalog alias (default: the
+// target).
+
+const GRAINLIFT_SCHEME = /^grainlift(\+(https?|iroh))?:\/\//i;
+
+export function isGrainliftService(serviceUrl: string): boolean {
+  return GRAINLIFT_SCHEME.test(serviceUrl);
+}
+
+/** The gateway's plain URL for HTTP requests (OAuth discovery, sign-in), or
+ *  null for Iroh, which has no HTTP origin. */
+export function grainliftHttpUrl(serviceUrl: string): string | null {
+  const match = GRAINLIFT_SCHEME.exec(serviceUrl);
+  if (!match) return null;
+  const transport = (match[2] ?? "https").toLowerCase();
+  if (transport === "iroh") return null;
+  return `${transport}://${serviceUrl.slice(match[0].length)}`;
+}
+
+/** `?target=`: the Grainlift target to attach. */
+export function getTargetFromUrl(): string | undefined {
+  if (!hasWindow()) return undefined;
+  return new URLSearchParams(window.location.search).get("target") || undefined;
+}
+
+/** `?name=`: the catalog alias to attach a Grainlift service as. */
+export function getCatalogNameFromUrl(): string | undefined {
+  if (!hasWindow()) return undefined;
+  return new URLSearchParams(window.location.search).get("name") || undefined;
+}
+
 /** Whether `?service=` was explicitly provided. Drives welcome-page logic. */
 export function hasExplicitService(): boolean {
   if (!hasWindow()) return false;

@@ -25,6 +25,9 @@ import { extensionInstallSql, recordExtensionLoaded, shellExtensionsForVgiVersio
 import { QueryResultCache } from "./query-results";
 import { isRecoverableAuthError, isUnrecoverableAuthError } from "./auth-errors";
 import { getOAuthMeta, redirectToAuth } from "./auth";
+import { startLoginFlow } from "./oauth-client";
+import { getIrohState } from "./iroh";
+import { grainliftHttpUrl, isGrainliftService } from "./url-params";
 import { ensureDuckDB } from "./duckdb-worker-boot";
 import { getTerminalTheme } from "./theme";
 import { type CatalogData } from "./service";
@@ -333,6 +336,7 @@ export function initShell(
    *  the VGI extension (vgi_extension.cpp:701) — refresh wins.
    */
   function buildAttachSql(): string {
+    if (isGrainliftService(config.serviceUrl)) return buildGrainliftAttachSql();
     const oauthMeta = getOAuthMeta(config.serviceUrl);
     // config.token is whichever bearer the catalog fetch ended up using
     // (SPA access token, cookie, or fragment) — captured by CatalogApp
@@ -354,6 +358,40 @@ export function initShell(
       tokenEndpoint: oauthMeta?.tokenEndpoint ?? "n/a",
     });
     return sql + `)`;
+  }
+
+  /** ATTACH for a Grainlift gateway: the grainlift extension, the gateway URI
+   *  as the path, `target` (and any other options) from `attachOptions`. With
+   *  a signed-in OAuth session it carries the bearer and the refresh token, so
+   *  the driver renews the token itself (through the gateway's token proxy). */
+  function buildGrainliftAttachSql(): string {
+    let sql = `ATTACH OR REPLACE ${quoteLiteral(config.serviceUrl)} AS ${quoteIdent(config.catalogName)} (TYPE grainlift`;
+    if (config.token) sql += `, bearer_token ${quoteLiteral(config.token)}`;
+    const refreshToken = getOAuthMeta(config.serviceUrl)?.refreshToken;
+    if (refreshToken) sql += `, oauth_refresh_token ${quoteLiteral(refreshToken)}`;
+    const userOpts = config.attachOptions?.trim().replace(/^,\s*/, "");
+    if (userOpts) sql += `, ${userOpts}`;
+    return sql + ")";
+  }
+
+  /** A Grainlift gateway refused us. Over HTTP without a token, sign in
+   *  (Cupola's own PKCE flow against the gateway's OAuth metadata); with a
+   *  token, or over Iroh, explain instead of looping. */
+  function handleGrainliftAuthError(errStr: string, title: string): "surfaced" | "redirected" {
+    if (grainliftHttpUrl(config.serviceUrl) && !config.token) {
+      startLoginFlow(config.serviceUrl).catch((err) => {
+        onAuthError?.(title, `${errStr}\n\nSign-in could not start: ${err instanceof Error ? err.message : String(err)}`);
+      });
+      return "redirected";
+    }
+    const endpointId = getIrohState().endpointId;
+    const hint = grainliftHttpUrl(config.serviceUrl)
+      ? "The gateway rejected this account. Check that it is allowed on the gateway."
+      : endpointId
+        ? `This browser's Iroh endpoint ID is ${endpointId}. Authorize it on the gateway (iroh.principals) and reload.`
+        : "The gateway did not authorize this browser's Iroh endpoint.";
+    onAuthError?.(title, `${errStr}\n\n${hint}`);
+    return "surfaced";
   }
 
   /**
@@ -385,6 +423,9 @@ export function initShell(
     }
     // Recoverable pre-exchange auth state — we need fresh credentials.
     const isRecoverableAuth = isRecoverableAuthError(errStr);
+    if (isRecoverableAuth && isGrainliftService(config.serviceUrl)) {
+      return handleGrainliftAuthError(errStr, title);
+    }
     if (isRecoverableAuth) {
       console.log("[shell] Recoverable auth error, redirecting. config.token:",
                   config.token ? config.token.substring(0, 20) + "..." : "NONE");

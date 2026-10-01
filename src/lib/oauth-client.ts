@@ -142,6 +142,10 @@ interface PendingFlow {
  *  vgi_rpc's `ExtractOrigin` in vgi_oauth.cpp so the frontend and extension
  *  agree on the cache key for a service. */
 export function extractOrigin(serviceUrl: string): string {
+  // A Grainlift gateway (`grainlift+https://host`) is reached at its plain
+  // HTTP(S) URL; tokens are kept and discovered under that origin.
+  const grainlift = /^grainlift(\+(https?))?:\/\//i.exec(serviceUrl);
+  if (grainlift) serviceUrl = `${(grainlift[2] ?? "https").toLowerCase()}://${serviceUrl.slice(grainlift[0].length)}`;
   try {
     const u = new URL(serviceUrl);
     return `${u.protocol}//${u.host}`;

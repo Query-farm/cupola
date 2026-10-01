@@ -42,8 +42,11 @@ export class CatalogInventory {
     this.state = { ...this.state, ...patch };
     this.listeners.forEach(listener => listener());
   }
-  seed(catalog: CatalogData, serviceUrl: string) {
-    this.bootstrap = { ...catalog, sourceUrl: serviceUrl, databaseType: 'vgi', primary: true };
+  /** The primary service's catalog before the engine has attached it. A
+   *  Grainlift service seeds an empty placeholder: its metadata is read from
+   *  DuckDB once attached. */
+  seed(catalog: CatalogData, serviceUrl: string, databaseType = 'vgi') {
+    this.bootstrap = { ...catalog, sourceUrl: serviceUrl, databaseType, primary: true };
     if (!this.state.ready) this.publish({ catalogs: [this.bootstrap] });
   }
   activate = async () => {
@@ -94,7 +97,7 @@ export class CatalogInventory {
             }
             // Connection context is only known for the original attachment.
             // Never assign the primary service's URL to another catalog alias.
-            const initialPrimary = !this.state.ready && db.name === this.bootstrap?.catalogName && db.type === 'vgi';
+            const initialPrimary = !this.state.ready && db.name === this.bootstrap?.catalogName && db.type === this.bootstrap?.databaseType;
             const primary = initialPrimary || Boolean(sameAttachment && base?.primary);
             return {
               ...catalog, catalogName: db.name, databaseType: db.type, primary,

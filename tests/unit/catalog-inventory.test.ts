@@ -99,3 +99,15 @@ test('recognizes changes in comments and batches without reacting to quoted SQL 
   for (const sql of ["SELECT 'ATTACH; DROP'", 'SELECT $$; ATTACH x$$', '-- ATTACH x', 'SELECT * FROM duckdb_databases()', 'EXPLAIN CREATE TABLE t(i INT)', 'SET VARIABLE x = 1'])
     expect(changesCatalog(sql)).toBe(false);
 });
+
+test('a Grainlift service seeds its alias and becomes primary once attached as grainlift', async () => {
+  const f = fixture();
+  f.inventory.seed(catalog('d1'), 'grainlift+https://gw.example', 'grainlift');
+  f.setDatabases([db('d1', 'grainlift'), db('memory', 'duckdb')]);
+  await f.inventory.activate();
+  const [primary] = await f.inventory.current();
+  expect(primary.catalogName).toBe('d1');
+  expect(primary.primary).toBe(true);
+  expect(primary.databaseType).toBe('grainlift');
+  expect(primary.sourceUrl).toBe('grainlift+https://gw.example');
+});

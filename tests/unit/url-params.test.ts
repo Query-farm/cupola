@@ -245,3 +245,20 @@ describe("consumePrefillFromHash", () => {
     expect(currentHash).toBe("#/schema/foo");
   });
 });
+
+describe("Grainlift services", () => {
+  test("are recognised by scheme and reached over plain HTTP(S)", async () => {
+    const { isGrainliftService, grainliftHttpUrl } = await import("../../src/lib/url-params");
+    const { extractOrigin } = await import("../../src/lib/oauth-client");
+    expect(isGrainliftService("grainlift+https://gw.example")).toBe(true);
+    expect(isGrainliftService("grainlift://gw.example")).toBe(true);
+    expect(isGrainliftService("grainlift+iroh://abc")).toBe(true);
+    expect(isGrainliftService("https://vgi.example")).toBe(false);
+    expect(grainliftHttpUrl("grainlift+https://gw.example/x")).toBe("https://gw.example/x");
+    expect(grainliftHttpUrl("grainlift+http://127.0.0.1:8787")).toBe("http://127.0.0.1:8787");
+    expect(grainliftHttpUrl("grainlift://gw.example")).toBe("https://gw.example");
+    expect(grainliftHttpUrl("grainlift+iroh://abc")).toBeNull();
+    expect(extractOrigin("grainlift+https://gw.example/path")).toBe("https://gw.example");
+    expect(extractOrigin("https://vgi.example/x")).toBe("https://vgi.example");
+  });
+});
