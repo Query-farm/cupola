@@ -168,6 +168,13 @@ export interface AgentCallbacks {
   takeUserMessages?: () => string | null;
 }
 
+/** The text a `takeUserMessages` callback hands the agent: the user's own words, framed so the
+ *  model treats them as part of the request rather than as a tool's output. */
+export function queuedUserMessagesText(texts: string[]): string {
+  const one = texts.length === 1;
+  return `The user sent ${one ? "this message" : "these messages"} while you were working. Take ${one ? "it" : "them"} into account from here; it may change or add to the request:\n${texts.join("\n\n")}`;
+}
+
 // Query-result serialization + caching lives in ./query-results (depends only on the pure
 // ./format helpers, so it stays unit-testable without the VGI/service import graph).
 // Re-exported here so existing `from "./ai-agent"` import sites keep working.

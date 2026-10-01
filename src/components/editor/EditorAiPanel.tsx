@@ -26,6 +26,7 @@ import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
 import type { CatalogData } from "@/lib/service";
 import {
   runAgentTurn,
+  queuedUserMessagesText,
   buildSystemPrompt,
   executeListTables,
   executeListCatalogs,
@@ -36,7 +37,7 @@ import {
 } from "@/lib/ai-agent";
 import { executeRunSql, executeSemanticQuery, describeTableWithFallback } from "@/lib/ai-tool-executor";
 import { toolInputLabel } from "@/lib/ai/tool-labels";
-import { ChatInput } from "@/components/chat/ChatInput";
+import { ChatInput, type ChatInputHandle } from "@/components/chat/ChatInput";
 import { ChatMessageUser } from "@/components/chat/ChatMessageUser";
 import {
   ChatMessageAssistant,
@@ -57,6 +58,8 @@ interface ChatMessage {
   blocks?: ContentBlock[];
   isStreaming?: boolean;
   usage?: AgentUsage;
+  /** A user message sent while the agent was working, not yet delivered to it. */
+  queued?: boolean;
 }
 
 interface ConversationState {
@@ -73,6 +76,9 @@ interface ConversationState {
   resultCache: QueryResultCache;
   /** Last current-query snapshot sent as context, so we only resend on change. */
   sentContext: string | null;
+  /** Follow-ups typed while the agent works. The running turn takes them after its next tool
+   *  round; any it ends without taking are sent as the next turn. */
+  queued: { id: string; text: string }[];
 }
 
 interface Props {
@@ -101,11 +107,12 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
   const convos = useRef<Map<string, ConversationState>>(new Map());
   const [, bump] = useReducer((x: number) => x + 1, 0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<ChatInputHandle>(null);
 
   const getConvo = useCallback((id: string): ConversationState => {
     let c = convos.current.get(id);
     if (!c) {
-      c = { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), resultCache: new QueryResultCache(), sentContext: null };
+      c = { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), resultCache: new QueryResultCache(), sentContext: null, queued: [] };
       convos.current.set(id, c);
     }
     return c;
@@ -165,11 +172,19 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
     return (settings as any)[key];
   };
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback(async (text: string, shown: string[] = []) => {
     const apiKey = getSetting("anthropicApiKey") || "";
     const workspaceId = getSetting("anthropicWorkspaceId") || "";
     const c = getConvo(docId);
     const myDoc = docId; // capture: stays correct even if the user switches sub-tabs mid-turn
+    if (c.abort) {
+      const id = uid();
+      c.queued.push({ id, text });
+      c.messages = [...c.messages, { id, role: "user", content: text, queued: true }];
+      bump();
+      return;
+    }
+    if (shown.length) c.messages = c.messages.map((m) => (shown.includes(m.id) ? { ...m, queued: false } : m));
 
     if (!apiKey) {
       c.messages = [...c.messages, { id: uid(), role: "assistant", blocks: [{ type: "text", id: uid(), content: "To use Ask AI, add your Anthropic API key in **Settings**." }] }];
@@ -186,10 +201,10 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
       c.sentContext = liveSql;
     }
 
-    c.messages = [...c.messages, { id: uid(), role: "user", content: text }];
+    if (!shown.length) c.messages = [...c.messages, { id: uid(), role: "user", content: text }];
     c.agentMessages.push({ role: "user", content: userContent });
 
-    const assistantId = uid();
+    let assistantId = uid();
     // Seeded into BOTH the message and the local `blocks` array below — they
     // used to disagree, so the first updateBlocks() of the turn silently wiped
     // this indicator (see onRetry, which can fire before any content arrives).
@@ -404,6 +419,20 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
           // being retried NOW; clearing the indicator there left the panel
           // blank for the whole retry.
           onRetry: (message) => showThinking(message ? message.replace("...", "") : "Thinking"),
+          takeUserMessages: () => {
+            const items = c.queued.splice(0);
+            if (!items.length) return null;
+            // Close this reply where it stands; the agent's answer to the follow-up reads below it.
+            removeThinking();
+            updateBlocks(blocks);
+            updateAssistant({ isStreaming: false });
+            const ids = new Set(items.map((item) => item.id));
+            assistantId = uid();
+            blocks = [{ type: "thinking", id: uid(), label: "Thinking" }];
+            c.messages = [...c.messages.map((m) => (ids.has(m.id) ? { ...m, queued: false } : m)), { id: assistantId, role: "assistant", blocks: [...blocks], isStreaming: true }];
+            bump();
+            return queuedUserMessagesText(items.map((item) => item.text));
+          },
           onError: (error) => {
             removeThinking();
             const idx = ensureTextBlock();
@@ -432,6 +461,13 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
         Sentry.captureException(err, { tags: { component: "ai-agent", path: "editor-panel" } });
       } else {
         blocks = [...blocks, { type: "text", id: uid(), content: "*(Stopped)*" }];
+        // A stop is not a send: what the agent never took goes back to the composer.
+        const items = c.queued.splice(0);
+        if (items.length) {
+          const ids = new Set(items.map((item) => item.id));
+          c.messages = c.messages.filter((m) => !ids.has(m.id));
+          if (docIdRef.current === myDoc) inputRef.current?.restore(items.map((item) => item.text).join("\n\n"));
+        }
       }
       updateBlocks(blocks);
       updateAssistant({ isStreaming: false });
@@ -442,6 +478,15 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
       onBusyChange?.(myDoc, false);
     }
   }, [docId, catalogData, attachedCatalogs, serviceUrl, settings, getCurrentSql, getConvo, apply, runIdRef, setActiveResult, onBusyChange]);
+
+  // Queued messages a turn ended without taking become the next turn, once their document is the
+  // one on screen: the turn's context is the editor's current query, which belongs to that document.
+  useEffect(() => {
+    const c = convos.current.get(docId);
+    if (!c || c.abort || !c.queued.length) return;
+    const items = c.queued.splice(0);
+    void send(items.map((item) => item.text).join("\n\n"), items.map((item) => item.id));
+  });
 
   const stop = useCallback(() => {
     const c = convos.current.get(docId);
@@ -463,7 +508,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
 
   const handleNew = useCallback(() => {
     const c = convos.current.get(docId);
-    if (c) { c.abort?.abort(); convos.current.set(docId, { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), resultCache: new QueryResultCache(), sentContext: null }); bump(); }
+    if (c) { c.abort?.abort(); convos.current.set(docId, { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), resultCache: new QueryResultCache(), sentContext: null, queued: [] }); bump(); }
   }, [docId]);
 
   const hasApiKey = !!getSetting("anthropicApiKey");
@@ -499,7 +544,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
         ) : (
           convo.messages.map((msg) =>
             msg.role === "user" ? (
-              <ChatMessageUser key={msg.id} content={msg.content || ""} />
+              <ChatMessageUser key={msg.id} content={msg.content || ""} queued={msg.queued} />
             ) : (
               <AssistantWithApply key={msg.id} msg={msg} model={model} apply={apply}
                 renderSqlToolCall={renderSqlToolCall}
@@ -510,7 +555,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
         )}
       </div>
 
-      <ChatInput onSend={send} onStop={stop} isLoading={convo.isLoading} disabled={!hasApiKey || engineLifecycle.status !== "ready"} focused placeholder="Ask AI about your query…" />
+      <ChatInput ref={inputRef} queueWhileLoading onSend={(text) => void send(text)} onStop={stop} isLoading={convo.isLoading} disabled={!hasApiKey || engineLifecycle.status !== "ready"} focused placeholder="Ask AI about your query…" />
     </div>
   );
 }

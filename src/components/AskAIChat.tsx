@@ -14,6 +14,7 @@ import { normalizeEffort } from "@/lib/ai/model-features";
 import type { CatalogData } from "@/lib/service";
 import {
   runAgentTurn,
+  queuedUserMessagesText,
   buildSystemPrompt,
   executeListTables,
   executeListCatalogs,
@@ -33,7 +34,7 @@ import type { AgentUsage } from "@/lib/ai-usage";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 const uid = () => crypto.randomUUID();
 
-import { ChatInput } from "./chat/ChatInput";
+import { ChatInput, type ChatInputHandle } from "./chat/ChatInput";
 import { ChatMessageUser } from "./chat/ChatMessageUser";
 import {
   ChatMessageAssistant,
@@ -62,6 +63,8 @@ interface ChatMessage {
   blocks?: ContentBlock[]; // assistant messages only
   isStreaming?: boolean;
   usage?: AgentUsage;
+  /** A user message sent while the agent was working, not yet delivered to it. */
+  queued?: boolean;
 }
 
 interface Props {
@@ -95,6 +98,10 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   const systemPromptKeyRef = useRef<{ catalog: CatalogData; key: string } | null>(null);
   const memoryObjectsRef = useRef<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  // Follow-ups typed while the agent works. The running turn takes them after its next tool
+  // round; any it ends without taking are sent as the next turn once it finishes.
+  const queuedRef = useRef<{ id: string; text: string }[]>([]);
+  const inputRef = useRef<ChatInputHandle>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Installed by the ask_user tool for the life of one question. Takes the
   // chosen option and its index (index < 0 = cancelled) so the resolver can
@@ -246,7 +253,15 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     return (settings as any)[key];
   };
 
-  const handleSend = useCallback(async (text: string) => {
+  const handleSend = useCallback(async (text: string, shown: string[] = []) => {
+    if (abortRef.current) {
+      const id = crypto.randomUUID();
+      queuedRef.current.push({ id, text });
+      userScrolledUp.current = false;
+      setMessages(prev => [...prev, { id, role: "user", content: text, queued: true }]);
+      return;
+    }
+    if (shown.length) setMessages(prev => prev.map(m => shown.includes(m.id) ? { ...m, queued: false } : m));
     const apiKey = getSetting("anthropicApiKey") || "";
     const workspaceId = getSetting("anthropicWorkspaceId") || "";
     if (!apiKey) {
@@ -258,15 +273,15 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     }
     if (!catalogData) return;
 
-    // Add user message
-    setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "user", content: text }]);
+    // Add user message (queued follow-ups are already on screen)
+    if (!shown.length) setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "user", content: text }]);
     agentMessages.current.push({ role: "user", content: text });
 
     // Add placeholder assistant message with thinking indicator. The SAME
     // block object seeds the local `blocks` array below — they used to
     // disagree, so the first updateBlocks() of the turn silently wiped this
     // indicator (see the onRetry path, which can fire before any content).
-    const assistantId = crypto.randomUUID();
+    let assistantId = crypto.randomUUID();
     const seedThinking: ContentBlock = { type: "thinking", id: uid(), label: "Thinking" };
     setMessages(prev => [...prev, {
       id: assistantId, role: "assistant",
@@ -753,6 +768,21 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
           // network day. Fall back to a plain indicator instead of clearing
           // it, which used to leave the panel blank for the whole retry.
           onRetry: (message) => showThinking(message ? message.replace("...", "") : "Thinking"),
+          takeUserMessages: () => {
+            const items = queuedRef.current.splice(0);
+            if (!items.length) return null;
+            // Close this reply where it stands; the agent's answer to the follow-up reads below it.
+            removeThinking();
+            blocks = blocks.map((b) => b.type === "vega_chart" && b.chart.pending ? { ...b, chart: { ...b.chart, pending: false } } : b);
+            updateBlocks(blocks);
+            updateAssistant({ isStreaming: false });
+            const ids = new Set(items.map((item) => item.id));
+            assistantId = crypto.randomUUID();
+            blocks = [{ type: "thinking", id: uid(), label: "Thinking" }];
+            const next: ChatMessage = { id: assistantId, role: "assistant", blocks: [...blocks], isStreaming: true };
+            setMessages(prev => [...prev.map(m => ids.has(m.id) ? { ...m, queued: false } : m), next]);
+            return queuedUserMessagesText(items.map((item) => item.text));
+          },
           onError: (error) => {
             removeThinking();
             const idx = ensureTextBlock();
@@ -809,6 +839,13 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
         });
       } else {
         blocks = [...blocks, { type: "text", id: uid(), content: "*(Stopped)*" }];
+        // A stop is not a send: what the agent never took goes back to the composer.
+        const items = queuedRef.current.splice(0);
+        if (items.length) {
+          const ids = new Set(items.map((item) => item.id));
+          setMessages(prev => prev.filter(m => !ids.has(m.id)));
+          inputRef.current?.restore(items.map((item) => item.text).join("\n\n"));
+        }
       }
       updateBlocks(blocks);
       updateAssistant({ isStreaming: false });
@@ -817,6 +854,13 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
       abortRef.current = null;
     }
   }, [catalogData, attachedCatalogs, serviceUrl, settings]);
+
+  // Queued messages the turn ended without taking become the next turn.
+  useEffect(() => {
+    if (isLoading || !queuedRef.current.length) return;
+    const items = queuedRef.current.splice(0);
+    void handleSend(items.map((item) => item.text).join("\n\n"), items.map((item) => item.id));
+  }, [isLoading]);
 
   // The resolver (installed by the ask_user tool) owns marking the block
   // answered — it can reach the turn's live block array, which this callback
@@ -828,6 +872,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   }, []);
 
   const handleNewConversation = () => {
+    queuedRef.current = [];
     setMessages([]);
     agentMessages.current = [];
     // Drop the frozen prompt so the next conversation picks up whatever the
@@ -909,7 +954,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
           <div className="max-w-5xl space-y-4">
             {messages.map((msg) => (
               msg.role === "user" ? (
-                <ChatMessageUser key={msg.id} content={msg.content || ""} />
+                <ChatMessageUser key={msg.id} content={msg.content || ""} queued={msg.queued} />
               ) : (
                 <ChatMessageAssistant
                   key={msg.id}
@@ -975,7 +1020,9 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
       )}
 
       <ChatInput
-        onSend={handleSend}
+        ref={inputRef}
+        queueWhileLoading
+        onSend={(text) => void handleSend(text)}
         onStop={handleStop}
         isLoading={isLoading}
         disabled={!hasApiKey || engineLifecycle.status !== "ready"}

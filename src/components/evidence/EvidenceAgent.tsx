@@ -7,7 +7,7 @@ import { ChatMessageUser } from '../chat/ChatMessageUser';
 import { ThinkingIndicator } from '../chat/ThinkingIndicator';
 import { toolActivityLabel, toolInputLabel } from '../../lib/ai/tool-labels';
 import { useSettings, DEFAULT_AI_MODEL } from '../../lib/settings';
-import { runAgentTurn, type MessageParam } from '../../lib/ai-agent';
+import { queuedUserMessagesText, runAgentTurn, type MessageParam } from '../../lib/ai-agent';
 import { normalizeEffort } from '../../lib/ai/model-features';
 import { DEFAULT_AI_MAX_TOKENS } from '../../lib/ai/model-limits';
 import { EVIDENCE_AGENT_PROMPT, EVIDENCE_AGENT_TOOLS, createReportProposal, applyReportProposal, reportFingerprint, type ReportProposal } from '../../lib/evidence/agent';
@@ -248,7 +248,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
             const next = uid(); assistantId = next; activeMessage.current = next;
             setMessages(previous => [...previous.map(m => ids.has(m.id) ? { ...m, queued: false } : m), { id: next, role: 'assistant', text: '', blocks: [] }]);
             progress('Passing your message to the agent…');
-            return `The user sent ${items.length === 1 ? 'this message' : 'these messages'} while you were working. Take ${items.length === 1 ? 'it' : 'them'} into account from here; it may change or add to the request:\n${items.map(item => item.text).join('\n\n')}`;
+            return queuedUserMessagesText(items.map(item => item.text));
           },
         }, controller.signal, config.aiMaxToolRounds || 20, toolsForAIQueryMode(EVIDENCE_AGENT_TOOLS, queryMode),
         config.aiMaxTokens || DEFAULT_AI_MAX_TOKENS, true, normalizeEffort(config.aiEffort),
@@ -320,7 +320,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
       <div role="log" aria-label="Report agent conversation" className="space-y-5">
         {!messages.length && <div className="rounded-xl bg-muted/40 p-4 text-sm"><p className="mb-2 font-medium">What would you like to change?</p><p className="text-muted-foreground">Ask me to improve this report, adjust a chart, or fix a preview error. I’ll show changes here for you to review.</p><div className="mt-3 flex flex-wrap gap-2">{['Improve the layout', 'Fix the preview errors'].map(prompt => <Button key={prompt} variant="outline" size="sm" disabled={locked} onClick={() => void send(prompt)}>{prompt}</Button>)}</div></div>}
         {messages.map(m => <article key={m.id}>
-          {m.role === 'user' ? <><ChatMessageUser content={m.text} />{m.queued && <p className="mt-1 text-right text-[11px] text-muted-foreground">Queued · the agent reads this after its current step</p>}</> : <ChatMessageAssistant blocks={m.blocks ?? [{ type: 'text', id: m.id, content: m.text }]} isStreaming={busy && m.id === activeMessage.current} onCancel={stop} />}
+          {m.role === 'user' ? <ChatMessageUser content={m.text} queued={m.queued} /> : <ChatMessageAssistant blocks={m.blocks ?? [{ type: 'text', id: m.id, content: m.text }]} isStreaming={busy && m.id === activeMessage.current} onCancel={stop} />}
           {m.proposal && proposalCard(m)}
         </article>)}
       </div>

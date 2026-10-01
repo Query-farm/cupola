@@ -300,6 +300,9 @@ test('the agent shows its reasoning between steps, folded once it moves on', asy
   await page.goto(evidencePath('evidence/reports'));
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report', exact: true }).click({ timeout: 90_000 });
+  // The composer is disabled while the first preview builds, which takes well over 10s when
+  // several browsers boot their engines at once.
+  await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
   const input = panel.getByRole('textbox', { name: 'Chat message input' });
   await input.fill('What should this report show?'); await input.press('Enter');
   await expect(panel.getByText('A table is the clearest fit.')).toBeVisible({ timeout: 30_000 });
@@ -373,7 +376,9 @@ test('messages sent while the agent works reach it after its current step, or as
   await page.addInitScript(() => localStorage.setItem('vgi-frontend-settings', JSON.stringify({ anthropicApiKey: 'test-key-not-real', aiModel: 'claude-sonnet-4-6' })));
   const requests: any[] = [];
   const gates: (() => void)[] = [];
-  const replies = [stream({ name: 'list_components', input: {} }), stream(), stream(), stream()];
+  // get_report answers from memory: list_components loads the component reference, which can
+  // outlast a poll window on a loaded machine and has nothing to do with delivery.
+  const replies = [stream({ name: 'get_report', input: {} }), stream(), stream(), stream()];
   await page.route('https://api.anthropic.com/v1/messages', async route => {
     const index = requests.push(route.request().postDataJSON()) - 1;
     // The first request of each turn waits, so the test can type while the agent is busy.
