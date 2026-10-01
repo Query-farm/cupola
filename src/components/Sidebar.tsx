@@ -1,6 +1,6 @@
 import { SavedReportsSidebar } from "./evidence/SavedReportsSidebar";
 import { useState, useMemo } from "react";
-import { Search, TerminalSquare, Cpu, RefreshCw, Loader2 } from "lucide-react";
+import { Search, Cpu, RefreshCw, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { TreeView } from "@/components/tree-view";
@@ -17,14 +17,13 @@ interface Props {
   serviceUrl?: string;
   selection: Selection | null;
   onSelect: (selection: Selection | null) => void;
-  onOpenShell?: () => void;
   /** Insert text into the DuckDB shell. */
   onShellInsert?: (text: string) => void;
   onRefresh?: () => void;
   refreshing?: boolean;
 }
 
-export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onOpenShell, onShellInsert, onRefresh, refreshing }: Props) {
+export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onRefresh, refreshing }: Props) {
   const [search, setSearch] = useState("");
   const { settings } = useSettings();
   const combinedData = useMemo(() => catalogs.flatMap(catalog => buildTreeData(catalog, {
@@ -84,26 +83,19 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
       {catalogs.filter(c => c.metadataError).map(c => <div role="alert" key={c.catalogName} className="px-3 py-2 text-xs text-destructive">{c.catalogName}: metadata unavailable. <button className="underline" onClick={onRefresh}>Retry</button></div>)}
       {/* Tree */}
       <div className="flex-1 overflow-y-auto p-2 text-sm">
-        {serviceUrl && <SavedReportsSidebar key={serviceUrl} serviceUrl={serviceUrl} search={search} />}
         <TreeView
           data={filteredData}
           expandAll={!!search}
           onSelectChange={handleSelectChange}
           initialSelectedItemId={selectedTreeId}
+          trailingDropZone={false}
         />
+        {/* Reports follow the catalogs, drawn as one more root of the same tree. */}
+        {serviceUrl && <SavedReportsSidebar key={serviceUrl} serviceUrl={serviceUrl} search={search} />}
       </div>
 
-      {/* Shell + Settings + Copyright */}
+      {/* Settings + Copyright. The SQL Shell has its own tab in the top bar. */}
       <div className="border-t border-border p-2">
-        {onOpenShell && (
-          <button
-            onClick={onOpenShell}
-            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer rounded-md hover:bg-secondary"
-          >
-            <TerminalSquare className="h-4 w-4" />
-            SQL Shell
-          </button>
-        )}
         <SettingsModal />
         <div className="border-t border-border mt-3 pt-3 mx-2" />
         <div className="px-2 pb-1 text-xs text-muted-foreground">

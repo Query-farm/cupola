@@ -684,7 +684,6 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
                 inventoryError={inventory.error}
                 selection={selection}
                 onSelect={(sel) => { navigate(sel); if (isNarrow) setMobileSidebarOpen(false); }}
-                onOpenShell={() => { setActiveTab("shell"); if (isNarrow) setMobileSidebarOpen(false); }}
                 onShellInsert={(text) => {
                   // In editor mode, route table/column clicks into the SQL
                   // editor at the cursor; otherwise into the xterm shell.
