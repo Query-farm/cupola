@@ -18,7 +18,7 @@ interface Props {
   parameters: ReportParameter[];
   onChange: (value: any) => void;
 }
-export function newSemanticFilter(members: SemanticChoice[]) {
+function newSemanticFilter(members: SemanticChoice[]) {
   return {
     member: members[0] ? JSON.parse(members[0].value) : "",
     operator: "eq",

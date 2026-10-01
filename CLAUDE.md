@@ -63,7 +63,6 @@ The app reads the following parameters from the URL. VGI servers issuing the red
 | `ai_key` | Anthropic API key for the AI agent. Also accepted in the URL fragment (see below — fragments aren't sent to servers, so prefer that form). Merged into `settings.anthropicApiKey`, persisted to localStorage, and **stripped from the URL via `replaceState`** on first read so it doesn't linger in browser history or get sent as a referrer. Treat it as one-shot: passing the param overwrites any previously stored key. The query-string form takes precedence if both are set. |
 | `sql` / `sql_z` | SQL for a shared query link. Accepted here for links a VGI server or a human composes server-side, but the Share button emits the fragment form (see below) — prefer that, since fragments aren't sent to servers. The query-string form takes precedence if both are set. |
 | `theme` | URL of a theme JSON file (colors + optional logo + terminal theme). Cached in localStorage so subsequent loads can apply it before first paint (`src/lib/theme.ts`, pre-paint application in `src/layouts/Layout.astro`). |
-| `fresh` | **Vestigial.** Formerly cleared a corrupted DuckDB session snapshot; session persistence was removed in the haybarn-wasm port. The reader (`getFreshFlag()` in `url-params.ts`) remains but has no callers. |
 
 ### URL fragment (`#...`)
 
@@ -120,7 +119,7 @@ src/
                              #   ColumnProfile, DataPreview, DataGrid, GeometryViewer,
                              #   MemoryCatalogOverview, Breadcrumb, ExampleQueries,
                              #   DescriptionSection, SqlCodeBlock, TagsTable, CatalogIcons,
-                             #   CatalogIdentityCard, CatalogListItem, ColumnTypeBadge
+                             #   CatalogListItem, ColumnTypeBadge
     chat/                    # AI chat sub-components: ChatInput, ChatMessageUser/Assistant,
                              #   ChatMarkdown, ThinkingIndicator, SqlToolCallBlock,
                              #   AskUserBlock, QueryResultTable, VegaChartBlock,
@@ -187,7 +186,6 @@ src/
                              #   per-arg name/type/kind + vgi_doc description and
                              #   vgi_default/choices/range/pattern constraints (the
                              #   same field metadata vgi_function_arguments() surfaces)
-    geo-detect.ts            # Detect spatial columns suitable for map visualization
     tags.ts                  # Reserved vgi.* tag vocabulary + helpers (getTag with
                              #   deprecated-alias fallback, JSON parsers, category grouping,
                              #   display/AI filters)
@@ -197,9 +195,8 @@ src/
     duckdb-catalog.ts        # Introspect attached DuckDB databases for sidebar
     perspective-duckdb-handler.ts  # Perspective VirtualServerHandler backed by DuckDB WASM
 
-    # Auth & Identity
+    # Auth
     oauth-client.ts          # Browser OAuth 2.0 PKCE client (Entra/IdP)
-    catalog-identity.ts      # Per-catalog identity fetching
 
     # Theme & Observability
     theme.ts                 # Theme loading from ?theme=<url>, localStorage caching
@@ -430,7 +427,6 @@ When a VGI server has OAuth PKCE enabled:
 3. `getUserInfo()` in `src/lib/auth.ts` decodes the JWT payload; identity is shown in the header / `ServiceSwitcher`
 4. Token from fragment is cached in memory and cleaned from the URL
 5. The DuckDB extension handles its own PKCE flow for ATTACH — uses SharedArrayBuffer to route auth codes from a popup back to the worker thread
-6. Per-catalog identity is fetched via `catalog-identity.ts` and displayed in `ServiceSwitcher`
 
 ## Testing
 

@@ -8,7 +8,7 @@ import {
 } from "@/lib/reports/semantic-builder";
 import { SemanticSelect, SemanticSection } from "./SemanticFormControls";
 
-export function SemanticPathEditor({
+function SemanticPathEditor({
   label,
   root,
   path,

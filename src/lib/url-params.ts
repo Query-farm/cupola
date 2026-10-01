@@ -119,12 +119,6 @@ export function getThemeUrl(): string | null {
   return new URLSearchParams(window.location.search).get("theme");
 }
 
-/** `?fresh` flag to clear a corrupted DuckDB session snapshot. */
-export function getFreshFlag(): boolean {
-  if (!hasWindow()) return false;
-  return new URLSearchParams(window.location.search).has("fresh");
-}
-
 /**
  * Resolve the VGI extension build for this browser tab.
  *
@@ -169,7 +163,7 @@ export function getVgiExtensionVersionSetting(): VgiExtensionVersionSetting {
 
 /** `#prefill=<url>` for the Edit connection options flow. Plain getter — does
  *  not consume; use consumePrefillFromHash to read+strip. */
-export function getPrefillFromHash(): string | null {
+function getPrefillFromHash(): string | null {
   if (!hasWindow()) return null;
   const m = window.location.hash.match(/^#prefill=(.+)$/);
   if (!m) return null;

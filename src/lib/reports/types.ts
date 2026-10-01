@@ -9,35 +9,6 @@ export type ReportParameterType =
 
 export type ReportParameterValue = string | number | boolean | null | (string | number)[] | { start: string | null; end: string | null };
 
-export interface ReportOption {
-  label: string;
-  value: string | number;
-}
-
-/** Declarative, agent-safe constraints for a report parameter. Only fields
- * meaningful to the parameter's type are accepted by report validation. */
-export interface ReportParameterValidation {
-  min?: number | string;
-  max?: number | string;
-  exclusiveMin?: number;
-  exclusiveMax?: number;
-  step?: number;
-  integer?: boolean;
-  minLength?: number;
-  maxLength?: number;
-  pattern?: string;
-  requireBoth?: boolean;
-  maxSpanDays?: number;
-  minSelections?: number;
-  maxSelections?: number;
-}
-
-export interface ReportParameterValidationDataset {
-  datasetId: string;
-  validColumn: string;
-  messageColumn?: string;
-}
-
 export interface ReportParameter {
   id: string;
   key: string;
@@ -46,18 +17,12 @@ export interface ReportParameter {
   description?: string;
   required?: boolean;
   defaultValue: ReportParameterValue;
-  validation?: ReportParameterValidation;
-  validationDataset?: ReportParameterValidationDataset;
-  options?:
-    | { kind: "static"; values: ReportOption[] }
-    | { kind: "dataset"; datasetId: string; valueColumn: string; labelColumn?: string };
 }
 
-export interface ReportDatasetBase {
+interface ReportDatasetBase {
   id: string;
   name: string;
   description?: string;
-  role?: "data" | "parameter_options" | "parameter_validation";
 }
 
 export interface ReportSemanticParameterRef {

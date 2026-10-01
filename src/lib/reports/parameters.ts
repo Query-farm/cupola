@@ -31,7 +31,7 @@ export function hasSqlStatements(sql: string): boolean {
 }
 
 /** True when a parameter is unset or set to All: null, empty text, or an empty list. */
-export function isAllValue(value: ReportParameterValue | undefined): boolean {
+function isAllValue(value: ReportParameterValue | undefined): boolean {
   return value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
 }
 
