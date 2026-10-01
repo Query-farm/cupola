@@ -19,6 +19,7 @@ import * as duckdb from "@haybarn/haybarn-wasm";
 
 import { engine, notifyQueryChange, setBootPhase, setEngineLifecycleError, type QueryResult } from "./shell-bridge";
 import { recordDuckDBVersion } from "./duckdb-engine";
+import { startIrohAdapter } from "./iroh";
 
 let bootPromise: Promise<void> | null = null;
 
@@ -104,6 +105,11 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // works without the Blob indirection and preserves source-map URLs.
   const subWorker = new Worker(bundle.mainWorker!);
   engine.worker = subWorker;
+
+  // Bridge a page-owned Iroh node to the worker before AsyncDuckDB starts, so
+  // extensions can dial iroh:// endpoints (grainlift+iroh://). COI only; any
+  // failure just disables iroh:// (see ./iroh).
+  startIrohAdapter(subWorker);
 
   // SABs go directly to the sub-worker pre-instantiate. Haybarn's
   // handlePreInitMessage consumes both 'init-oauth-sab' and 'init-cancel-sab'

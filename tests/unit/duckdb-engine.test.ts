@@ -39,6 +39,14 @@ describe("SHELL_EXTENSIONS", () => {
     expect(extensionInstallSql(vgi!)).toBe("INSTALL vgi FROM community");
   });
 
+  test("grainlift installs optional and unpinned from the community repo", () => {
+    // Optional: a missing grainlift build must never block VGI catalogs.
+    const grainlift = SHELL_EXTENSIONS.find((e) => e.name === "grainlift");
+    expect(grainlift).toMatchObject({ source: "community" });
+    expect(grainlift?.required).toBeFalsy();
+    expect(extensionInstallSql(grainlift!)).toBe("INSTALL grainlift FROM community");
+  });
+
   test("core extensions keep their unversioned INSTALL syntax", () => {
     expect(extensionInstallSql(SHELL_EXTENSIONS.find((e) => e.name === "icu")!)).toBe(
       "INSTALL icu"

@@ -1,3 +1,4 @@
+import { useState, useSyncExternalStore } from "react";
 import {
   Dialog,
   DialogClose,
@@ -23,7 +24,46 @@ import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
 import { AI_EFFORT_LEVELS, normalizeEffort, supportsEffort, type AIEffort } from "@/lib/ai/model-features";
 import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { useMediaQuery } from "@/lib/use-media-query";
+import { getIrohState, subscribeIroh } from "@/lib/iroh";
 import { AI_QUERY_MODES, normalizeAIQueryMode, type AIQueryMode } from "@/lib/ai/query-mode";
+
+/** This browser's Iroh endpoint ID: what a Grainlift gateway authorizes for
+ *  `grainlift+iroh://` connections (grainlift-server `iroh.principals`). */
+function IrohIdentityRow() {
+  const iroh = useSyncExternalStore(subscribeIroh, getIrohState, getIrohState);
+  const [copied, setCopied] = useState(false);
+  const description =
+    iroh.status === "ready" ? (
+      <span className="font-mono break-all select-all" data-testid="iroh-endpoint-id">{iroh.endpointId}</span>
+    ) : iroh.status === "starting" ? "Starting…"
+      : iroh.status === "error" ? `Unavailable: ${iroh.error}`
+        : "Unavailable (needs a cross-origin isolated page).";
+  return (
+    <SettingRow>
+      <div className="flex flex-col items-start gap-1 text-left min-w-0 flex-1">
+        <span className="text-sm font-medium">Iroh identity</span>
+        <span className="text-xs text-muted-foreground">
+          Authorize this ID on a Grainlift gateway to attach <code>grainlift+iroh://</code> databases.
+        </span>
+        <span className="text-xs">{description}</span>
+      </div>
+      {iroh.status === "ready" && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            void navigator.clipboard?.writeText(iroh.endpointId ?? "").then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            });
+          }}
+        >
+          {copied ? "Copied" : "Copy"}
+        </Button>
+      )}
+    </SettingRow>
+  );
+}
 
 function SettingRow({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
@@ -191,6 +231,7 @@ export function SettingsModal() {
           {/* Shell settings */}
           <TabsContent value="shell" className="min-w-0 overflow-y-auto px-5 py-3">
             <div className="divide-y divide-border">
+              <IrohIdentityRow />
               <SettingRow>
                 <SettingLabel
                   title="Font size"

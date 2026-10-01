@@ -22,6 +22,7 @@
         "@myriaddreamin/typst.ts": "0.7.0",
         "@query-farm/apache-arrow": "21.1.1",
         "@query-farm/vgi-rpc": "0.25.4",
+        "@query-farm/vgi-rpc-iroh-browser": "0.28.0",
         "@radix-ui/react-accordion": "^1.2.12",
         "@sentry/astro": "^10.55.0",
         "@sentry/cloudflare": "^10.55.0",
@@ -514,6 +515,8 @@
     "@query-farm/flechette": ["@query-farm/flechette@2.4.1", "", {}, "sha512-aKrkfJk7bS5fIfICCX9/O92vrTEE7mNFvzODaGXJOJPJbg1nzPUDWiCMNOvbGRX5c88iMWU3VUzMmXW1p8VHow=="],
 
     "@query-farm/vgi-rpc": ["@query-farm/vgi-rpc@0.25.4", "", { "dependencies": { "@noble/ciphers": "^2.2.0", "@query-farm/apache-arrow": "^21.1.1", "@query-farm/flechette": "^2.4.1", "fzstd": "^0.1.1", "oauth4webapi": "^3.8.6" }, "peerDependencies": { "@aws-sdk/client-s3": ">=3.0.0", "@aws-sdk/s3-request-presigner": ">=3.0.0", "@google-cloud/storage": ">=7.0.0", "@momics/iroh-http-node": ">=0.6.2 <1", "@number0/iroh": ">=1.1.0 <2", "@opentelemetry/api": ">=1.4.0" }, "optionalPeers": ["@aws-sdk/client-s3", "@aws-sdk/s3-request-presigner", "@google-cloud/storage", "@momics/iroh-http-node", "@number0/iroh", "@opentelemetry/api"] }, "sha512-fOsk+hGbEG56lK+Bek7Vy5ZovjYuz6N71AlfiIjTQGXysUhWXU3pZHRx2qw6Ms8D2fJ3kI+7ZgCemws21LrN2g=="],
+
+    "@query-farm/vgi-rpc-iroh-browser": ["@query-farm/vgi-rpc-iroh-browser@0.28.0", "", {}, "sha512-cQtegPzMNvVlkvpO6F9ykAsULdULd1ChaDTvACtbBkcQFPd/lxB10JdtlD9Xyy5QdY9YcD3CnDPikHQEgW/s+Q=="],
 
     "@radix-ui/primitive": ["@radix-ui/primitive@1.1.3", "", {}, "sha512-JTF99U/6XIjCBo0wqkU5sK10glYe27MRRsfwoiq5zzOEZLHU3A3KCMa5X/azekYRCJ0HlwI0crAXS/5dEHTzDg=="],
 
