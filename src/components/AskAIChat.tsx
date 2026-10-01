@@ -410,13 +410,13 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
           onEnd: () => { engine.progress = prevProgress; },
           onOutcome: async (out) => {
             if (out.kind === "error") {
-              ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: out.sql, executionTimeMs: out.elapsedMs, success: false, error: out.errMsg, userQuestion });
+              ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), source: "ask-ai", sql: out.sql, executionTimeMs: out.elapsedMs, success: false, error: out.errMsg, userQuestion });
               return;
             }
             if (out.kind !== "table") return;
             const parsed = JSON.parse(out.json);
             pendingDisplayResult = { columns: parsed.columns, rows: parsed.rows, rowCount: parsed.row_count, showing: parsed.showing };
-            ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), sql: out.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion });
+            ui.addQueryHistoryEntry?.({ id: Date.now(), timestamp: Date.now(), source: "ask-ai", sql: out.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion });
           },
         });
         try {
@@ -455,14 +455,14 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
             onOutcome: async (out) => {
               if (out.kind === "error") {
                 ui.addQueryHistoryEntry?.({
-                  id: Date.now(), timestamp: Date.now(), sql: input.sql,
+                  id: Date.now(), timestamp: Date.now(), source: "ask-ai", sql: input.sql,
                   executionTimeMs: out.elapsedMs, success: false, error: out.errMsg, userQuestion,
                 });
                 return;
               }
               if (out.kind === "empty") {
                 ui.addQueryHistoryEntry?.({
-                  id: Date.now(), timestamp: Date.now(), sql: input.sql,
+                  id: Date.now(), timestamp: Date.now(), source: "ask-ai", sql: input.sql,
                   executionTimeMs: out.elapsedMs, success: true, rowCount: 0, userQuestion,
                 });
                 pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
@@ -472,7 +472,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
               }
               if (out.kind === "ddl") {
                 ui.addQueryHistoryEntry?.({
-                  id: Date.now(), timestamp: Date.now(), sql: input.sql,
+                  id: Date.now(), timestamp: Date.now(), source: "ask-ai", sql: input.sql,
                   executionTimeMs: out.elapsedMs, success: true, rowCount: 0, userQuestion,
                 });
                 pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
@@ -504,7 +504,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
                 showing: parsed.showing,
               };
               ui.addQueryHistoryEntry?.({
-                id: Date.now(), timestamp: Date.now(), sql: input.sql,
+                id: Date.now(), timestamp: Date.now(), source: "ask-ai", sql: input.sql,
                 executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion,
               });
             },

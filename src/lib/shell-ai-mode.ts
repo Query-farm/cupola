@@ -155,12 +155,12 @@ function createToolExecutor(
         onOutcome: async (out) => {
           if (out.kind === "error") {
             term.println(`\x1b[31m  Error: ${out.errMsg}\x1b[0m`);
-            recordQuery({ sql: out.sql, executionTimeMs: out.elapsedMs, success: false, error: out.errMsg, userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName });
+            recordQuery({ source: "shell-ai", sql: out.sql, executionTimeMs: out.elapsedMs, success: false, error: out.errMsg, userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName });
             return;
           }
           if (out.kind !== "table") return;
           await ops.printTable(out.table);
-          recordQuery({ sql: out.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName });
+          recordQuery({ source: "shell-ai", sql: out.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows, userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName });
         },
       });
     }
@@ -174,7 +174,7 @@ function createToolExecutor(
           if (out.kind === "error") {
             term.println(`\x1b[31m  Error: ${out.errMsg}\x1b[0m`);
             recordQuery({
-              sql: input.sql, executionTimeMs: out.elapsedMs, success: false, error: out.errMsg,
+              source: "shell-ai", sql: input.sql, executionTimeMs: out.elapsedMs, success: false, error: out.errMsg,
               userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
             });
             return;
@@ -182,7 +182,7 @@ function createToolExecutor(
           if (out.kind === "empty") {
             term.println(`\x1b[2m  OK (no results)\x1b[0m`);
             recordQuery({
-              sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: 0,
+              source: "shell-ai", sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: 0,
               userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
             });
             return;
@@ -192,7 +192,7 @@ function createToolExecutor(
             // shell's own readLoop handles that for direct queries, and the
             // model already knows the schema it just changed.
             recordQuery({
-              sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: 0,
+              source: "shell-ai", sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: 0,
               userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
             });
             return;
@@ -200,7 +200,7 @@ function createToolExecutor(
           // out.kind === "table"
           await ops.printTable(out.table);
           recordQuery({
-            sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows,
+            source: "shell-ai", sql: input.sql, executionTimeMs: out.elapsedMs, success: true, rowCount: out.table.numRows,
             userQuestion, conversationId: conv.conversationId, conversationName: conv.conversationName,
           });
         },

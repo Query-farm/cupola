@@ -3,11 +3,11 @@
  * header "Catalog / Query Editor" toggle and the bottom shell drawer's own tab
  * strip — one place to drive the whole UI.
  */
-import { Database, FileCode2, Sparkles, History, BarChart3, PanelLeftClose, PanelLeftOpen, FileChartColumn, X } from "lucide-react";
+import { Database, FileCode2, Sparkles, BarChart3, PanelLeftClose, PanelLeftOpen, FileChartColumn, X } from "lucide-react";
 import { Fragment } from "react";
 import { cn } from "@/lib/utils";
 
-export type TabId = "catalog" | "editor" | "shell" | "askai" | "reports" | "evidence" | "queries" | "perspective";
+export type TabId = "catalog" | "editor" | "shell" | "askai" | "reports" | "evidence" | "perspective";
 
 interface TabDef {
   id: TabId;
@@ -27,15 +27,12 @@ const TABS: TabDef[] = [
   { id: "reports", label: "Reports", icon: FileChartColumn },
   { id: "shell", label: "SQL Shell", img: true },
   { id: "catalog", label: "Catalog", icon: Database },
-  { id: "queries", label: "Query History", icon: History },
   { id: "perspective", label: "Perspective", icon: BarChart3, closable: true },
 ];
 
 interface Props {
   activeTab: TabId;
   onSelect: (tab: TabId) => void;
-  /** Count shown on the Query History tab. */
-  queryHistoryCount?: number;
   /** Tabs with work in flight — currently the two AI surfaces. Renders a
    *  pulsing dot so a running agent is visible from any other tab. */
   busyTabs?: Partial<Record<TabId, boolean>>;
@@ -47,7 +44,7 @@ interface Props {
   onCloseTab?: (tab: TabId) => void;
 }
 
-export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs, sidebarCollapsed, onToggleSidebar, openTabs, onCloseTab }: Props) {
+export function AppTabBar({ activeTab, onSelect, busyTabs, sidebarCollapsed, onToggleSidebar, openTabs, onCloseTab }: Props) {
   return (
     <div className="flex items-center gap-1 px-2 h-10 border-b border-border bg-card shrink-0 overflow-x-auto">
       <button
@@ -102,11 +99,6 @@ export function AppTabBar({ activeTab, onSelect, queryHistoryCount = 0, busyTabs
                 title="Working…"
                 aria-label="Working"
               />
-            )}
-            {tab.id === "queries" && queryHistoryCount > 0 && (
-              <span className={cn("ml-0.5 rounded-full px-1.5 text-[10px]", active ? "bg-primary-foreground/20" : "bg-foreground/10")}>
-                {queryHistoryCount}
-              </span>
             )}
           </button>
           {tab.closable && onCloseTab && (

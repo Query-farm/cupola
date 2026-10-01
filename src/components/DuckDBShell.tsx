@@ -29,21 +29,14 @@ import { describePerspectiveArrowInput } from "@/lib/perspective-diagnostics";
 import type { CatalogData } from "@/lib/service";
 import type { TableInfo } from "@/lib/vgi-catalog-types";
 
-// Imported (not just re-exported) because this module uses the type itself —
-// `export type { X } from "..."` forwards the name without binding it locally,
-// so the four annotations below were unresolved.
-import type { QueryHistoryEntry } from "@/lib/shell-bridge";
-export type { QueryHistoryEntry };
 
 interface Props {
   serviceUrl: string;
   catalogName: string;
   /** The active top-level tab (controlled by CatalogApp's single tab bar). */
   activeTab: TabId;
-  /** Switch the active top-level tab (used by bridge slots / history re-run). */
+  /** Switch the active top-level tab (used by bridge slots). */
   onTabChange: (tab: TabId) => void;
-  /** Notifies the parent of the query-history entry count (for the tab badge). */
-  onQueryHistoryCountChange?: (count: number) => void;
   /** Notifies the parent while the Ask AI panel has a turn in flight (for the
    *  tab bar's busy dot — the panel is hidden, not unmounted, on other tabs). */
   onAiBusyChange?: (busy: boolean) => void;
@@ -126,10 +119,10 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, onQueryHistoryCountChange, onAiBusyChange, onShellReady, catalogData, attachedCatalogs = [], selection, onAuthError, onAttachError, attachOptions }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, onAiBusyChange, onShellReady, catalogData, attachedCatalogs = [], selection, onAuthError, onAttachError, attachOptions }: Props) {
   const inventory = useCatalogInventory();
   // The parent controls the active tab; expose a local alias so the existing
-  // setActiveTab(...) call sites (history re-run, bridge slots) keep working.
+  // setActiveTab(...) call sites (bridge slots) keep working.
   const setActiveTab = onTabChange;
   const rootRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -149,22 +142,12 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   const [error, setError] = useState<string | null>(null);
   const displayedError = error ?? (engineLifecycle.status === "error" ? engineLifecycle.error : null);
   const cleanupRef = useRef<(() => void) | null>(null);
-  const [queryHistory, setQueryHistory] = useState<QueryHistoryEntry[]>([]);
 
   // CatalogApp only mounts this component once an engine-backed tab has been
   // visited, so the heavy DuckDB WASM boot is already deferred upstream — the
   // shell is "activated" for its whole lifetime here.
   const shellActivated = true;
 
-  // Expose query history setter for the initShell closure. Inside useEffect
-  // with cleanup so React's strict-mode mount/unmount/remount doesn't leave a
-  // stale closure pointing at the previous component instance's setState.
-  useEffect(() => {
-    ui.addQueryHistoryEntry = (entry: QueryHistoryEntry) => {
-      setQueryHistory(prev => { const next = [...prev, entry]; onQueryHistoryCountChange?.(next.length); return next; });
-    };
-    return () => { ui.addQueryHistoryEntry = null; };
-  }, [onQueryHistoryCountChange]);
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
 
   // Resolve the selected table for the Perspective tab.
@@ -565,178 +548,6 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         </Suspense>
       </div>
 
-      {/* Query History panel */}
-      {activeTab === "queries" && (() => {
-        const handleRerun = (sql: string) => {
-          setActiveTab("shell");
-          const run = () => {
-            const tryRun = () => {
-              if (terminal.runQuery) {
-                terminal.runQuery(sql);
-              } else {
-                requestAnimationFrame(tryRun);
-              }
-            };
-            tryRun();
-          };
-          // If in AI mode, exit it first by simulating Ctrl+D
-          if (terminal.inAiMode) {
-            const term = terminal.term;
-            if (term) {
-              term.paste("\x04"); // Ctrl+D to exit AI mode
-              // Wait for AI mode to exit, then run the query
-              const waitForSql = () => {
-                if (!terminal.inAiMode) {
-                  setTimeout(run, 100);
-                } else {
-                  requestAnimationFrame(waitForSql);
-                }
-              };
-              requestAnimationFrame(waitForSql);
-            }
-          } else {
-            run();
-          }
-        };
-        return (
-        <div className="flex-1 min-h-0 overflow-y-auto bg-terminal-bg p-3">
-          {queryHistory.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-terminal-fg/40 text-sm font-mono">
-              No queries yet. Use .ai mode to generate queries.
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {(() => {
-                // Group queries by conversationId, preserving order (newest conversation first)
-                const groups: { conversationId: string | null; question: string | undefined; name: string | undefined; entries: QueryHistoryEntry[] }[] = [];
-                const convMap = new Map<string, typeof groups[number]>();
-                for (const entry of queryHistory) {
-                  const cid = entry.conversationId ?? null;
-                  if (cid && convMap.has(cid)) {
-                    const g = convMap.get(cid)!;
-                    g.entries.push(entry);
-                    // Update name if a later entry has one (e.g., user named it mid-session)
-                    if (entry.conversationName) g.name = entry.conversationName;
-                  } else {
-                    const group = { conversationId: cid, question: entry.userQuestion, name: entry.conversationName, entries: [entry] };
-                    groups.push(group);
-                    if (cid) convMap.set(cid, group);
-                  }
-                }
-                return [...groups].reverse().map((group) => {
-                  if (!group.conversationId || group.entries.length === 1) {
-                    // Standalone query — render flat
-                    const entry = group.entries[0];
-                    return <QueryCard key={entry.id} entry={entry} onRerun={handleRerun} />;
-                  }
-                  // Threaded conversation
-                  return (
-                    <div key={group.conversationId} className="border border-[#3a3a28] rounded-md bg-[#1e1e14] overflow-hidden">
-                      {/* Conversation header */}
-                      <div className="px-3 py-2 bg-[#24241a] border-b border-[#3a3a28] flex items-center gap-2">
-                        <span className="text-terminal-accent text-xs font-mono font-semibold shrink-0">AI</span>
-                        <span className="text-terminal-fg/60 text-xs truncate">
-                          {group.name || group.question || "Unnamed conversation"}
-                        </span>
-                        <span className="text-terminal-fg/20 text-xs font-mono ml-auto shrink-0">{group.entries.length} queries</span>
-                      </div>
-                      {/* Threaded queries */}
-                      <div className="flex flex-col">
-                        {group.entries.map((entry, i) => (
-                          <div key={entry.id} className="flex">
-                            {/* Thread line */}
-                            <div className="w-6 shrink-0 flex flex-col items-center">
-                              <div className={`w-px flex-1 ${i === 0 ? "bg-transparent" : "bg-[#3a3a28]"}`} />
-                              <div className="w-2 h-2 rounded-full bg-[#3a3a28] shrink-0" />
-                              <div className={`w-px flex-1 ${i === group.entries.length - 1 ? "bg-transparent" : "bg-[#3a3a28]"}`} />
-                            </div>
-                            <div className="flex-1 min-w-0 py-2 pr-3">
-                              <QueryCard entry={entry} compact onRerun={handleRerun} />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                });
-              })()}
-            </div>
-          )}
-        </div>
-        );
-      })()}
-
-    </div>
-  );
-}
-
-function QueryCard({ entry, compact, onRerun }: { entry: QueryHistoryEntry; compact?: boolean; onRerun?: (sql: string) => void }) {
-  const isAI = !!entry.conversationId;
-  return (
-    <div className={compact ? "" : `border rounded-md p-3 ${isAI ? "border-[#3a3a28] bg-[#24241a]" : "border-[#2a3a28] bg-[#1e241a]"}`}>
-      <div className="flex items-start justify-between gap-2 mb-1">
-        <div className="flex items-center gap-1.5 flex-1 min-w-0">
-          {!compact && (
-            <span className={`text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded ${isAI ? "bg-[#35304a] text-purple-300" : "bg-[#2a3a2a] text-green-300"}`}>
-              {isAI ? "AI" : "SQL"}
-            </span>
-          )}
-          {!compact && entry.userQuestion && (
-            <span className="text-terminal-fg/50 text-xs italic truncate">
-              &ldquo;{entry.userQuestion}&rdquo;
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <span className="text-terminal-fg/30 text-xs font-mono">
-            {new Date(entry.timestamp).toLocaleTimeString()}
-          </span>
-          <button
-            className="p-1 text-terminal-fg/30 hover:text-terminal-accent transition-colors cursor-pointer"
-            title="Copy SQL"
-            onClick={() => navigator.clipboard.writeText(entry.sql)}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-          </button>
-          {onRerun && (
-            <button
-              className="p-1 text-terminal-fg/30 hover:text-terminal-accent transition-colors cursor-pointer"
-              title="Re-run query"
-              onClick={() => onRerun(entry.sql)}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            </button>
-          )}
-          {ui.openInEditor && (
-            <button
-              className="p-1 text-terminal-fg/30 hover:text-terminal-accent transition-colors cursor-pointer"
-              title="Open in SQL editor"
-              onClick={() => ui.openInEditor?.(entry.sql)}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m10 13-2 2 2 2"/><path d="m14 17 2-2-2-2"/></svg>
-            </button>
-          )}
-        </div>
-      </div>
-      <pre className={`text-xs font-mono whitespace-pre-wrap break-all leading-relaxed ${isAI ? "text-purple-300" : "text-terminal-accent"}`}>
-        {entry.sql}
-      </pre>
-      <div className="mt-1 text-xs font-mono">
-        {entry.success ? (
-          <span className="text-terminal-accent">
-            {entry.rowCount != null ? `${entry.rowCount.toLocaleString()} row${entry.rowCount !== 1 ? "s" : ""}` : "OK"}
-          </span>
-        ) : (
-          <span className="text-red-400">
-            {entry.error || "Failed"}
-          </span>
-        )}
-        <span className="text-terminal-fg/30 ml-2">
-          {entry.executionTimeMs >= 1000
-            ? `${(entry.executionTimeMs / 1000).toFixed(1)}s`
-            : `${Math.round(entry.executionTimeMs)}ms`}
-        </span>
-      </div>
     </div>
   );
 }

@@ -19,6 +19,7 @@ import {
 } from "@/lib/oauth-client";
 import { SettingsProvider } from "@/lib/settings";
 import { terminal, ui, setShellWorkerSentryUser } from "@/lib/shell-bridge";
+import { addQueryHistoryEntry } from "@/lib/editor/query-history";
 import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
 import { loadTheme } from "@/lib/theme";
 import { lazy, Suspense } from "react";
@@ -132,7 +133,9 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
       // surface; start on the safe Catalog tab instead.
       if (stored === "evidence") return "reports";
       if (stored === "perspective") return "catalog";
-      if (stored && ["catalog", "editor", "shell", "askai", "reports", "evidence", "queries"].includes(stored)) return stored;
+      // Query History was a tab until it moved into the editor's History menu.
+      if ((stored as string) === "queries") return "editor";
+      if (stored && ["catalog", "editor", "shell", "askai", "reports", "evidence"].includes(stored)) return stored;
       if (localStorage.getItem("vgi-app-view") === "editor") return "editor";
     } catch {}
     return "catalog";
@@ -153,13 +156,12 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [mobileSidebarOpen]);
-  const [queryHistoryCount, setQueryHistoryCount] = useState(0);
   // AI turns in flight, per surface. Both panels stay mounted (or, for the
   // editor's, can be collapsed) while a turn runs, so the tab bar is the only
   // place that can say "still working" once the user looks elsewhere.
   const [askAiBusy, setAskAiBusy] = useState(false);
   const [editorAiBusy, setEditorAiBusy] = useState(false);
-  // The engine host (shell/askai/preview/queries/perspective) is mounted for
+  // The engine host (shell/askai/perspective) is mounted for
   // the whole session — hidden behind the catalog/editor when not active — so
   // (a) DuckDB boots + ATTACHes once (column stats, previews work on the
   // catalog tab), and (b) terminal / chat / perspective state survives tab
@@ -215,7 +217,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
     window.addEventListener(OPEN_REPORT_EVENT, openReport);
     return () => window.removeEventListener(OPEN_REPORT_EVENT, openReport);
   }, []);
-  // SQL pushed into the editor from elsewhere (example queries, shell history,
+  // SQL pushed into the editor from elsewhere (example queries, query history,
   // shared query links). `autoRun` is false for shared links: the recipient
   // gets the query staged and ready, but chooses when to execute it.
   const [pendingEditorSql, setPendingEditorSql] = useState<PendingEditorSql | null>(null);
@@ -254,7 +256,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
   }, [sidebarCollapsed, showcaseMode]);
 
   // ui.openInEditor: switch to the editor tab and queue the SQL.
-  // Invoked by ExampleQueries' Run button and the shell's history tab.
+  // Invoked by ExampleQueries' Run button and the AI panels' "open in new tab".
   useEffect(() => {
     ui.openInEditor = (sql: string, opts?: { autoRun?: boolean }) => {
       setPendingEditorSql({ sql, autoRun: opts?.autoRun ?? true });
@@ -300,6 +302,13 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
   }, [activeTab]);
 
   const serviceUrl = useMemo(() => showcaseMode ? "" : (hasExplicitService() ? getServiceUrl() : defaultServiceUrl || getServiceUrl()), [showcaseMode, defaultServiceUrl]);
+  // Every surface records its queries through this slot; they are kept per server
+  // and read in the editor's History menu.
+  useEffect(() => {
+    if (showcaseMode) return;
+    ui.addQueryHistoryEntry = (entry) => addQueryHistoryEntry(serviceUrl, entry);
+    return () => { ui.addQueryHistoryEntry = null; };
+  }, [serviceUrl, showcaseMode]);
   // `?attach_options=` URL param wins over the localStorage value and is
   // persisted so a future visit without the param keeps the same options.
   // An explicit empty value clears them.
@@ -642,7 +651,6 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
       <AppTabBar
         activeTab={activeTab}
         onSelect={setActiveTab}
-        queryHistoryCount={queryHistoryCount}
         busyTabs={{ askai: askAiBusy, editor: editorAiBusy }}
         sidebarCollapsed={!sidebarVisible}
         onToggleSidebar={() => isNarrow ? setMobileSidebarOpen((open) => !open) : setSidebarCollapsed((c) => !c)}
@@ -700,7 +708,7 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
         )}
         {/* Content area — one tab visible at a time. Only the catalog is
             conditionally rendered; the editor and the engine host (shell/askai/
-            preview/queries/perspective) are mounted once activated and then
+            perspective) are mounted once activated and then
             kept sized via visibility (not display:none), so the xterm terminal,
             the chat, and the editor's result grid all survive tab switches and
             still have a layout box to measure against while hidden. */}
@@ -756,7 +764,6 @@ export function CatalogApp({ showcase, initialTab, defaultServiceUrl }: CatalogA
                     catalogName={data.catalogName}
                     activeTab={activeTab}
                     onTabChange={setActiveTab}
-                    onQueryHistoryCountChange={setQueryHistoryCount}
                     onAiBusyChange={setAskAiBusy}
                     onShellReady={(insert) => { shellInsertRef.current = insert; }}
                     catalogData={data}

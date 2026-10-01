@@ -43,7 +43,13 @@ export interface QueryHistoryEntry {
   userQuestion?: string;
   conversationId?: string;
   conversationName?: string;
+  /** Where it ran. Absent on entries recorded before sources were tracked. */
+  source?: QuerySource;
+  /** Consecutive identical runs folded into this entry (`query-history.ts`). */
+  runs?: number;
 }
+
+export type QuerySource = "editor" | "shell" | "ask-ai" | "editor-ai" | "shell-ai";
 
 export type EngineLifecycleStatus = "idle" | "starting" | "attaching" | "ready" | "error";
 
@@ -65,6 +71,7 @@ export function recordQuery(opts: {
   userQuestion?: string;
   conversationId?: string;
   conversationName?: string;
+  source?: QuerySource;
 }): void {
   ui.addQueryHistoryEntry?.({
     id: Date.now(),

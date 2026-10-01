@@ -53,7 +53,7 @@ interface Props {
   serviceUrl: string;
   /** Resolved ATTACH options fragment, propagated into share links. */
   attachOptions?: string;
-  /** SQL pushed in from elsewhere (example queries, shell history, shared
+  /** SQL pushed in from elsewhere (example queries, AI panels, shared
    *  links). Opens a new tab; call onPendingConsumed once handled. */
   pendingSql?: PendingEditorSql | null;
   onPendingConsumed?: () => void;
@@ -213,7 +213,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
 
     if (!res.ok) {
       setActiveResult(docId, { running: false, error: res.error || "Query failed", ok: false, table: null });
-      recordQuery({ sql: trimmed, executionTimeMs: elapsedMs, success: false, error: res.error });
+      recordQuery({ source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: false, error: res.error });
       maybeSelectError(res.error);
       return;
     }
@@ -222,7 +222,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     const isEmpty = !buf || (buf instanceof ArrayBuffer ? buf.byteLength === 0 : (buf as Uint8Array).length === 0);
     if (isEmpty) {
       setActiveResult(docId, { running: false, error: null, ok: true, table: null, rowCount: 0, elapsedMs });
-      recordQuery({ sql: trimmed, executionTimeMs: elapsedMs, success: true });
+      recordQuery({ source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true });
       return;
     }
     const table = decodeArrowBuffer(buf);
@@ -231,13 +231,13 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     const isCount = fields.length === 1 && fields[0].name === "Count" && table.numRows <= 1;
     if (isCount) {
       setActiveResult(docId, { running: false, error: null, ok: true, table: null, rowCount: 0, elapsedMs });
-      recordQuery({ sql: trimmed, executionTimeMs: elapsedMs, success: true });
+      recordQuery({ source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true });
       return;
     }
     setActiveResult(docId, {
       running: false, error: null, ok: true, table, sourceSql: trimmed, rowCount: table.numRows, elapsedMs,
     });
-    recordQuery({ sql: trimmed, executionTimeMs: elapsedMs, success: true, rowCount: table.numRows });
+    recordQuery({ source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true, rowCount: table.numRows });
   }, [setActiveResult]);
 
   /** Best-effort: if a DuckDB error names a character offset, select it. */
@@ -512,10 +512,8 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     return () => { if (ui.insertIntoEditor === smartInsert) ui.insertIntoEditor = null; };
   }, [smartInsert]);
 
-  // ---- externally-pushed SQL (example queries, shell history, share links) --
-  useEffect(() => {
-    if (!pendingSql) return;
-    const { sql, autoRun } = pendingSql;
+  // SQL from outside this tab's text always lands in a new tab, which becomes active.
+  const openInNewTab = useCallback((sql: string, autoRun: boolean) => {
     setDocState((prev) => {
       const next = addDoc(prev, sql);
       saveEditorState(next, serviceUrl);
@@ -524,6 +522,12 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       if (autoRun) setTimeout(() => runSql(sql, newId), 60);
       return next;
     });
+  }, [runSql, serviceUrl]);
+
+  // ---- externally-pushed SQL (example queries, AI panels, share links) -----
+  useEffect(() => {
+    if (!pendingSql) return;
+    openInNewTab(pendingSql.sql, pendingSql.autoRun);
     onPendingConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingSql]);
@@ -561,6 +565,8 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
         onDownloadSql={handleDownloadSql}
         onShareLink={handleShareLink}
         shareCopied={shareCopied}
+        serviceUrl={serviceUrl}
+        onOpenFromHistory={openInNewTab}
       />
       {/* Horizontal split: editor+results on the left, Ask AI panel on the
           right. The panel stays mounted (display:none when closed) so its

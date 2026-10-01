@@ -810,13 +810,13 @@ export function initShell(
             await printTable(table, elapsed);
           }
 
-          recordQuery({ sql: trimmed, executionTimeMs: elapsed, success: true, rowCount: table.numRows });
+          recordQuery({ source: "shell", sql: trimmed, executionTimeMs: elapsed, success: true, rowCount: table.numRows });
         } catch (err: any) {
           writeln(`Failed to render: ${err.message}`, "31");
         }
       } else {
         writeln("OK", "32");
-        recordQuery({ sql: trimmed, executionTimeMs: elapsed, success: true, rowCount: 0 });
+        recordQuery({ source: "shell", sql: trimmed, executionTimeMs: elapsed, success: true, rowCount: 0 });
       }
 
       // Refresh prompt catalog if the query might have changed it

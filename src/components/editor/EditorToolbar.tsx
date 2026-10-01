@@ -2,6 +2,7 @@ import { Play, Square, Sparkles, WandSparkles, Loader2, FileChartColumn } from "
 import { Button } from "@/components/ui/button";
 import { ScriptMenu } from "./ScriptMenu";
 import { PivotMenu } from "./PivotMenu";
+import { QueryHistoryMenu } from "./QueryHistoryMenu";
 import type { PerspectivePivotMode, QueryPivotMode } from "@/lib/pivot-source";
 
 interface Props {
@@ -32,6 +33,10 @@ interface Props {
   onShareLink: () => void;
   /** Renders the share row in its just-copied state. */
   shareCopied?: boolean;
+  /** Server whose query history the History menu shows. */
+  serviceUrl: string;
+  /** Open a history entry in a new tab; `run` also executes it. */
+  onOpenFromHistory: (sql: string, run: boolean) => void;
 }
 
 /**
@@ -44,7 +49,7 @@ interface Props {
  *
  * Layout, left to right:
  *
- *   [▶ Run] [Run in Perspective ▾] [✨ Ask AI]  │  Format   Script ▾
+ *   [▶ Run] [Run in Perspective ▾] [✨ Ask AI]  │  Format   Script ▾   History ▾
  *
  * Ask AI sits in the execute cluster with a filled background because it is a
  * primary action, not a utility. Its fill is `primary` (brown) rather than the
@@ -68,6 +73,8 @@ export function EditorToolbar({
   onDownloadSql,
   onShareLink,
   shareCopied,
+  serviceUrl,
+  onOpenFromHistory,
 }: Props) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0">
@@ -178,6 +185,8 @@ export function EditorToolbar({
         onShareLink={onShareLink}
         shareCopied={shareCopied}
       />
+
+      <QueryHistoryMenu serviceUrl={serviceUrl} onOpen={onOpenFromHistory} />
 
       <div className="flex-1" />
     </div>
