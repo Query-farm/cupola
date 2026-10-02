@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Loader2, AlertCircle, TableProperties, CheckCircle2, Maximize2, SquareArrowOutUpRight } from "lucide-react";
+import { Loader2, AlertCircle, TableProperties, CheckCircle2, Maximize2, SquareArrowOutUpRight, CircleSlash } from "lucide-react";
 import { DataPreview } from "@/components/content/DataPreview";
 import { ExplainView } from "@/components/editor/ExplainView";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -21,6 +21,8 @@ export interface ResultState {
   ran: boolean;
   /** Exact statement which produced the current result table. */
   sourceSql?: string;
+  /** True when the reader stopped the last run (or a newer run replaced it). */
+  cancelled?: boolean;
 }
 
 export const emptyResult: ResultState = {
@@ -104,6 +106,11 @@ export function EditorResultsPane({ state, onPopout, onExport, onOpenInPerspecti
               {state.error}
             </pre>
           </div>
+        ) : state.cancelled && !state.running ? (
+          <div className="flex flex-col items-center justify-center h-full text-center p-8" data-testid="editor-cancelled">
+            <CircleSlash className="h-8 w-8 text-muted-foreground/50 mb-3" />
+            <p className="text-sm text-muted-foreground">Query cancelled.</p>
+          </div>
         ) : state.running && !state.table ? (
           <div className="flex items-center justify-center h-full text-muted-foreground gap-2">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -152,7 +159,7 @@ export function EditorResultsPane({ state, onPopout, onExport, onOpenInPerspecti
 function QueryTimeBar({ state }: Props) {
   // Row count lives in the DataPreview footer; here we only surface the
   // elapsed time, and only once a statement has completed successfully.
-  if (state.running || !state.ran || state.error) return null;
+  if (state.running || !state.ran || state.error || state.cancelled) return null;
   return (
     <div className="flex items-center justify-end px-3 py-1 border-t border-border bg-muted/30 text-xs text-muted-foreground shrink-0">
       <span>{state.elapsedMs} ms</span>

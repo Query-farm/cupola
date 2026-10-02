@@ -99,6 +99,9 @@ export const engine = {
   rolledBack: null as (<T>(work: (run: (sql: string, params?: unknown[]) => Promise<QueryResult>) => Promise<T>, options?: QueryExecutionOptions) => Promise<T>) | null,
   querySync: null as ((sql: string, options?: QueryExecutionOptions) => Promise<QueryResult>) | null,
   cancelQuery: null as (() => void) | null,
+  /** True when a query run with a signal can be interrupted mid-execution, not
+   *  only between polls (haybarn-wasm's `getInterruptHandle`, threads builds). */
+  interruptsRunningQueries: false,
   progress: null as ((pct: number) => void) | null,
   catalogName: null as string | null,
   worker: null as Worker | null,
@@ -309,6 +312,7 @@ if (typeof window !== "undefined") {
     get getTableNames() { return engine.getTableNames; },
     get querySync() { return engine.querySync; },
     get cancelQuery() { return engine.cancelQuery; },
+    get interruptsRunningQueries() { return engine.interruptsRunningQueries; },
     get catalogName() { return engine.catalogName; },
     get worker() { return engine.worker; },
     get bootPhase() { return engine.bootPhase; },

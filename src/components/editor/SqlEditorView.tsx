@@ -110,6 +110,10 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
 
   const editorRef = useRef<CodeMirrorSqlHandle | null>(null);
   const runIdRef = useRef(0);
+  // The run in flight, if any. Stop aborts it, and so does a newer run: the
+  // engine has one connection, so a superseded query would only hold the next
+  // one up while producing a result nobody shows.
+  const activeRunRef = useRef<{ controller: AbortController; docId: string } | null>(null);
   // Persist edits (debounced) without re-rendering on every keystroke.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Latest doc state, so the flush-on-hide/unmount handler writes current text
@@ -185,16 +189,28 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     const trimmed = sql.trim();
     if (!trimmed) return;
     const myRun = ++runIdRef.current;
-    setActiveResult(docId, { running: true, ran: true, error: null });
+    const previous = activeRunRef.current;
+    if (previous) {
+      previous.controller.abort();
+      if (previous.docId !== docId) setActiveResult(previous.docId, { running: false, cancelled: true, error: null, table: null });
+    }
+    const controller = new AbortController();
+    activeRunRef.current = { controller, docId };
+    setActiveResult(docId, { running: true, ran: true, error: null, cancelled: false });
+
+    // Only the latest run owns the slot; a superseded one leaves it alone.
+    const release = () => { if (activeRunRef.current?.controller === controller) activeRunRef.current = null; };
 
     try {
       await waitForEngineReady();
     } catch (error) {
+      release();
       setActiveResult(docId, { running: false, error: error instanceof Error ? error.message : "The data engine failed to start." });
       return;
     }
     const q = engine.query;
     if (!q) {
+      release();
       setActiveResult(docId, { running: false, error: "The data engine is not ready." });
       return;
     }
@@ -202,12 +218,21 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     const t0 = performance.now();
     let res;
     try {
-      res = await q(trimmed);
+      // With a signal the engine runs this as a pending query it can cancel
+      // between polls; without one it is a single blocking call Stop can't reach.
+      res = await q(trimmed, { signal: controller.signal });
     } catch (e) {
+      release();
       if (myRun !== runIdRef.current) return;
+      if (controller.signal.aborted) {
+        setActiveResult(docId, { running: false, cancelled: true, error: null, table: null });
+        recordQuery({ source: "editor", sql: trimmed, executionTimeMs: Math.round(performance.now() - t0), success: false, error: "Query cancelled" });
+        return;
+      }
       setActiveResult(docId, { running: false, error: e instanceof Error ? e.message : String(e) });
       return;
     }
+    release();
     if (myRun !== runIdRef.current) return;
     const elapsedMs = Math.round(performance.now() - t0);
 
@@ -271,7 +296,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   }, [activeId, runSql]);
 
   const handleStop = useCallback(() => {
-    engine.cancelQuery?.();
+    activeRunRef.current?.controller.abort();
   }, []);
 
   // ---- toolbar actions ----------------------------------------------------

@@ -198,7 +198,6 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // `src/lib/format.ts` keys its hugeint/timetz/bit/uuid handlers off the
   // `ARROW:extension:metadata` this produces; without it they silently never
   // fire. `.test_formats` is the guard.
-  await db.open({ arrowLosslessConversion: true });
 
   setBootPhase("Connecting to Haybarn");
   const conn = await db.connect();
@@ -242,19 +241,49 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
       return { ok: false, error: msg };
     }
   };
-  const execute = createQueryExecutor(() => engine.cancelQuery?.());
-  // rc6 CancelPendingQuery releases the pending result but does not interrupt
-  // parallel background tasks. Run interruptible work on the polling thread;
-  // restore the shared setting before releasing connection ownership.
+  // The connection's own interrupt flag, in wasm memory (haybarn-wasm with
+  // `getInterruptHandle`, threads builds only). A query runs synchronously in the
+  // worker and one poll can process dozens of chunks, so a cancel sent as a
+  // message is read only after the poll, by which point a slow remote scan has
+  // often finished: a 20-chunk `slow_rows` scan stopped after one chunk ran all
+  // 38s inside a single poll. Setting the flag in place reaches the query
+  // mid-poll, on every engine thread, and it then fails with an interrupt error.
+  //
+  // Only the executor sets it, and only while its own query holds the
+  // connection: the flag interrupts whatever runs on the connection, while
+  // `engine.cancelQuery` is also called by surfaces that don't know what's running.
+  const handleSource = db as unknown as { getInterruptHandle?: (conn: number) => Promise<{ memory: SharedArrayBuffer; offset: number } | null> };
+  const interruptHandle = handleSource.getInterruptHandle ? await handleSource.getInterruptHandle(connId) : null;
+  const interruptFlag = interruptHandle ? new Uint8Array(interruptHandle.memory, interruptHandle.offset, 1) : null;
+  engine.interruptsRunningQueries = interruptFlag !== null;
+  const execute = createQueryExecutor(() => {
+    if (interruptFlag) Atomics.store(interruptFlag, 0, 1);
+    engine.cancelQuery?.();
+  });
+  // Interruptible work still runs on the polling thread alone (`threads = 1`),
+  // with the shared setting restored before releasing connection ownership.
+  // Without the flag, a cancelled pending query is only released and its tasks
+  // on other threads keep running. With it, an interrupt that lands while a
+  // remote VGI scan runs on engine threads deadlocked the engine in about half
+  // of runs (the poll never returned, and nothing ran again until reload); on
+  // one thread it was clean every time.
+  //
+  // `threads` is a global setting, so it is read and set on a connection of its
+  // own. On the shared one, a user's `BEGIN` followed by a cancelled or failed
+  // statement leaves an aborted transaction, where even SET is refused ("Current
+  // transaction is aborted"): the restore in `finally` threw, replaced the
+  // query's own error, and left the engine at one thread for the session.
+  const settingsConn = await db.connect();
+  const settingsConnId = settingsConn.useUnsafe((_db, id) => id);
   const interruptible = async <T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> => {
     signal.throwIfAborted();
-    const setting = await db.runQuery(connId, "SELECT current_setting('threads')");
+    const setting = await db.runQuery(settingsConnId, "SELECT current_setting('threads')");
     const threads = Number(decodeArrowBuffer(new Uint8Array(setting).buffer).getChildAt(0)?.get(0));
     if (!Number.isSafeInteger(threads) || threads < 1) throw new Error('Could not read the engine thread setting.');
     signal.throwIfAborted();
-    await db.runQuery(connId, 'SET threads = 1');
+    await db.runQuery(settingsConnId, 'SET threads = 1');
     try { signal.throwIfAborted(); return await work(); }
-    finally { await db.runQuery(connId, `SET threads = ${threads}`); }
+    finally { await db.runQuery(settingsConnId, `SET threads = ${threads}`); }
   };
   engine.query = (sql, options) => observeCatalogQuery(sql, () => execute(signal => options
     ? interruptible(signal, () => runQueryWrapped(sql, signal))
