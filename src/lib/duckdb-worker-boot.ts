@@ -260,13 +260,16 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
     if (interruptFlag) Atomics.store(interruptFlag, 0, 1);
     engine.cancelQuery?.();
   });
-  // Interruptible work still runs on the polling thread alone (`threads = 1`),
-  // with the shared setting restored before releasing connection ownership.
-  // Without the flag, a cancelled pending query is only released and its tasks
-  // on other threads keep running. With it, an interrupt that lands while a
-  // remote VGI scan runs on engine threads deadlocked the engine in about half
-  // of runs (the poll never returned, and nothing ran again until reload); on
-  // one thread it was clean every time.
+  // With the flag, interruptible work runs on every engine thread. The flag
+  // arrived in haybarn-wasm 1.5.5-rc7 together with the engine fix that made
+  // that safe: interrupting a remote VGI scan on engine threads used to
+  // deadlock the engine (6 of 10 fresh page loads), because the scan's teardown
+  // on a pthread waited on the main thread while it spun in CancelTasks.
+  //
+  // Without the flag (older builds), a cancelled pending query is only
+  // released and its tasks on other threads keep running, so interruptible
+  // work runs on the polling thread alone (`threads = 1`), with the shared
+  // setting restored before releasing connection ownership.
   //
   // `threads` is a global setting, so it is read and set on a connection of its
   // own. On the shared one, a user's `BEGIN` followed by a cancelled or failed
@@ -277,6 +280,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   const settingsConnId = settingsConn.useUnsafe((_db, id) => id);
   const interruptible = async <T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> => {
     signal.throwIfAborted();
+    if (interruptFlag) return work();
     const setting = await db.runQuery(settingsConnId, "SELECT current_setting('threads')");
     const threads = Number(decodeArrowBuffer(new Uint8Array(setting).buffer).getChildAt(0)?.get(0));
     if (!Number.isSafeInteger(threads) || threads < 1) throw new Error('Could not read the engine thread setting.');

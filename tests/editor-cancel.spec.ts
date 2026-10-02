@@ -68,8 +68,8 @@ test("the engine is free again within one in-flight chunk of Stop", async ({ pag
 });
 
 test("a failed statement inside BEGIN keeps its error and the engine's threads", async ({ page }) => {
-  // Cancellable queries run at `SET threads = 1` and restore the setting
-  // afterwards. In an aborted transaction DuckDB refuses even SET, so a restore
+  // On builds without the interrupt flag, cancellable queries run at
+  // `SET threads = 1` and restore the setting afterwards. In an aborted transaction DuckDB refuses even SET, so a restore
   // on the shared connection threw "Current transaction is aborted", replacing
   // the statement's own error and leaving the engine on one thread.
   const before = await shellQuery(page, "SELECT current_setting('threads') AS t");
