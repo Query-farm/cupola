@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Bot, FileDown, History, RotateCcw, User } from 'lucide-react';
+import { Bot, FileDown, History, RotateCcw, Trash2, User } from 'lucide-react';
 import { Button } from '../ui/button';
 import { fieldText, lineDiff, REVISION_FIELD_LABELS, revisionSpec, type DiffLine, type ReportHistory, type Revision, type RevisionField, type RevisionKind } from '../../lib/evidence/revisions';
 
@@ -9,9 +9,11 @@ const KIND_ICONS: Record<RevisionKind, typeof User> = { edit: User, agent: Bot, 
 const CONTEXT = 3;
 
 /** Every saved version of the report, newest first: who changed what, and a line diff of each
- *  changed field against the version before it. Any version can be restored into the draft. */
-export function EvidenceHistory({ history, dirty, onRestore }: { history: ReportHistory; dirty: boolean; onRestore: (revision: Revision) => void }) {
+ *  changed field against the version before it. Any version can be restored into the draft, and
+ *  any but the latest (the saved report itself) removed. */
+export function EvidenceHistory({ history, dirty, onRestore, onDelete }: { history: ReportHistory; dirty: boolean; onRestore: (revision: Revision) => void; onDelete: (revision: Revision) => void }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
   const newestFirst = useMemo(() => [...history.revisions].reverse(), [history]);
   if (!history.revisions.length) return <p className="text-xs text-muted-foreground">No revisions yet. Each time you save the report, the saved version is kept here with what changed and who changed it: you, or the report agent’s applied proposals.</p>;
   const format = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -39,7 +41,16 @@ export function EvidenceHistory({ history, dirty, onRestore }: { history: Report
             </div>}
             {revision.changed.map(field => <FieldDiff key={field} field={field} before={previous ? revisionSpec(history, previous)[field] : undefined} after={revisionSpec(history, revision)[field]} />)}
             {!revision.changed.length && <p className="text-muted-foreground">{previous ? 'Nothing changed from the version before.' : 'The first version in this history.'}</p>}
-            <Button variant="outline" size="sm" onClick={() => onRestore(revision)} title="Replace the draft with this version; save to keep it"><RotateCcw />Restore this version</Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => onRestore(revision)} title="Replace the draft with this version; save to keep it"><RotateCcw />Restore this version</Button>
+              {!latest && (confirming === revision.id
+                ? <span role="group" aria-label="Confirm removing this version" className="inline-flex items-center gap-2">
+                    <span className="text-muted-foreground">Remove this version from the history?</span>
+                    <Button variant="destructive" size="sm" onClick={() => { setConfirming(null); setOpen(null); onDelete(revision); }}>Remove</Button>
+                    <Button variant="ghost" size="sm" onClick={() => setConfirming(null)}>Cancel</Button>
+                  </span>
+                : <Button variant="ghost" size="sm" onClick={() => setConfirming(revision.id)} title="Remove this version from the history; the report itself is unchanged"><Trash2 />Remove from history</Button>)}
+            </div>
           </div>}
         </li>;
       })}

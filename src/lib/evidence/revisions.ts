@@ -162,6 +162,26 @@ export function mergeHistories(a: ReportHistory, b: ReportHistory): ReportHistor
   return { revisions, blobs: { ...a.blobs, ...b.blobs } };
 }
 
+/** The history without one revision, and without the blobs only it used. The latest revision is
+ *  the saved report, so it can't be removed. The revision after the removed one is now measured
+ *  against the one before it: its `changed` fields are recomputed, and a label that only named
+ *  them is rewritten to match. */
+export function removeRevision(history: ReportHistory, id: string): ReportHistory {
+  const index = history.revisions.findIndex(revision => revision.id === id);
+  if (index < 0) return history;
+  if (index === history.revisions.length - 1) throw new Error('The latest version is the saved report and cannot be removed.');
+  const revisions = history.revisions.filter(revision => revision.id !== id);
+  const next = revisions[index];
+  const previous = revisions[index - 1];
+  const nextSpec = revisionSpec(history, next);
+  const previousSpec = previous ? revisionSpec(history, previous) : null;
+  const changed = previousSpec ? REVISION_FIELDS.filter(field => JSON.stringify(previousSpec[field] ?? null) !== JSON.stringify(nextSpec[field] ?? null)) : [];
+  const generated = next.label === describeChanges(next.changed, next.kind);
+  const label = !generated ? next.label : previousSpec || next.kind === 'baseline' ? describeChanges(changed, next.kind) : 'First saved version';
+  revisions[index] = { ...next, changed, label };
+  return compactHistory({ revisions, blobs: history.blobs });
+}
+
 /** Drop blobs no revision refers to (after a merge replaced nothing, this is a no-op). */
 export function compactHistory(history: ReportHistory): ReportHistory {
   const used = new Set(history.revisions.flatMap(revision => Object.values(revision.fields)));

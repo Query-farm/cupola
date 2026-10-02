@@ -11,7 +11,7 @@ import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveP
 import { newDrillExampleReport, newEvidenceReport } from '../../lib/evidence/templates';
 import { OPEN_REPORT_EVENT, type OpenReportDetail } from '../../lib/evidence/open-report';
 import { parseReportFile, planImport, reportFileName, serializeReportFile, REPORT_FILE_EXTENSION } from '../../lib/evidence/report-file';
-import { emptyHistory, loadReportHistory, mergeHistories, recordRevision, revisionReport, saveReportHistory, shrinkStoredHistory, specOf, type ReportHistory, type Revision, type RevisionMeta } from '../../lib/evidence/revisions';
+import { emptyHistory, loadReportHistory, mergeHistories, recordRevision, removeRevision, revisionReport, saveReportHistory, shrinkStoredHistory, specOf, type ReportHistory, type Revision, type RevisionMeta } from '../../lib/evidence/revisions';
 import type { ProposalEvent } from './EvidenceAgent';
 import { isWeatherService, WEATHER_TEST_SERVICE } from '../../lib/evidence/weather';
 import { quoteIdentifier } from '../../lib/evidence/data-browser';
@@ -604,6 +604,15 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
       void refresh(reportRef.current);
     } catch (e) { setError(`Could not restore that version: ${message(e)}`); }
   }
+  /** Remove an earlier version from the history. The saved report itself is untouched. */
+  function deleteRevision(revision: Revision) {
+    try {
+      const id = reportRef.current.id;
+      const next = removeRevision(loadReportHistory(serviceUrl, id), revision.id);
+      saveReportHistory(serviceUrl, id, next);
+      setHistory(next);
+    } catch (e) { setError(`Could not remove that version: ${message(e)}`); }
+  }
   /** `saveNow`: a new report whose content the reader brought (Add to report) saves at once. A blank
    *  one from a template doesn't, so one opened and abandoned never lands in the list. */
   function openReport(next: EvidenceReport, updateUrl = true, fresh = false, history: 'replace' | 'none' = 'replace', saveNow = false) {
@@ -891,7 +900,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
             resizeEditor(event.key === 'Home' ? 25 : event.key === 'End' ? 70 : editorWidth + (event.key === 'ArrowLeft' ? 2 : -2));
           }}
         ><span className="h-10 w-0.5 rounded-full bg-muted-foreground/40" /></div>}
-        <div style={{ display: editing ? 'contents' : 'none' }}><EvidenceEditor history={{ history, dirty, onRestore: restoreRevision }} onProposal={proposalEvent} performance={{ profile, namedQueries: dataContext?.queries ?? [], runnable: sql => {
+        <div style={{ display: editing ? 'contents' : 'none' }}><EvidenceEditor history={{ history, dirty, onRestore: restoreRevision, onDelete: deleteRevision }} onProposal={proposalEvent} performance={{ profile, namedQueries: dataContext?.queries ?? [], runnable: sql => {
           if (!run) return sql;
           try { return materializeReportQuery(sql, compilerParameters(run.report, run.values), run.values); } catch { return sql; }
         } }} parameterChoices={{ states: choices.states, values: choices.values, loader: choices.loader }} fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={async () => { await refresh(); }} key={report.id} report={report} onChange={change} issues={issues} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => setEditorOnly(!editorOnly)} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); await refresh(next); }} /></div>

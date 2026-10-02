@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { compactHistory, describeChanges, SESSION_WINDOW_MS, emptyHistory, lineDiff, loadReportHistory, mergeHistories, recordRevision, REVISION_FIELDS, revisionReport, saveReportHistory, specOf, validateHistory } from '../../src/lib/evidence/revisions';
+import { compactHistory, describeChanges, SESSION_WINDOW_MS, emptyHistory, lineDiff, loadReportHistory, mergeHistories, recordRevision, removeRevision, REVISION_FIELDS, revisionReport, saveReportHistory, specOf, validateHistory } from '../../src/lib/evidence/revisions';
 import { editableFields } from '../../src/lib/evidence/agent';
 import type { EvidenceReport } from '../../src/lib/evidence/reports';
 
@@ -103,6 +103,38 @@ describe('autosave sessions', () => {
     expect(history.revisions).toHaveLength(1);
     expect(history.revisions[0]).toMatchObject({ label: 'First saved version', changed: [] });
     expect(revisionReport(history, history.revisions[0], base).title).toBe('b');
+  });
+});
+
+describe('removeRevision', () => {
+  const versions = [base, { ...base, title: 'Two' }, { ...base, title: 'Two', source: '# Three' }, { ...base, title: 'Four', source: '# Three' }];
+  const build = () => versions.reduce((history, version) => recordRevision(history, version, { kind: 'edit' }, id), emptyHistory());
+  test('re-measures the next revision against the one before, and keeps blobs others use', () => {
+    const history = build();
+    const removed = removeRevision(history, history.revisions[2].id);
+    expect(removed.revisions).toHaveLength(3);
+    expect(removed.revisions[2]).toMatchObject({ id: history.revisions[3].id, changed: ['title', 'source'], label: 'Changed Title and Document' });
+    // Every remaining revision still resolves to the report it was.
+    expect(removed.revisions.map(revision => revisionReport(removed, revision, base).title)).toEqual(['Sales', 'Two', 'Four']);
+    expect(validateHistory(removed)).toEqual(removed);
+    // Its values are all shared with its neighbours, so every blob stays.
+    expect(Object.keys(removed.blobs)).toHaveLength(Object.keys(history.blobs).length);
+  });
+  test('the next revision becomes the first, values only the removed one used go, and written labels are kept', () => {
+    let history = build();
+    const first = removeRevision(history, history.revisions[0].id);
+    expect(first.revisions[0]).toMatchObject({ changed: [], label: 'First saved version' });
+    // Only the first version was titled "Sales".
+    expect(Object.values(first.blobs)).not.toContain('"Sales"');
+    history = recordRevision(history, { ...base, title: 'Five' }, { kind: 'agent', agentSummaries: ['Retitle'] }, id);
+    history = recordRevision(history, { ...base, title: 'Six' }, { kind: 'edit' }, id);
+    const removed = removeRevision(history, history.revisions[3].id);
+    expect(removed.revisions[3]).toMatchObject({ label: 'Retitle', changed: ['title', 'source'] });
+  });
+  test('refuses the latest revision, and ignores an unknown id', () => {
+    const history = build();
+    expect(() => removeRevision(history, history.revisions.at(-1)!.id)).toThrow('cannot be removed');
+    expect(removeRevision(history, 'nope')).toBe(history);
   });
 });
 

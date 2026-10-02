@@ -288,6 +288,52 @@ test('reports export to a file and import, from another worker, into the saved r
   expect(errors).toEqual([]);
 });
 
+test('an earlier revision can be removed from the history; the latest cannot', async ({ page }) => {
+  test.setTimeout(150_000);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript((serviceUrl) => {
+    if (sessionStorage.getItem('seeded')) return;
+    sessionStorage.setItem('seeded', '1');
+    const report = { version: 1, id: 'pruned', title: 'Pruned report', serviceUrl, source: '# Pruned report\n\nFirst paragraph.', setupSql: '', parameters: [], values: {}, createdAt: 1, updatedAt: 1000 };
+    localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(serviceUrl)}:pruned`, JSON.stringify(report));
+  }, EVIDENCE_SERVICE_URL);
+  await page.goto(evidencePath('evidence?evidence_report=pruned'));
+  const panel = page.getByTestId('evidence-panel');
+  await expect(panel.getByTestId('evidence-document')).toContainText('First paragraph.', { timeout: 90_000 });
+  await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
+  await panel.getByLabel('Report title').fill('Pruned report, retitled');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
+  await panel.getByRole('tab', { name: 'History', exact: true }).click();
+  const revisions = panel.getByRole('list', { name: 'Revisions, newest first' });
+  await expect(revisions.getByRole('listitem')).toHaveCount(2);
+
+  // The latest version is the saved report: it can be restored, not removed.
+  await revisions.getByRole('button', { name: /Changed Title/ }).click();
+  await expect(panel.getByRole('button', { name: 'Restore this version' })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Remove from history' })).toHaveCount(0);
+
+  // Removing asks first; Cancel keeps it.
+  await revisions.getByRole('button', { name: /Saved before revision history began/ }).click();
+  await panel.getByRole('button', { name: 'Remove from history' }).click();
+  await panel.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(revisions.getByRole('listitem')).toHaveCount(2);
+  await panel.getByRole('button', { name: 'Remove from history' }).click();
+  await panel.getByRole('group', { name: 'Confirm removing this version' }).getByRole('button', { name: 'Remove', exact: true }).click();
+
+  // What's left is now the first version, and the report itself is unchanged.
+  await expect(revisions.getByRole('listitem')).toHaveCount(1);
+  await expect(revisions.getByRole('listitem').nth(0)).toContainText('First saved version');
+  await expect(panel.getByLabel('Report title')).toHaveValue('Pruned report, retitled');
+  const stored = await page.evaluate(() => {
+    const key = Object.keys(localStorage).find(key => key.startsWith('cupola.evidence.history.v1:') && key.endsWith(':pruned'))!;
+    return JSON.parse(localStorage.getItem(key)!) as { revisions: { kind: string }[]; blobs: Record<string, string> };
+  });
+  expect(stored.revisions.map(revision => revision.kind)).toEqual(['edit']);
+  expect(Object.values(stored.blobs)).not.toContain('"Pruned report"');
+  expect(errors).toEqual([]);
+});
+
 test('saving keeps revisions: who changed what, a diff, restore, and the history travels in report files', async ({ page }, testInfo) => {
   test.setTimeout(150_000);
   const errors: string[] = [];
