@@ -321,6 +321,7 @@ export function DataPreview({ result }: Props) {
           arrowFields={arrowFields}
           rows={rows}
           startRow={startRow}
+          totalRows={totalRows}
           canLoadMore={hasMore && !loading}
           onLoadMore={loadMore}
           geometryAsText={settings.geometryAsText}

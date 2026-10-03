@@ -15,6 +15,8 @@ interface Props {
   arrowFields?: any[];
   rows: Record<string, any>[];
   startRow?: number;
+  /** Rows in the whole result, for the "Row 3 of 1,200" header. */
+  totalRows?: number | null;
   canLoadMore?: boolean;
   onLoadMore?: () => void;
   geometryAsText?: boolean;
@@ -35,6 +37,7 @@ export function DataRecords({
   arrowFields,
   rows,
   startRow = 0,
+  totalRows,
   canLoadMore,
   onLoadMore,
   geometryAsText,
@@ -48,9 +51,10 @@ export function DataRecords({
     () => new Map((arrowFields ?? []).map((f: any) => [f.name, f])),
     [arrowFields],
   );
-  // Labels are padded to the longest column name, in ch, so values line up.
+  // The label gutter fits the longest column name (in ch, plus padding), capped
+  // so a long name can't squeeze the values; longer names truncate.
   const labelWidth = useMemo(
-    () => Math.min(32, Math.max(4, ...columnNames.map((c) => c.length))),
+    () => Math.min(28, Math.max(6, ...columnNames.map((c) => c.length))),
     [columnNames],
   );
   // Long values the reader expanded, keyed `row:column`. Held here, not in the
@@ -61,7 +65,7 @@ export function DataRecords({
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 28 + columnNames.length * 20,
+    estimateSize: () => 44 + columnNames.length * 25,
     overscan: 4,
   });
 
@@ -73,7 +77,7 @@ export function DataRecords({
 
   const renderValue = (rowIndex: number, col: string) => {
     const val = rows[rowIndex][col];
-    if (isNullValue(val)) return <span className="text-muted-foreground/40 italic">NULL</span>;
+    if (isNullValue(val)) return <span className="text-muted-foreground/50 italic">NULL</span>;
     const info = infoByName.get(col);
     if (info?.duckdbType === "GEOMETRY" && val instanceof Uint8Array && !geometryAsText) {
       return <GeometryViewer wkb={val} label={`Row ${startRow + rowIndex + 1}`} />;
@@ -86,7 +90,7 @@ export function DataRecords({
         {text.slice(0, VALUE_PREVIEW_CHARS)}
         <button
           type="button"
-          className="ml-1 text-accent hover:underline cursor-pointer font-sans"
+          className="ml-1 rounded px-1 text-accent hover:bg-accent/10 cursor-pointer font-sans text-[11px]"
           onClick={() => setExpanded((s) => new Set(s).add(key))}
         >
           … show all {text.length.toLocaleString()} characters
@@ -96,46 +100,67 @@ export function DataRecords({
   };
 
   const items = virtualizer.getVirtualItems();
+  // Same opaque tint as DataGrid's header, so the two layouts read as one.
+  const headStyle = { backgroundColor: "color-mix(in oklab, var(--color-primary) 12%, var(--color-card))" };
 
   return (
     <div
       ref={scrollRef}
       onScroll={maybeLoadMore}
-      className="h-full overflow-auto"
+      className="h-full overflow-auto bg-muted/40"
       role="list"
       aria-label="Result rows"
     >
-      <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+      {/* +12px: the gap below the last record (each record pads only its top). */}
+      <div style={{ height: virtualizer.getTotalSize() + 12, position: "relative" }}>
         {items.map((vi) => (
           <div
             key={vi.key}
             data-index={vi.index}
             ref={virtualizer.measureElement}
             role="listitem"
-            className="absolute left-0 right-0 px-4 py-1.5 border-b border-border"
-            style={{ transform: `translateY(${vi.start}px)` }}
+            // Padding, not margin: the virtualizer measures the element's own box.
+            className="absolute left-0 right-0 px-3 pt-3"
+            // `top`, not a translateY transform: sticky positioning ignores
+            // transforms, so every record's header would stick as if its record
+            // started at the top of the list.
+            style={{ top: vi.start }}
           >
-            <div className="text-[11px] font-mono text-primary/70 font-semibold mb-0.5">
-              Row {(startRow + vi.index + 1).toLocaleString()}
-            </div>
-            <dl
-              className="grid gap-x-3 text-xs font-mono"
-              style={{ gridTemplateColumns: `minmax(0, ${labelWidth}ch) minmax(0, 1fr)` }}
-            >
-              {columnNames.map((col) => (
-                <div key={col} className="contents">
-                  <dt
-                    className="text-muted-foreground text-right truncate"
-                    title={infoByName.get(col)?.duckdbType ? `${col} (${infoByName.get(col)!.duckdbType})` : col}
-                  >
-                    {col}
-                  </dt>
-                  <dd className="whitespace-pre-wrap [overflow-wrap:anywhere] select-text">
-                    {renderValue(vi.index, col)}
-                  </dd>
-                </div>
-              ))}
-            </dl>
+            <article className="rounded-md border border-border bg-card shadow-xs">
+              {/* Sticky within its record: a tall record keeps its row number in view. */}
+              <header
+                className="sticky top-0 z-10 flex items-baseline gap-1.5 rounded-t-md border-b border-primary/20 px-3 py-1.5 font-mono text-xs"
+                style={headStyle}
+              >
+                <span className="font-semibold text-primary">Row {(startRow + vi.index + 1).toLocaleString()}</span>
+                {totalRows != null && (
+                  <span className="text-primary/50">of {totalRows.toLocaleString()}</span>
+                )}
+              </header>
+              <dl className="divide-y divide-border text-xs font-mono">
+                {columnNames.map((col) => {
+                  const type = infoByName.get(col)?.duckdbType;
+                  return (
+                    <div
+                      key={col}
+                      className="grid hover:bg-accent/5 last:rounded-b-md"
+                      // ch + the label's px-3 padding + its 1px rule.
+                      style={{ gridTemplateColumns: `calc(${labelWidth}ch + 1.5rem + 1px) minmax(0, 1fr)` }}
+                    >
+                      <dt
+                        className="truncate border-r border-border bg-muted/30 px-3 py-1 text-muted-foreground"
+                        title={type ? `${col} · ${type}` : col}
+                      >
+                        {col}
+                      </dt>
+                      <dd className="min-w-0 px-3 py-1 whitespace-pre-wrap [overflow-wrap:anywhere] select-text tabular-nums">
+                        {renderValue(vi.index, col)}
+                      </dd>
+                    </div>
+                  );
+                })}
+              </dl>
+            </article>
           </div>
         ))}
       </div>
