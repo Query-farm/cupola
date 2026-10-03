@@ -18,6 +18,9 @@ export interface Settings {
   /** Remembered rows-per-page for the data preview grid (editor results +
    *  pop-out results window). One of the PAGE_SIZES in DataPreview. */
   previewRowsPerPage: number;
+  /** Results layout: the column grid, or one block per row with every value
+   *  shown in full (like DuckDB's `.mode line`). */
+  previewLayout: "grid" | "lines";
   /** Render geometry columns as WKT text instead of a clickable map preview. */
   geometryAsText: boolean;
   /** Group digits in numeric cells using the browser's locale separator
@@ -92,6 +95,7 @@ const defaultSettings: Settings = {
   editorFontSize: 13,
   editorAutocomplete: true,
   previewRowsPerPage: 50,
+  previewLayout: "grid",
   geometryAsText: false,
   numberGrouping: false,
   anthropicApiKey: "",

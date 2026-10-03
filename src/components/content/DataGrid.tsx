@@ -30,7 +30,7 @@ import {
 type SortState = { col: string; dir: "asc" | "desc" } | null;
 
 /** A grid cell coordinate: row index within the loaded window + data-column index. */
-type Cell = { row: number; col: number };
+export type Cell = { row: number; col: number };
 /** A rectangular selection: `anchor` is fixed, `focus` moves (the active cell). */
 type Selection = { anchor: Cell; focus: Cell };
 
@@ -75,6 +75,11 @@ interface Props {
   sort?: SortState;
   /** Called when a column header is clicked. Absent → headers aren't sortable. */
   onSort?: (col: string) => void;
+  /** Reports the active (focused) cell as it moves, so a value inspector can
+   *  follow it. Indices are into the loaded `rows` and `columnNames`. */
+  onActiveCellChange?: (cell: Cell | null) => void;
+  /** Double-click or Enter on a cell: show its full, untruncated value. */
+  onCellOpen?: (cell: Cell) => void;
 }
 
 /** A column header: hover shows the column comment (when present), click cycles
@@ -210,6 +215,8 @@ export function DataGrid({
   numberGrouping,
   sort,
   onSort,
+  onActiveCellChange,
+  onCellOpen,
 }: Props) {
   // Build maps for type lookups
   const infoByName = useMemo(() => {
@@ -539,6 +546,8 @@ export function DataGrid({
     }
   }, [active, rowVirtualizer]);
 
+  useEffect(() => { onActiveCellChange?.(active); }, [active?.row, active?.col, onActiveCellChange]);
+
   // Focus the grid once on first data load so arrow keys work without a click
   // — but never steal focus from an input/textarea (e.g. the shell terminal).
   useEffect(() => {
@@ -571,6 +580,12 @@ export function DataGrid({
     if (mod && (e.key === "a" || e.key === "A")) {
       e.preventDefault();
       selectAll();
+      return;
+    }
+    // Enter — open the active cell's full value.
+    if (e.key === "Enter" && active && onCellOpen) {
+      e.preventDefault();
+      onCellOpen(active);
       return;
     }
     const navKeys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"];
@@ -607,7 +622,7 @@ export function DataGrid({
         }
         break;
     }
-  }, [cellNavigation, numCols, active, selection, rows.length, canLoadMore, onLoadMore, extendTo, selectCell, selectAll, copySelection]);
+  }, [cellNavigation, numCols, active, selection, rows.length, canLoadMore, onLoadMore, extendTo, selectCell, selectAll, copySelection, onCellOpen]);
 
   // Sticky background applied per-<th> (not the <thead>) so the header pins
   // reliably across browsers and the cell backgrounds fully cover scrolled
@@ -657,6 +672,7 @@ export function DataGrid({
               scrollRef.current?.focus({ preventScroll: true });
             } : undefined}
             onMouseEnter={cellNavigation ? () => { if (draggingRef.current) extendTo({ row: index, col: ci }); } : undefined}
+            onDoubleClick={onCellOpen ? () => onCellOpen({ row: index, col: ci }) : undefined}
             className={`text-xs py-1 whitespace-nowrap max-w-[400px] truncate ${cellSep} ${cellNavigation ? "cursor-default select-none" : ""} ${inSelection ? "bg-primary/10" : ""} ${isFocus ? "ring-2 ring-inset ring-primary" : ""}`}
           >
             {flexRender(cell.column.columnDef.cell, cell.getContext())}

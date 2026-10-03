@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Loader2, AlertCircle, ChevronLeft, ChevronRight, ChevronsLeft, Database } from "lucide-react";
+import { Loader2, AlertCircle, ChevronLeft, ChevronRight, ChevronsLeft, Database, Table2, Rows3, PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -8,7 +8,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { DataGrid } from "./DataGrid";
+import { DataGrid, type Cell } from "./DataGrid";
+import { DataRecords } from "./DataRecords";
+import { ValueInspector } from "./ValueInspector";
 import type { ColumnInfo } from "@/lib/service";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 import { safeGetArrowValue } from "@/lib/format";
@@ -132,6 +134,12 @@ export function DataPreview({ result }: Props) {
   // paging doesn't re-sort every window).
   const sortedIndicesRef = useRef<{ table: any; col: string; dir: string; indices: number[] } | null>(null);
   const requestIdRef = useRef(0);
+  const layout = settings.previewLayout === "lines" ? "lines" : "grid";
+  // The grid's active cell, and whether the value panel is open on it. The
+  // panel follows the active cell as it moves.
+  const [activeCell, setActiveCell] = useState<Cell | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const openCell = useCallback((cell: Cell) => { setActiveCell(cell); setInspecting(true); }, []);
   // Live row count for async append offset math, kept off `rows` so loadMore
   // doesn't need `rows` in its deps (which would re-subscribe scroll handlers).
   const rowsCountRef = useRef(0);
@@ -248,6 +256,14 @@ export function DataPreview({ result }: Props) {
 
   const startRow = page * pageSize;
 
+  const inspected = activeCell && activeCell.row < rows.length && activeCell.col < columns.length
+    ? {
+        ...activeCell,
+        column: columns[activeCell.col],
+        value: rows[activeCell.row][columns[activeCell.col]],
+      }
+    : null;
+
   // Error state
   if (error) {
     return (
@@ -291,7 +307,29 @@ export function DataPreview({ result }: Props) {
     <div className="flex flex-col h-full">
       {/* Data grid — fills available space; DataGrid owns the scroll container
           so its sticky header pins to the actual scroller on vertical scroll. */}
-      <div className="flex-1 min-h-0">
+      <div
+        className="flex-1 min-h-0 flex"
+        onKeyDown={(e) => { if (e.key === "Escape" && inspecting) { e.stopPropagation(); setInspecting(false); } }}
+      >
+        {layout === "lines" ? (
+        <div className="flex-1 min-w-0">
+        <DataRecords
+          // Re-mount on a window reset so scroll and expanded values start over.
+          key={`${startRow}:${sort?.col ?? ""}:${sort?.dir ?? ""}`}
+          columnNames={columns}
+          columnInfo={columnInfo}
+          arrowFields={arrowFields}
+          rows={rows}
+          startRow={startRow}
+          canLoadMore={hasMore && !loading}
+          onLoadMore={loadMore}
+          geometryAsText={settings.geometryAsText}
+          numberGrouping={settings.numberGrouping}
+        />
+        </div>
+        ) : (
+        <>
+        <div className="flex-1 min-w-0">
         <DataGrid
           columnNames={columns}
           columnInfo={columnInfo}
@@ -306,7 +344,31 @@ export function DataPreview({ result }: Props) {
           numberGrouping={settings.numberGrouping}
           sort={sort}
           onSort={handleSort}
+          onActiveCellChange={setActiveCell}
+          onCellOpen={openCell}
         />
+        </div>
+        {inspecting && (
+          <div className="w-[40%] max-w-[560px] min-w-[240px] shrink-0">
+            {inspected ? (
+            <ValueInspector
+              column={inspected.column}
+              info={columnInfo[inspected.col]}
+              field={arrowFields[inspected.col]}
+              value={inspected.value}
+              rowNumber={startRow + inspected.row + 1}
+              numberGrouping={settings.numberGrouping}
+              onClose={() => setInspecting(false)}
+            />
+            ) : (
+              <div className="flex h-full items-center justify-center border-l border-border bg-card p-4 text-center text-xs text-muted-foreground">
+                Select a cell to see its full value.
+              </div>
+            )}
+          </div>
+        )}
+        </>
+        )}
       </div>
 
       {/* Pagination footer */}
@@ -357,8 +419,42 @@ export function DataPreview({ result }: Props) {
           </Button>
         </div>
 
-        {/* Right: page size selector */}
+        {/* Right: layout + page size selector */}
         <div className="flex items-center gap-2">
+          {layout === "grid" && (
+            <Button
+              variant={inspecting ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setInspecting((v) => !v)}
+              className="h-7 w-7 p-0"
+              title="Value panel: the selected cell's full value (double-click or Enter on a cell)"
+              aria-pressed={inspecting}
+              aria-label="Value panel"
+            >
+              <PanelRight className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          <div className="flex items-center rounded-md border border-border p-0.5" role="radiogroup" aria-label="Results layout">
+            {([
+              ["grid", Table2, "Grid layout", "Grid"],
+              ["lines", Rows3, "Lines layout", "Lines: one block per row, values shown in full"],
+            ] as const).map(([value, Icon, name, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={layout === value}
+                aria-label={name}
+                title={label}
+                onClick={() => updateSettings({ previewLayout: value })}
+                className={`h-6 w-7 inline-flex items-center justify-center rounded-sm cursor-pointer transition-colors ${
+                  layout === value ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+              </button>
+            ))}
+          </div>
           <span className="text-xs text-muted-foreground whitespace-nowrap">Rows per page</span>
           <Select
             value={String(pageSize)}
