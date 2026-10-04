@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/select";
 import { DataGrid, type Cell } from "./DataGrid";
 import { DataRecords } from "./DataRecords";
-import { ValueInspector } from "./ValueInspector";
+import { ValueInspector, ValuePanelFrame } from "./ValueInspector";
 import type { ColumnInfo } from "@/lib/service";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 import { safeGetArrowValue } from "@/lib/format";
@@ -350,7 +350,7 @@ export function DataPreview({ result }: Props) {
         />
         </div>
         {inspecting && (
-          <div className="w-[40%] max-w-[560px] min-w-[240px] shrink-0">
+          <ValuePanelFrame>
             {inspected ? (
             <ValueInspector
               column={inspected.column}
@@ -366,7 +366,7 @@ export function DataPreview({ result }: Props) {
                 Select a cell to see its full value.
               </div>
             )}
-          </div>
+          </ValuePanelFrame>
         )}
         </>
         )}

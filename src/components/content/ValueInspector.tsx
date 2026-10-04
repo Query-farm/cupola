@@ -97,3 +97,88 @@ export function ValueInspector({ column, info, field, value, rowNumber, numberGr
     </div>
   );
 }
+
+const PANEL_WIDTH_KEY = "cupola.value-panel-width";
+const MIN_PANEL_WIDTH = 220;
+/** Room the grid keeps beside the panel, however wide it's dragged. */
+const MIN_GRID_WIDTH = 160;
+
+function readPanelWidth(): number | null {
+  try {
+    const n = Number(localStorage.getItem(PANEL_WIDTH_KEY));
+    return Number.isFinite(n) && n >= MIN_PANEL_WIDTH ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The value panel's dock: a left-edge handle drags its width (double-click
+ * resets it), remembered per browser. Unset, it takes 40% of the results area.
+ */
+export function ValuePanelFrame({ children }: { children: React.ReactNode }) {
+  const [width, setWidth] = useState<number | null>(readPanelWidth);
+  const [dragging, setDragging] = useState(false);
+  const frameRef = useRef<HTMLDivElement>(null);
+
+  const startDrag = (e: React.PointerEvent) => {
+    const frame = frameRef.current;
+    const area = frame?.parentElement;
+    if (!frame || !area) return;
+    e.preventDefault();
+    // The element's own view: the pop-out results window renders this from the
+    // opener's realm, so its pointer events arrive at the child window.
+    const doc = frame.ownerDocument;
+    const view = doc.defaultView ?? window;
+    const startX = e.clientX;
+    const startWidth = frame.getBoundingClientRect().width;
+    const max = Math.max(MIN_PANEL_WIDTH, area.getBoundingClientRect().width - MIN_GRID_WIDTH);
+    let latest = startWidth;
+    const onMove = (ev: PointerEvent) => {
+      latest = Math.round(Math.min(max, Math.max(MIN_PANEL_WIDTH, startWidth + startX - ev.clientX)));
+      setWidth(latest);
+    };
+    const prevCursor = doc.body.style.cursor;
+    const prevSelect = doc.body.style.userSelect;
+    const onUp = () => {
+      view.removeEventListener("pointermove", onMove);
+      view.removeEventListener("pointerup", onUp);
+      doc.body.style.cursor = prevCursor;
+      doc.body.style.userSelect = prevSelect;
+      setDragging(false);
+      try { localStorage.setItem(PANEL_WIDTH_KEY, String(latest)); } catch {}
+    };
+    view.addEventListener("pointermove", onMove);
+    view.addEventListener("pointerup", onUp);
+    doc.body.style.cursor = "col-resize";
+    doc.body.style.userSelect = "none";
+    setDragging(true);
+  };
+
+  const reset = () => {
+    setWidth(null);
+    try { localStorage.removeItem(PANEL_WIDTH_KEY); } catch {}
+  };
+
+  return (
+    <div
+      ref={frameRef}
+      data-testid="value-panel"
+      className={`relative shrink-0 ${width == null ? "w-[40%] max-w-[560px] min-w-[240px]" : ""}`}
+      style={width == null ? undefined : { width, maxWidth: `calc(100% - ${MIN_GRID_WIDTH}px)` }}
+    >
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize value panel"
+        title="Drag to resize · double-click to reset"
+        onPointerDown={startDrag}
+        onDoubleClick={reset}
+        className={`absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize touch-none
+          after:absolute after:inset-y-0 after:left-1 after:w-px after:bg-primary
+          after:opacity-0 hover:after:opacity-60 ${dragging ? "after:opacity-100" : ""}`}
+      />
+      {children}
+    </div>
+  );
+}

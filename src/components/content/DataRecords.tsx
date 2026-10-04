@@ -1,9 +1,10 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { Braces } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isNullValue } from "@/lib/format";
 import type { ColumnInfo } from "@/lib/service";
 import { GeometryViewer } from "./GeometryViewer";
-import { cellText } from "./cell-text";
+import { cellText, prettyJson } from "./cell-text";
 
 /** Values longer than this are cut until the reader asks for the rest, so one
  *  multi-megabyte cell can't stall layout of the whole list. */
@@ -60,6 +61,13 @@ export function DataRecords({
   // Long values the reader expanded, keyed `row:column`. Held here, not in the
   // record, so it survives a record being virtualized away and back.
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  // JSON values the reader switched back to the stored text (formatted is the default).
+  const [raw, setRaw] = useState<Set<string>>(() => new Set());
+  const toggleIn = (set: Set<string>, key: string) => {
+    const next = new Set(set);
+    if (!next.delete(key)) next.add(key);
+    return next;
+  };
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -82,9 +90,26 @@ export function DataRecords({
     if (info?.duckdbType === "GEOMETRY" && val instanceof Uint8Array && !geometryAsText) {
       return <GeometryViewer wkb={val} label={`Row ${startRow + rowIndex + 1}`} />;
     }
-    const text = cellText(val, col, fieldByName.get(col), info, numberGrouping);
+    const stored = cellText(val, col, fieldByName.get(col), info, numberGrouping);
     const key = `${rowIndex}:${col}`;
-    if (text.length <= VALUE_PREVIEW_CHARS || expanded.has(key)) return text;
+    const pretty = prettyJson(stored);
+    const showRaw = raw.has(key);
+    const text = pretty && !showRaw ? pretty : stored;
+    const jsonToggle = pretty && (
+      <button
+        type="button"
+        onClick={() => setRaw((s) => toggleIn(s, key))}
+        aria-pressed={!showRaw}
+        aria-label={showRaw ? "Format JSON" : "Show as stored"}
+        title={showRaw ? "Format JSON" : "Show as stored"}
+        className={`absolute right-1.5 top-1 inline-flex h-5 w-5 items-center justify-center rounded
+          cursor-pointer opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity
+          ${showRaw ? "text-muted-foreground hover:bg-muted" : "bg-primary/10 text-primary"}`}
+      >
+        <Braces className="h-3 w-3" />
+      </button>
+    );
+    if (text.length <= VALUE_PREVIEW_CHARS || expanded.has(key)) return <>{text}{jsonToggle}</>;
     return (
       <>
         {text.slice(0, VALUE_PREVIEW_CHARS)}
@@ -95,6 +120,7 @@ export function DataRecords({
         >
           … show all {text.length.toLocaleString()} characters
         </button>
+        {jsonToggle}
       </>
     );
   };
@@ -153,7 +179,7 @@ export function DataRecords({
                       >
                         {col}
                       </dt>
-                      <dd className="min-w-0 px-3 py-1 whitespace-pre-wrap [overflow-wrap:anywhere] select-text tabular-nums">
+                      <dd className="group relative min-w-0 px-3 py-1 pr-8 whitespace-pre-wrap [overflow-wrap:anywhere] select-text tabular-nums">
                         {renderValue(vi.index, col)}
                       </dd>
                     </div>
