@@ -5,12 +5,13 @@
  * Both tab bodies stay mounted (hidden with display:none) so Ask AI's per-tab
  * conversations survive switching to the Inspector and back.
  */
-import { useCallback, useEffect, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { PanelResizeHandle, usePanelWidth } from "../shared/PanelResizeHandle";
 import { History, Info, Loader2, Sparkles, X } from "lucide-react";
 
 export type DockTab = "inspector" | "ai" | "history";
 
-const MIN = 320, MAX = 720;
+
 const OPEN_KEY = "vgi-editor-dock-open";
 const TAB_KEY = "vgi-editor-dock-tab";
 // The width key predates the Inspector; keeping it keeps everyone's width.
@@ -35,10 +36,7 @@ export function useDockState() {
     if (v === "inspector" || v === "ai" || v === "history") return v;
     return "ai"; // a dock opened before the Inspector existed held Ask AI
   });
-  const [width, setWidth] = useState<number>(() => {
-    const n = parseInt(read(WIDTH_KEY) || "", 10);
-    return n >= MIN && n <= MAX ? n : 400;
-  });
+  const sizing = usePanelWidth(WIDTH_KEY);
   useEffect(() => { write(OPEN_KEY, open ? "1" : "0"); }, [open]);
   useEffect(() => { write(TAB_KEY, tab); }, [tab]);
 
@@ -50,25 +48,7 @@ export function useDockState() {
   }, [open, tab]);
   const show = useCallback((which: DockTab) => { setTab(which); setOpen(true); }, []);
 
-  // Resize from the left edge: dragging left widens. Persist on release.
-  const onResizeStart = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = width;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const onMove = (ev: globalThis.PointerEvent) => {
-      setWidth(Math.min(MAX, Math.max(MIN, startW - (ev.clientX - startX))));
-    };
-    const onUp = () => {
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onUp);
-      setWidth((w) => { write(WIDTH_KEY, String(w)); return w; });
-    };
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onUp);
-  }, [width]);
-
-  return { open, setOpen, tab, setTab, width, toggle, show, onResizeStart };
+  return { open, setOpen, tab, setTab, ...sizing, toggle, show };
 }
 
 interface Props {
@@ -81,7 +61,7 @@ interface Props {
 }
 
 export function RightDock({ state, isNarrow, aiBusy, inspector, ai, history }: Props) {
-  const { open, tab, setTab, setOpen, width, onResizeStart } = state;
+  const { open, tab, setTab, setOpen, width } = state;
   const tabClass = (active: boolean) =>
     `flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border-b-2 transition-colors ${
       active ? "border-accent text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
@@ -89,10 +69,7 @@ export function RightDock({ state, isNarrow, aiBusy, inspector, ai, history }: P
   return (
     <>
       {open && !isNarrow && (
-        <div
-          onPointerDown={onResizeStart}
-          className="w-1.5 shrink-0 cursor-col-resize bg-border hover:bg-accent/60 active:bg-accent transition-colors"
-        />
+        <PanelResizeHandle sizing={state} label="Resize editor side panel" />
       )}
       <div
         className={isNarrow ? "min-h-0 border-t border-border overflow-hidden flex flex-col" : "shrink-0 overflow-hidden flex flex-col border-l border-border"}

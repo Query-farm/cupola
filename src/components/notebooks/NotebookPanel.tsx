@@ -1,9 +1,20 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Button } from '../ui/button';
+import { PanelResizeHandle, usePanelWidth } from '../shared/PanelResizeHandle';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '../ui/dialog';
 import { Input } from '../ui/input';
 import { NotebookCellView } from './NotebookCellView';
 const NotebookAgent = lazy(() =>
-  import('./NotebookAgent').then((module) => ({ default: module.NotebookAgent })),
+  import('./NotebookAgent').then((module) => ({
+    default: module.NotebookAgent,
+  })),
 );
 import {
   newNotebook,
@@ -44,6 +55,7 @@ export function NotebookPanel({
   const [search, setSearch] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const file = useRef<HTMLInputElement>(null);
+  const keepNotebook = useRef<HTMLButtonElement>(null);
   function refresh() {
     try {
       const result = listNotebooks(serviceUrl);
@@ -148,36 +160,49 @@ export function NotebookPanel({
                 <Button size="sm" variant="outline" onClick={() => download(doc)}>
                   Export
                 </Button>
-                {deleteId === doc.id ? (
-                  <>
-                    <span className="text-sm">Delete from this browser?</span>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => {
-                        try {
-                          localStorage.removeItem(storageKey(serviceUrl, doc.id));
-                          setDeleteId(null);
-                          refresh();
-                        } catch (e) {
-                          setError(String(e));
-                        }
-                      }}
-                    >
-                      Confirm delete
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => setDeleteId(null)}>
-                      Cancel
-                    </Button>
-                  </>
-                ) : (
-                  <Button size="sm" variant="ghost" onClick={() => setDeleteId(doc.id)}>
-                    Delete
-                  </Button>
-                )}
+                <Button size="sm" variant="ghost" onClick={() => setDeleteId(doc.id)}>
+                  Delete
+                </Button>
               </div>
             ))}
         </div>
+        <Dialog
+          open={deleteId !== null}
+          onOpenChange={(open) => {
+            if (!open) setDeleteId(null);
+          }}
+        >
+          <DialogContent initialFocus={keepNotebook}>
+            <DialogHeader>
+              <DialogTitle>Delete notebook?</DialogTitle>
+              <DialogDescription>
+                Delete “{documents.find((doc) => doc.id === deleteId)?.title || 'Untitled notebook'}” from
+                this browser? This cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button ref={keepNotebook} variant="outline" onClick={() => setDeleteId(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  if (!deleteId) return;
+                  try {
+                    localStorage.removeItem(storageKey(serviceUrl, deleteId));
+                    setDeleteId(null);
+                    refresh();
+                  } catch (e) {
+                    setError(String(e));
+                    setDeleteId(null);
+                  }
+                }}
+              >
+                Confirm delete
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
@@ -201,6 +226,8 @@ function NotebookWorkspace({
   const [running, setRunning] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [showAi, setShowAi] = useState(false);
+  const aiSizing = usePanelWidth('cupola-notebook-ai-width', 384);
+  const keepEditing = useRef<HTMLButtonElement>(null);
   const [aiMounted, setAiMounted] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [saved, setSaved] = useState('');
@@ -238,7 +265,10 @@ function NotebookWorkspace({
       },
       (id, update) => {
         if (alive.current && latest.current.cells.some((cell) => cell.id === id))
-          setResults((previous) => ({ ...previous, [id]: { ...previous[id], ...update } }));
+          setResults((previous) => ({
+            ...previous,
+            [id]: { ...previous[id], ...update },
+          }));
       },
     );
   useEffect(() => {
@@ -430,25 +460,31 @@ function NotebookWorkspace({
           <p role="alert" className="text-destructive">
             {storageError} Export remains available.
           </p>
-          {discardRequested ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <span>Discard unsaved edits and return to the library?</span>
-              <Button size="sm" variant="destructive" disabled={busy} onClick={onClose}>
-                Discard and return
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => setDiscardRequested(false)}>
-                Keep editing
-              </Button>
-            </div>
-          ) : (
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => setDiscardRequested(true)}>
-              Discard local edits…
-            </Button>
-          )}
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => setDiscardRequested(true)}>
+            Discard local edits…
+          </Button>
         </div>
       )}
+      <Dialog open={discardRequested} onOpenChange={setDiscardRequested}>
+        <DialogContent initialFocus={keepEditing}>
+          <DialogHeader>
+            <DialogTitle>Discard unsaved edits?</DialogTitle>
+            <DialogDescription>
+              Return to the library and discard your local edits. The saved notebook will be kept.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button ref={keepEditing} variant="outline" onClick={() => setDiscardRequested(false)}>
+              Keep editing
+            </Button>
+            <Button variant="destructive" disabled={busy} onClick={onClose}>
+              Discard and return
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-        <main className="flex-1 min-h-0 overflow-auto p-3 md:p-5 space-y-4">
+        <main className="flex-1 min-w-0 min-h-0 overflow-auto p-3 md:p-5 space-y-4">
           <p className="text-xs text-muted-foreground">
             SQL cells run independently against the current connection. Run all executes top to bottom and
             stops on an error. Charts use the last returned result.
@@ -476,7 +512,10 @@ function NotebookWorkspace({
                   change({ ...doc, cells });
                 }}
                 onDelete={() => {
-                  change({ ...doc, cells: doc.cells.filter((item) => item.id !== cell.id) });
+                  change({
+                    ...doc,
+                    cells: doc.cells.filter((item) => item.id !== cell.id),
+                  });
                   setResults((previous) => {
                     const next = { ...previous };
                     delete next[cell.id];
@@ -502,8 +541,20 @@ function NotebookWorkspace({
             </Button>
           </div>
         </main>
+        {showAi && (
+          <PanelResizeHandle
+            sizing={aiSizing}
+            label="Resize notebook assistant"
+            className="hidden lg:block"
+          />
+        )}
         {aiMounted && (
-          <div className={showAi ? 'flex min-h-0 h-96 lg:h-auto lg:w-96 shrink-0' : 'hidden'}>
+          <div
+            className={
+              showAi ? 'flex min-h-0 h-96 lg:h-auto lg:w-[var(--notebook-ai-width)] shrink-0' : 'hidden'
+            }
+            style={{ '--notebook-ai-width': `${aiSizing.width}px` } as CSSProperties}
+          >
             <Suspense fallback={<p className="p-3">Loading assistant…</p>}>
               <NotebookAgent
                 disabled={running}
@@ -511,7 +562,26 @@ function NotebookWorkspace({
                 results={results}
                 selectedCell={selected}
                 catalogs={catalogs}
-                onApply={change}
+                onApply={(next) => {
+                  const previous = latest.current;
+                  const target =
+                    next.cells.find((cell) => !previous.cells.some((old) => old.id === cell.id)) ??
+                    next.cells.find(
+                      (cell) =>
+                        JSON.stringify(cell) !==
+                        JSON.stringify(previous.cells.find((old) => old.id === cell.id)),
+                    );
+                  change(next);
+                  if (target) {
+                    setSelected(target.id);
+                    requestAnimationFrame(() =>
+                      window.document
+                        .getElementById('notebook-' + target.id)
+                        ?.scrollIntoView({ block: 'nearest' }),
+                    );
+                  }
+                }}
+                onClose={() => setShowAi(false)}
                 onBusy={setAiBusy}
               />
             </Suspense>

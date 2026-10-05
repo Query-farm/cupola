@@ -28,16 +28,17 @@ export function notebookProposal(current: Notebook, input: unknown, mode: AIQuer
         throw new Error('Semantic-only mode does not allow the assistant to create or change raw SQL cells.');
     }
   }
-  return {
-    summary: edit.summary,
-    base: fingerprint(current),
-    document: notebookSchema.parse({
-      ...current,
-      title: edit.title,
-      cells: edit.cells,
-      updatedAt: Date.now(),
-    }),
-  };
+  const document = notebookSchema.parse({
+    ...current,
+    title: edit.title,
+    cells: edit.cells,
+    updatedAt: Date.now(),
+  });
+  if (fingerprint(current) === fingerprint(document))
+    throw new Error(
+      'The proposed notebook contains no changes. Revise the proposal to include the requested edits.',
+    );
+  return { summary: edit.summary, base: fingerprint(current), document };
 }
 export function applyNotebookProposal(current: Notebook, proposal: NotebookProposal): Notebook {
   if (fingerprint(current) !== proposal.base)
@@ -61,7 +62,11 @@ export const NOTEBOOK_TOOLS: Tool[] = [
     name: 'get_notebook',
     description:
       'Read the current notebook, selected cell ID, result schemas and execution diagnostics. Output rows are not included.',
-    input_schema: { type: 'object', properties: {}, additionalProperties: false },
+    input_schema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
   },
   {
     name: 'propose_notebook_edit',
@@ -79,7 +84,7 @@ export const NOTEBOOK_PROMPT = `You help users author Cupola SQL notebooks. Read
 Use propose_notebook_edit to stage changes; the user must apply them. Never claim a proposal was applied, saved, or executed. Preserve unchanged cells and their IDs, ordering and chart definitions. Explain changes briefly. Do not put secrets or credentials in notebook content.
 Cell JSON schema:
 Markdown: {id:string,type:"markdown",title:string,source:string,collapsed:boolean}
-SQL: {id:string,type:"sql",title:string,source:string,collapsed:boolean,charts:Chart[]}
+SQL: {id:string,type:"sql",title:string,source:string,collapsed:boolean,charts:Chart[],outputHeight?:number}
 Chart: {id:string,title:string,type:"bar"|"line"|"area"|"scatter"|"histogram",x:string,y:string,color:string,xType:"nominal"|"quantitative"|"temporal",sort:"ascending"|"descending",xTitle:string,yTitle:string,yFormat:string}
-Use unique IDs for new cells and charts. Use empty strings for optional chart fields. Charts consume the parent SQL result, with no SQL execution or implicit aggregation. Except histograms (which bin/count x), Y must be numeric; aggregate in SQL. Chart previews are limited to 10000 returned rows. yFormat is a D3 number format like ,.2f. Limit 200 cells and 20 charts per SQL cell.
+outputHeight is an optional saved table viewport height in pixels (integer 240–4000); preserve it when present. Use unique IDs for new cells and charts. Use empty strings for optional chart fields. Charts consume the parent SQL result, with no SQL execution or implicit aggregation. Except histograms (which bin/count x), Y must be numeric; aggregate in SQL. Chart previews are limited to 10000 returned rows. yFormat is a D3 number format like ,.2f. Limit 200 cells and 20 charts per SQL cell.
 In semantic-only mode you may explain, change Markdown or charts and reorganize existing SQL cells, but must not create or modify raw SQL. Explain this limitation when necessary.`;

@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import { Sparkles, RotateCcw, X } from 'lucide-react';
+import { ChatInput } from '../chat/ChatInput';
+import { ChatMessageUser } from '../chat/ChatMessageUser';
+import { ChatMessageAssistant, type ContentBlock } from '../chat/ChatMessageAssistant';
+import { ThinkingIndicator } from '../chat/ThinkingIndicator';
+import { toolActivityLabel, toolInputLabel } from '../../lib/ai/tool-labels';
+import type { AgentUsage } from '../../lib/ai-usage';
 import { Button } from '../ui/button';
 import { useSettings, DEFAULT_AI_MODEL } from '../../lib/settings';
 import { runAgentTurn, type MessageParam } from '../../lib/ai-agent';
@@ -17,7 +23,7 @@ import {
   applyNotebookProposal,
   type NotebookProposal,
 } from '../../lib/notebooks/agent';
-import { fingerprint, type Notebook } from '../../lib/notebooks/model';
+import { fingerprint, uid, type Notebook } from '../../lib/notebooks/model';
 import { validateSelectQuery, type CellResult } from '../../lib/notebooks/execution';
 import type { CatalogData } from '../../lib/service';
 
@@ -29,6 +35,7 @@ export function NotebookAgent({
   catalogs,
   onApply,
   onBusy,
+  onClose,
 }: {
   disabled: boolean;
   document: Notebook;
@@ -37,26 +44,41 @@ export function NotebookAgent({
   catalogs: readonly CatalogData[];
   onApply: (doc: Notebook) => void;
   onBusy: (busy: boolean) => void;
+  onClose: () => void;
 }) {
   const { settings } = useSettings();
-  const [request, setRequest] = useState('');
-  const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; text: string }[]>([]);
+  const [messages, setMessages] = useState<
+    {
+      id: string;
+      role: 'user' | 'assistant';
+      text: string;
+      blocks?: ContentBlock[];
+      usage?: AgentUsage;
+    }[]
+  >([]);
   const [busy, setBusy] = useState(false);
   const [activity, setActivity] = useState('');
   const [error, setError] = useState('');
+  const [applied, setApplied] = useState('');
   const [proposal, setProposal] = useState<NotebookProposal | null>(null);
   const latest = useRef({ document, results, selectedCell });
   latest.current = { document, results, selectedCell };
   const abort = useRef<AbortController | null>(null);
   const history = useRef<MessageParam[]>([]);
   const cache = useRef(new QueryResultCache());
+  const scroller = useRef<HTMLDivElement>(null);
+  const follow = useRef(true);
+  const stopGeneration = () => abort.current?.abort();
+  useEffect(() => {
+    if (follow.current && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
+  }, [messages, proposal, activity, applied, error]);
   useEffect(
     () => () => {
       abort.current?.abort();
     },
     [],
   );
-  async function send() {
+  async function send(request: string) {
     if (disabled || !request.trim() || abort.current) return;
     if (!settings.anthropicApiKey) {
       setError('Add your Anthropic API key in Settings to use the notebook assistant.');
@@ -80,14 +102,38 @@ export function NotebookAgent({
     setBusy(true);
     onBusy(true);
     setError('');
+    setApplied('');
     setProposal(null);
-    setRequest('');
     setActivity('Connecting…');
-    setMessages((previous) => [...previous, { role: 'user', text }, { role: 'assistant', text: '' }]);
+    const assistantId = uid();
+    follow.current = true;
+    setMessages((previous) => [
+      ...previous,
+      { id: uid(), role: 'user', text },
+      { id: assistantId, role: 'assistant', text: '', blocks: [] },
+    ]);
+    const updateBlocks = (update: (blocks: ContentBlock[]) => ContentBlock[]) => {
+      if (controller.signal.aborted) return;
+      setMessages((previous) =>
+        previous.map((message) =>
+          message.id === assistantId ? { ...message, blocks: update(message.blocks ?? []) } : message,
+        ),
+      );
+    };
+    const append = (type: 'text' | 'reasoning', content: string) =>
+      updateBlocks((blocks) => {
+        const last = blocks.at(-1);
+        return last?.type === type
+          ? [...blocks.slice(0, -1), { ...last, content: last.content + content }]
+          : [...blocks, { type, id: uid(), content }];
+      });
     history.current.push({ role: 'user', content: text });
     try {
       await runAgentTurn(
-        { apiKey: settings.anthropicApiKey, workspaceId: settings.anthropicWorkspaceId || '' },
+        {
+          apiKey: settings.anthropicApiKey,
+          workspaceId: settings.anthropicWorkspaceId || '',
+        },
         settings.aiModel || DEFAULT_AI_MODEL,
         history.current,
         NOTEBOOK_PROMPT + '\n' + aiQueryModePrompt(mode),
@@ -142,16 +188,45 @@ export function NotebookAgent({
         },
         {
           onText: (chunk) => {
+            append('text', chunk);
+            setActivity('Writing response…');
+          },
+          onThinking: (chunk) => {
+            append('reasoning', chunk);
+            setActivity('Thinking…');
+          },
+          onToolInputStart: (name) => setActivity(toolInputLabel(name) + '…'),
+          onToolCall: (name, input) => {
+            setActivity(toolActivityLabel(name, input) + '…');
+            updateBlocks((blocks) => [
+              ...blocks,
+              { type: 'tool_call', id: uid(), toolCall: { name, input, isExecuting: true } },
+            ]);
+          },
+          onToolResult: (_name, result) => {
+            setActivity('Preparing response…');
+            updateBlocks((blocks) =>
+              blocks.map((block) =>
+                block.type === 'tool_call' && block.toolCall.isExecuting
+                  ? {
+                      ...block,
+                      toolCall: {
+                        ...block.toolCall,
+                        isExecuting: false,
+                        result,
+                        error: result.startsWith('Error:') ? result.slice(6).trim() : undefined,
+                      },
+                    }
+                  : block,
+              ),
+            );
+          },
+          onDone: (usage) => {
             if (!controller.signal.aborted)
               setMessages((previous) =>
-                previous.map((message, index) =>
-                  index === previous.length - 1 ? { ...message, text: message.text + chunk } : message,
-                ),
+                previous.map((message) => (message.id === assistantId ? { ...message, usage } : message)),
               );
           },
-          onToolCall: (name) => setActivity(`Working: ${name.replaceAll('_', ' ')}…`),
-          onToolResult: () => setActivity('Preparing response…'),
-          onDone: () => {},
           onError: (message) => {
             if (!controller.signal.aborted) setError(message);
           },
@@ -173,6 +248,28 @@ export function NotebookAgent({
         setProposal(null);
         setError('Stopped. No proposed changes were applied.');
       }
+      // A cancelled or interrupted tool must not keep showing a live spinner.
+      setMessages((previous) =>
+        previous.map((message) =>
+          message.id === assistantId
+            ? {
+                ...message,
+                blocks: message.blocks?.map((block) =>
+                  block.type === 'tool_call' && block.toolCall.isExecuting
+                    ? {
+                        ...block,
+                        toolCall: {
+                          ...block.toolCall,
+                          isExecuting: false,
+                          error: controller.signal.aborted ? 'Cancelled' : 'Interrupted',
+                        },
+                      }
+                    : block,
+                ),
+              }
+            : message,
+        ),
+      );
       abort.current = null;
       setBusy(false);
       onBusy(false);
@@ -181,33 +278,77 @@ export function NotebookAgent({
   }
   return (
     <aside
-      className="border-l bg-card flex flex-col w-full lg:w-96 shrink-0 min-h-0"
+      className="border-l border-border bg-background flex flex-col w-full min-w-0 shrink-0 min-h-0 h-full"
       aria-label="Notebook assistant"
     >
-      <div className="p-3 border-b font-medium">Notebook assistant</div>
-      <div className="flex-1 overflow-auto p-3 space-y-4">
-        {!messages.length && (
-          <p className="text-sm text-muted-foreground">
-            Ask for a new analysis, a chart, or an explanation. Proposed edits can be reviewed before
-            applying. The assistant may run read queries to inspect your data.
-          </p>
-        )}
-        {messages.map((message, index) => (
-          <div key={index} className="text-sm">
-            <strong>{message.role === 'user' ? 'You' : 'Assistant'}</strong>
-            <div className="prose prose-sm dark:prose-invert max-w-none">
-              <ReactMarkdown skipHtml>{message.text}</ReactMarkdown>
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border shrink-0">
+        <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <Sparkles className="h-3.5 w-3.5 text-accent" /> Ask AI
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            disabled={busy}
+            title="New conversation"
+            onClick={() => {
+              history.current = [];
+              cache.current.clear();
+              setMessages([]);
+              setProposal(null);
+              setApplied('');
+              setError('');
+            }}
+            className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 px-1.5 py-0.5 disabled:opacity-50"
+          >
+            <RotateCcw className="h-3 w-3" /> New
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close Ask AI panel"
+            className="p-1 text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+      <div
+        ref={scroller}
+        onScroll={() => {
+          const el = scroller.current!;
+          follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        }}
+        className="flex-1 min-h-0 overflow-auto p-3 space-y-4"
+      >
+        <div role="log" aria-label="Notebook AI conversation" className="space-y-5">
+          {!messages.length && (
+            <div className="flex items-start gap-2 text-xs text-muted-foreground pt-2">
+              <Sparkles className="h-3.5 w-3.5 text-accent shrink-0" />
+              <p>
+                {settings.anthropicApiKey
+                  ? 'Ask for a new analysis, a chart, or an explanation. Review proposed changes before applying. The assistant may run read queries to inspect your data.'
+                  : 'Add your Anthropic API key in Settings to use Ask AI.'}
+              </p>
             </div>
-          </div>
-        ))}
-        {activity && (
-          <p role="status" className="text-xs text-muted-foreground">
-            {activity}
-          </p>
-        )}
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
+          )}
+          {messages.map((message, index) =>
+            message.role === 'user' ? (
+              <ChatMessageUser key={message.id} content={message.text} />
+            ) : (
+              <ChatMessageAssistant
+                key={message.id}
+                blocks={message.blocks ?? []}
+                isStreaming={busy && index === messages.length - 1}
+                onCancel={stopGeneration}
+                usage={message.usage}
+                model={settings.aiModel || DEFAULT_AI_MODEL}
+              />
+            ),
+          )}
+        </div>
+        {applied && (
+          <p role="status" className="text-sm">
+            {applied}
           </p>
         )}
         {proposal && (
@@ -219,12 +360,20 @@ export function NotebookAgent({
             <details>
               <summary className="cursor-pointer">Review proposed notebook</summary>
               <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">
-                {JSON.stringify({ title: proposal.document.title, cells: proposal.document.cells }, null, 2)}
+                {JSON.stringify(
+                  {
+                    title: proposal.document.title,
+                    cells: proposal.document.cells,
+                  },
+                  null,
+                  2,
+                )}
               </pre>
             </details>
             {fingerprint(document) !== proposal.base && (
               <p>The notebook has changed. Ask for an updated proposal.</p>
             )}
+            {busy && <p role="status">Finishing the response before changes can be applied…</p>}
             <div className="flex gap-2">
               <Button
                 size="sm"
@@ -232,6 +381,10 @@ export function NotebookAgent({
                 onClick={() => {
                   try {
                     onApply(applyNotebookProposal(latest.current.document, proposal));
+                    setApplied(
+                      `Changes applied · ${proposal.document.cells.length} cells. Applying did not run SQL. Use Undo to reverse.`,
+                    );
+                    setError('');
                     setProposal(null);
                   } catch (e) {
                     setError(String(e));
@@ -250,32 +403,27 @@ export function NotebookAgent({
           </div>
         )}
       </div>
-      <form
-        className="border-t p-3 space-y-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send();
-        }}
-      >
-        <textarea
-          className="w-full rounded border bg-background p-2 text-sm min-h-24"
-          aria-label="Notebook AI request"
-          value={request}
-          onChange={(event) => setRequest(event.target.value)}
-          placeholder="Add a chart and explain the results…"
-          disabled={busy}
-        />
-        <div className="flex gap-2">
-          <Button type="submit" size="sm" disabled={disabled || busy || !request.trim()}>
-            Send
-          </Button>
-          {busy && (
-            <Button type="button" size="sm" variant="destructive" onClick={() => abort.current?.abort()}>
-              Stop generation
-            </Button>
-          )}
+      {busy && (
+        <div role="status" aria-label="Agent progress" className="shrink-0 border-t bg-muted/40 px-3">
+          <ThinkingIndicator label={activity} onCancel={stopGeneration} />
         </div>
-      </form>
+      )}
+      {error && (
+        <div
+          role="alert"
+          className="shrink-0 border-t border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+        >
+          {error}
+        </div>
+      )}
+      <ChatInput
+        onSend={(text) => void send(text)}
+        onStop={stopGeneration}
+        isLoading={busy}
+        disabled={disabled || !settings.anthropicApiKey}
+        focused
+        placeholder="Ask AI about your notebook…"
+      />
     </aside>
   );
 }

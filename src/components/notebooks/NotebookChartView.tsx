@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Table } from '@query-farm/apache-arrow';
 import { Button } from '../ui/button';
+import { ChartDownloadMenu } from '../chat/ChartDownloadMenu';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../ui/select';
 import { Input } from '../ui/input';
 import { embedChart, downloadPNG, downloadSVG, type VegaView } from '../chat/chart-embed';
 import { chartData, chartSpec, CHART_ROW_LIMIT } from '../../lib/notebooks/charts';
@@ -79,24 +81,31 @@ export function NotebookChartView({
     options: { value: string; label: string }[],
     change: (value: string) => void,
   ) => (
-    <label className="text-xs flex flex-col gap-1">
-      {label}
-      <select
-        className="rounded border bg-background px-2 py-1.5 text-sm"
-        aria-label={label}
+    <div className="text-xs flex flex-col gap-1">
+      <span>{label}</span>
+      <Select
         value={value}
-        onChange={(e) => change(e.target.value)}
+        onValueChange={(next) => {
+          if (next !== null) change(next);
+        }}
       >
-        {!options.some((option) => option.value === value) && (
-          <option value={value}>{value || 'Select column'}</option>
-        )}
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
+        <SelectTrigger aria-label={label} className="w-full">
+          <SelectValue>
+            {options.find((option) => option.value === value)?.label ?? (value || 'Select column')}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {!options.some((option) => option.value === value) && (
+            <SelectItem value={value}>{value || 'Select column'}</SelectItem>
+          )}
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
   const fields = columns.map((column) => ({ value: column.name, label: column.name }));
   return (
@@ -180,26 +189,17 @@ export function NotebookChartView({
       )}
       <div ref={host} className="w-full min-w-0 overflow-auto" />
       <div className="flex gap-2">
-        <Button
-          size="sm"
-          variant="outline"
+        <ChartDownloadMenu
           disabled={!ready}
-          onClick={() => {
-            if (view.current) void downloadPNG(view.current, chart.title).catch((e) => setError(String(e)));
+          onDownload={async (format) => {
+            if (!view.current) return;
+            try {
+              await (format === 'png' ? downloadPNG : downloadSVG)(view.current, chart.title);
+            } catch (e) {
+              setError(String(e));
+            }
           }}
-        >
-          Download PNG
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!ready}
-          onClick={() => {
-            if (view.current) void downloadSVG(view.current, chart.title).catch((e) => setError(String(e)));
-          }}
-        >
-          Download SVG
-        </Button>
+        />
         <Button size="sm" variant="ghost" onClick={onDelete}>
           Remove chart
         </Button>

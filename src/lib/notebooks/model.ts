@@ -16,10 +16,22 @@ export const chartSchema = z
     yFormat: z.string().max(50),
   })
   .strict();
-const common = { id, title: z.string().max(200), source: z.string().max(500_000), collapsed: z.boolean() };
+const common = {
+  id,
+  title: z.string().max(200),
+  source: z.string().max(500_000),
+  collapsed: z.boolean(),
+};
 export const cellSchema = z.discriminatedUnion('type', [
   z.object({ ...common, type: z.literal('markdown') }).strict(),
-  z.object({ ...common, type: z.literal('sql'), charts: z.array(chartSchema).max(20) }).strict(),
+  z
+    .object({
+      ...common,
+      type: z.literal('sql'),
+      charts: z.array(chartSchema).max(20),
+      outputHeight: z.number().int().min(240).max(4000).optional(),
+    })
+    .strict(),
 ]);
 export const notebookSchema = z
   .object({
@@ -36,7 +48,11 @@ export const notebookSchema = z
     const ids = new Set<string>();
     for (const cell of doc.cells) {
       for (const value of [cell.id, ...(cell.type === 'sql' ? cell.charts.map((chart) => chart.id) : [])]) {
-        if (ids.has(value)) ctx.addIssue({ code: 'custom', message: `Duplicate cell or chart ID: ${value}` });
+        if (ids.has(value))
+          ctx.addIssue({
+            code: 'custom',
+            message: `Duplicate cell or chart ID: ${value}`,
+          });
         ids.add(value);
       }
     }
@@ -47,7 +63,12 @@ export type SqlCell = Extract<NotebookCell, { type: 'sql' }>;
 export type NotebookChart = z.infer<typeof chartSchema>;
 export const uid = () => crypto.randomUUID();
 export function newCell(type: NotebookCell['type']): NotebookCell {
-  const base = { id: uid(), title: type === 'sql' ? 'Query' : 'Notes', source: '', collapsed: false };
+  const base = {
+    id: uid(),
+    title: type === 'sql' ? 'Query' : 'Notes',
+    source: '',
+    collapsed: false,
+  };
   return type === 'sql' ? { ...base, type, charts: [] } : { ...base, type };
 }
 export function newNotebook(serviceUrl: string): Notebook {
@@ -62,7 +83,13 @@ export function newNotebook(serviceUrl: string): Notebook {
   };
 }
 export function fingerprint(doc: Notebook): string {
-  return JSON.stringify([doc.id, doc.serviceUrl, doc.title, doc.cells]);
+  // Compare content, not the key order produced by imports or model responses.
+  // Do not validate here: an in-progress editor value may exceed save limits.
+  return JSON.stringify([doc.id, doc.serviceUrl, doc.title, doc.cells], (_key, value) =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]]))
+      : value,
+  );
 }
 export function duplicateCell(cell: NotebookCell): NotebookCell {
   return {
@@ -118,11 +145,20 @@ export function listNotebooks(
       unreadable++;
     }
   }
-  return { documents: documents.sort((a, b) => b.updatedAt - a.updatedAt), unreadable };
+  return {
+    documents: documents.sort((a, b) => b.updatedAt - a.updatedAt),
+    unreadable,
+  };
 }
 /** Import into the current connection as a new document; never overwrite the source. */
 export function importNotebook(text: string, serviceUrl: string): Notebook {
   if (text.length > 5_000_000) throw new Error('Notebook files must be smaller than 5 MB.');
   const doc = notebookSchema.parse(JSON.parse(text));
-  return { ...doc, id: uid(), serviceUrl, createdAt: Date.now(), updatedAt: Date.now() };
+  return {
+    ...doc,
+    id: uid(),
+    serviceUrl,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
 }

@@ -39,7 +39,11 @@ function storage(): Storage {
     clear: () => items.clear(),
   };
 }
-const cell = (id: string, source = 'select 1'): SqlCell => ({ ...(newCell('sql') as SqlCell), id, source });
+const cell = (id: string, source = 'select 1'): SqlCell => ({
+  ...(newCell('sql') as SqlCell),
+  id,
+  source,
+});
 const response = () => ({
   ok: true,
   arrowBuffers: [tableToIPC(tableFromArrays({ value: [42] })).slice().buffer as ArrayBuffer],
@@ -53,7 +57,10 @@ describe('notebook documents', () => {
     saveNotebook(a, saved);
     saveNotebook(b, saved);
     saved.setItem(storageKey(a.serviceUrl, 'broken'), '{broken');
-    expect(listNotebooks(a.serviceUrl, saved)).toEqual({ documents: [a], unreadable: 1 });
+    expect(listNotebooks(a.serviceUrl, saved)).toEqual({
+      documents: [a],
+      unreadable: 1,
+    });
     expect(saved.getItem(storageKey(a.serviceUrl, 'broken'))).toBe('{broken');
     const imported = importNotebook(JSON.stringify(a), b.serviceUrl);
     expect(imported.id).not.toBe(a.id);
@@ -107,7 +114,10 @@ describe('notebook execution', () => {
     expect(bound).toEqual(["select 'quoted'"]);
     await expect(
       validateSelectQuery('WITH t AS (select 1) DELETE FROM sales', async () =>
-        parsed({ error: true, error_message: 'Only SELECT statements are supported' }),
+        parsed({
+          error: true,
+          error_message: 'Only SELECT statements are supported',
+        }),
       ),
     ).rejects.toThrow('one SELECT query');
     await expect(
@@ -191,7 +201,9 @@ describe('notebook execution', () => {
 
 describe('notebook charts', () => {
   test('bounds conversion and exposes preview truncation', () => {
-    const table = tableFromArrays({ x: Array.from({ length: CHART_ROW_LIMIT + 1 }, (_, i) => i) });
+    const table = tableFromArrays({
+      x: Array.from({ length: CHART_ROW_LIMIT + 1 }, (_, i) => i),
+    });
     const data = chartData(table);
     expect(data.rows).toHaveLength(CHART_ROW_LIMIT);
     expect(data.truncated).toBe(true);
@@ -233,7 +245,11 @@ describe('notebook AI edits', () => {
     expect(() =>
       notebookProposal(
         doc,
-        { summary: 'Notes', title: doc.title, cells: [...doc.cells, newCell('markdown')] },
+        {
+          summary: 'Notes',
+          title: doc.title,
+          cells: [...doc.cells, newCell('markdown')],
+        },
         'semantic-only',
       ),
     ).not.toThrow();
@@ -241,4 +257,14 @@ describe('notebook AI edits', () => {
       notebookProposal(doc, { summary: 'Query', title: doc.title, cells: [cell('new')] }, 'semantic-only'),
     ).toThrow('raw SQL');
   });
+});
+
+test('AI rejects unchanged proposals regardless of cell property order', () => {
+  const doc = newNotebook('a');
+  const original = doc.cells[0];
+  const { type, ...rest } = original;
+  const reordered = { type, ...rest };
+  expect(() =>
+    notebookProposal(doc, { summary: 'No edits', title: doc.title, cells: [reordered] }, 'unrestricted-sql'),
+  ).toThrow('no changes');
 });
