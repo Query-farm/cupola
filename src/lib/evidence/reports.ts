@@ -6,6 +6,7 @@ import type { ReportParameter } from '../reports/types';
 import { parameterGraphErrors } from './parameter-graph';
 import { initialValue, toReportParameters } from './parameters';
 import { historyStorageKey, isQuotaError } from './revisions';
+import { legacyScopeFor } from '../workspace/legacy-scope';
 // Re-exported for callers that already import from here; modules reports.ts depends on import it from ./parameters.
 export { toReportParameters };
 
@@ -36,6 +37,9 @@ const drillPathSchema = z.object({ id: z.string().min(1), label: z.string().opti
 const reportSchema = z.object({
   version: z.literal(1), id: z.string().min(1), title: z.string().trim().min(1),
   source: z.string(), setupSql: z.string(), serviceUrl: z.string(),
+  /** The workspace the report belongs to (multi-catalog phase 2). Reports saved before workspaces
+   *  have none and are scoped by `serviceUrl`, the default catalog's URL at the time. */
+  workspaceId: z.string().optional(),
   appearance: appearanceSchema.optional(),
   semanticDatasets: z.array(semanticDatasetSchema).optional(),
   pivots: z.array(z.object({ id: z.string().min(1), title: z.string().min(1), datasetId: z.string().min(1), config: z.record(z.string(), z.any()).optional() })).optional(),
@@ -51,8 +55,15 @@ export type EvidenceDrillPath = NonNullable<EvidenceReport['drillPaths']>[number
 export const EVIDENCE_REPORTS_CHANGED = 'cupola:evidence-reports-changed';
 export const LEGACY_STORAGE_PREFIX = 'cupola.evidence.report.v1:';
 export const STORAGE_PREFIX = 'cupola.evidence.report.v2:';
-export function evidenceReportStorageKey(serviceUrl: string, id: string) {
-  return `${STORAGE_PREFIX}${encodeURIComponent(serviceUrl)}:${encodeURIComponent(id)}`;
+/** Reports are stored per scope: the workspace id, or for a report saved before workspaces, the
+ *  service URL it was saved against. Every storage function takes the scope where it used to take
+ *  the service URL; a workspace scope also reads its legacy URL's keys (`legacy-scope.ts`). */
+export function evidenceReportStorageKey(scope: string, id: string) {
+  return `${STORAGE_PREFIX}${encodeURIComponent(scope)}:${encodeURIComponent(id)}`;
+}
+/** Where a report is stored. */
+export function reportScope(report: Pick<EvidenceReport, 'workspaceId' | 'serviceUrl'>): string {
+  return report.workspaceId || report.serviceUrl;
 }
 
 function validateValue(parameter: EvidenceParameter, value: ParameterValue, required: boolean) {
@@ -121,23 +132,38 @@ export function compilerParameters(report: Pick<EvidenceReport, 'parameters'>, v
 }
 // Keep existing v1 reports readable; saving upgrades only that report after the
 // new write succeeds. Each worker has its own namespace, including report IDs.
-export function listEvidenceReports(serviceUrl: string, storage: Storage = localStorage): EvidenceReport[] {
+export function listEvidenceReports(scope: string, storage: Storage = localStorage): EvidenceReport[] {
   const reports = new Map<string, EvidenceReport>();
-  const prefix = evidenceReportStorageKey(serviceUrl, '');
+  // A workspace reads the reports saved against its service URL before workspaces, read-only:
+  // each records the workspace once it is saved again (under the workspace's own key).
+  const legacy = legacyScopeFor(scope);
+  const urlScope = legacy ?? scope;
+  const adopt = (report: EvidenceReport) => legacy ? { ...report, workspaceId: scope } : report;
   for (let i = 0; i < storage.length; i++) {
     const key = storage.key(i);
     if (!key?.startsWith(LEGACY_STORAGE_PREFIX)) continue;
     const input = JSON.parse(storage.getItem(key)!);
-    if (input.serviceUrl === serviceUrl) {
+    if (input.serviceUrl === urlScope && !input.workspaceId) {
       const report = validateEvidenceReport(input);
-      reports.set(report.id, report);
+      reports.set(report.id, adopt(report));
     }
   }
+  if (legacy) {
+    const prefix = evidenceReportStorageKey(legacy, '');
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (!key?.startsWith(prefix)) continue;
+      const report = validateEvidenceReport(JSON.parse(storage.getItem(key)!));
+      if (reportScope(report) !== legacy) continue;
+      reports.set(report.id, adopt(report));
+    }
+  }
+  const prefix = evidenceReportStorageKey(scope, '');
   for (let i = 0; i < storage.length; i++) {
     const key = storage.key(i);
     if (!key?.startsWith(prefix)) continue;
     const report = validateEvidenceReport(JSON.parse(storage.getItem(key)!));
-    if (report.serviceUrl !== serviceUrl) throw new Error('Saved report worker URL does not match its storage key.');
+    if (reportScope(report) !== scope) throw new Error('Saved report workspace does not match its storage key.');
     reports.set(report.id, report);
   }
   return [...reports.values()].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -152,17 +178,22 @@ function matchingLegacyKey(serviceUrl: string, id: string, storage: Storage): st
 export function saveEvidenceReport(input: EvidenceReport, storage: Storage = localStorage): EvidenceReport {
   const report = validateEvidenceReport({ ...input, updatedAt: Date.now() });
   const legacy = matchingLegacyKey(report.serviceUrl, report.id, storage);
-  storage.setItem(evidenceReportStorageKey(report.serviceUrl, report.id), JSON.stringify(report));
+  storage.setItem(evidenceReportStorageKey(reportScope(report), report.id), JSON.stringify(report));
   if (legacy) storage.removeItem(legacy);
   if (typeof window !== 'undefined' && storage === window.localStorage) window.dispatchEvent(new Event(EVIDENCE_REPORTS_CHANGED));
   return report;
 }
-export function deleteEvidenceReport(serviceUrl: string, id: string, storage: Storage = localStorage) {
-  const legacy = matchingLegacyKey(serviceUrl, id, storage);
-  storage.removeItem(evidenceReportStorageKey(serviceUrl, id));
-  storage.removeItem(historyStorageKey(serviceUrl, id));
-  storage.removeItem(recoveryDraftKey(serviceUrl, id));
-  if (legacy) storage.removeItem(legacy);
+export function deleteEvidenceReport(scope: string, id: string, storage: Storage = localStorage) {
+  // Deleting is the reader's choice, so the pre-workspace copy goes too; otherwise the fallback
+  // would bring the report back.
+  const url = legacyScopeFor(scope);
+  for (const s of url ? [scope, url] : [scope]) {
+    const legacy = matchingLegacyKey(s, id, storage);
+    storage.removeItem(evidenceReportStorageKey(s, id));
+    storage.removeItem(historyStorageKey(s, id));
+    storage.removeItem(recoveryDraftKey(s, id));
+    if (legacy) storage.removeItem(legacy);
+  }
   if (typeof window !== 'undefined' && storage === window.localStorage) window.dispatchEvent(new Event(EVIDENCE_REPORTS_CHANGED));
 }
 
@@ -180,43 +211,54 @@ export function describeReportError(error: unknown): string {
  *  kept as it is so a closed tab doesn't lose it. The next successful save removes it; opening
  *  the report brings it back. */
 export const RECOVERY_DRAFT_PREFIX = 'cupola.evidence.draft.v1:';
-export function recoveryDraftKey(serviceUrl: string, id: string) {
-  return `${RECOVERY_DRAFT_PREFIX}${encodeURIComponent(serviceUrl)}:${encodeURIComponent(id)}`;
+export function recoveryDraftKey(scope: string, id: string) {
+  return `${RECOVERY_DRAFT_PREFIX}${encodeURIComponent(scope)}:${encodeURIComponent(id)}`;
 }
 /** False when it could not be kept either (storage full): the draft is then only in the tab. */
 export function saveRecoveryDraft(report: EvidenceReport, storage: Storage = localStorage): boolean {
-  try { storage.setItem(recoveryDraftKey(report.serviceUrl, report.id), JSON.stringify({ savedAt: Date.now(), report })); return true; }
+  try { storage.setItem(recoveryDraftKey(reportScope(report), report.id), JSON.stringify({ savedAt: Date.now(), report })); return true; }
   catch { return false; }
 }
-export function clearRecoveryDraft(serviceUrl: string, id: string, storage: Storage = localStorage) {
-  storage.removeItem(recoveryDraftKey(serviceUrl, id));
+export function clearRecoveryDraft(scope: string, id: string, storage: Storage = localStorage) {
+  storage.removeItem(recoveryDraftKey(scope, id));
 }
-/** The unsaved draft for a report, when there is one that differs from what is saved. */
-export function loadRecoveryDraft(serviceUrl: string, id: string, storage: Storage = localStorage): EvidenceReport | null {
+function readDraft(keyScope: string, scope: string, id: string, storage: Storage, adopt: boolean): EvidenceReport | null {
   try {
-    const text = storage.getItem(recoveryDraftKey(serviceUrl, id));
+    const text = storage.getItem(recoveryDraftKey(keyScope, id));
     if (!text) return null;
     const draft = JSON.parse(text).report;
-    return draft && typeof draft === 'object' && draft.id === id && draft.serviceUrl === serviceUrl ? draft as EvidenceReport : null;
+    if (!draft || typeof draft !== 'object' || draft.id !== id || reportScope(draft) !== keyScope) return null;
+    return (adopt ? { ...draft, workspaceId: scope } : draft) as EvidenceReport;
   } catch { return null; }
+}
+/** The unsaved draft for a report, when there is one that differs from what is saved. A workspace
+ *  falls back to a draft kept under its pre-workspace service URL. */
+export function loadRecoveryDraft(scope: string, id: string, storage: Storage = localStorage): EvidenceReport | null {
+  const own = readDraft(scope, scope, id, storage, false);
+  if (own) return own;
+  const legacy = legacyScopeFor(scope);
+  return legacy ? readDraft(legacy, scope, id, storage, true) : null;
 }
 /** Drafts of reports that were never saved (a new report that didn't validate, or storage was
  *  full): no saved report opens them, so the library lists them. Newest first. */
-export function listUnsavedDrafts(serviceUrl: string, savedIds: ReadonlySet<string>, storage: Storage = localStorage): { report: EvidenceReport; savedAt: number }[] {
-  const prefix = recoveryDraftKey(serviceUrl, '');
-  const drafts: { report: EvidenceReport; savedAt: number }[] = [];
-  for (let i = 0; i < storage.length; i++) {
-    const key = storage.key(i);
-    if (!key?.startsWith(prefix)) continue;
-    const id = decodeURIComponent(key.slice(prefix.length));
-    if (savedIds.has(id)) continue;
-    const report = loadRecoveryDraft(serviceUrl, id, storage);
-    if (!report) continue;
-    let savedAt = 0;
-    try { savedAt = Number(JSON.parse(storage.getItem(key)!).savedAt) || 0; } catch { /* Unknown age. */ }
-    drafts.push({ report, savedAt });
+export function listUnsavedDrafts(scope: string, savedIds: ReadonlySet<string>, storage: Storage = localStorage): { report: EvidenceReport; savedAt: number }[] {
+  const drafts = new Map<string, { report: EvidenceReport; savedAt: number }>();
+  const legacy = legacyScopeFor(scope);
+  for (const keyScope of legacy ? [legacy, scope] : [scope]) {
+    const prefix = recoveryDraftKey(keyScope, '');
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (!key?.startsWith(prefix)) continue;
+      const id = decodeURIComponent(key.slice(prefix.length));
+      if (savedIds.has(id)) continue;
+      const report = readDraft(keyScope, scope, id, storage, keyScope !== scope);
+      if (!report) continue;
+      let savedAt = 0;
+      try { savedAt = Number(JSON.parse(storage.getItem(key)!).savedAt) || 0; } catch { /* Unknown age. */ }
+      drafts.set(id, { report, savedAt });
+    }
   }
-  return drafts.sort((a, b) => b.savedAt - a.savedAt);
+  return [...drafts.values()].sort((a, b) => b.savedAt - a.savedAt);
 }
 
 /** A blank title is a title being retyped, not a problem: it saves as "Untitled report". */

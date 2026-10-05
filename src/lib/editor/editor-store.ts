@@ -4,6 +4,8 @@
  * settings store so editor docs don't bloat the settings blob.
  */
 
+import { legacyScopeFor } from "../workspace/legacy-scope";
+
 export interface EditorDoc {
   id: string;
   name: string;
@@ -22,11 +24,12 @@ export interface EditorState {
  *  load for a server, then removed. */
 const LEGACY_KEY = "vgi-sql-editor-docs";
 
-/** Saved queries are scoped to the connected VGI server so each server keeps
- *  its own set of tabs. Falls back to the legacy unscoped key when no service
- *  is provided (e.g. unit tests). */
-function storageKey(serviceUrl?: string): string {
-  return serviceUrl ? `${LEGACY_KEY}::${serviceUrl}` : LEGACY_KEY;
+/** Saved queries are scoped to the workspace (multi-catalog phase 2; before
+ *  that, to the connected VGI server's URL) so each keeps its own set of
+ *  tabs. Falls back to the legacy unscoped key when no scope is provided
+ *  (e.g. unit tests). */
+function storageKey(scope?: string): string {
+  return scope ? `${LEGACY_KEY}::${scope}` : LEGACY_KEY;
 }
 
 /** Best-effort UUID — crypto.randomUUID where available, else a timestamp+rand fallback. */
@@ -55,6 +58,10 @@ export function loadEditorState(serviceUrl?: string): EditorState {
   try {
     const key = storageKey(serviceUrl);
     let raw = localStorage.getItem(key);
+    // A workspace reads the tabs its service URL kept before workspaces, until
+    // it saves its own (read-only: the old key is never written or removed).
+    const legacyScope = serviceUrl ? legacyScopeFor(serviceUrl) : undefined;
+    if (!raw && legacyScope) raw = localStorage.getItem(storageKey(legacyScope));
     // One-time migration: the first server to load adopts the legacy
     // unscoped docs, then the legacy key is cleared.
     if (!raw && serviceUrl) {

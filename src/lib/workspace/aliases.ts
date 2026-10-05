@@ -101,3 +101,14 @@ export function serviceAlias(catalogName: string): string {
   if (!catalogName.trim()) return "catalog";
   return isReservedAlias(catalogName) ? uniqueAlias(catalogName, new Set(RESERVED_ALIASES)) : catalogName;
 }
+
+/** Why an alias the reader typed cannot be used, or null. `taken` is the
+ *  workspace's other aliases. */
+export function aliasProblem(alias: string, taken: readonly string[]): string | null {
+  if (!alias) return "An alias is required.";
+  if (alias.length > MAX_ALIAS_LENGTH) return `At most ${MAX_ALIAS_LENGTH} characters.`;
+  if (isReservedAlias(alias)) return `"${alias}" is reserved by DuckDB.`;
+  if (!isValidAlias(alias)) return "Letters, digits and _ only, not starting with a digit.";
+  if (taken.some((t) => t.toLowerCase() === alias.toLowerCase())) return `"${alias}" is already used in this workspace.`;
+  return null;
+}

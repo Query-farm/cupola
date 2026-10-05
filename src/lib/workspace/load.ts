@@ -20,7 +20,7 @@ import { isRecoverableAuthError } from "../auth-errors";
 import { getAuthTokenForService, hadAuthToken } from "../auth";
 import { extractOrigin, hasTokens as hasOAuthTokens } from "../oauth-client";
 import { grainliftHttpUrl } from "../url-params";
-import { serviceAlias } from "./aliases";
+import { serviceAlias, uniqueAlias } from "./aliases";
 import type { ActiveCatalog } from "./spec";
 
 export type CatalogLoad =
@@ -49,6 +49,9 @@ export interface LoadOptions {
   persist: boolean;
   /** The `?service=` Grainlift alias (`?name=` or the target). */
   grainliftAlias?: string;
+  /** Aliases the workspace's other catalogs hold: a catalog whose alias is
+   *  learned from its server is kept clear of them. */
+  takenAliases?: readonly string[];
 }
 
 /** The sign-in requirement message used throughout. */
@@ -82,7 +85,9 @@ export async function loadCatalogEntry(entry: CatalogEntry, opts: LoadOptions): 
   try {
     const fetched = await fetchCatalog(catalog.url, { hasOptions: hasAnyOptions(input), catalogName: catalog.catalogName || undefined });
     const serverName = fetched.catalog.catalogName;
-    const alias = knownAlias || serviceAlias(serverName);
+    const alias = knownAlias || (opts.takenAliases?.length
+      ? uniqueAlias(serviceAlias(serverName), new Set(opts.takenAliases.map((a) => a.toLowerCase())))
+      : serviceAlias(serverName));
     const finalized = finalizeConnection(input, serverName, fetched.specs, { persist: opts.persist });
     const shell: ShellCatalog = {
       kind: "vgi",

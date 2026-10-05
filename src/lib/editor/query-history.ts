@@ -1,7 +1,13 @@
 /**
  * Query history: every query the shell, the Query Editor and the AI surfaces
- * ran, kept in localStorage per VGI server so it survives a reload. Read in
- * the editor's History menu.
+ * ran, kept in localStorage per workspace so it survives a reload. Read in
+ * the editor's History menu, which can also list every workspace's
+ * (`loadAllQueryHistories`).
+ *
+ * Keyed `cupola.query-history.v1::<workspace id>` since multi-catalog phase 2;
+ * before that, by the default catalog's service URL. A workspace with no list
+ * of its own yet reads its legacy URL's list (`legacy-scope.ts`), read-only:
+ * the first query it records starts its own list from that one.
  *
  * It used to live only in React state behind its own top-level tab, so it
  * covered the current session and nothing else — which is when it was needed
@@ -10,6 +16,7 @@
  * it is kept.
  */
 import type { QueryHistoryEntry } from "@/lib/shell-bridge";
+import { legacyScopeFor } from "@/lib/workspace/legacy-scope";
 
 /** Entries kept per server; the oldest go first. */
 export const QUERY_HISTORY_LIMIT = 300;
@@ -26,17 +33,35 @@ function isEntry(value: unknown): value is QueryHistoryEntry {
 }
 
 /** Newest first. Never throws: unreadable storage is an empty history. */
-export function loadQueryHistory(serviceUrl: string): QueryHistoryEntry[] {
-  const cached = cache.get(serviceUrl);
+export function loadQueryHistory(scope: string): QueryHistoryEntry[] {
+  const cached = cache.get(scope);
   if (cached) return cached;
   let entries: QueryHistoryEntry[] = EMPTY;
   try {
-    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(key(serviceUrl));
+    let raw = typeof localStorage === "undefined" ? null : localStorage.getItem(key(scope));
+    const legacy = legacyScopeFor(scope);
+    if (raw === null && legacy && typeof localStorage !== "undefined") raw = localStorage.getItem(key(legacy));
     const parsed: unknown = raw ? JSON.parse(raw) : null;
     if (Array.isArray(parsed)) entries = parsed.filter(isEntry);
   } catch { /* Corrupt or blocked storage: start empty. */ }
-  cache.set(serviceUrl, entries);
+  cache.set(scope, entries);
   return entries;
+}
+
+/** Every stored list whose scope `isScope` accepts (the workspace ids this
+ *  browser knows), newest entry first, each entry labelled with its scope. */
+export function loadAllQueryHistories(isScope: (scope: string) => boolean): { scope: string; entry: QueryHistoryEntry }[] {
+  const all: { scope: string; entry: QueryHistoryEntry }[] = [];
+  if (typeof localStorage === "undefined") return all;
+  const scopes = new Set<string>();
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(KEY_PREFIX) && isScope(k.slice(KEY_PREFIX.length))) scopes.add(k.slice(KEY_PREFIX.length));
+    }
+  } catch { return all; }
+  for (const scope of scopes) for (const entry of loadQueryHistory(scope)) all.push({ scope, entry });
+  return all.sort((a, b) => b.entry.timestamp - a.entry.timestamp);
 }
 
 /** Write, shedding the oldest half until it fits; the in-memory list stays whole

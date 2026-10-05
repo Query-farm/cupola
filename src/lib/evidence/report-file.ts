@@ -86,16 +86,19 @@ export type ImportAction = 'new' | 'replace' | 'copy' | 'unchanged';
 export interface PlannedImport { report: EvidenceReport; action: ImportAction; existing?: EvidenceReport }
 
 /** The content that makes two reports the same, whatever was saved when and where. */
-const spec = ({ createdAt: _c, updatedAt: _u, serviceUrl: _s, ...rest }: EvidenceReport) => JSON.stringify(rest);
+const spec = ({ createdAt: _c, updatedAt: _u, serviceUrl: _s, workspaceId: _w, ...rest }: EvidenceReport) => JSON.stringify(rest);
 
-/** Plan an import into `serviceUrl`'s saved reports. Reports are saved against the service
- *  they are imported into, not the one they were exported from: the file is how a report moves
- *  between workers as well as people. `replace` decides a changed report whose id is taken. */
-export function planImport(incoming: EvidenceReport[], existing: EvidenceReport[], serviceUrl: string,
+/** Plan an import into a workspace's saved reports (or, given a bare URL, a service's). Reports
+ *  are saved against the workspace they are imported into, not the one they were exported from:
+ *  the file is how a report moves between workers and workspaces as well as people. `replace`
+ *  decides a changed report whose id is taken. */
+export function planImport(incoming: EvidenceReport[], existing: EvidenceReport[], target: string | { serviceUrl: string; workspaceId?: string },
   replace: (existing: EvidenceReport, report: EvidenceReport) => boolean, newId: () => string = () => crypto.randomUUID()): PlannedImport[] {
   const saved = new Map(existing.map(report => [report.id, report]));
+  const { serviceUrl, workspaceId } = typeof target === 'string' ? { serviceUrl: target, workspaceId: undefined } : target;
   return incoming.map(input => {
-    const report = { ...input, serviceUrl };
+    const { workspaceId: _from, ...rest } = input;
+    const report: EvidenceReport = { ...rest, serviceUrl, ...(workspaceId ? { workspaceId } : {}) };
     const match = saved.get(report.id);
     let planned: PlannedImport;
     if (!match) planned = { report, action: 'new' };

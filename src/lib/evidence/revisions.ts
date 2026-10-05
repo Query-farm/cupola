@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { EvidenceReport } from './reports';
+import { legacyScopeFor } from '../workspace/legacy-scope';
 
 /** A report's revision history: every saved version, what changed and who changed it.
  *
@@ -197,11 +198,17 @@ export function validateHistory(input: unknown): ReportHistory {
 // Storage: one key per report, beside the report's own key (different prefix, so report listing
 // never reads a history as a report).
 export const HISTORY_STORAGE_PREFIX = 'cupola.evidence.history.v1:';
-export function historyStorageKey(serviceUrl: string, id: string) {
-  return `${HISTORY_STORAGE_PREFIX}${encodeURIComponent(serviceUrl)}:${encodeURIComponent(id)}`;
+export function historyStorageKey(scope: string, id: string) {
+  return `${HISTORY_STORAGE_PREFIX}${encodeURIComponent(scope)}:${encodeURIComponent(id)}`;
 }
-export function loadReportHistory(serviceUrl: string, id: string, storage: Storage = localStorage): ReportHistory {
-  const text = storage.getItem(historyStorageKey(serviceUrl, id));
+/** A report's history, by the report's scope (its workspace id, or its pre-workspace service URL).
+ *  A workspace falls back to the history kept under its legacy service URL (`legacy-scope.ts`). */
+export function loadReportHistory(scope: string, id: string, storage: Storage = localStorage): ReportHistory {
+  let text = storage.getItem(historyStorageKey(scope, id));
+  if (!text) {
+    const legacy = legacyScopeFor(scope);
+    if (legacy) text = storage.getItem(historyStorageKey(legacy, id));
+  }
   if (!text) return emptyHistory();
   return validateHistory(JSON.parse(text));
 }

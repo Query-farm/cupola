@@ -229,10 +229,18 @@ export const ui = {
 
 // Initialize the attached Promise + control functions. Called at module load
 // and whenever the shell needs to start a new attach cycle.
+//
+// A cycle that is replaced before it settled hands its waiters to the new
+// one. Without that, anything that awaited the old promise waited forever:
+// a Retry clicked just before the shell mounted awaited `engine.attached`,
+// then DuckDBShell's init effect reset it, and nothing ever resolved the
+// promise the Retry held (multi-catalog phase 1's known gap).
 function initAttached() {
+  const previous = engine.markAttached;
   engine.attached = new Promise<void>((resolve) => {
     engine.markAttached = () => resolve();
   });
+  if (previous) void engine.attached.then(previous);
 }
 engine.resetAttached = () => initAttached();
 initAttached();
@@ -265,6 +273,14 @@ export function notifyCatalogStatusChange(): void {
 export function setCatalogStatus(status: CatalogStatus): void {
   const next = new Map(engine.catalogStatuses);
   next.set(status.alias, status);
+  engine.catalogStatuses = next;
+  notifyCatalogStatusChange();
+}
+/** Forget one catalog's status (it was detached from the workspace). */
+export function removeCatalogStatus(alias: string): void {
+  if (!engine.catalogStatuses.has(alias)) return;
+  const next = new Map(engine.catalogStatuses);
+  next.delete(alias);
   engine.catalogStatuses = next;
   notifyCatalogStatusChange();
 }

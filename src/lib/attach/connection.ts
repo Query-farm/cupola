@@ -1,21 +1,19 @@
 /**
  * Where a catalog's attach options come from, and where they go back to.
  *
- * Sources, in increasing precedence: the recent-services entry (structured
- * options, plus raw text still awaiting migration), the secret store, and the
- * URL (`?attach_options=` raw text, `?data_version_spec=`, a Grainlift
- * `?target=`). The URL's plain literals apply at once; its expressions wait
- * for the reader's consent, then for the engine (`prepare.ts`).
+ * Sources, in increasing precedence: the workspace catalog's stored record
+ * (structured options, plus raw text still awaiting migration), the secret
+ * store, and the URL (`?attach_options=` raw text, `?data_version_spec=`, a
+ * Grainlift `?target=`). The URL's plain literals apply at once; its
+ * expressions wait for the reader's consent, then for the engine
+ * (`prepare.ts`).
  *
  * Nothing is persisted until the catalog's specs are known, because only the
  * specs say which options are secret: `finalizeConnection` writes non-secret
- * values to the recent list, secrets to the secret store, and only then strips
- * `attach_options` from the address bar.
+ * values to the workspace catalog, secrets to the secret store (both through
+ * its `OptionSink`), and only then strips `attach_options` from the address
+ * bar. Before workspaces both went to the recent-services list, keyed by URL.
  */
-import {
-  getRecentService,
-  saveRecentService,
-} from "../recent-services";
 import {
   getAttachOptionsFromUrl,
   getDataVersionSpecFromUrl,
@@ -25,10 +23,34 @@ import {
 } from "../url-params";
 import { parsePlainLiteral, splitLegacyOptions, type LegacyEntry, type OptionProblem } from "./legacy-options";
 import { isSecretOption, missingRequiredOptions, partitionSecrets, type OptionSpecInfo } from "./options";
-import { clearSecretsForService, saveSecrets, secretsFor } from "./secret-store";
+
+/** Where one catalog's options are stored: a workspace catalog's record and
+ *  its secrets (`workspace/store.ts`'s `catalogOptionSink`). */
+export interface OptionSink {
+  /** Stored non-secret options and pending raw text. */
+  stored(): { options: Record<string, string>; rawOptions?: string };
+  /** Stored secrets, once the server's catalog name is known. */
+  secrets(catalogName: string): Record<string, string>;
+  /** Record the catalog's name and replace the given fields. */
+  save(catalogName: string, update: { options?: Record<string, string>; rawOptions?: string }): void;
+  saveSecrets(catalogName: string, values: Record<string, string>, opts?: { replace?: boolean }): void;
+  /** Forget the options and secrets (an explicit empty `?attach_options=`). */
+  clear(): void;
+}
+
+/** A sink that stores nothing: a catalog whose options are this page's only. */
+export const NULL_SINK: OptionSink = {
+  stored: () => ({ options: {} }),
+  secrets: () => ({}),
+  save: () => {},
+  saveSecrets: () => {},
+  clear: () => {},
+};
 
 export interface ConnectionInput {
   serviceUrl: string;
+  /** Where its options are stored. */
+  sink: OptionSink;
   /** Structured options from storage and the URL. Secrets are added by
    *  `finalizeConnection`, once the catalog name is known. */
   options: Record<string, string>;
@@ -48,11 +70,12 @@ export interface ConnectionInput {
 
 /** Read every option source for `serviceUrl`. Side effect: an explicit empty
  *  `?attach_options=` clears the stored options, as it always has. */
-export function readConnectionInput(serviceUrl: string, { grainlift = false } = {}): ConnectionInput {
+export function readConnectionInput(serviceUrl: string, { grainlift = false, sink = NULL_SINK }: { grainlift?: boolean; sink?: OptionSink } = {}): ConnectionInput {
   const explicit = hasExplicitService();
   const urlRaw = explicit ? getAttachOptionsFromUrl() : undefined;
   const input: ConnectionInput = {
     serviceUrl,
+    sink,
     options: {},
     sessionOptions: {},
     pending: [],
@@ -62,12 +85,11 @@ export function readConnectionInput(serviceUrl: string, { grainlift = false } = 
   };
 
   if (urlRaw !== undefined && urlRaw.trim() === "") {
-    saveRecentService(serviceUrl, "", { options: {}, rawOptions: "" });
-    clearSecretsForService(serviceUrl);
+    sink.clear();
   } else {
-    const recent = getRecentService(serviceUrl);
-    Object.assign(input.options, recent?.options ?? {});
-    if (recent?.rawOptions) {
+    const recent = sink.stored();
+    Object.assign(input.options, recent.options);
+    if (recent.rawOptions) {
       const stored = splitLegacyOptions(recent.rawOptions);
       input.pending.push(...stored.entries);
       input.problems.push(...stored.problems);
@@ -93,19 +115,19 @@ export function readConnectionInput(serviceUrl: string, { grainlift = false } = 
   return input;
 }
 
-/** The options input for one catalog of a workspace link: the link's own
- *  (non-secret, already DuckDB text) options, its Grainlift target and pinned
- *  data version. Stored secrets for the same service + catalog are merged in
- *  by `finalizeConnection`. Nothing here is persisted: workspaces are stored
- *  in phase 2, and a link never writes the recent-services list. */
+/** The options input for one catalog of a stored workspace: its own
+ *  (non-secret, already DuckDB text) options, any raw text still awaiting
+ *  evaluation, its Grainlift target and pinned data version. Its secrets are
+ *  merged in by `finalizeConnection`. */
 export function workspaceConnectionInput(catalog: {
   url: string;
   options: Record<string, string>;
   target?: string;
   dataVersionSpec?: string;
-}): ConnectionInput {
-  return {
+}, sink: OptionSink = NULL_SINK): ConnectionInput {
+  const input: ConnectionInput = {
     serviceUrl: catalog.url,
+    sink,
     options: { ...catalog.options, ...(catalog.target ? { target: catalog.target } : {}) },
     sessionOptions: catalog.dataVersionSpec ? { data_version_spec: catalog.dataVersionSpec } : {},
     pending: [],
@@ -113,6 +135,13 @@ export function workspaceConnectionInput(catalog: {
     problems: [],
     fromUrl: false,
   };
+  const raw = sink.stored().rawOptions;
+  if (raw) {
+    const stored = splitLegacyOptions(raw);
+    input.pending.push(...stored.entries.filter((e) => !(e.name in input.options)));
+    input.problems.push(...stored.problems);
+  }
+  return input;
 }
 
 /** Apply the reader's answer to the consent screen. */
@@ -153,7 +182,7 @@ export function finalizeConnection(
   specs: readonly OptionSpecInfo[],
   { persist = hasExplicitService() || input.fromUrl }: { persist?: boolean } = {},
 ): FinalizedConnection {
-  const options = { ...secretsFor(input.serviceUrl, catalogName), ...input.options };
+  const options = { ...input.sink.secrets(catalogName), ...input.options };
   const { plain, secret } = partitionSecrets(options, specs);
   // Pending expressions for a secret option are evaluated this page load and
   // stored (as a secret) by `persistEvaluatedOptions`; their raw text is not
@@ -163,8 +192,8 @@ export function finalizeConnection(
     .map((e) => `${e.name} ${e.expr}`)
     .join(", ");
   if (persist) {
-    saveRecentService(input.serviceUrl, catalogName, { options: plain, rawOptions });
-    saveSecrets(input.serviceUrl, catalogName, secret, { replace: false });
+    input.sink.save(catalogName, { options: plain, rawOptions });
+    input.sink.saveSecrets(catalogName, secret, { replace: false });
   }
   if (input.fromUrl) stripAttachOptionsFromUrl();
   const all = { ...options, ...input.sessionOptions };
@@ -179,28 +208,27 @@ export function finalizeConnection(
 /** Store expressions the engine evaluated (structured from now on), and drop
  *  the raw text they came from. */
 export function persistEvaluatedOptions(
-  serviceUrl: string,
+  sink: OptionSink,
   catalogName: string,
   values: Record<string, string>,
   specs: readonly OptionSpecInfo[] | undefined,
 ): void {
-  const recent = getRecentService(serviceUrl);
   const { plain, secret } = partitionSecrets(values, specs);
-  saveRecentService(serviceUrl, catalogName, { options: { ...(recent?.options ?? {}), ...plain }, rawOptions: "" });
-  if (Object.keys(secret).length) saveSecrets(serviceUrl, catalogName, secret);
+  sink.save(catalogName, { options: { ...sink.stored().options, ...plain }, rawOptions: "" });
+  if (Object.keys(secret).length) sink.saveSecrets(catalogName, secret);
 }
 
-/** Save options entered in the options form: non-secret values to the recent
- *  list, secrets to the secret store (replacing that catalog's set), and the
- *  raw-text remainder as pending text. */
+/** Save options entered in the options form: non-secret values to the
+ *  workspace catalog, secrets to the secret store (replacing that catalog's
+ *  set), and the raw-text remainder as pending text. */
 export function saveFormOptions(
-  serviceUrl: string,
+  sink: OptionSink,
   catalogName: string,
   options: Record<string, string>,
   rawOptions: string,
   specs: readonly OptionSpecInfo[] | undefined,
 ): void {
   const { plain, secret } = partitionSecrets(options, specs);
-  saveRecentService(serviceUrl, catalogName, { options: plain, rawOptions });
-  saveSecrets(serviceUrl, catalogName, secret, { replace: true });
+  sink.save(catalogName, { options: plain, rawOptions });
+  sink.saveSecrets(catalogName, secret, { replace: true });
 }

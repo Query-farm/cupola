@@ -29,6 +29,7 @@ import { engine } from "./shell-bridge";
 import { readRows, esc } from "./duckdb-query";
 import { decodeOptionSpecs } from "./attach/specs";
 import type { OptionSpecInfo } from "./attach/options";
+import { isRecoverableAuthError } from "./auth-errors";
 
 /** Column info extracted from a TableInfo's serialized Arrow schema. */
 export interface ColumnInfo {
@@ -293,6 +294,27 @@ export async function fetchCatalogSpecs(serviceUrl: string): Promise<{ catalogNa
   } catch (error) {
     console.warn("[service] could not read attach option specs:", error instanceof Error ? error.message : error);
     return null;
+  } finally {
+    client?.close();
+  }
+}
+
+/** Every catalog a service lists, with its declared attach options: the
+ *  picker's "Attach a catalog…" form and its Test connection. A failure is
+ *  returned, not thrown, with whether signing in would help. */
+export async function fetchServiceCatalogs(serviceUrl: string): Promise<
+  | { ok: true; catalogs: { name: string; specs: OptionSpecInfo[] }[] }
+  | { ok: false; error: string; signInRequired: boolean }
+> {
+  let client: VgiClient | null = null;
+  try {
+    const token = await getAuthTokenForService(serviceUrl);
+    client = new VgiClient(httpConnect(serviceUrl, { authorization: token ? `Bearer ${token}` : undefined }));
+    const infos = await client.catalogsInfo();
+    return { ok: true, catalogs: infos.map((info) => ({ name: info.name, specs: decodeOptionSpecs(info.attach_option_specs) })) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: message, signInRequired: isRecoverableAuthError(message) };
   } finally {
     client?.close();
   }
