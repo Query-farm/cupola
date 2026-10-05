@@ -39,6 +39,7 @@ import { RightDock, useDockState } from "./RightDock";
 import { ConfirmCloseQueryDialog, type PendingClose } from "./ConfirmCloseQueryDialog";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { HistoryPanel } from "./HistoryPanel";
+import { deleteTabRevisions, recordRevision, type RevisionKind, type RunOutcome } from "@/lib/editor/tab-revisions";
 import { Inspector } from "@/components/inspector/Inspector";
 import { parseSelection, type Selection } from "@/lib/tree";
 import { callablesForSelection, type Callable } from "@/lib/callable";
@@ -190,9 +191,10 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   }, [docState, persist]);
 
   const closeTab = useCallback((id: string) => {
+    deleteTabRevisions(serviceUrl, id);
     persist(removeDoc(docStateRef.current, id));
     setResults((prev) => { const { [id]: _drop, ...rest } = prev; return rest; });
-  }, [persist]);
+  }, [persist, serviceUrl]);
 
   // Closing a tab deletes its query, so one with SQL in it asks first.
   const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
@@ -221,10 +223,12 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   const runSql = useCallback(async (sql: string, docId: string) => {
     const trimmed = sql.trim();
     if (!trimmed) return;
-    // The tab's whole text as it ran, for the History panel's per-tab view.
+    // The tab's whole text as it ran: a revision of the tab once the run ends.
     const docText = (docId === docStateRef.current.activeId ? editorRef.current?.getDoc() : undefined)
       ?? docStateRef.current.docs.find((d) => d.id === docId)?.sql ?? trimmed;
-    const tab = { docId, ...(docText.trim() !== trimmed ? { docSql: docText } : {}) };
+    const tab = { docId };
+    const statement = docText.trim() !== trimmed ? trimmed : undefined;
+    const ran = (outcome: RunOutcome) => recordRevision(serviceUrl, docId, docText, "run", { statement, outcome });
     const myRun = ++runIdRef.current;
     const previous = activeRunRef.current;
     if (previous) {
@@ -264,9 +268,11 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       if (controller.signal.aborted) {
         setActiveResult(docId, { running: false, cancelled: true, error: null, table: null });
         recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: Math.round(performance.now() - t0), success: false, error: "Query cancelled" });
+        ran({ success: false, error: "Query cancelled", ms: Math.round(performance.now() - t0) });
         return;
       }
       setActiveResult(docId, { running: false, error: e instanceof Error ? e.message : String(e) });
+      ran({ success: false, error: e instanceof Error ? e.message : String(e), ms: Math.round(performance.now() - t0) });
       return;
     }
     release();
@@ -276,6 +282,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     if (!res.ok) {
       setActiveResult(docId, { running: false, error: res.error || "Query failed", ok: false, table: null });
       recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: false, error: res.error });
+      ran({ success: false, error: res.error || "Query failed", ms: elapsedMs });
       maybeSelectError(res.error);
       return;
     }
@@ -285,6 +292,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     if (isEmpty) {
       setActiveResult(docId, { running: false, error: null, ok: true, table: null, rowCount: 0, elapsedMs });
       recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true });
+      ran({ success: true, ms: elapsedMs });
       return;
     }
     const table = decodeArrowBuffer(buf);
@@ -294,13 +302,15 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     if (isCount) {
       setActiveResult(docId, { running: false, error: null, ok: true, table: null, rowCount: 0, elapsedMs });
       recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true });
+      ran({ success: true, ms: elapsedMs });
       return;
     }
     setActiveResult(docId, {
       running: false, error: null, ok: true, table, sourceSql: trimmed, rowCount: table.numRows, elapsedMs,
     });
     recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true, rowCount: table.numRows });
-  }, [setActiveResult]);
+    ran({ success: true, rowCount: table.numRows, ms: elapsedMs });
+  }, [setActiveResult, serviceUrl]);
 
   /** Best-effort: if a DuckDB error names a character offset, select it. */
   const maybeSelectError = useCallback((errMsg?: string) => {
@@ -352,6 +362,17 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   }, []);
 
   // ---- toolbar actions ----------------------------------------------------
+  // A whole-buffer change (Ask AI applying SQL, Restore, Format) snapshots the
+  // text it replaces and the text it leaves, so neither exists only in undo.
+  const replacingBuffer = useCallback((kind: RevisionKind, change: () => void) => {
+    const ed = editorRef.current;
+    const id = docStateRef.current.activeId;
+    if (!ed || !id) { change(); return; }
+    recordRevision(serviceUrl, id, ed.getDoc(), "edit");
+    change();
+    recordRevision(serviceUrl, id, ed.getDoc(), kind);
+  }, [serviceUrl]);
+
   const handleFormat = useCallback(() => {
     const ed = editorRef.current;
     if (!ed) return;
@@ -363,12 +384,15 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
         ed.insertAtCursor(formatSql(sel, { language: "duckdb", keywordCase: "upper", tabWidth: 2 }));
       } else {
         const doc = ed.getDoc();
-        if (doc.trim()) ed.setDoc(formatSql(doc, { language: "duckdb", keywordCase: "upper", tabWidth: 2 }));
+        if (doc.trim()) {
+          const formatted = formatSql(doc, { language: "duckdb", keywordCase: "upper", tabWidth: 2 });
+          replacingBuffer("format", () => ed.setDoc(formatted));
+        }
       }
     } catch {
       // sql-formatter throws on unparseable input — leave the text untouched.
     }
-  }, []);
+  }, [replacingBuffer]);
 
   const handleExport = useCallback(async (fmt: ExportFormat) => {
     const table = activeResult.table;
@@ -556,11 +580,11 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   // Apply-back actions handed to the AI panel (it lives inside this component,
   // so it calls our editor handlers directly).
   const aiApply = useMemo<SqlApplyActions>(() => ({
-    replaceStatement: applyReplaceStatement,
-    replaceDocument: applyReplaceDocument,
-    insertAtCursor: applyInsertAtCursor,
+    replaceStatement: (sql) => replacingBuffer("ai", () => applyReplaceStatement(sql)),
+    replaceDocument: (sql) => replacingBuffer("ai", () => applyReplaceDocument(sql)),
+    insertAtCursor: (sql) => replacingBuffer("ai", () => applyInsertAtCursor(sql)),
     openInNewTab: (sql: string) => ui.openInEditor?.(sql),
-  }), [applyReplaceStatement, applyReplaceDocument, applyInsertAtCursor]);
+  }), [applyReplaceStatement, applyReplaceDocument, applyInsertAtCursor, replacingBuffer]);
 
   // Vertical split resize between the editor and results panes. Clamp so each
   // keeps at least ~120px; persist the fraction on release.
@@ -714,7 +738,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
               serviceUrl={serviceUrl}
               activeDocId={activeDoc?.id ?? null}
               onOpen={openInNewTab}
-              onRestore={(sql) => { applyReplaceDocument(sql); editorRef.current?.focus(); }}
+              onRestore={(sql) => { replacingBuffer("restore", () => applyReplaceDocument(sql)); editorRef.current?.focus(); }}
             />
           }
           ai={
