@@ -36,6 +36,7 @@ import { EditorToolbar } from "./EditorToolbar";
 import { EditorResultsPane, emptyResult, type ResultState } from "./EditorResultsPane";
 import { EditorAiPanel } from "./EditorAiPanel";
 import { RightDock, useDockState } from "./RightDock";
+import { ConfirmCloseQueryDialog, type PendingClose } from "./ConfirmCloseQueryDialog";
 import { Inspector } from "@/components/inspector/Inspector";
 import { parseSelection, type Selection } from "@/lib/tree";
 import { callablesForSelection, type Callable } from "@/lib/callable";
@@ -186,10 +187,21 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     persist(addDoc(docState, sql));
   }, [docState, persist]);
 
-  const handleCloseTab = useCallback((id: string) => {
-    persist(removeDoc(docState, id));
+  const closeTab = useCallback((id: string) => {
+    persist(removeDoc(docStateRef.current, id));
     setResults((prev) => { const { [id]: _drop, ...rest } = prev; return rest; });
-  }, [docState, persist]);
+  }, [persist]);
+
+  // Closing a tab deletes its query, so one with SQL in it asks first.
+  const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
+  const handleCloseTab = useCallback((id: string) => {
+    const doc = docState.docs.find((d) => d.id === id);
+    if (!doc) return;
+    // The active tab's text is in CodeMirror; the stored copy lags by the save debounce.
+    const sql = id === docState.activeId && editorRef.current ? editorRef.current.getDoc() : doc.sql;
+    if (!sql.trim()) { closeTab(id); return; }
+    setPendingClose({ id, name: doc.name, sql });
+  }, [docState, closeTab]);
 
   const handleRename = useCallback((id: string, name: string) => {
     persist(renameDoc(docState, id, name));
@@ -588,6 +600,11 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-background" data-testid="sql-editor-view">
+      <ConfirmCloseQueryDialog
+        pending={pendingClose}
+        onCancel={() => setPendingClose(null)}
+        onConfirm={(id) => { setPendingClose(null); closeTab(id); }}
+      />
       <SqlEditorTabs
         docs={docState.docs}
         activeId={activeId}
