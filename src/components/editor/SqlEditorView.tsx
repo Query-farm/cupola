@@ -38,6 +38,7 @@ import { EditorAiPanel } from "./EditorAiPanel";
 import { openPopout, updateLatest } from "@/lib/editor/result-popout";
 import type { SqlApplyActions } from "./EditorSqlToolCallBlock";
 import { buildShareQueryUrl } from "@/lib/share-query";
+import { EDITOR_DOCS_REQUEST_EVENT, EDITOR_DOCS_REWRITE_EVENT, rewriteEditorState, type EditorDocsRequest, type EditorDocsRewrite } from "@/lib/workspace/alias-rename";
 import { promoteToReport } from "@/lib/reports/events";
 
 /** SQL pushed into the editor from outside. Always lands in a new tab, which
@@ -156,6 +157,35 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       window.removeEventListener("pagehide", flush);
       document.removeEventListener("visibilitychange", flush);
       flush();
+    };
+  }, [storageScope]);
+
+  // A catalog alias rename (AliasRenameDialog) reads and rewrites this
+  // workspace's tabs through here, so a pending debounced save can't undo it.
+  useEffect(() => {
+    const onRequest = (event: Event) => {
+      const detail = (event as CustomEvent<EditorDocsRequest>).detail;
+      if (detail.scope === storageScope) detail.docs = docStateRef.current.docs;
+    };
+    const onRewrite = (event: Event) => {
+      const detail = (event as CustomEvent<EditorDocsRewrite>).detail;
+      if (detail.scope !== storageScope) return;
+      detail.handled = true;
+      const { state: next, count } = rewriteEditorState(docStateRef.current, detail.from, detail.to);
+      detail.count = count;
+      if (!count) return;
+      if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+      docStateRef.current = next;
+      setDocState(next);
+      saveEditorState(next, storageScope);
+      const activeSql = next.docs.find((d) => d.id === next.activeId)?.sql;
+      if (activeSql !== undefined && editorRef.current && editorRef.current.getDoc() !== activeSql) editorRef.current.setDoc(activeSql);
+    };
+    window.addEventListener(EDITOR_DOCS_REQUEST_EVENT, onRequest);
+    window.addEventListener(EDITOR_DOCS_REWRITE_EVENT, onRewrite);
+    return () => {
+      window.removeEventListener(EDITOR_DOCS_REQUEST_EVENT, onRequest);
+      window.removeEventListener(EDITOR_DOCS_REWRITE_EVENT, onRewrite);
     };
   }, [storageScope]);
 

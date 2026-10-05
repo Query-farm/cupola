@@ -5,3 +5,11 @@
  *  `href` is the report's URL, for a workspace that hasn't mounted yet to read on its first render. */
 export const OPEN_REPORT_EVENT = 'cupola:open-report';
 export interface OpenReportDetail { serviceUrl: string; workspaceId?: string; id?: string; href: string }
+
+/** A saved report's URL in this tab's workspace (or, without an id, the saved-reports list), as the
+ *  sidebar links it: `?local_ws=` when the tab names a workspace, else `?service=`. */
+export function reportHref(serviceUrl: string, id?: string): string {
+  const base = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/reports`;
+  const localWs = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('local_ws');
+  return `${base}${id ? '' : '/saved'}?${new URLSearchParams({ ...(localWs ? { local_ws: localWs } : { service: serviceUrl }), ...(id ? { evidence_report: id } : {}) })}`;
+}

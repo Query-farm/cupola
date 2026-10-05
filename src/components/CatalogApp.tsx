@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, useSyncExternalStore
 import { fetchCatalogSpecs, type CatalogData } from "@/lib/service";
 import { quoteIdent } from "@/lib/duckdb-query";
 import { useMediaQuery } from "@/lib/use-media-query";
-import { OPEN_REPORT_EVENT, type OpenReportDetail } from "@/lib/evidence/open-report";
+import { OPEN_REPORT_EVENT, reportHref, type OpenReportDetail } from "@/lib/evidence/open-report";
 import {
   getServiceUrl,
   hasExplicitService,
@@ -115,6 +115,11 @@ import { OPEN_ATTACH_EVENT, type PickerCatalog, type WorkspaceActions } from "./
 import type { AttachRequest } from "./workspace/AttachCatalogForm";
 import { CatalogOptionsDialog, type OptionsEditTarget } from "./workspace/CatalogOptionsDialog";
 import { CatalogChip, ChipStack } from "./workspace/CatalogChip";
+import { AliasRenameHost, renameCatalogAliasInStore } from "./workspace/AliasRenameDialog";
+import { CommandPalette } from "./CommandPalette";
+import { buildPaletteCommands, type PaletteCommand } from "@/lib/command-palette";
+import { onAliasRenameRequested, openAttachCatalog } from "@/lib/workspace/events";
+import { listEvidenceReports } from "@/lib/evidence/reports";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -1043,6 +1048,24 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     });
   }, [workspace, moveToStoredUrl, dropEntry, addEntries]);
 
+  /** Rename a catalog's alias (the alias-rename dialog's last step): the store, then, when it is
+   *  this tab's workspace, detach it and attach it again under the new name. DuckDB cannot rename
+   *  an attached database. The default stays the default. */
+  const renameAlias = useCallback(async (wsId: string, catalogId: string, alias: string): Promise<string | null> => {
+    const error = renameCatalogAliasInStore(wsId, catalogId, alias);
+    if (error || !workspace || wsId !== workspace.id) return error;
+    moveToStoredUrl();
+    const entry = entriesRef.current.find((e) => e.catalog.id === catalogId);
+    if (!entry) return null; // disabled: attaches under the new name when enabled
+    const request = requestedDefaultRef.current;
+    const wasDefault = Boolean(request && request.alias === aliasOf(entry));
+    await dropEntry(catalogId, "removed");
+    if (wasDefault) requestedDefaultRef.current = { alias, schema: request?.schema ?? null };
+    const renamed = getWorkspace(wsId)?.catalogs.find((c) => c.id === catalogId);
+    if (renamed?.enabled) addEntries([renamed]);
+    return null;
+  }, [workspace, moveToStoredUrl, dropEntry, addEntries]);
+
   const setEnabled = useCallback((id: string, enabled: boolean) => {
     if (!workspace) return;
     setCatalogEnabled(workspace.id, id, enabled);
@@ -1454,9 +1477,44 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     };
   });
 
+  // ⌘K: built when the palette opens, from this moment's catalogs, workspaces and reports.
+  const paletteCommands = (): PaletteCommand[] => {
+    let reports: { id: string; title: string }[] = [];
+    try { reports = listEvidenceReports(workspaceId || serviceUrl).map((r) => ({ id: r.id, title: r.title })); } catch { /* None listed. */ }
+    return buildPaletteCommands({
+      workspaces: listWorkspaces().map((w) => ({ id: w.id, label: workspaceLabel(w), current: w.id === workspaceId, catalogCount: w.catalogs.length })),
+      catalogs: pickerCatalogs.map((c) => ({ id: c.id, alias: c.alias, host: hostOf(c.url), state: c.state, enabled: c.enabled, isDefault: c.isDefault })),
+      reports,
+      actions: {
+        switchWorkspace: workspaceActions.switchTo,
+        attachCatalog: () => openAttachCatalog(),
+        signIn: workspaceActions.signIn,
+        retry: workspaceActions.retry,
+        makeDefault: workspaceActions.makeDefault,
+        renameCatalog: (id) => {
+          const c = storedWorkspace?.catalogs.find((x) => x.id === id);
+          if (c && workspaceId) onAliasRenameRequested(workspaceId, id, c.alias, c.alias);
+        },
+        // phase3-wire: open WorkspaceManager (the picker's handler until the manager lands).
+        manageWorkspaces: workspaceActions.manage,
+        openReport: (id) => {
+          window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId: workspaceId || undefined, id, href: reportHref(serviceUrl, id) } }));
+        },
+        shareWorkspaceLink: async () => {
+          const { url, omitted } = await workspaceActions.shareLink();
+          if (!url) return "This workspace has nothing to share yet.";
+          try { await navigator.clipboard.writeText(url); } catch { return `Could not copy the link: ${url}`; }
+          return omitted.length ? `Workspace link copied. Not included (enter them in the other browser): ${omitted.join(", ")}.` : "Workspace link copied.";
+        },
+      },
+    });
+  };
+
   return (
     <SettingsProvider>
     <div className="flex flex-col h-dvh">
+      <CommandPalette getCommands={paletteCommands} />
+      <AliasRenameHost onRename={renameAlias} />
       <Header
         workspace={{ id: workspaceId, name: storedWorkspace?.name ?? null }}
         catalogs={pickerCatalogs}

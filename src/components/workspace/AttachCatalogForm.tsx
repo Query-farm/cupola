@@ -45,18 +45,22 @@ export function AttachCatalogForm({
   takenAliases,
   onAttach,
   onCancel,
+  initial,
 }: {
   takenAliases: readonly string[];
+  /** Start with this URL (and alias), ticking only `catalogName` when the service lists several:
+   *  a report's Attach for a catalog it reads. Read on mount; key the form to change it. */
+  initial?: { url: string; catalogName?: string; alias?: string };
   /** Resolves with an error to show, or null once attached. */
   onAttach: (requests: AttachRequest[]) => Promise<string | null>;
   onCancel: () => void;
 }) {
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(initial?.url ?? "");
   const [discovery, setDiscovery] = useState<Discovery>({ state: "idle" });
   const [tested, setTested] = useState(false);
   const [ticked, setTicked] = useState<Set<string>>(new Set());
-  const [alias, setAlias] = useState("");
-  const [aliasEdited, setAliasEdited] = useState(false);
+  const [alias, setAlias] = useState(initial?.alias ?? "");
+  const [aliasEdited, setAliasEdited] = useState(Boolean(initial?.alias));
   const [values, setValues] = useState<Record<string, Record<string, string>>>({});
   const [raws, setRaws] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<string[]>([]);
@@ -69,7 +73,8 @@ export function AttachCatalogForm({
     if (which !== url.trim()) return found;
     if (found.ok) {
       setDiscovery({ state: "ok", catalogs: found.catalogs });
-      setTicked(new Set(found.catalogs.map((c) => c.name)));
+      const wanted = initial?.catalogName && found.catalogs.find((c) => c.name.toLowerCase() === initial.catalogName!.toLowerCase());
+      setTicked(new Set(wanted ? [wanted.name] : found.catalogs.map((c) => c.name)));
     } else {
       setDiscovery({ state: "error", error: found.error, signInRequired: found.signInRequired });
     }
