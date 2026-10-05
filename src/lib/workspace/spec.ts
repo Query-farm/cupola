@@ -14,7 +14,8 @@
  * A portable workspace carries **no secrets**. The validator drops any option
  * whose name looks like a credential (it cannot know the server's specs), and
  * reports it, rather than letting a link plant a credential in someone's
- * session. Option values are DuckDB text, as in `lib/attach/options.ts`, and
+ * session. A catalog may list its secret options' NAMES (`secrets`), never
+ * their values, so an import can say what to enter (`file.ts`). Option values are DuckDB text, as in `lib/attach/options.ts`, and
  * go through the same quoting builder; names must be plain identifiers.
  *
  * Pure: unit-tested in tests/unit/workspace.test.ts.
@@ -37,6 +38,10 @@ export interface PortableCatalog {
   alias?: string;
   /** Option name → DuckDB text of the value. Never secrets. */
   options?: Record<string, string>;
+  /** Names (never values) of the secret options the catalog takes, so an
+   *  import can say which values to enter. Workspace files and scripts carry
+   *  them; a value is never part of the portable record. */
+  secrets?: string[];
   target?: string;
   dataVersionSpec?: string;
 }
@@ -89,9 +94,11 @@ export interface ActiveWorkspace {
   notes: string[];
 }
 
-const SERVICE_URL = /^(?:https?|grainlift(?:\+(?:https?|iroh))?):\/\/\S+$/i;
+/** Exported for the JSON Schema test (`public/schema/workspace-v1.json`). */
+export const SERVICE_URL = /^(?:https?|grainlift(?:\+(?:https?|iroh))?):\/\/\S+$/i;
 const GRAINLIFT = /^grainlift(?:\+(?:https?|iroh))?:\/\//i;
-const MAX_TEXT = 2048;
+export const MAX_TEXT = 2048;
+export const MAX_CATALOG_NAME = 255;
 
 export type ValidationResult =
   | { ok: true; file: PortableWorkspaceFile; warnings: string[] }
@@ -143,7 +150,7 @@ export function validateWorkspaceFile(value: unknown): ValidationResult {
         continue;
       }
       const catalogName = typeof rawCatalog.catalogName === "string" ? rawCatalog.catalogName.trim() : "";
-      if (!catalogName || catalogName.length > 255) {
+      if (!catalogName || catalogName.length > MAX_CATALOG_NAME) {
         errors.push(`${label}: "catalogName" is required.`);
         continue;
       }
@@ -177,13 +184,37 @@ export function validateWorkspaceFile(value: unknown): ValidationResult {
           if (Object.keys(options).length) catalog.options = options;
         }
       }
+      if (rawCatalog.secrets !== undefined && rawCatalog.secrets !== null) {
+        if (!Array.isArray(rawCatalog.secrets)) {
+          errors.push(`${label}: "secrets" must be a list of option names.`);
+        } else {
+          const names: string[] = [];
+          for (const name of rawCatalog.secrets) {
+            if (typeof name !== "string" || !OPTION_NAME_RE.test(name)) {
+              warnings.push(`${label}: secret ${JSON.stringify(name)} is not a valid option name and was dropped.`);
+              continue;
+            }
+            if (names.some((n) => n.toLowerCase() === name.toLowerCase())) continue;
+            names.push(name);
+            // A secret's value is never portable, whatever its name.
+            for (const key of Object.keys(catalog.options ?? {})) {
+              if (key.toLowerCase() !== name.toLowerCase()) continue;
+              delete catalog.options![key];
+              warnings.push(`${label}: option "${key}" is secret, so its value was dropped; enter it in this browser instead.`);
+            }
+          }
+          if (catalog.options && !Object.keys(catalog.options).length) delete catalog.options;
+          if (names.length) catalog.secrets = names;
+        }
+      }
       catalogs.push(catalog);
     }
     if (errors.length) return { ok: false, error: errors.join(" ") };
     const workspace: PortableWorkspace = { catalogs };
     const id = optionalText(raw.id, `${where}id`, errors);
     if (id) workspace.id = id;
-    if (typeof raw.name === "string" && raw.name.trim()) workspace.name = raw.name.trim().slice(0, 200);
+    if (raw.name !== undefined && raw.name !== null && typeof raw.name !== "string") errors.push(`${where}"name" must be text.`);
+    else if (typeof raw.name === "string" && raw.name.trim()) workspace.name = raw.name.trim().slice(0, 200);
     const defaultCatalogId = optionalText(raw.defaultCatalogId, `${where}defaultCatalogId`, errors);
     if (defaultCatalogId) workspace.defaultCatalogId = defaultCatalogId;
     const defaultSchema = optionalText(raw.defaultSchema, `${where}defaultSchema`, errors);

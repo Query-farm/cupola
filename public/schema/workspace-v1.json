@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cupola.query-farm.services/schema/workspace-v1.json",
+  "title": "Cupola workspace file",
+  "description": "One or more Cupola workspaces: the catalogs each attaches, their aliases and non-secret ATTACH options. The same JSON a #ws= link carries. Never holds a secret value, or personal state (colour, enabled, sidebar expansion). Cupola's importer (src/lib/workspace/spec.ts) also trims surrounding whitespace, drops options and secret names it cannot use with a warning, and ignores unknown keys; this schema describes a file it accepts as written.",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "workspaces"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "format": {
+      "const": "cupola-workspaces"
+    },
+    "version": {
+      "const": 1
+    },
+    "workspaces": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/workspace"
+      }
+    }
+  },
+  "$defs": {
+    "workspace": {
+      "type": "object",
+      "required": [
+        "catalogs"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048,
+          "description": "Stable id. An import with the same id updates (replaces) that workspace, or is kept as a copy."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Display name. Untitled when absent."
+        },
+        "defaultCatalogId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048,
+          "description": "The id (or alias) of the catalog that gets USE. Default: the first."
+        },
+        "defaultSchema": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048,
+          "description": "The schema USE selects in the default catalog."
+        },
+        "catalogs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/catalog"
+          }
+        }
+      }
+    },
+    "catalog": {
+      "type": "object",
+      "required": [
+        "url",
+        "catalogName"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048,
+          "description": "Stable within the workspace."
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(?:[hH][tT][tT][pP][sS]?|[gG][rR][aA][iI][nN][lL][iI][fF][tT](?:\\+(?:[hH][tT][tT][pP][sS]?|[iI][rR][oO][hH]))?):\\/\\/\\S+$",
+          "description": "VGI server (http/https) or Grainlift gateway (grainlift://, grainlift+https://, grainlift+http://, grainlift+iroh://) URL."
+        },
+        "catalogName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "\\S",
+          "description": "The catalog's name on the server."
+        },
+        "alias": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048,
+          "description": "The DuckDB database name the catalog is attached as. Assigned from catalogName when absent."
+        },
+        "options": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "ATTACH option name to the DuckDB text form of its value. Never a secret: names that read like credentials are refused.",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "not": {
+              "pattern": "([kK][eE][yY]|[tT][oO][kK][eE][nN]|[sS][eE][cC][rR][eE][tT]|[pP][aA][sS][sS][wW][oO][rR][dD]|[pP][aA][sS][sS][wW][dD]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL]|[aA][uU][tT][hH])"
+            }
+          },
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        },
+        "secrets": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "description": "Names (never values) of the secret options the catalog takes; an import asks for their values."
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048,
+          "description": "Grainlift: the gateway's server-side target."
+        },
+        "dataVersionSpec": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048,
+          "description": "Pinned data version (data_version_spec)."
+        }
+      }
+    }
+  }
+}
