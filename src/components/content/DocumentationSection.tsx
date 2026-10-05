@@ -10,23 +10,10 @@ import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 interface Props {
   markdown: string;
   defaultOpen?: boolean;
-  /** Always open, with a plain heading (the editor's narrow Inspector). */
-  collapsible?: boolean;
 }
 
-export function DocumentationSection({ markdown, defaultOpen = true, collapsible = true }: Props) {
+export function DocumentationSection({ markdown, defaultOpen = true }: Props) {
   const [open, setOpen] = useState(defaultOpen);
-
-  if (!collapsible) {
-    return (
-      <div className="mb-4">
-        <h3 className="mt-4 mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Documentation</h3>
-        <div className="text-sm">
-          <ChatMarkdown content={markdown} />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="mb-4">

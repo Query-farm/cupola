@@ -188,6 +188,37 @@ test.describe("Sidebar in the query editor", () => {
     });
   });
 
+  test("a view's SQL definition is available on request, and sections are ruled off", async ({ page }) => {
+    await page.waitForFunction(() => typeof (window as any).__bridge?.refreshMemoryTables === "function", null, { timeout: T_SHELL_BOOT });
+    const created = await page.evaluate(async () => {
+      const bridge = (window as any).__bridge;
+      const r = await bridge.query("CREATE OR REPLACE VIEW memory.main.pw_inspect_view AS SELECT 1 AS answer, 'x' AS label");
+      await bridge.refreshMemoryTables();
+      return r.ok ? null : r.error;
+    });
+    expect(created).toBeNull();
+    try {
+      await page.evaluate(() => localStorage.removeItem("cupola.inspector.view-sql-open"));
+      await (await reveal(page, "pw_inspect_view")).click();
+      const inspector = page.getByTestId("editor-inspector");
+      await expect(inspector.getByRole("heading", { name: /Columns/ })).toBeVisible({ timeout: T_NORMAL });
+
+      // Collapsed by default; opening shows the definition and is remembered.
+      const sql = page.getByTestId("inspector-view-sql");
+      await expect(sql).toBeVisible();
+      await expect(sql.locator("pre")).toHaveCount(0);
+      await page.getByTestId("inspector-view-sql-toggle").click();
+      await expect(sql.locator("pre")).toContainText("answer");
+      expect(await page.evaluate(() => localStorage.getItem("cupola.inspector.view-sql-open"))).toBe("1");
+    } finally {
+      await page.evaluate(async () => {
+        const bridge = (window as any).__bridge;
+        await bridge.query("DROP VIEW IF EXISTS memory.main.pw_inspect_view");
+        await bridge.refreshMemoryTables();
+      });
+    }
+  });
+
   test("Ask AI and the Inspector share one panel", async ({ page }) => {
     await page.getByTestId("editor-ask-ai").click();
     await expect(page.getByTestId("editor-ai-panel")).toBeVisible();

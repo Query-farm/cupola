@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { SqlCodeBlock } from "./SqlCodeBlock";
 import * as Accordion from "@radix-ui/react-accordion";
 import { terminal, ui } from "@/lib/shell-bridge";
+import { displaySql } from "@/lib/sql/display-sql";
 
-interface ExampleQuery {
+export interface ExampleQuery {
   name?: string | null;
   description?: string | null;
   sql: string;
@@ -21,6 +22,8 @@ interface Props {
   defaultSql?: string;
   /** Whether the shell can be opened to run queries. */
   onOpenShell?: () => void;
+  /** Draw the "Example Queries" heading (off when the host titles the section). */
+  heading?: boolean;
 }
 
 function parseExampleQueries(json: string): ExampleQuery[] | null {
@@ -44,8 +47,11 @@ function parseExampleQueries(json: string): ExampleQuery[] | null {
 function QueryBlock({ query, onOpenShell }: { query: ExampleQuery; index: number; onOpenShell?: () => void }) {
   const [copied, setCopied] = useState(false);
 
+  // What the block shows, line breaks included, is what Copy and Run hand on.
+  const sql = displaySql(query.sql);
+
   const handleCopy = () => {
-    navigator.clipboard.writeText(query.sql);
+    navigator.clipboard.writeText(sql);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -55,12 +61,12 @@ function QueryBlock({ query, onOpenShell }: { query: ExampleQuery; index: number
     // query without the terminal-paste setTimeout race). Fall back to the
     // xterm shell if the editor surface isn't available.
     if (ui.openInEditor) {
-      ui.openInEditor(query.sql);
+      ui.openInEditor(sql);
       return;
     }
     terminal.activate?.();
     setTimeout(() => {
-      terminal.runQuery?.(query.sql);
+      terminal.runQuery?.(sql);
     }, 150);
   };
 
@@ -95,7 +101,9 @@ function QueryBlock({ query, onOpenShell }: { query: ExampleQuery; index: number
   );
 }
 
-export function ExampleQueries({ exampleQueriesJson, queries: queriesProp, defaultSql, onOpenShell }: Props) {
+/** The examples an object offers: structured ones first, then the
+ *  `vgi.example_queries` tag's, deduplicated by SQL. */
+export function collectExampleQueries(exampleQueriesJson?: string | null, queriesProp?: ExampleQuery[], defaultSql?: string): ExampleQuery[] {
   const fromTag = exampleQueriesJson ? parseExampleQueries(exampleQueriesJson) : null;
   const fromProp = queriesProp && queriesProp.length > 0 ? queriesProp : null;
   // Merge with prop-supplied examples first (they're typically the structured
@@ -109,20 +117,20 @@ export function ExampleQueries({ exampleQueriesJson, queries: queriesProp, defau
     seen.add(q.sql);
     merged.push(q);
   }
-  const queries: ExampleQuery[] =
-    merged.length > 0
-      ? merged
-      : defaultSql ? [{ sql: defaultSql }] : [];
+  return merged.length > 0 ? merged : defaultSql ? [{ sql: defaultSql }] : [];
+}
 
+export function ExampleQueries({ exampleQueriesJson, queries: queriesProp, defaultSql, onOpenShell, heading = true }: Props) {
+  const queries = collectExampleQueries(exampleQueriesJson, queriesProp, defaultSql);
   if (queries.length === 0) return null;
 
   return (
     <>
-      <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mt-6 mb-2">
+      {heading && <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mt-6 mb-2">
         {queries.length === 1 ? "Example Query" : "Example Queries"}
         {queries.length > 1 && <span className="ml-2 text-xs font-normal text-muted-foreground/60">({queries.length})</span>}
-      </h2>
-      <Accordion.Root type="multiple" className="mb-6">
+      </h2>}
+      <Accordion.Root type="multiple" className={heading ? "mb-6" : undefined}>
         {queries.map((q, i) => {
           const title = q.name || q.description || `Query ${i + 1}`;
           const subtitle = q.name && q.description ? q.description : null;

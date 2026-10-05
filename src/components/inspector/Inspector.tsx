@@ -5,7 +5,7 @@
  * editor rather than on the catalog page.
  */
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, ExternalLink, Key, Pin, PinOff, Search, SquareFunction, Table2, Eye, Braces, TerminalSquare } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, Key, Pin, PinOff, Search, SquareFunction, Table2, Eye, Braces, TerminalSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCatalogInventory } from "@/lib/use-catalog-inventory";
@@ -20,8 +20,12 @@ import type { FunctionInfo } from "@/lib/vgi-catalog-types";
 import type { ProfileData } from "@/lib/column-profiler";
 import { sqlIdentifier } from "@/lib/editor/call-snippet";
 import { ColumnTypeBadge } from "@/components/content/ColumnTypeBadge";
-import { DocumentationSection } from "@/components/content/DocumentationSection";
-import { ExampleQueries } from "@/components/content/ExampleQueries";
+import { ExampleQueries, collectExampleQueries, type ExampleQuery } from "@/components/content/ExampleQueries";
+import { SqlCodeBlock } from "@/components/content/SqlCodeBlock";
+import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
+import { stripLeadingNameHeading } from "@/lib/doc-markdown";
+import { displaySql } from "@/lib/sql/display-sql";
+import type { ViewInfo } from "@/lib/vgi-catalog-types";
 import { ColumnProfile } from "@/components/content/ColumnProfile";
 import { SignatureView, callableKindLabel } from "./SignatureView";
 
@@ -41,8 +45,88 @@ export interface InspectorProps {
 
 const ICONS = { function: SquareFunction, macro: Braces, table: Table2, view: Eye } as const;
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h3 className="mt-4 mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{children}</h3>;
+function readOpen(key: string | undefined, fallback: boolean): boolean {
+  if (!key) return fallback;
+  try { const v = localStorage.getItem(key); return v === null ? fallback : v === "1"; } catch { return fallback; }
+}
+
+/** One titled part of the Inspector, ruled off from the one above. A
+ *  collapsible section can remember whether the reader left it open. */
+function Section({ title, count, actions, collapsible = false, defaultOpen = true, storageKey, testId, children }: {
+  title: string;
+  count?: number;
+  actions?: React.ReactNode;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  storageKey?: string;
+  testId?: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(() => !collapsible || readOpen(storageKey, defaultOpen));
+  const toggle = () => setOpen((o) => {
+    if (storageKey) { try { localStorage.setItem(storageKey, o ? "0" : "1"); } catch {} }
+    return !o;
+  });
+  const label = (
+    <>
+      {title}
+      {count !== undefined && <span className="text-xs font-normal text-muted-foreground">{count}</span>}
+    </>
+  );
+  return (
+    <section className="mt-5 border-t border-border pt-4" data-testid={testId}>
+      <div className="mb-2.5 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-foreground">
+          {collapsible ? (
+            <button onClick={toggle} aria-expanded={open} className="flex items-center gap-1.5 hover:text-primary" data-testid={testId && `${testId}-toggle`}>
+              {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+              {label}
+            </button>
+          ) : (
+            <span className="flex items-center gap-2">{label}</span>
+          )}
+        </h3>
+        {actions && <div className="ml-auto flex items-center gap-1">{actions}</div>}
+      </div>
+      {open && children}
+    </section>
+  );
+}
+
+/** `vgi.doc_md`, less a leading heading that only repeats the object's name,
+ *  which the Inspector's own header already shows. */
+function DocsSection({ markdown, name }: { markdown: string; name: string }) {
+  const body = useMemo(() => stripLeadingNameHeading(markdown, name), [markdown, name]);
+  if (!body.trim()) return null;
+  return (
+    <Section title="Documentation" testId="inspector-docs">
+      <div className="text-sm"><ChatMarkdown content={body} /></div>
+    </Section>
+  );
+}
+
+function ExamplesSection({ json, queries }: { json?: string | null; queries: ExampleQuery[] }) {
+  const all = collectExampleQueries(json, queries);
+  if (all.length === 0) return null;
+  return (
+    <Section title="Example queries" count={all.length} testId="inspector-examples">
+      <ExampleQueries queries={all} onOpenShell={() => {}} heading={false} />
+    </Section>
+  );
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      className="rounded p-1 text-muted-foreground hover:text-foreground"
+      title={label}
+      aria-label={label}
+      onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
+    >
+      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
 }
 
 export function Inspector({ target, pinned, onTogglePin, onOpenFullPage, onInsertText, onInsertCallable, onInsertRelation }: InspectorProps) {
@@ -139,11 +223,10 @@ function CallableSection({ callables, onInsertText, onInsertCallable }: {
         <TerminalSquare className="h-3.5 w-3.5" /> Insert call
       </Button>
       {c.description && <p className="mt-3 text-sm text-foreground/90 whitespace-pre-wrap" data-testid="inspector-summary">{c.description}</p>}
-      {c.docMd && <DocumentationSection markdown={c.docMd} collapsible={false} />}
+      {c.docMd && <DocsSection markdown={c.docMd} name={c.name} />}
 
       {c.args.length > 0 && (
-        <>
-          <SectionTitle>Arguments</SectionTitle>
+        <Section title="Arguments" count={c.args.length}>
           <ul className="space-y-2" data-testid="inspector-args">
             {c.args.map((a) => (
               <li key={a.name} className="rounded-md border border-border px-2.5 py-1.5 text-xs">
@@ -176,29 +259,26 @@ function CallableSection({ callables, onInsertText, onInsertCallable }: {
               </li>
             ))}
           </ul>
-        </>
+        </Section>
       )}
 
       {c.ret.columns.length > 0 && (c.isTable ? (
-        <>
-          <SectionTitle>Returns</SectionTitle>
+        <Section title="Returns" count={c.ret.columns.length}>
           <ColumnList columns={c.ret.columns} onInsertText={onInsertText} />
-        </>
+        </Section>
       ) : (
-        <>
-          <SectionTitle>Returns</SectionTitle>
+        <Section title="Returns">
           <ColumnTypeBadge type={c.ret.columns[0].duckdbType} />
-        </>
+        </Section>
       ))}
 
       {c.kind === "macro" && "definition" in c.source && c.source.definition && (
-        <>
-          <SectionTitle>Definition</SectionTitle>
-          <pre className="overflow-x-auto rounded-md bg-muted/60 px-2.5 py-2 font-mono text-[11px] whitespace-pre-wrap break-words">{c.source.definition}</pre>
-        </>
+        <Section title="Definition" actions={<CopyButton text={displaySql(c.source.definition)} label="Copy definition" />}>
+          <div className="rounded-md bg-muted/60 px-2.5 py-2"><SqlCodeBlock query={c.source.definition} /></div>
+        </Section>
       )}
 
-      <ExampleQueries exampleQueriesJson={c.source.tags?.[TAG_EXAMPLE_QUERIES]} queries={examples} onOpenShell={() => {}} />
+      <ExamplesSection json={c.source.tags?.[TAG_EXAMPLE_QUERIES]} queries={examples} />
     </div>
   );
 }
@@ -293,6 +373,7 @@ function RelationSection({ relation, onInsertText, onInsertRelation }: {
   }, [relation]);
   const columns = relation.columns.length > 0 ? relation.columns : viewColumns ?? [];
   const dotted = [relation.catalog, relation.schema, relation.name].map(sqlIdentifier).join(".");
+  const viewDefinition = relation.kind === "view" ? ((relation.source as ViewInfo).definition || "").trim() : "";
 
   return (
     <div data-testid="inspector-relation">
@@ -303,23 +384,30 @@ function RelationSection({ relation, onInsertText, onInsertRelation }: {
         <TerminalSquare className="h-3.5 w-3.5" /> Insert {relation.kind}
       </Button>
       {relation.description && <p className="mt-3 text-sm text-foreground/90 whitespace-pre-wrap" data-testid="inspector-summary">{relation.description}</p>}
-      {relation.docMd && <DocumentationSection markdown={relation.docMd} collapsible={false} />}
+      {relation.docMd && <DocsSection markdown={relation.docMd} name={relation.name} />}
       {columns.length > 0 && (
-        <>
-          <SectionTitle>Columns</SectionTitle>
+        <Section title="Columns" count={columns.length}>
           <ColumnList
             columns={columns}
             primaryKey={relation.primaryKey}
             onInsertText={onInsertText}
             profile={relation.kind === "table" ? { catalog: relation.catalog, schema: relation.schema, table: relation.name } : undefined}
           />
-        </>
+        </Section>
       )}
-      <ExampleQueries
-        exampleQueriesJson={relation.source.tags?.[TAG_EXAMPLE_QUERIES]}
-        queries={parseExecutableExamples(relation.source.tags ?? {})}
-        onOpenShell={() => {}}
-      />
+      {viewDefinition && (
+        <Section
+          title="SQL definition"
+          collapsible
+          defaultOpen={false}
+          storageKey="cupola.inspector.view-sql-open"
+          testId="inspector-view-sql"
+          actions={<CopyButton text={displaySql(viewDefinition)} label="Copy view SQL" />}
+        >
+          <div className="rounded-md bg-muted/60 px-2.5 py-2"><SqlCodeBlock query={viewDefinition} /></div>
+        </Section>
+      )}
+      <ExamplesSection json={relation.source.tags?.[TAG_EXAMPLE_QUERIES]} queries={parseExecutableExamples(relation.source.tags ?? {})} />
     </div>
   );
 }
