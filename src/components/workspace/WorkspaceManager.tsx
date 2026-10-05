@@ -51,6 +51,7 @@ import {
 } from "@/lib/workspace/manager";
 import { confirmAliasRename, type AliasRenameHandler } from "@/lib/workspace/alias-rename-confirm";
 import { cn } from "@/lib/utils";
+import { WorkspaceFileActions } from "./WorkspaceFileActions";
 
 /** The running engine's side of the open workspace. Every action here also
  *  writes the store, so the manager calls these *instead of* the store for
@@ -177,7 +178,11 @@ export function WorkspaceManager({ open, onClose, currentWorkspaceId, initialWor
           </section>
         </div>
         <div className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/40 px-4 py-2.5" data-testid="workspace-manager-footer">
-          {/* phase3-wire: WorkspaceFileActions */}
+          <WorkspaceFileActions
+            workspaces={workspaces}
+            selectedWorkspaceId={selected?.id}
+            onImported={(ids) => { if (ids[0]) setSelectedId(ids[0]); }}
+          />
           <span className="flex-1" />
           <Button variant="outline" onClick={onClose}>Done</Button>
         </div>

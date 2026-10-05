@@ -116,6 +116,7 @@ import type { AttachRequest } from "./workspace/AttachCatalogForm";
 import { CatalogOptionsDialog, type OptionsEditTarget } from "./workspace/CatalogOptionsDialog";
 import { WorkspaceManager, type LiveWorkspaceHooks } from "./workspace/WorkspaceManager";
 import { CatalogChip, ChipStack } from "./workspace/CatalogChip";
+import { WorkspaceFileActions } from "./workspace/WorkspaceFileActions";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -2475,15 +2476,23 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
           <ConnectForm />
         </div>
 
-        {named.length > 0 && (
+        {named.length > 0 ? (
           <div className="mb-6" data-testid="welcome-workspaces">
-            <div className="flex items-baseline justify-between gap-2 mb-2">
+            <div className="flex items-center justify-between gap-2 mb-2">
               <h2 className="text-sm font-semibold text-foreground">Workspaces</h2>
-              <button type="button" className="text-xs text-primary underline-offset-4 hover:underline" onClick={() => setManagerOpen(true)} data-testid="welcome-manage-workspaces">
-                Manage workspaces…
-              </button>
+              <div className="flex items-center gap-3">
+                <WorkspaceFileActions workspaces={workspaces} />
+                <button type="button" className="text-xs text-primary underline-offset-4 hover:underline" onClick={() => setManagerOpen(true)} data-testid="welcome-manage-workspaces">
+                  Manage workspaces…
+                </button>
+              </div>
             </div>
             <WorkspaceCards workspaces={named} />
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-2 mb-6 text-sm text-muted-foreground">
+            <span>Have a workspace file or DuckDB script?</span>
+            <WorkspaceFileActions workspaces={workspaces} />
           </div>
         )}
         {named.length === 0 && returning && (
