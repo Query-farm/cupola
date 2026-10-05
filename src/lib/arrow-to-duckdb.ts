@@ -62,12 +62,16 @@ function mapTypeString(s: string): string {
   }
   if (s.startsWith("Timestamp<")) {
     const tz = s.includes(",");
-    if (s.includes("SECOND")) return tz ? "TIMESTAMPTZ" : "TIMESTAMP_S";
-    if (s.includes("MILLISECOND")) return tz ? "TIMESTAMPTZ" : "TIMESTAMP_MS";
-    if (s.includes("NANOSECOND")) return tz ? "TIMESTAMPTZ" : "TIMESTAMP_NS";
-    return tz ? "TIMESTAMPTZ" : "TIMESTAMP";
+    // Match the unit as a whole word: "MICROSECOND".includes("SECOND") is
+    // true, which once mapped every microsecond timestamp to TIMESTAMP_S.
+    const unit = /^Timestamp<([A-Z]+)/.exec(s)?.[1];
+    if (tz) return "TIMESTAMPTZ";
+    if (unit === "SECOND") return "TIMESTAMP_S";
+    if (unit === "MILLISECOND") return "TIMESTAMP_MS";
+    if (unit === "NANOSECOND") return "TIMESTAMP_NS";
+    return "TIMESTAMP";
   }
-  if (s.startsWith("Duration<")) {
+  if (s.startsWith("Duration<") || s.startsWith("Interval<")) {
     return "INTERVAL";
   }
   if (s.startsWith("Time32<")) return "TIME";
@@ -131,6 +135,45 @@ function mapTypeString(s: string): string {
 
   // Fall through — return as-is (already readable enough)
   return s;
+}
+
+/**
+ * The DuckDB type to CAST a value to, in DuckDB's own syntax, or null when the
+ * Arrow type has no castable equivalent. The display form above writes a
+ * struct as `STRUCT<{a: BIGINT}>`, which reads well but is not SQL; this
+ * writes `STRUCT(a BIGINT)`. Field names that are not plain identifiers give
+ * null rather than a quoted name, so the result is always safe to splice
+ * after `AS` (attach-option validation does exactly that).
+ */
+export function arrowTypeToDuckDBCast(type: DataType): string | null {
+  return castSyntax(arrowTypeToDuckDB(type));
+}
+
+function castSyntax(display: string): string | null {
+  const list = /^(.*)\[\]$/.exec(display);
+  if (list) {
+    const inner = castSyntax(list[1]);
+    return inner ? `${inner}[]` : null;
+  }
+  if (display.startsWith("STRUCT<{") && display.endsWith("}>")) {
+    const fields = parseStructBody(display.slice("STRUCT<".length, -1));
+    if (!fields) return null;
+    const parts: string[] = [];
+    for (const f of fields) {
+      const t = castSyntax(f.type);
+      if (!t || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(f.name)) return null;
+      parts.push(`${f.name} ${t}`);
+    }
+    return `STRUCT(${parts.join(", ")})`;
+  }
+  const map = /^MAP\((.*)\)$/.exec(display);
+  if (map) {
+    const kv = splitTopLevel(map[1]);
+    if (kv.length !== 2) return null;
+    const [k, v] = kv.map(castSyntax);
+    return k && v ? `MAP(${k}, ${v})` : null;
+  }
+  return /^[A-Z][A-Z0-9_]*(?:\(\d+(?:,\s*\d+)?\))?$/.test(display) ? display : null;
 }
 
 /**

@@ -51,6 +51,9 @@ if (import.meta.env.PROD) {
     },
     // Navigation/fetch/xhr breadcrumbs carry URLs that beforeSend never sees.
     beforeBreadcrumb(breadcrumb) {
+      // Console breadcrumbs carry log lines verbatim, e.g. an ATTACH error
+      // that quotes an option value.
+      if (typeof breadcrumb.message === "string") breadcrumb.message = scrubText(breadcrumb.message);
       const data = breadcrumb.data;
       if (data) {
         for (const key of ["url", "from", "to"] as const) {
@@ -95,6 +98,11 @@ function scrubAuth(event: ScrubbableEvent): void {
   // e.g. captured OAuth/auth errors. beforeSend never sees these otherwise.
   if (typeof event.message === "string") {
     event.message = scrubText(event.message);
+  }
+  if (event.extra) {
+    for (const [key, value] of Object.entries(event.extra)) {
+      if (typeof value === "string") event.extra[key] = scrubText(value);
+    }
   }
   if (event.exception?.values) {
     for (const value of event.exception.values) {
