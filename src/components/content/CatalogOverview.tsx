@@ -80,7 +80,7 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, attachSpec
           switcher in the top-right, which shows the same name/email and owns
           sign-in and sign-out — so this was a second, read-only copy of it
           halfway down the page. */}
-      {serviceUrl && <ConnectBox catalogName={catalog.catalogName} serviceUrl={serviceUrl} attachOptions={attachOptions} attachSpecs={attachSpecs} />}
+      {serviceUrl && <ConnectBox catalogName={catalog.catalogName} serverCatalogName={catalog.serverCatalogName} serviceUrl={serviceUrl} attachOptions={attachOptions} attachSpecs={attachSpecs} />}
 
       {catalog.schemas.length > 0 && (
         <>

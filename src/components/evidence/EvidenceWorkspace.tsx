@@ -280,7 +280,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     const url = new URL(window.location.href);
     url.pathname = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/reports${showLibrary ? '/saved' : ''}`;
     url.searchParams.delete('evidence_view');
-    url.searchParams.set('service', serviceUrl);
+    // A workspace tab names its catalogs with `?local_ws=`, which wins over `?service=`.
+    if (!url.searchParams.has('local_ws')) url.searchParams.set('service', serviceUrl);
     if (id !== url.searchParams.get('evidence_report')) for (const key of [...url.searchParams.keys()]) if (key.startsWith(PARAMETER_URL_PREFIX)) url.searchParams.delete(key);
     if (id) url.searchParams.set('evidence_report', id); else url.searchParams.delete('evidence_report');
     window.history[replace ? 'replaceState' : 'pushState']({}, '', url);

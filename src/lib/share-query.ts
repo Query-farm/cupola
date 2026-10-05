@@ -92,6 +92,10 @@ export interface ShareQueryLinkOptions {
   attachOptions?: string;
   /** Pinned catalog data version, if the author had one. */
   dataVersionSpec?: string;
+  /** A workspace's `#ws=` token (lib/workspace/codec.ts). Goes in the
+   *  fragment beside the SQL, in place of `?service=`, so the recipient
+   *  attaches the same catalog set. */
+  workspaceToken?: string;
   /** `true` forces `sql_z`, `false` forces `sql`. Default: compress only when
    *  the plain encoding exceeds AUTO_COMPRESS_THRESHOLD. */
   compress?: boolean;
@@ -151,6 +155,7 @@ export async function buildShareQueryUrl(opts: ShareQueryLinkOptions): Promise<s
     try { compressed = await compressSql(sql); } catch { compressed = null; }
   }
   const fragment = new URLSearchParams();
+  if (opts.workspaceToken) fragment.set("ws", opts.workspaceToken);
   if (compressed !== null) fragment.set(SQL_Z_PARAM, compressed);
   else fragment.set(SQL_PARAM, sql);
 

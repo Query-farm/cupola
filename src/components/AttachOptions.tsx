@@ -19,6 +19,7 @@ import {
 import { fieldKind, fieldPlaceholder } from "@/lib/attach/form";
 import type { OptionSpecInfo } from "@/lib/attach/options";
 import type { LegacyEntry, OptionProblem } from "@/lib/attach/legacy-options";
+import type { ActiveWorkspace } from "@/lib/workspace/spec";
 import { probeService, statusFromError, type AttachErrorDetail, type ServiceProbe } from "@/lib/attach/error-detail";
 
 const inputClass =
@@ -127,6 +128,54 @@ export function ConsentPanel({
   );
 }
 
+/** Shown before a workspace link attaches anything: which servers it
+ *  connects to, under which names, with which options. A link can name any
+ *  URL, and attaching sends this browser's requests (and stored credentials
+ *  for that server) there, so the reader agrees first. */
+export function CatalogsConsentPanel({
+  workspace,
+  onAnswer,
+}: { workspace: ActiveWorkspace; onAnswer: (granted: boolean) => void }) {
+  const count = workspace.catalogs.length;
+  return (
+    <div className="bg-card rounded-xl ring-1 ring-foreground/10 p-5 max-w-xl w-full" data-testid="workspace-consent">
+      <h1 className="font-heading text-lg font-semibold text-foreground mb-2">
+        This link wants to attach {count === 1 ? "1 catalog" : `${count} catalogs`}
+      </h1>
+      <p className="text-sm text-muted-foreground mb-3">
+        {workspace.name ? <>Workspace <span className="font-medium text-foreground">{workspace.name}</span>. </> : null}
+        Cupola connects to each server below from this browser. Links never carry secrets; any a server needs are asked for here.
+      </p>
+      <ul className="mb-3 space-y-2" aria-label="Catalogs to attach">
+        {workspace.catalogs.map((c) => (
+          <li key={c.id} className="text-xs rounded-md bg-muted px-2.5 py-1.5">
+            <div className="font-mono font-semibold text-foreground break-all">
+              {c.alias}
+              {c.alias !== c.catalogName && <span className="font-normal text-muted-foreground"> (catalog {c.catalogName})</span>}
+              {c.id === workspace.defaultCatalogId && <span className="ml-1.5 font-sans font-normal text-muted-foreground">default</span>}
+            </div>
+            <div className="font-mono text-muted-foreground break-all">{c.url}</div>
+            {Object.keys(c.options).length > 0 && (
+              <div className="font-mono text-muted-foreground break-all">
+                {Object.entries(c.options).map(([k, v]) => `${k} = ${v}`).join(", ")}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      {workspace.notes.length > 0 && (
+        <ul className="mb-3 space-y-0.5 text-xs text-muted-foreground list-disc pl-4">
+          {workspace.notes.map((n) => <li key={n}>{n}</li>)}
+        </ul>
+      )}
+      <div className="flex flex-wrap gap-2 justify-end">
+        <Button variant="outline" onClick={() => onAnswer(false)}>Don't attach</Button>
+        <Button onClick={() => onAnswer(true)}>Attach {count === 1 ? "catalog" : `${count} catalogs`}</Button>
+      </div>
+    </div>
+  );
+}
+
 /** Lists options that were not used. */
 export function OptionsNoticeDialog({ problems, onClose }: { problems: OptionProblem[]; onClose: () => void }) {
   return (
@@ -175,7 +224,7 @@ export function AttachErrorDialog({
   const [copied, setCopied] = useState<string | null>(null);
   useEffect(() => {
     setProbe(null);
-    if (!detail?.ran) return;
+    if (!detail?.ran && detail?.stage !== "fetch") return;
     let live = true;
     void probeService(detail.serviceUrl).then((p) => { if (live) setProbe(p); });
     return () => { live = false; };
@@ -197,9 +246,11 @@ export function AttachErrorDialog({
         <DialogHeader>
           <DialogTitle>{detail?.title ?? "Connection failed"}</DialogTitle>
           <DialogDescription>
-            {detail?.ran
-              ? "DuckDB rejected the ATTACH statement. This is usually a missing, misspelled or mistyped connection option."
-              : "Cupola checked the connection options before attaching and did not run the ATTACH."}
+            {detail?.stage === "fetch"
+              ? "Cupola could not read this catalog from its server, so it was not attached. Check that the server is running and the URL is right."
+              : detail?.ran
+                ? "DuckDB rejected the ATTACH statement. This is usually a missing, misspelled or mistyped connection option."
+                : "Cupola checked the connection options before attaching and did not run the ATTACH."}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
@@ -221,7 +272,7 @@ export function AttachErrorDialog({
               <pre className={preClass} data-testid="attach-error-sql">{detail.sql}</pre>
             </Section>
           )}
-          {detail?.ran && (
+          {(detail?.ran || detail?.stage === "fetch") && (
             <Section title="Server">
               <div className="text-xs space-y-0.5">
                 <div>

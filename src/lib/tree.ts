@@ -111,11 +111,14 @@ export interface BuildTreeOptions {
   refreshing?: boolean;
   /** Override the root node icon (default: Database). */
   rootIcon?: React.ComponentType<{ className?: string }>;
+  /** Trailing content on the root node (a catalog's attach status). Ignored
+   *  when `onRefresh` supplies the root's refresh button. */
+  rootActions?: React.ReactNode;
 }
 
 /** Build the full tree from catalog data. Root node is the catalog. */
 export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = {}): TreeDataItem[] {
-  const { showDuckDBTypes = true, hideTableBackingFunctions = true, hideDollarTables = true, onTableAction, onRefresh, refreshing, rootIcon } = options;
+  const { showDuckDBTypes = true, hideTableBackingFunctions = true, hideDollarTables = true, onTableAction, onRefresh, refreshing, rootIcon, rootActions } = options;
   const sortedSchemas = [...catalog.schemas].sort((a, b) =>
     a.info.name.localeCompare(b.info.name)
   );
@@ -141,7 +144,7 @@ export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = 
         }, React.createElement(refreshing ? Loader2 : RefreshCw, {
           className: `h-3.5 w-3.5${refreshing ? " animate-spin" : ""}`,
         }))
-      : undefined,
+      : rootActions,
   };
   return [root];
 }

@@ -8,7 +8,10 @@ import { buildAttachSql, isSecretOption, type AttachSpec, type OptionSpecInfo } 
 import { quoteIdent, quoteLiteral } from "@/lib/duckdb-query";
 
 interface Props {
+  /** The alias the snippets attach under (what this app's SQL calls it). */
   catalogName: string;
+  /** The catalog's name on the server, when it differs from the alias. */
+  serverCatalogName?: string;
   serviceUrl: string;
   /** Structured attach options. Secret values are never printed: the
    *  snippets read them with `getenv('<ALIAS>_<OPTION>')`. */
@@ -38,7 +41,7 @@ const LANGS: { id: LangId; label: string }[] = [
  * worked here but not when pasted into a fresh client, which is exactly where
  * these snippets get pasted.
  */
-function buildSnippets(catalogName: string, serviceUrl: string, options: Record<string, string>, specs?: OptionSpecInfo[]) {
+function buildSnippets(catalogName: string, serviceUrl: string, options: Record<string, string>, specs?: OptionSpecInfo[], serverCatalogName = catalogName) {
   if (isGrainliftService(serviceUrl)) return buildGrainliftSnippets(catalogName, serviceUrl, options);
   const setting = getVgiExtensionVersionSetting();
   const vgi = shellExtensionsForVgiVersion(setting.error ? undefined : setting.value)
@@ -47,7 +50,7 @@ function buildSnippets(catalogName: string, serviceUrl: string, options: Record<
   // The same builder the engine's ATTACH uses, in its CLI mode: quoted alias
   // and literals, secrets as getenv(), no sign-in credentials (a client signs
   // in by itself).
-  const spec: AttachSpec = { kind: "vgi", url: serviceUrl, catalogName, alias: catalogName, options: withoutSecretValues(options, specs), specs };
+  const spec: AttachSpec = { kind: "vgi", url: serviceUrl, catalogName: serverCatalogName, alias: catalogName, options: withoutSecretValues(options, specs), specs };
   const attach = `${buildAttachSql(spec, "cli")};`;
   // The same statement inside a host-language string literal. The SQL now
   // carries double-quoted identifiers, so the host string is JSON-escaped.
@@ -262,11 +265,11 @@ function CodeLine({ line, lang }: { line: string; lang: LangId }) {
   );
 }
 
-export function ConnectBox({ catalogName, serviceUrl, attachOptions, attachSpecs }: Props) {
+export function ConnectBox({ catalogName, serverCatalogName, serviceUrl, attachOptions, attachSpecs }: Props) {
   const [lang, setLang] = useState<LangId>("duckdb");
   const [copied, setCopied] = useState(false);
 
-  const snippets = buildSnippets(catalogName, serviceUrl, attachOptions ?? {}, attachSpecs);
+  const snippets = buildSnippets(catalogName, serviceUrl, attachOptions ?? {}, attachSpecs, serverCatalogName);
   const source = snippets[lang];
 
   function handleCopy() {

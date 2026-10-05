@@ -16,6 +16,8 @@ interface Props {
 function buildServiceHref(url: string): string {
   const dest = new URL(window.location.href);
   dest.searchParams.set("service", url);
+  // A workspace (`?local_ws=`) would win over `?service=`.
+  dest.searchParams.delete("local_ws");
   // Selection anchors (#/schema/x/table/y) are scoped to the previous
   // catalog and meaningless in the next one.
   dest.hash = "";

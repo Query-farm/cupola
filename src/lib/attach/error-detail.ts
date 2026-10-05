@@ -15,6 +15,9 @@ export interface AttachErrorDetail {
    *  `ran` is false and `sql` is what would have run. */
   problems?: OptionProblem[];
   ran: boolean;
+  /** `fetch`: the server could not be read over RPC, so nothing was attached
+   *  (the panel still probes the service). Absent: the ATTACH itself. */
+  stage?: "fetch";
   /** The ATTACH statement, secrets redacted. */
   sql?: string;
   /** INSTALL/LOAD + ATTACH for the duckdb CLI, secrets as getenv(). */

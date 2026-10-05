@@ -93,6 +93,28 @@ export function readConnectionInput(serviceUrl: string, { grainlift = false } = 
   return input;
 }
 
+/** The options input for one catalog of a workspace link: the link's own
+ *  (non-secret, already DuckDB text) options, its Grainlift target and pinned
+ *  data version. Stored secrets for the same service + catalog are merged in
+ *  by `finalizeConnection`. Nothing here is persisted: workspaces are stored
+ *  in phase 2, and a link never writes the recent-services list. */
+export function workspaceConnectionInput(catalog: {
+  url: string;
+  options: Record<string, string>;
+  target?: string;
+  dataVersionSpec?: string;
+}): ConnectionInput {
+  return {
+    serviceUrl: catalog.url,
+    options: { ...catalog.options, ...(catalog.target ? { target: catalog.target } : {}) },
+    sessionOptions: catalog.dataVersionSpec ? { data_version_spec: catalog.dataVersionSpec } : {},
+    pending: [],
+    needsConsent: [],
+    problems: [],
+    fromUrl: false,
+  };
+}
+
 /** Apply the reader's answer to the consent screen. */
 export function applyConsent(input: ConnectionInput, granted: boolean): ConnectionInput {
   if (granted) {
@@ -129,6 +151,7 @@ export function finalizeConnection(
   input: ConnectionInput,
   catalogName: string,
   specs: readonly OptionSpecInfo[],
+  { persist = hasExplicitService() || input.fromUrl }: { persist?: boolean } = {},
 ): FinalizedConnection {
   const options = { ...secretsFor(input.serviceUrl, catalogName), ...input.options };
   const { plain, secret } = partitionSecrets(options, specs);
@@ -139,7 +162,7 @@ export function finalizeConnection(
     .filter((e) => !isSecretOption(e.name, specs))
     .map((e) => `${e.name} ${e.expr}`)
     .join(", ");
-  if (hasExplicitService() || input.fromUrl) {
+  if (persist) {
     saveRecentService(input.serviceUrl, catalogName, { options: plain, rawOptions });
     saveSecrets(input.serviceUrl, catalogName, secret, { replace: false });
   }

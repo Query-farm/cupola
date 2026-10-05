@@ -1,9 +1,15 @@
 import { expect, test } from 'bun:test';
-import { CatalogInventory, changesCatalog, type AttachedDatabase } from '../../src/lib/catalog-inventory';
+import { CatalogInventory, changesCatalog, type AttachedDatabase, type CatalogConnection } from '../../src/lib/catalog-inventory';
 import type { CatalogData } from '../../src/lib/service';
 
 const db = (name: string, type = 'vgi', id = name): AttachedDatabase => ({ name, type, id });
 const catalog = (name: string, doc = name): CatalogData => ({ catalogName: name, catalogComment: doc, catalogTags: { 'vgi.doc_llm': doc }, schemas: [], defaultSchema: null });
+
+const conn = (sourceUrl: string, catalogName: string, databaseType = 'vgi', extra: Partial<CatalogConnection> = {}): CatalogConnection => ({ sourceUrl, catalogName, databaseType, ...extra });
+/** The single-catalog case: one connection, which is the default. */
+function seedOne(inventory: CatalogInventory, seed: CatalogData, url: string, type = 'vgi') {
+  inventory.setConnections(new Map([[seed.catalogName, conn(url, seed.catalogName, type)]]), seed.catalogName, [seed]);
+}
 
 function fixture() {
   let databases = [db('alpha'), db('memory', 'duckdb'), db('system', 'duckdb'), db('temp', 'duckdb')];
@@ -18,25 +24,25 @@ function fixture() {
 
 test('bootstrap is provisional; every user attachment is discovered with its real type', async () => {
   const f = fixture();
-  f.inventory.seed(catalog('alpha'), 'https://alpha.example');
+  seedOne(f.inventory, catalog('alpha'), 'https://alpha.example');
   expect(f.inventory.getSnapshot().ready).toBe(false);
   f.setDatabases([db('alpha'), db('beta'), db('warehouse', 'ducklake'), db('local', 'duckdb'), db('memory', 'duckdb'), db('system'), db('temp')]);
   await f.inventory.activate();
   const entries = await f.inventory.current();
   expect(entries.map(c => c.catalogName)).toEqual(['alpha', 'beta', 'local', 'memory', 'warehouse']);
   expect(entries.find(c => c.catalogName === 'warehouse')?.databaseType).toBe('ducklake');
-  expect(entries.filter(c => c.primary).map(c => c.catalogName)).toEqual(['alpha']);
+  expect(entries.filter(c => c.isDefault).map(c => c.catalogName)).toEqual(['alpha']);
   expect(entries.find(c => c.catalogName === 'beta')?.sourceUrl).toBeUndefined();
   expect(entries[0].catalogTags['vgi.doc_llm']).toBe('alpha');
 });
 
-test('detaching the primary removes it; reusing its alias does not inherit connection context', async () => {
+test('detaching the default removes it; reusing its alias does not inherit connection context', async () => {
   const f = fixture();
-  f.inventory.seed(catalog('alpha'), 'https://alpha.example');
+  seedOne(f.inventory, catalog('alpha'), 'https://alpha.example');
   await f.inventory.activate();
   f.setDatabases([db('alpha', 'vgi', 'replacement'), db('memory', 'duckdb')]);
   await f.inventory.refresh();
-  expect(f.inventory.getSnapshot().catalogs.find(c => c.catalogName === 'alpha')).toMatchObject({ primary: false, sourceUrl: undefined });
+  expect(f.inventory.getSnapshot().catalogs.find(c => c.catalogName === 'alpha')).toMatchObject({ isDefault: false, sourceUrl: undefined });
   f.setDatabases([db('memory', 'duckdb')]);
   await f.inventory.refresh();
   expect(f.inventory.getSnapshot().catalogs.map(c => c.catalogName)).toEqual(['memory']);
@@ -100,14 +106,58 @@ test('recognizes changes in comments and batches without reacting to quoted SQL 
     expect(changesCatalog(sql)).toBe(false);
 });
 
-test('a Grainlift service seeds its alias and becomes primary once attached as grainlift', async () => {
+test('a Grainlift service seeds its alias and becomes the default once attached as grainlift', async () => {
   const f = fixture();
-  f.inventory.seed(catalog('d1'), 'grainlift+https://gw.example', 'grainlift');
+  seedOne(f.inventory, catalog('d1'), 'grainlift+https://gw.example', 'grainlift');
   f.setDatabases([db('d1', 'grainlift'), db('memory', 'duckdb')]);
   await f.inventory.activate();
-  const [primary] = await f.inventory.current();
-  expect(primary.catalogName).toBe('d1');
-  expect(primary.primary).toBe(true);
-  expect(primary.databaseType).toBe('grainlift');
-  expect(primary.sourceUrl).toBe('grainlift+https://gw.example');
+  const [first] = await f.inventory.current();
+  expect(first.catalogName).toBe('d1');
+  expect(first.isDefault).toBe(true);
+  expect(first.databaseType).toBe('grainlift');
+  expect(first.sourceUrl).toBe('grainlift+https://gw.example');
+});
+
+test('several connections: each keeps its own context, ordered default first then workspace order', async () => {
+  const f = fixture();
+  const connections = new Map([
+    ['sales', conn('https://a.example', 'sales', 'vgi', { attachOptions: { region: 'eu' }, secretOptionNames: ['api_key'], defaultSchema: 'main' })],
+    ['sales_2', conn('https://b.example', 'sales')],
+    ['zeta', conn('https://z.example', 'zeta')],
+  ]);
+  f.inventory.setConnections(connections, 'sales_2', [catalog('sales'), catalog('sales_2')]);
+  expect(f.inventory.getSnapshot().catalogs.map(c => c.catalogName)).toEqual(['sales_2', 'sales']);
+  f.setDatabases([db('aaa', 'duckdb'), db('zeta'), db('sales'), db('sales_2'), db('memory', 'duckdb')]);
+  await f.inventory.activate();
+  const entries = await f.inventory.current();
+  expect(entries.map(c => c.catalogName)).toEqual(['sales_2', 'sales', 'zeta', 'aaa', 'memory']);
+  expect(entries.find(c => c.catalogName === 'sales')).toMatchObject({ sourceUrl: 'https://a.example', serverCatalogName: 'sales', attachOptions: { region: 'eu' }, secretOptionNames: ['api_key'], isDefault: false });
+  expect(entries.find(c => c.catalogName === 'sales_2')).toMatchObject({ sourceUrl: 'https://b.example', serverCatalogName: 'sales', isDefault: true });
+  expect(entries.find(c => c.catalogName === 'aaa')?.sourceUrl).toBeUndefined();
+  f.inventory.setDefault('sales');
+  expect(f.inventory.getSnapshot().catalogs.map(c => c.catalogName)).toEqual(['sales', 'sales_2', 'zeta', 'aaa', 'memory']);
+});
+
+test('a configured catalog attached later (Retry) binds; a manual re-attach of a bound alias does not', async () => {
+  const f = fixture();
+  f.inventory.setConnections(new Map([['a', conn('https://a', 'a')], ['b', conn('https://b', 'b')]]), 'a');
+  f.setDatabases([db('a'), db('memory', 'duckdb')]);
+  await f.inventory.activate();
+  f.setDatabases([db('a'), db('b', 'vgi', 'b-1'), db('memory', 'duckdb')]);
+  await f.inventory.refresh();
+  expect(f.inventory.getSnapshot().catalogs.find(c => c.catalogName === 'b')?.sourceUrl).toBe('https://b');
+  f.setDatabases([db('a'), db('b', 'vgi', 'b-2'), db('memory', 'duckdb')]);
+  await f.inventory.refresh();
+  expect(f.inventory.getSnapshot().catalogs.find(c => c.catalogName === 'b')?.sourceUrl).toBeUndefined();
+  f.inventory.rebind('b');
+  await f.inventory.refresh();
+  expect(f.inventory.getSnapshot().catalogs.find(c => c.catalogName === 'b')?.sourceUrl).toBe('https://b');
+});
+
+test('an attachment of the wrong type under a configured alias gets no context', async () => {
+  const f = fixture();
+  f.inventory.setConnections(new Map([['a', conn('https://a', 'a')]]), 'a');
+  f.setDatabases([db('a', 'duckdb')]);
+  await f.inventory.activate();
+  expect(f.inventory.getSnapshot().catalogs[0]).toMatchObject({ sourceUrl: undefined, isDefault: false });
 });

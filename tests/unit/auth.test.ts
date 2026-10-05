@@ -84,3 +84,19 @@ describe("fragment token cache invalidation", () => {
     expect(getAuthToken()).toBe("aaa");
   });
 });
+
+describe("legacy fragment token is scoped to the ?service= catalog", () => {
+  test("only the named service gets it; a workspace link gives it to none", async () => {
+    const { getAuthTokenForService, setLegacyAuthService } = await import("../../src/lib/auth");
+    try {
+      setLegacyAuthService("http://a.example");
+      currentHash = "#token=aaa";
+      expect(await getAuthTokenForService("http://b.example")).toBeNull();
+      expect(await getAuthTokenForService("http://a.example")).toBe("aaa");
+      setLegacyAuthService(null);
+      expect(await getAuthTokenForService("http://a.example")).toBeNull();
+    } finally {
+      setLegacyAuthService(undefined);
+    }
+  });
+});

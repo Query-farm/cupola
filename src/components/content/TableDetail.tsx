@@ -13,20 +13,24 @@ import { DescriptionSection } from "./DescriptionSection";
 import { ObjectMeta } from "./ObjectMeta";
 import { TableQueryButton } from "./TableQueryButton";
 import { Button } from "@/components/ui/button";
+import { quoteIdent } from "@/lib/duckdb-query";
 
 interface Props {
   table: TableInfo;
   catalogName: string;
+  /** The catalog's DuckDB type. Column statistics come from the VGI
+   *  extension's `vgi_table_statistics()`, so only `vgi` catalogs have them. */
+  databaseType?: string;
   onNavigate?: (selection: Selection) => void;
   onOpenShell?: () => void;
   /** Pivot this table in the Perspective tab (live: DuckDB answers each pivot). */
   onPivot?: () => void;
 }
 
-export function TableDetail({ table, catalogName, onNavigate, onOpenShell, onPivot }: Props) {
+export function TableDetail({ table, catalogName, databaseType = "vgi", onNavigate, onOpenShell, onPivot }: Props) {
   const columns = getColumns(table);
   const foreignKeys = getForeignKeys(table);
-  const defaultSql = `SELECT * FROM ${catalogName}.${table.schema_name}.${table.name} LIMIT 100;`;
+  const defaultSql = `SELECT * FROM ${[catalogName, table.schema_name, table.name].map(quoteIdent).join(".")} LIMIT 100;`;
   const displayTags = useMemo(() => filterDisplayTags(table.tags), [table.tags]);
   const title = getTag(table.tags, TAG_TITLE);
   const docMd = getTag(table.tags, TAG_DOC_MD);
@@ -37,15 +41,20 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, onPiv
   // fetchColumnStats internally awaits engine.attached, so a click that
   // lands before the shell finishes booting is queued, not failed.
   const [columnStats, setColumnStats] = useState<Map<string, ColumnStats> | undefined | null>(undefined);
+  const hasStats = databaseType === "vgi";
   useEffect(() => {
     let cancelled = false;
+    if (!hasStats) {
+      setColumnStats(null);
+      return;
+    }
     setColumnStats(undefined);
     fetchColumnStats(catalogName, table.schema_name, table.name).then(
       (stats) => { if (!cancelled) setColumnStats(stats); },
       () => { if (!cancelled) setColumnStats(null); },
     );
     return () => { cancelled = true; };
-  }, [catalogName, table.schema_name, table.name]);
+  }, [catalogName, table.schema_name, table.name, hasStats]);
 
   // Build constraint lookup sets
   const notNullSet = new Set<number>(table.not_null_constraints);

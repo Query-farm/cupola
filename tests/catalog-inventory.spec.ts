@@ -25,8 +25,8 @@ test.beforeEach(async ({ page }) => {
   await expect.poll(async () => (await inventory(page)).some(c => c.catalogName === 'memory')).toBe(true);
 });
 
-test('editor batches discover native catalogs, schema changes, and primary detach', async ({ page }) => {
-  const primary = (await inventory(page)).find(c => c.primary).catalogName;
+test('editor batches discover native catalogs, schema changes, and default-catalog detach', async ({ page }) => {
+  const defaultCatalog = (await inventory(page)).find(c => c.isDefault).catalogName;
   await openEditor(page);
   await typeInEditor(page, `-- A batch with a final SELECT must still refresh metadata.\nATTACH ':memory:' AS "local data"; CREATE TABLE "local data".main.items(id INTEGER PRIMARY KEY); SELECT 1`);
   await page.locator('.cm-content').press('ControlOrMeta+a');
@@ -37,25 +37,25 @@ test('editor batches discover native catalogs, schema changes, and primary detac
   expect(catalog.metadataError).toBeUndefined();
   expect(catalog.schemas.find((s: any) => s.info.name === 'main').tables[0].primary_key_constraints).toEqual([[0]]);
   expect((await listedCatalogs(page)).find(c => c.catalog === 'local data').type).toBe('duckdb');
-  await shellQuery(page, `USE memory; DETACH "${primary.replaceAll('"', '""')}"`);
-  await expect.poll(async () => (await listedCatalogs(page)).map(c => c.catalog)).not.toContain(primary);
-  await expect(sidebar(page).getByText(primary, { exact: true })).toHaveCount(0);
+  await shellQuery(page, `USE memory; DETACH "${defaultCatalog.replaceAll('"', '""')}"`);
+  await expect.poll(async () => (await listedCatalogs(page)).map(c => c.catalog)).not.toContain(defaultCatalog);
+  await expect(sidebar(page).getByText(defaultCatalog, { exact: true })).toHaveCount(0);
   await shellQuery(page, 'DETACH "local data"');
   await expect(sidebar(page).getByText('local data', { exact: true })).toHaveCount(0);
 });
 
 test('shell attachments preserve VGI metadata and share discovery with reporting and Ask AI', async ({ page }) => {
-  const primary = (await inventory(page)).find(c => c.primary);
+  const defaultCatalog = (await inventory(page)).find(c => c.isDefault);
   await page.getByTestId('tab-shell').click();
-  await page.evaluate(sql => (window as any).__bridge.runQuery(sql), `/* second worker */ ATTACH ${literal(primary.catalogName)} AS second_worker (TYPE vgi, LOCATION ${literal(SERVICE_URL)});`);
+  await page.evaluate(sql => (window as any).__bridge.runQuery(sql), `/* second worker */ ATTACH ${literal(defaultCatalog.catalogName)} AS second_worker (TYPE vgi, LOCATION ${literal(SERVICE_URL)});`);
   await expect(sidebar(page).getByText('second_worker', { exact: true })).toBeVisible({ timeout: 15000 });
   const catalogs = await inventory(page);
   const second = catalogs.find(c => c.catalogName === 'second_worker');
   expect(second.metadataError).toBeUndefined();
-  expect(second.catalogTags).toEqual(primary.catalogTags);
-  expect(second.schemas.map((s: any) => s.info.name)).toEqual(primary.schemas.map((s: any) => s.info.name));
+  expect(second.catalogTags).toEqual(defaultCatalog.catalogTags);
+  expect(second.schemas.map((s: any) => s.info.name)).toEqual(defaultCatalog.schemas.map((s: any) => s.info.name));
   const listed = await listedCatalogs(page);
-  expect(listed.find(c => c.catalog === 'second_worker')).toMatchObject({ type: 'vgi', primary: false });
+  expect(listed.find(c => c.catalog === 'second_worker')).toMatchObject({ type: 'vgi', default: false });
   const askAI = await page.evaluate(async () => {
     const storePath = '/src/lib/catalog-store.ts', aiPath = '/src/lib/ai-agent.ts';
     const { sessionCatalogs } = await import(storePath);

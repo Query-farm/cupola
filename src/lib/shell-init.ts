@@ -13,56 +13,39 @@ import { catalogInventory } from "./catalog-store";
  * once (first call) and reattached to the new container on subsequent calls,
  * so panel/full-screen mode transitions don't tear down the SQL session.
  */
-import * as Sentry from "@sentry/astro";
 import { formatCellValue, safeGetArrowValue } from "./format";
 import { printBoxTable, printLineTable, cellWidth, type TerminalOutput } from "./shell-table-renderer";
 import { handleDotCommand, type ShellState, type ShellIO } from "./shell-commands";
 import { runAIMode, type AIConversationState, type AITerminal, type AIShellOps } from "./shell-ai-mode";
 import { attachInputHandlers, type CompletionItem } from "./shell-input";
 import { engine, terminal, ui, notifyQueryChange, recordQuery, setBootPhase, setEngineLifecycleError } from "./shell-bridge";
-import { quoteLiteral, decodeArrowBuffer } from "./duckdb-query";
-import { buildAttachSql as buildAttachStatement, buildCliScript, partitionSecrets, redactValues, type AttachSpec, type CatalogKind, type OptionSpecInfo } from "./attach/options";
-import { evaluateLegacyEntries, validateOptionValues, type AttachEngine } from "./attach/prepare";
-import type { LegacyEntry, OptionProblem } from "./attach/legacy-options";
-import type { AttachErrorDetail } from "./attach/error-detail";
-import { registerSecretValues, scrubSecretOptions } from "./sentry-scrub";
-import { extensionInstallSql, getEngineInfo, hasExtension, recordExtensionLoaded, shellExtensionsForVgiVersion } from "./duckdb-engine";
+import { quoteLiteral } from "./duckdb-query";
+import { attachAll, type AttachCallbacks, type DefaultRequest, type ShellCatalog } from "./attach/attach-catalog";
+import { extensionInstallSql, recordExtensionLoaded, shellExtensionsForVgiVersion } from "./duckdb-engine";
 import { QueryResultCache } from "./query-results";
-import { isRecoverableAuthError, isUnrecoverableAuthError } from "./auth-errors";
-import { getOAuthMeta, redirectToAuth } from "./auth";
-import { startLoginFlow } from "./oauth-client";
-import { getIrohState } from "./iroh";
-import { grainliftHttpUrl, isGrainliftService } from "./url-params";
 import { ensureDuckDB } from "./duckdb-worker-boot";
 import { getTerminalTheme } from "./theme";
 import { type CatalogData } from "./service";
 import { buildTableSelect, isTableRef } from "./sql/table-select";
 import { getVgiExtensionVersionSetting } from "./url-params";
 
+export type { ShellCatalog } from "./attach/attach-catalog";
+
 export interface ShellConfig {
+  /** The default catalog's service URL (dot commands, `.ai`). */
   serviceUrl: string;
+  /** The default catalog's alias. */
   catalogName: string;
-  token: string | null;
+  /** Every catalog to attach, in workspace order. */
+  catalogs: ShellCatalog[];
+  /** Which catalog (and schema) gets `USE`. */
+  defaultCatalog: DefaultRequest;
   fontSize?: number;
   threadCount?: number;
   catalogData?: CatalogData;
   aiApiKey?: string;
   aiWorkspaceId?: string;
   aiModel?: string;
-  /** The catalog's attach options. Absent: attach with none. */
-  attach?: ShellAttachConfig;
-}
-
-/** One catalog's options, as the shell needs them to ATTACH. */
-export interface ShellAttachConfig {
-  kind: CatalogKind;
-  /** Option name → DuckDB text, secrets included. */
-  options: Record<string, string>;
-  /** Raw expressions still to evaluate (legacy text the user agreed to). */
-  pending: LegacyEntry[];
-  specs: OptionSpecInfo[];
-  /** The server's implementation version, for the error panel. */
-  serverVersion?: string | null;
 }
 
 export interface ShellModules {
@@ -70,13 +53,7 @@ export interface ShellModules {
   Readline: any;
 }
 
-export interface ShellCallbacks {
-  onAuthError?: (title: string, message: string) => void;
-  onAttachError?: (detail: AttachErrorDetail) => void;
-  /** Pending expressions were evaluated: `values` should be stored in
-   *  structured form, `problems` reported (those options were dropped). */
-  onOptionsEvaluated?: (values: Record<string, string>, problems: OptionProblem[]) => void;
-}
+export type ShellCallbacks = Omit<AttachCallbacks, "single" | "log">;
 
 export interface ShellHandle {
   cleanup: () => void;
@@ -89,7 +66,6 @@ export function initShell(
   modules: ShellModules,
   callbacks: ShellCallbacks = {}
 ): ShellHandle {
-  const { onAuthError, onAttachError, onOptionsEvaluated } = callbacks;
   const { tableFromIPC, Readline } = modules;
   const T = (window as any).Terminal;
   const FA = (window as any).FitAddon;
@@ -338,183 +314,6 @@ export function initShell(
     }, 60_000);
   }
 
-  /** The attach spec for this catalog: its options (once evaluated and
-   *  validated) plus whichever credentials the catalog fetch was using.
-   *
-   *  Two auth shapes the frontend supports:
-   *  - SPA / PKCE popup: tokens (incl. refresh) live in sessionStorage.
-   *    `getOAuthMeta` returns {refreshToken, tokenEndpoint, clientId, ...}
-   *    which we forward as `oauth_refresh_token` so the VGI extension can
-   *    refresh on 401 without prompting again.
-   *  - Server-side redirect + cookie / URL fragment: refresh token isn't
-   *    exposed to JS — only the access token is (via the `_vgi_auth` cookie
-   *    or `#token=` fragment). Forward it as `bearer_token` so the extension
-   *    uses it as-is; once the token expires the extension falls back to
-   *    its own PKCE popup, but at least the FIRST ATTACH after sign-in
-   *    doesn't double-prompt the user.
-   *
-   *  `bearer_token` and `oauth_refresh_token` are mutually exclusive per
-   *  the VGI extension (vgi_extension.cpp:701) — refresh wins. The statement
-   *  itself is built by `lib/attach/options.ts`, the same builder the
-   *  ConnectBox snippets and the error panel's CLI script use. */
-  function attachSpec(options: Record<string, string>): AttachSpec {
-    const oauthMeta = getOAuthMeta(config.serviceUrl);
-    return {
-      kind: isGrainliftService(config.serviceUrl) ? "grainlift" : "vgi",
-      url: config.serviceUrl,
-      catalogName: config.catalogName,
-      alias: config.catalogName,
-      options,
-      specs: config.attach?.specs,
-      auth: { bearerToken: config.token, refreshToken: oauthMeta?.refreshToken ?? null },
-    };
-  }
-
-  /** The engine, as attach-option evaluation and validation need it. */
-  function attachEngine(): AttachEngine {
-    const first = (result: { ok: boolean; arrowBuffers?: ArrayBuffer[]; error?: string }): unknown => {
-      if (!result.ok) throw new Error(result.error ?? "query failed");
-      const buf = result.arrowBuffers?.[0];
-      if (!buf) return null;
-      const table = decodeArrowBuffer(buf);
-      return table.numRows ? table.getChildAt(0)?.get(0) ?? null : null;
-    };
-    return {
-      canParse: hasExtension("json"),
-      scalar: async (sql) => first(await engine.query!(sql)),
-      scalarPrepared: async (sql, params) => {
-        if (!engine.queryPrepared) throw new Error("prepared statements unavailable");
-        return first(await engine.queryPrepared(sql, params));
-      },
-    };
-  }
-
-  /** Evaluate pending expressions and check every value before ATTACH.
-   *  Returns the options to attach with, or the problems that stop it. */
-  async function prepareAttachOptions(): Promise<{ options: Record<string, string>; problems: OptionProblem[] }> {
-    const attach = config.attach;
-    if (!attach) return { options: {}, problems: [] };
-    const options = { ...attach.options };
-    registerSecretValues(Object.values(partitionSecrets(options, attach.specs).secret));
-    if (attach.pending.length) {
-      const evaluated = await evaluateLegacyEntries(attach.pending, attachEngine());
-      Object.assign(options, evaluated.values);
-      registerSecretValues(Object.values(partitionSecrets(evaluated.values, attach.specs).secret));
-      onOptionsEvaluated?.(evaluated.values, evaluated.problems);
-    }
-    // Grainlift publishes no specs; its options go to the extension as given.
-    const problems = attach.kind === "vgi" ? await validateOptionValues(options, attach.specs, attachEngine()) : [];
-    return { options, problems };
-  }
-
-  /** Redact every secret this catalog knows of from text bound for the
-   *  screen, a log or Sentry. */
-  function redact(text: string, options: Record<string, string>): string {
-    const secrets = Object.values(partitionSecrets(options, config.attach?.specs).secret);
-    const auth = [config.token, getOAuthMeta(config.serviceUrl)?.refreshToken].filter((v): v is string => Boolean(v));
-    return scrubSecretOptions(redactValues(text, [...secrets, ...auth]));
-  }
-
-  /** The error panel's payload for this catalog. */
-  async function attachErrorDetail(
-    title: string,
-    message: string,
-    spec: AttachSpec,
-    { ran, problems }: { ran: boolean; problems?: OptionProblem[] },
-  ): Promise<AttachErrorDetail> {
-    const setting = getVgiExtensionVersionSetting();
-    const ext = shellExtensionsForVgiVersion(setting.error ? undefined : setting.value).find((e) => e.name === spec.kind);
-    let extensionVersion: string | null = null;
-    try {
-      const v = await attachEngine().scalar(`SELECT extension_version FROM duckdb_extensions() WHERE extension_name = ${quoteLiteral(spec.kind)}`);
-      extensionVersion = v == null ? null : String(v);
-    } catch { /* engine gone */ }
-    return {
-      title,
-      message: redact(message, spec.options),
-      serviceUrl: config.serviceUrl,
-      problems,
-      ran,
-      sql: buildAttachStatement(spec, "redacted"),
-      cliScript: ext ? buildCliScript(spec, extensionInstallSql(ext)) : undefined,
-      versions: {
-        cupola: __APP_VERSION__,
-        duckdb: getEngineInfo().duckdbVersion || undefined,
-        vgiExtension: extensionVersion,
-        server: config.attach?.serverVersion ?? null,
-      },
-    };
-  }
-
-  /** A Grainlift gateway refused us. Over HTTP without a token, sign in
-   *  (Cupola's own PKCE flow against the gateway's OAuth metadata); with a
-   *  token, or over Iroh, explain instead of looping. */
-  function handleGrainliftAuthError(errStr: string, title: string): "surfaced" | "redirected" {
-    if (grainliftHttpUrl(config.serviceUrl) && !config.token) {
-      startLoginFlow(config.serviceUrl).catch((err) => {
-        onAuthError?.(title, `${errStr}\n\nSign-in could not start: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      return "redirected";
-    }
-    const endpointId = getIrohState().endpointId;
-    const hint = grainliftHttpUrl(config.serviceUrl)
-      ? "The gateway rejected this account. Check that it is allowed on the gateway."
-      : endpointId
-        ? `This browser's Iroh endpoint ID is ${endpointId}. Authorize it on the gateway (iroh.principals) and reload.`
-        : "The gateway did not authorize this browser's Iroh endpoint.";
-    onAuthError?.(title, `${errStr}\n\n${hint}`);
-    return "surfaced";
-  }
-
-  /**
-   * Classify an ATTACH error and route it.
-   *
-   * - "surfaced": the error came from the IdP rejecting our credentials
-   *   (token exchange or refresh failed, invalid_grant). Re-running the
-   *   same auth flow would hit the same wall — we show the full error
-   *   in a modal via onAuthError instead.
-   * - "redirected": the error is a recoverable pre-exchange auth state
-   *   (no token yet, bare 401/403). We send the user back through the
-   *   VGI server's auth flow to get fresh credentials. Caller should
-   *   return immediately.
-   * - "unhandled": not auth-related. Caller should fall through to its
-   *   normal error rendering.
-   */
-  function handleAttachError(errStr: string, title: string, spec: AttachSpec): "surfaced" | "redirected" | "unhandled" {
-    // Unrecoverable IdP rejections — the tokens we have are bad and the
-    // front-end can't fix them by retrying. Surface via modal, don't loop.
-    const isUnrecoverable = isUnrecoverableAuthError(errStr);
-    if (isUnrecoverable) {
-      console.log("[shell] Unrecoverable auth error, surfacing to modal:", errStr);
-      Sentry.captureException(new Error(errStr), {
-        tags: { component: "shell", path: "attach", auth_kind: "unrecoverable" },
-        extra: { serviceUrl: config.serviceUrl, title },
-      });
-      onAuthError?.(title, errStr);
-      return "surfaced";
-    }
-    // Recoverable pre-exchange auth state — we need fresh credentials.
-    const isRecoverableAuth = isRecoverableAuthError(errStr);
-    if (isRecoverableAuth && isGrainliftService(config.serviceUrl)) {
-      return handleGrainliftAuthError(errStr, title);
-    }
-    if (isRecoverableAuth) {
-      console.log("[shell] Recoverable auth error, redirecting. config.token:",
-                  config.token ? config.token.substring(0, 20) + "..." : "NONE");
-      redirectToAuth(config.serviceUrl);
-      return "redirected";
-    }
-    // Non-auth ATTACH failure (typically a malformed user-supplied option).
-    // Surface via modal so users notice with the shell minimized; the
-    // terminal also receives the error via the caller's writeln fallback.
-    Sentry.captureException(new Error(redact(errStr, spec.options)), {
-      tags: { component: "shell", path: "attach", auth_kind: "non-auth" },
-      extra: { serviceUrl: config.serviceUrl, title },
-    });
-    void attachErrorDetail(title, errStr, spec, { ran: true }).then((detail) => onAttachError?.(detail));
-    return "unhandled";
-  }
-
   // Runs the post-ready flow (INSTALL vgi + ATTACH + timezone + readLoop).
   // Invoked once AsyncDuckDB.instantiate has resolved and engine.query is live.
   let postReadyInvoked = false;
@@ -637,51 +436,22 @@ export function initShell(
         }),
       ]);
 
-      if (config.serviceUrl && config.catalogName) {
-        writeln(`Connecting to ${config.catalogName}...`, "33");
-        setBootPhase(`Connecting to ${config.catalogName}`, null, "attaching");
-        const prepared = await prepareAttachOptions();
-        const spec = attachSpec(prepared.options);
-        if (prepared.problems.length) {
-          // Report a missing or mistyped option before ATTACH, not as the
-          // server's (or the cast's) error after it.
-          const lines = prepared.problems.map((p) => `${p.name ?? p.text}: ${p.reason}`);
-          console.warn("[shell] ATTACH not run; option problems:", lines);
-          writeln(`Not connecting to ${config.catalogName}: check its connection options.`, "31");
-          for (const line of lines) writeln(`  ${line}`, "31");
-          onAttachError?.(await attachErrorDetail("Connection options need attention", lines.join("\n"), spec, { ran: false, problems: prepared.problems }));
-          engine.markAttached?.();
-          setEngineLifecycleError(`Connection options for ${config.catalogName} need attention.`);
-          return;
-        }
-        const attachSql = buildAttachStatement(spec);
-        console.log("[shell] ATTACH SQL:", buildAttachStatement(spec, "redacted"));
-        console.log("[shell] ATTACH auth:", {
-          refreshToken: spec.auth?.refreshToken ? "<present>" : "missing",
-          bearerToken: spec.auth?.bearerToken && !spec.auth?.refreshToken ? `<present (${spec.auth.bearerToken.length} chars)>` : "skipped",
+      if (config.catalogs.length) {
+        // One at a time; each catalog ends in its own status and a failure
+        // never stops the others or sets the engine's error (attach-catalog.ts).
+        setBootPhase(config.catalogs.length === 1 ? `Connecting to ${config.catalogs[0].alias}` : `Connecting to ${config.catalogs.length} catalogs`, null, "attaching");
+        const statuses = await attachAll(config.catalogs, config.defaultCatalog, {
+          ...callbacks,
+          single: config.catalogs.length === 1,
+          log: writeln,
         });
-        const result = await engine.query!(attachSql);
-        if (result.ok) {
-          await engine.query!(`USE ${config.catalogName}`);
-          writeln(`Connected to ${config.catalogName}`, "32");
-          // Wake up consumers (column stats, data preview) that were awaiting
-          // ATTACH completion. They block on engine.attached so they don't
-          // race the boot-phase exposure of engine.query.
-          engine.markAttached?.();
-        } else {
-          const errStr = result.error ?? "";
-          console.log("[shell] ATTACH failed:", redact(errStr, spec.options));
-          const handled = handleAttachError(errStr, "Attach failed", spec);
-          if (handled === "redirected") return;
-          if (handled !== "surfaced") {
-            writeln(`Attach failed: ${redact(errStr, spec.options)}`, "31");
-          }
-          // Resolve attached even on failure so downstream consumers fail
-          // fast with their own "catalog not found" error instead of hanging.
-          engine.markAttached?.();
-          setEngineLifecycleError(redact(errStr, spec.options) || `Could not connect to ${config.catalogName}.`);
-          return;
-        }
+        // A single catalog redirecting to sign in leaves the page.
+        if (config.catalogs.length === 1 && statuses[0]?.state === "sign-in-required") return;
+        // Wake up consumers (column stats, data preview) that were awaiting
+        // ATTACH completion. They block on engine.attached so they don't race
+        // the boot-phase exposure of engine.query. Resolved even when a
+        // catalog failed, so they fail fast with "catalog not found".
+        engine.markAttached?.();
         writeln("");
       } else {
         // No VGI catalog configured — resolve attached immediately so any
@@ -1037,8 +807,8 @@ export function initShell(
   }
 
   // engine.query and engine.querySync are set by ensureDuckDB once AsyncDuckDB
-  // has instantiated. Only catalogName is shell-config-specific.
-  engine.catalogName = config.catalogName;
+  // has instantiated. engine.catalogName is set once the default catalog has
+  // had its USE (attach-catalog.ts).
 
   if (isNewTerminal) {
     // First initShell call this page load — wait for ensureDuckDB to resolve
@@ -1105,7 +875,6 @@ export function initShell(
       // engine.query stays set — it's owned by ensureDuckDB now, not by the
       // shell, and other components (DataPreview, fetchColumnStats, etc.)
       // depend on it remaining available even when the shell tab is closed.
-      engine.catalogName = null;
       notifyQueryChange();
     },
     insertText,

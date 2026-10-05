@@ -43,6 +43,22 @@ let _cachedOAuthMeta: OAuthMeta | null = null;
 /** True once we've seen a valid token — means this service requires auth. */
 let _hadToken = false;
 
+/** The one service the legacy `#token=` fragment / `_vgi_auth` cookie belongs
+ *  to. A server's auth redirect lands on `?service=<it>#token=…`, so that
+ *  token is that service's and nobody else's: with several catalogs attached,
+ *  handing it to every catalog would send one server's bearer token to the
+ *  others. `undefined` (never set) keeps the old behaviour for pages that do
+ *  not set it; `null` means no catalog gets it (a `#ws=` workspace). */
+let _legacyAuthService: string | null | undefined = undefined;
+
+export function setLegacyAuthService(serviceUrl: string | null | undefined): void {
+  _legacyAuthService = serviceUrl;
+}
+
+function legacyAppliesTo(serviceUrl: string): boolean {
+  return _legacyAuthService === undefined || _legacyAuthService === serviceUrl;
+}
+
 /** Extract and cache the token + OAuth metadata from the URL fragment, then clean the URL. */
 function _extractFragmentToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -138,7 +154,7 @@ export async function getAuthTokenForService(serviceUrl: string): Promise<string
     _hadToken = true;
     return spaToken;
   }
-  return getAuthToken();
+  return legacyAppliesTo(serviceUrl) ? getAuthToken() : null;
 }
 
 /** Synchronous peek: is a SPA-issued token stored for this service? Used by
@@ -148,7 +164,7 @@ export function hasAuthTokenForService(serviceUrl: string): boolean {
     _hadToken = true;
     return true;
   }
-  return !!getAuthToken();
+  return legacyAppliesTo(serviceUrl) && !!getAuthToken();
 }
 
 /** Returns true if we previously had a valid auth token (i.e. this service requires auth). */
@@ -182,6 +198,7 @@ export function getOAuthMeta(serviceUrl?: string): OAuthMeta | null {
       };
     }
   }
+  if (serviceUrl && !legacyAppliesTo(serviceUrl)) return null;
   _extractFragmentToken(); // ensure parsed
   return _cachedOAuthMeta;
 }
@@ -233,7 +250,7 @@ export function getUserInfo(serviceUrl?: string): UserInfo | null {
       candidates.push(stored.access_token);
     }
   }
-  const legacy = getAuthToken();
+  const legacy = !serviceUrl || legacyAppliesTo(serviceUrl) ? getAuthToken() : null;
   if (legacy) candidates.push(legacy);
 
   for (const token of candidates) {

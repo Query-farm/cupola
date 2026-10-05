@@ -20,7 +20,7 @@ interface Props {
 
 export function Breadcrumb({ catalogName, schemaName, itemName, itemType, onNavigate, trailing }: Props) {
   const crumbs: Crumb[] = [
-    { type: "catalog", label: catalogName, selection: { type: "catalog", name: catalogName } },
+    { type: "catalog", label: catalogName, selection: { type: "catalog", name: catalogName, catalog: catalogName } },
   ];
 
   if (schemaName) {

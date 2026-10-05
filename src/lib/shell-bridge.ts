@@ -25,6 +25,7 @@ import type { QueryExecutionOptions } from './query-execution';
 import type { Selection } from "./tree";
 import type { CatalogData } from "./service";
 import type { QueryPivotMode } from "./pivot-source";
+import type { AttachErrorDetail } from "./attach/error-detail";
 
 export interface QueryResult {
   ok: boolean;
@@ -50,6 +51,35 @@ export interface QueryHistoryEntry {
 }
 
 export type QuerySource = "editor" | "shell" | "ask-ai" | "editor-ai" | "shell-ai";
+
+/** Where one configured catalog is in its attach. `failed` and
+ *  `sign-in-required` are per catalog and never set the engine's lifecycle
+ *  error: the engine itself (memory, other catalogs) is fine. */
+export type CatalogAttachState = "connecting" | "attached" | "sign-in-required" | "failed" | "disabled";
+
+export interface CatalogStatus {
+  /** The DuckDB alias: the key. */
+  alias: string;
+  url: string;
+  /** The catalog's name on the server. */
+  catalogName: string;
+  state: CatalogAttachState;
+  /** Why it failed or needs sign-in, secrets redacted. */
+  error?: string;
+  /** The ATTACH statement that ran (or would have), secrets redacted. */
+  sql?: string;
+  /** The error panel's payload, when there is one. */
+  detail?: AttachErrorDetail;
+}
+
+/** Which catalog got `USE`. `requested` is the workspace's default; when it
+ *  did not attach, `alias` is the next catalog that did and `fellBack` says so. */
+export interface DefaultCatalogState {
+  alias: string | null;
+  schema: string | null;
+  requested: string | null;
+  fellBack: boolean;
+}
 
 export type EngineLifecycleStatus = "idle" | "starting" | "attaching" | "ready" | "error";
 
@@ -103,7 +133,13 @@ export const engine = {
    *  only between polls (haybarn-wasm's `getInterruptHandle`, threads builds). */
   interruptsRunningQueries: false,
   progress: null as ((pct: number) => void) | null,
+  /** The default catalog's alias: the one `USE` points at. Null until the
+   *  engine has attached its catalogs, or when none attached. */
   catalogName: null as string | null,
+  /** Per-alias attach status of every configured catalog, in workspace order.
+   *  Written through `setCatalogStatus`; subscribe with `onCatalogStatusChange`. */
+  catalogStatuses: new Map<string, CatalogStatus>(),
+  defaultCatalog: { alias: null, schema: null, requested: null, fellBack: false } as DefaultCatalogState,
   worker: null as Worker | null,
 
   /** Main-thread performance.now() when `new Worker(...)` was called, so
@@ -127,10 +163,12 @@ export const engine = {
    *  setUser effect fires, or vice-versa. */
   sentryUser: null as { id?: string; email?: string; username?: string } | null,
 
-  /** Resolves once the shell has run ATTACH + USE for the active VGI catalog.
-   *  Consumers that depend on the catalog (column stats, data preview) must
-   *  `await engine.attached` before issuing queries. Re-initialized by
-   *  `resetAttached()` on a shell reconnect / catalog switch. */
+  /** Resolves once every configured catalog has settled (attached, failed,
+   *  or needs sign-in) and `USE` has run for the default one. Consumers that
+   *  depend on a catalog (column stats, data preview) must `await
+   *  engine.attached` before issuing queries; a catalog that failed then fails
+   *  their query with its own "catalog not found". Re-initialized by
+   *  `resetAttached()` on a shell reconnect. */
   attached: null as Promise<void> | null,
   markAttached: null as (() => void) | null,
   resetAttached: null as (() => void) | null,
@@ -209,6 +247,36 @@ export function setShellWorkerSentryUser(
   if (engine.worker) {
     engine.worker.postMessage({ type: "set-sentry-user", user });
   }
+}
+
+/** Subscribe to per-catalog status changes (and default-catalog changes).
+ *  Callers read `engine.catalogStatuses` / `engine.defaultCatalog` after each
+ *  fire. */
+const catalogStatusListeners = new Set<() => void>();
+export function onCatalogStatusChange(cb: () => void): () => void {
+  catalogStatusListeners.add(cb);
+  return () => { catalogStatusListeners.delete(cb); };
+}
+export function notifyCatalogStatusChange(): void {
+  for (const cb of catalogStatusListeners) cb();
+}
+/** Record one catalog's status. A new Map each time, so React snapshots of
+ *  it change identity. */
+export function setCatalogStatus(status: CatalogStatus): void {
+  const next = new Map(engine.catalogStatuses);
+  next.set(status.alias, status);
+  engine.catalogStatuses = next;
+  notifyCatalogStatusChange();
+}
+/** Forget every status (a new catalog set is about to load). */
+export function resetCatalogStatuses(order: readonly CatalogStatus[] = []): void {
+  engine.catalogStatuses = new Map(order.map((s) => [s.alias, s]));
+  notifyCatalogStatusChange();
+}
+export function setDefaultCatalogState(state: DefaultCatalogState): void {
+  engine.defaultCatalog = state;
+  engine.catalogName = state.alias;
+  notifyCatalogStatusChange();
 }
 
 /** Subscribe to `engine.query` availability changes. Fires when it is set or cleared. */
@@ -314,6 +382,11 @@ if (typeof window !== "undefined") {
     get cancelQuery() { return engine.cancelQuery; },
     get interruptsRunningQueries() { return engine.interruptsRunningQueries; },
     get catalogName() { return engine.catalogName; },
+    /** Per-alias attach status, as plain objects (no detail payload). */
+    catalogStatuses() {
+      return [...engine.catalogStatuses.values()].map(({ detail: _detail, ...status }) => status);
+    },
+    get defaultCatalog() { return engine.defaultCatalog; },
     get worker() { return engine.worker; },
     get bootPhase() { return engine.bootPhase; },
     get engineStatus() { return engine.lifecycleStatus; },

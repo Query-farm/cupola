@@ -10,7 +10,7 @@
  *     empty vs row-bearing result detection, recording, JSON serialization.
  *     UI side effects (print, navigate, refresh) come in as callbacks.
  *   - describeTableWithFallback: the SQL-fallback path for tables in
- *     secondary-attached catalogs that aren't in the primary CatalogData.
+ *     secondary-attached catalogs that aren't in the default CatalogData.
  *   - validateChartSpec: shape-walk for the render_chart tool that rejects
  *     any external-resource reference (url/href/src) at any nesting depth.
  *
@@ -226,7 +226,7 @@ async function fetchColumnsViaSql(
 /**
  * describe_table that handles tables in secondary-attached or memory
  * catalogs by querying duckdb_columns()/duckdb_tables()/duckdb_constraints()
- * directly. For tables in the primary VGI catalog, delegates to the
+ * directly. For tables in the default VGI catalog, delegates to the
  * shared executeDescribeTable (which uses the already-fetched CatalogData).
  *
  * Views are a special case: the VGI catalog payload (ViewInfo) ships no
@@ -283,7 +283,7 @@ export async function describeTableWithFallback(
   if (!input.catalog) return executeDescribeTable(catalogs, input.schema, input.table);
   const cols = await fetchColumnsViaSql(env, input.catalog, input.schema, input.table);
   if (!cols) {
-    // Fall back to whatever the primary catalog knows (may be empty).
+    // Fall back to whatever the default catalog knows (may be empty).
     return catalogs.length ? executeDescribeTable(catalogs, input.schema, input.table, input.catalog)
                        : JSON.stringify({ error: `Table ${input.schema}.${input.table} not found` });
   }

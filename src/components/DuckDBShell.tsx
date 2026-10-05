@@ -12,7 +12,6 @@ import { getColumns } from "@/lib/service";
 import { treeIdToShellText } from "@/lib/tree";
 import { VgiDuckDBHandler, perspectiveServeMode, runPerspectiveQuery, type PerspectiveServeMode } from "@/lib/perspective-duckdb-handler";
 import { createQueryPivotSource, dropQueryPivotSource, type QueryPivotSource } from "@/lib/pivot-source";
-import { getAuthToken, getAuthTokenForService } from "@/lib/auth";
 import { useSettings } from "@/lib/settings";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
 import { tableFromIPCWithDictionaries } from "@/lib/duckdb-query";
@@ -23,7 +22,8 @@ import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { ShellBootScreen } from "./ShellBootScreen";
 import * as Sentry from "@sentry/astro";
 import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
-import { initShell, type ShellAttachConfig } from "@/lib/shell-init";
+import { initShell, type ShellCatalog } from "@/lib/shell-init";
+import type { DefaultRequest } from "@/lib/attach/attach-catalog";
 import type { AttachErrorDetail } from "@/lib/attach/error-detail";
 import type { OptionProblem } from "@/lib/attach/legacy-options";
 import { describePerspectiveArrowInput } from "@/lib/perspective-diagnostics";
@@ -33,8 +33,14 @@ import type { TableInfo } from "@/lib/vgi-catalog-types";
 
 
 interface Props {
+  /** The default catalog's service URL. */
   serviceUrl: string;
+  /** The default catalog's alias. */
   catalogName: string;
+  /** Every catalog to attach, in workspace order (read once, at boot). */
+  catalogs: ShellCatalog[];
+  /** Which catalog and schema get `USE`. */
+  defaultCatalog: DefaultRequest;
   /** The active top-level tab (controlled by CatalogApp's single tab bar). */
   activeTab: TabId;
   /** Switch the active top-level tab (used by bridge slots). */
@@ -58,16 +64,14 @@ interface Props {
    */
   onAuthError?: (title: string, message: string) => void;
   /**
-   * Called when ATTACH fails for a non-auth reason — typically a malformed
-   * or unrecognized option in the user-supplied connection options. The
-   * parent surfaces this in a modal so users notice even if the shell is
-   * minimized.
+   * Called when a catalog's ATTACH fails for a non-auth reason — typically a
+   * malformed or unrecognized connection option. With a single catalog the
+   * parent opens the error panel at once; with several it is on the
+   * catalog's sidebar entry (attach-catalog.ts).
    */
-  onAttachError?: (detail: AttachErrorDetail) => void;
-  /** The catalog's attach options (structured; see lib/attach/options.ts). */
-  attach?: ShellAttachConfig;
+  onAttachError?: (alias: string, detail: AttachErrorDetail) => void;
   /** Legacy expressions were evaluated before ATTACH (see ShellCallbacks). */
-  onOptionsEvaluated?: (values: Record<string, string>, problems: OptionProblem[]) => void;
+  onOptionsEvaluated?: (alias: string, values: Record<string, string>, problems: OptionProblem[]) => void;
 }
 
 // CDN script URLs (matching public/shell/index.html versions)
@@ -123,7 +127,7 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, onAiBusyChange, onShellReady, catalogData, attachedCatalogs = [], selection, onAuthError, onAttachError, attach, onOptionsEvaluated }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, catalogs, defaultCatalog, activeTab, onTabChange, onAiBusyChange, onShellReady, catalogData, attachedCatalogs = [], selection, onAuthError, onAttachError, onOptionsEvaluated }: Props) {
   const inventory = useCatalogInventory();
   // The parent controls the active tab; expose a local alias so the existing
   // setActiveTab(...) call sites (bridge slots) keep working.
@@ -155,7 +159,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
   const [perspectiveLoading, setPerspectiveLoading] = useState(false);
 
   // Resolve the selected table for the Perspective tab.
-  // Search the primary, every secondary VGI worker, and the memory catalog.
+  // Search the default catalog, every other attached catalog, and memory.
   const allCatalogs = inventory.catalogs;
   function findTable(name?: string, schema?: string, catalog?: string): TableInfo | null {
     if (!name || !schema) return null;
@@ -326,15 +330,12 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         const { Readline } = await import(/* @vite-ignore */ READLINE_CDN);
         if (cancelled || !containerRef.current) return;
 
-        // Use the service-aware async path so we see SPA / sessionStorage
-        // tokens (synchronous `getAuthToken()` only checks the URL fragment
-        // and `_vgi_auth` cookie). For SPA-flow services the fragment is
-        // consumed by an earlier fetchCatalog call and never seen by us.
-        const shellToken = (await getAuthTokenForService(serviceUrl)) ?? getAuthToken();
-        console.log("[shell] Initializing DuckDB shell, token:", shellToken ? shellToken.substring(0, 20) + "..." : "NONE");
+        // Credentials are looked up per catalog at ATTACH time
+        // (attach-catalog.ts), each service's own.
+        console.log("[shell] Initializing DuckDB shell:", catalogs.map((c) => c.alias).join(", ") || "no catalogs");
         const { cleanup, insertText } = initShell(
           containerRef.current,
-          { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, threadCount: resolveThreadCount(settings.shellThreads), catalogData, aiApiKey: settings.anthropicApiKey, aiWorkspaceId: settings.anthropicWorkspaceId, aiModel: settings.aiModel, attach },
+          { serviceUrl, catalogName, catalogs, defaultCatalog, fontSize: settings.shellFontSize, threadCount: resolveThreadCount(settings.shellThreads), catalogData, aiApiKey: settings.anthropicApiKey, aiWorkspaceId: settings.anthropicWorkspaceId, aiModel: settings.aiModel },
           { tableFromIPC: tableFromIPCWithDictionaries, Readline },
           { onAuthError, onAttachError, onOptionsEvaluated }
         );

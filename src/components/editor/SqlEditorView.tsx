@@ -53,6 +53,9 @@ interface Props {
   serviceUrl: string;
   /** Resolved ATTACH options fragment, propagated into share links. */
   attachOptions?: string;
+  /** A workspace link's `#ws=` token: share links carry the whole catalog
+   *  set instead of `?service=`. */
+  shareWorkspaceToken?: string;
   /** SQL pushed in from elsewhere (example queries, AI panels, shared
    *  links). Opens a new tab; call onPendingConsumed once handled. */
   pendingSql?: PendingEditorSql | null;
@@ -62,7 +65,7 @@ interface Props {
   onAiBusyChange?: (busy: boolean) => void;
 }
 
-export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, attachOptions, pendingSql, onPendingConsumed, onAiBusyChange }: Props) {
+export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, attachOptions, shareWorkspaceToken, pendingSql, onPendingConsumed, onAiBusyChange }: Props) {
   const { settings } = useSettings();
   const isNarrow = useMediaQuery("(max-width: 767px)");
   // Transient "Copied" confirmation on the Share button.
@@ -398,7 +401,9 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     // self-hosted deploy where Cupola and the VGI server share an origin).
     // A share link without `?service=` lands the recipient on the welcome
     // page, where no editor ever mounts to receive the SQL.
-    const url = await buildShareQueryUrl({ sql, serviceUrl, attachOptions });
+    const url = await buildShareQueryUrl(shareWorkspaceToken
+      ? { sql, workspaceToken: shareWorkspaceToken }
+      : { sql, serviceUrl, attachOptions });
     try {
       await navigator.clipboard.writeText(url);
       setShareCopied(true);
@@ -406,7 +411,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     } catch (err) {
       Sentry.captureException(err, { tags: { feature: "share-query-link" } });
     }
-  }, [activeDoc?.sql, serviceUrl, attachOptions]);
+  }, [activeDoc?.sql, serviceUrl, attachOptions, shareWorkspaceToken]);
 
   const handleDownloadSql = useCallback(() => {
     const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";

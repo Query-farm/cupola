@@ -521,7 +521,7 @@ export function executeListCatalogs(collection: CatalogCollection, input: any = 
   const items = catalogs.map((catalog, index) => ({
     catalog: catalog.catalogName,
     type: catalog.databaseType ?? (catalog.catalogName === "memory" ? "memory" : "vgi"),
-    primary: catalog.primary ?? index === 0,
+    default: catalog.isDefault ?? index === 0,
     ...(catalog.metadataError ? { metadata_error: catalog.metadataError } : {}),
     comment: listingText(catalog.catalogComment),
     tags: filterTagsForAI(catalog.catalogTags),

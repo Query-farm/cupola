@@ -15,7 +15,7 @@ export const catalogInventory = new CatalogInventory({
 catalogInventory.subscribe(() => {
   const { catalogs } = catalogInventory.getSnapshot();
   ui.memoryCatalog = catalogs.find(c => c.catalogName === 'memory') ?? null;
-  ui.attachedCatalogs = catalogs.filter(c => !c.primary && c.catalogName !== 'memory');
+  ui.attachedCatalogs = catalogs.filter(c => !c.isDefault && c.catalogName !== 'memory');
 });
 
 export async function sessionCatalogs(fallback: readonly CatalogData[] = []): Promise<readonly CatalogData[]> {

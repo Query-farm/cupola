@@ -1,48 +1,79 @@
-import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
-import { fetchCatalog, fetchCatalogSpecs, type CatalogData } from "@/lib/service";
+import { useEffect, useState, useMemo, useCallback, useRef, useSyncExternalStore, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
+import { fetchCatalogSpecs, type CatalogData } from "@/lib/service";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { OPEN_REPORT_EVENT, type OpenReportDetail } from "@/lib/evidence/open-report";
-import { getServiceUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql, clearSharedSql, isGrainliftService, grainliftHttpUrl, getCatalogNameFromUrl } from "@/lib/url-params";
+import {
+  getServiceUrl,
+  hasExplicitService,
+  consumePrefillFromHash,
+  consumeSharedSql,
+  clearSharedSql,
+  isGrainliftService,
+  getCatalogNameFromUrl,
+  getTargetFromUrl,
+  getWorkspaceTokenFromHash,
+  getLocalWorkspaceId,
+  swapWorkspaceFragmentForId,
+  LOCAL_WS_PARAM,
+} from "@/lib/url-params";
 import type { PendingEditorSql } from "./editor/SqlEditorView";
 import { catalogInventory } from "@/lib/catalog-store";
+import type { CatalogConnection } from "@/lib/catalog-inventory";
 import { useCatalogInventory } from "@/lib/use-catalog-inventory";
 import {
   applyConsent,
-  finalizeConnection,
-  hasAnyOptions,
   persistEvaluatedOptions,
   readConnectionInput,
   saveFormOptions,
-  type ConnectionInput,
+  workspaceConnectionInput,
 } from "@/lib/attach/connection";
 import { collectFormOptions } from "@/lib/attach/form";
-import { isSecretOption, shareableOptionsText, type OptionSpecInfo } from "@/lib/attach/options";
+import { isSecretOption, partitionSecrets, shareableOptionsText, type OptionSpecInfo } from "@/lib/attach/options";
 import type { OptionProblem } from "@/lib/attach/legacy-options";
 import { secretsFor } from "@/lib/attach/secret-store";
 import type { AttachErrorDetail } from "@/lib/attach/error-detail";
-import type { ShellAttachConfig } from "@/lib/shell-init";
-import { AttachErrorDialog, ConsentPanel, OptionsFields, OptionsNoticeDialog } from "./AttachOptions";
+import { applyDefaultCatalog, attachCatalog, type DefaultRequest, type ShellCatalog } from "@/lib/attach/attach-catalog";
+import { AttachErrorDialog, CatalogsConsentPanel, ConsentPanel, OptionsFields, OptionsNoticeDialog } from "./AttachOptions";
 import { isRecoverableAuthError } from "@/lib/auth-errors";
 import { type Selection } from "@/lib/tree";
-import { getAuthTokenForService, getUserInfo, hadAuthToken } from "@/lib/auth";
+import { getUserInfo, setLegacyAuthService } from "@/lib/auth";
 import * as Sentry from "@sentry/astro";
 import {
   bootstrap as oauthBootstrap,
   consumePendingCallback,
   startLoginFlow,
-  hasTokens as hasOAuthTokens,
-  extractOrigin,
 } from "@/lib/oauth-client";
 import { SettingsProvider } from "@/lib/settings";
-import { engine, terminal, ui, setShellWorkerSentryUser } from "@/lib/shell-bridge";
+import {
+  engine,
+  terminal,
+  ui,
+  onCatalogStatusChange,
+  resetCatalogStatuses,
+  setCatalogStatus,
+  setShellWorkerSentryUser,
+  type CatalogStatus,
+  type DefaultCatalogState,
+} from "@/lib/shell-bridge";
 import { addQueryHistoryEntry } from "@/lib/editor/query-history";
-import { hashToSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
+import { hashToSelection, resolveSelection, updatePageTitle, pushSelectionToUrl } from "@/lib/navigation";
 import { loadTheme } from "@/lib/theme";
+import { decodeWorkspaceToken, encodeWorkspaceToken } from "@/lib/workspace/codec";
+import { normaliseWorkspace, toPortableFile, type ActiveWorkspace } from "@/lib/workspace/spec";
+import { loadCatalogEntry, type CatalogEntry, type CatalogLoad, type LoadResult } from "@/lib/workspace/load";
+import {
+  clearPendingSignIn,
+  loadSessionWorkspace,
+  markSessionWorkspaceConsented,
+  readPendingSignIn,
+  savePendingSignIn,
+  stashSessionWorkspace,
+} from "@/lib/workspace/session";
 import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { Header } from "./Header";
 import { BrandMark } from "./BrandMark";
-import { Sidebar } from "./Sidebar";
+import { Sidebar, type SidebarCatalogStatus } from "./Sidebar";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -78,8 +109,8 @@ import {
  *  token) and are deliberately NOT reported to Sentry. Hard failures (e.g.
  *  "token exchange failed", connection errors) don't match and ARE reported.
  *
- *  The rule lives in ./auth-errors so this file, the render branch below, and
- *  shell-init all classify identically — they previously had three different
+ *  The rule lives in ./auth-errors so this file, the loader and the attach
+ *  path all classify identically — they previously had three different
  *  inline rules, each keying off a bare "auth" substring. */
 const isRecoverableAuthMessage = isRecoverableAuthError;
 
@@ -89,15 +120,24 @@ const CUPOLA_MARK = `${import.meta.env.BASE_URL}cupola-logo-large.png`;
 /** Minimum spacing between two login redirects before we call it a loop. */
 const AUTH_REDIRECT_LOOP_WINDOW_MS = 10_000;
 
-/** Start an OAuth login redirect, refusing to do so twice in quick succession.
+/** The redirect-loop guard's sessionStorage key, per service: with several
+ *  catalogs, signing in to one must not block signing in to the next. */
+function redirectGuardKey(serviceUrl: string): string {
+  return `_vgi_auth_redirect_ts:${serviceUrl}`;
+}
+
+/** Start an OAuth login redirect, refusing to do so twice in quick succession
+ *  for the same service.
  *
- *  Both entry points into the login flow — the `loadCatalog` pre-check and the
- *  auth-error effect — must go through here. When only the error path recorded
- *  the timestamp, a service that authenticates but then fails the pre-check
- *  could bounce the user to the IdP without limit. Returns false when the
- *  redirect was suppressed, so callers can surface the failure instead. */
+ *  Both automatic entry points into the login flow — the loader's pre-check
+ *  and a 401 from the catalog fetch — must go through here. When only the
+ *  error path recorded the timestamp, a service that authenticates but then
+ *  fails the pre-check could bounce the user to the IdP without limit.
+ *  Returns false when the redirect was suppressed, so callers can surface the
+ *  failure instead. */
 function beginLoginFlow(serviceUrl: string, path: string): boolean {
-  const lastRedirect = Number(sessionStorage.getItem("_vgi_auth_redirect_ts") || "0");
+  const key = redirectGuardKey(serviceUrl);
+  const lastRedirect = Number(sessionStorage.getItem(key) || "0");
   const sinceLastRedirectMs = Date.now() - lastRedirect;
   if (sinceLastRedirectMs < AUTH_REDIRECT_LOOP_WINDOW_MS) {
     console.warn("[catalog] Auth redirect loop detected — last redirect was", sinceLastRedirectMs, "ms ago. Stopping.");
@@ -110,7 +150,7 @@ function beginLoginFlow(serviceUrl: string, path: string): boolean {
     });
     return false;
   }
-  sessionStorage.setItem("_vgi_auth_redirect_ts", String(Date.now()));
+  sessionStorage.setItem(key, String(Date.now()));
   return true;
 }
 
@@ -119,11 +159,80 @@ interface CatalogAppProps {
   defaultServiceUrl?: string;
 }
 
+/** How this page load names its catalogs. */
+interface Boot {
+  workspace: ActiveWorkspace | null;
+  /** Consent already given for this workspace (a reload of `?local_ws=`). */
+  consented: boolean;
+  /** A `#ws=` token still to decode. */
+  token: string | null;
+  error: string | null;
+}
+
+/** Read the URL once. `#ws=` wins over `?service=`; `?local_ws=` is this
+ *  tab's stored copy of a workspace link; `?service=` (or the page's
+ *  `defaultServiceUrl`) is one catalog, the frozen contract. */
+function readBoot(defaultServiceUrl?: string): Boot {
+  const none: Boot = { workspace: null, consented: false, token: null, error: null };
+  if (typeof window === "undefined") return none;
+  const token = getWorkspaceTokenFromHash();
+  if (token) {
+    setLegacyAuthService(null);
+    return { ...none, token };
+  }
+  const localId = getLocalWorkspaceId();
+  if (localId) {
+    setLegacyAuthService(null);
+    const stored = loadSessionWorkspace(localId);
+    if (!stored) return { ...none, error: "This workspace was opened in another tab or session and is not stored here. Open the original workspace link again." };
+    return { ...none, workspace: stored.workspace, consented: stored.consented };
+  }
+  if (!hasExplicitService() && !defaultServiceUrl) return none;
+  const serviceUrl = hasExplicitService() ? getServiceUrl() : defaultServiceUrl!;
+  // The legacy `#token=` fragment belongs to this catalog only.
+  setLegacyAuthService(serviceUrl);
+  const grainlift = isGrainliftService(serviceUrl);
+  const workspace: ActiveWorkspace = {
+    id: "service",
+    name: null,
+    source: "service",
+    catalogs: [{
+      id: "service",
+      url: serviceUrl,
+      kind: grainlift ? "grainlift" : "vgi",
+      catalogName: "",
+      // A Grainlift gateway's alias is known up front; a VGI server names its
+      // catalog when asked.
+      alias: grainlift ? (getCatalogNameFromUrl() ?? getTargetFromUrl() ?? "") : "",
+      options: {},
+    }],
+    defaultCatalogId: "service",
+    defaultSchema: null,
+    notes: [],
+  };
+  return { ...none, workspace, consented: true };
+}
+
+function entriesFor(workspace: ActiveWorkspace | null): CatalogEntry[] {
+  if (!workspace) return [];
+  return workspace.catalogs.map((catalog) => ({
+    catalog,
+    input: workspace.source === "service"
+      ? readConnectionInput(catalog.url, { grainlift: catalog.kind === "grainlift" })
+      : workspaceConnectionInput(catalog),
+    load: { state: "loading" } as CatalogLoad,
+  }));
+}
+
+/** The engine's per-catalog statuses, for React. */
+function useCatalogStatuses(): ReadonlyMap<string, CatalogStatus> {
+  return useSyncExternalStore(onCatalogStatusChange, () => engine.catalogStatuses, () => engine.catalogStatuses);
+}
+function useDefaultCatalogState(): DefaultCatalogState {
+  return useSyncExternalStore(onCatalogStatusChange, () => engine.defaultCatalog, () => engine.defaultCatalog);
+}
+
 export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = {}) {
-  const [data, setData] = useState<CatalogData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const shellInsertRef = useRef<((text: string) => void) | null>(null);
   // The single source of truth for which top-level surface is showing. Replaces
@@ -227,7 +336,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   const [pendingEditorSql, setPendingEditorSql] = useState<PendingEditorSql | null>(null);
   const inventory = useCatalogInventory();
   const catalogs = inventory.catalogs;
-  const attachedCatalogs = catalogs.filter(c => !c.primary && c.catalogName !== "memory");
+  const attachedCatalogs = catalogs.filter(c => !c.isDefault && c.catalogName !== "memory");
   // Brand mark for the welcome / connecting / error screens. Defaults to the
   // Cupola mark and is replaced when a `?theme=` config supplies its own logo.
   //
@@ -246,6 +355,64 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
+  // ---------------------------------------------------------------------------
+  // The catalog set
+  // ---------------------------------------------------------------------------
+  //
+  // One entry per catalog, loaded in parallel (workspace/load.ts). Once every
+  // entry has settled, the ready ones go to the engine, which attaches them
+  // one at a time (attach/attach-catalog.ts). A `?service=` page is the same
+  // machinery with one entry, and keeps the single-catalog behaviour: an
+  // auth error redirects to sign in, a failure is the full-page error.
+  const [boot, setBoot] = useState<Boot>(() => readBoot(defaultServiceUrl));
+  const workspace = boot.workspace;
+  const [entries, setEntries] = useState<CatalogEntry[]>(() => entriesFor(boot.workspace));
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
+  const single = entries.length === 1;
+  const settled = entries.length > 0 && entries.every((e) => e.load.state !== "loading");
+  const readyEntries = entries.filter((e): e is CatalogEntry & { load: Extract<CatalogLoad, { state: "ready" }> } => e.load.state === "ready");
+  const requestedDefaultEntry = workspace
+    ? entries.find((e) => e.catalog.id === workspace.defaultCatalogId) ?? entries[0]
+    : undefined;
+  const requestedDefaultAlias = requestedDefaultEntry?.load.state === "ready"
+    ? requestedDefaultEntry.load.shell.alias
+    : requestedDefaultEntry?.catalog.alias || null;
+  // Stable for the session: query history, editor tabs and reports are still
+  // keyed by the default catalog's service URL (phase 2 keys them by workspace).
+  const serviceUrl = requestedDefaultEntry?.catalog.url ?? (hasExplicitService() ? getServiceUrl() : defaultServiceUrl ?? "");
+  const [signInBlocked, setSignInBlocked] = useState<string | null>(null);
+  // Expressions the engine evaluated before ATTACH, now plain values, per alias.
+  const [evaluatedOptions, setEvaluatedOptions] = useState<Record<string, Record<string, string>>>({});
+  // Options that were refused or dropped, reported once.
+  const [optionNotices, setOptionNotices] = useState<OptionProblem[]>([]);
+  const statuses = useCatalogStatuses();
+  const engineDefault = useDefaultCatalogState();
+
+  // `#ws=`: decode, validate, normalise (aliases fixed here, once), store for
+  // this tab and swap the fragment for `?local_ws=<id>` so a reload finds the
+  // same set. The consent screen comes next.
+  useEffect(() => {
+    if (!boot.token) return;
+    let live = true;
+    void decodeWorkspaceToken(boot.token).then((result) => {
+      if (!live) return;
+      if (!result.ok) {
+        setBoot({ workspace: null, consented: false, token: null, error: result.error });
+        return;
+      }
+      if (result.file.workspaces.length > 1) result.warnings.push(`The link holds ${result.file.workspaces.length} workspaces; the first is opened.`);
+      const opened = normaliseWorkspace(result.file.workspaces[0], () => crypto.randomUUID(), result.warnings);
+      // Always a fresh id for this tab: two tabs opening the same link must
+      // not share (or overwrite) one stored copy.
+      const active: ActiveWorkspace = { ...opened, id: crypto.randomUUID() };
+      stashSessionWorkspace(active, false);
+      swapWorkspaceFragmentForId(active.id);
+      setBoot({ workspace: active, consented: false, token: null, error: null });
+      setEntries(entriesFor(active));
+    });
+    return () => { live = false; };
+  }, [boot.token]);
 
   // Persist the active tab.
   useEffect(() => {
@@ -303,59 +470,138 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     });
   }, [activeTab]);
 
-  const serviceUrl = useMemo(() => hasExplicitService() ? getServiceUrl() : defaultServiceUrl || getServiceUrl(), [defaultServiceUrl]);
   // Every surface records its queries through this slot; they are kept per server
   // and read in the editor's History menu.
   useEffect(() => {
+    if (!serviceUrl) return;
     ui.addQueryHistoryEntry = (entry) => addQueryHistoryEntry(serviceUrl, entry);
     return () => { ui.addQueryHistoryEntry = null; };
   }, [serviceUrl]);
-  // This catalog's attach options (lib/attach/connection.ts): stored values,
-  // stored secrets and the URL's `?attach_options=` / `?data_version_spec=` /
-  // Grainlift `?target=`. URL expressions wait for the reader's consent;
-  // nothing is persisted until the catalog's specs say what is secret.
-  const [connInput, setConnInput] = useState<ConnectionInput>(() =>
-    readConnectionInput(serviceUrl, { grainlift: isGrainliftService(serviceUrl) }));
-  // What the shell attaches with, set once the catalog (and its specs) is known.
-  const [attach, setAttach] = useState<ShellAttachConfig | undefined>();
-  // Expressions the engine evaluated before ATTACH, now plain values.
-  const [evaluatedOptions, setEvaluatedOptions] = useState<Record<string, string>>({});
-  // A catalog that cannot attach without options the reader has not given.
-  const [optionsNeeded, setOptionsNeeded] = useState<{ catalogName: string; specs: OptionSpecInfo[]; options: Record<string, string> } | null>(null);
-  // Options that were refused or dropped, reported once.
-  const [optionNotices, setOptionNotices] = useState<OptionProblem[]>([]);
-  const attachOptionsAll = useMemo(() => ({ ...(attach?.options ?? {}), ...evaluatedOptions }), [attach, evaluatedOptions]);
-  // Share links carry the non-secret options only, as plain literals.
-  const shareAttachOptions = useMemo(
-    () => shareableOptionsText(attachOptionsAll, attach?.specs) || undefined,
-    [attachOptionsAll, attach?.specs],
-  );
-  const onOptionsEvaluated = useCallback((values: Record<string, string>, problems: OptionProblem[]) => {
-    setEvaluatedOptions(values);
-    if (problems.length) setOptionNotices((prev) => [...prev, ...problems]);
-    if (data?.catalogName && (hasExplicitService() || connInput.fromUrl)) {
-      persistEvaluatedOptions(serviceUrl, data.catalogName, values, attach?.specs);
-    }
-  }, [data?.catalogName, serviceUrl, attach?.specs, connInput.fromUrl]);
 
-  // Tag every Sentry event with the service URL and (when known) the catalog
-  // name. Lets us slice errors by tenant without putting URLs in messages.
+  const setLoad = useCallback((id: string, load: CatalogLoad, alias?: string, catalogName?: string) => {
+    setEntries((current) => current.map((e) => e.catalog.id !== id ? e : {
+      ...e,
+      load,
+      // A `?service=` catalog learns its alias and name from the server.
+      catalog: { ...e.catalog, alias: e.catalog.alias || alias || "", catalogName: e.catalog.catalogName || catalogName || "" },
+    }));
+  }, []);
+
+  /** Record a settled load as this catalog's status (the engine records the
+   *  ready ones once it attaches them). */
+  const publishLoadStatus = useCallback((entry: CatalogEntry, result: LoadResult) => {
+    const base = { alias: result.alias, url: entry.catalog.url, catalogName: result.catalogName };
+    const { load } = result;
+    if (load.state === "ready") setCatalogStatus({ ...base, state: "connecting" });
+    else if (load.state === "sign-in-required") setCatalogStatus({ ...base, state: "sign-in-required", error: load.message });
+    else if (load.state === "options-needed") setCatalogStatus({ ...base, state: "failed", error: `Needs connection options: ${load.detail.problems?.map((p) => p.name).join(", ")}`, sql: load.detail.sql, detail: load.detail });
+    else if (load.state === "failed") setCatalogStatus({ ...base, state: "failed", error: load.message, sql: load.detail?.sql, detail: load.detail });
+  }, []);
+
+  const loadOne = useCallback(async (entry: CatalogEntry): Promise<LoadResult> => {
+    const result = await loadCatalogEntry(entry, {
+      persist: workspace?.source === "service" && (hasExplicitService() || entry.input.fromUrl),
+      grainliftAlias: workspace?.source === "service" ? (getCatalogNameFromUrl() ?? entry.input.options.target) : undefined,
+    });
+    setLoad(entry.catalog.id, result.load, result.alias, result.catalogName);
+    publishLoadStatus(entry, result);
+    if (entry.input.problems.length) setOptionNotices((prev) => [...prev, ...entry.input.problems]);
+    return result;
+  }, [workspace?.source, setLoad, publishLoadStatus]);
+
+  const consentPending = !workspace || !boot.consented || entries.some((e) => e.input.needsConsent.length > 0);
+  const loadAll = useCallback(async () => {
+    const current = entriesRef.current;
+    if (!current.length) return;
+    // A `?service=` catalog has no alias until its server names it; it gets
+    // a status once loaded.
+    resetCatalogStatuses(current.filter((e) => e.catalog.alias).map((e) => ({ alias: e.catalog.alias, url: e.catalog.url, catalogName: e.catalog.catalogName, state: "connecting" as const })));
+    setEntries((list) => list.map((e) => ({ ...e, load: { state: "loading" } })));
+    await Promise.all(current.map((entry) => loadOne(entry)));
+  }, [loadOne]);
+
+  // Process any pending SPA OAuth callback before the first catalog fetch.
+  // This is the "returning from the IdP" path: oauth-callback.html stashed
+  // `{code, state}` in sessionStorage and navigated us back here. We need
+  // to exchange the code for tokens BEFORE loading — otherwise the first
+  // fetchCatalog call goes out with no Authorization header and triggers
+  // another OAuth redirect, creating a loop.
+  const startedRef = useRef(false);
   useEffect(() => {
-    Sentry.setTag("service", serviceUrl);
-  }, [serviceUrl]);
+    if (consentPending || startedRef.current) return;
+    startedRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        await consumePendingCallback();
+      } catch (err) {
+        // IdP returned an error (e.g. invalid_client, consent_required).
+        // Surface it as a permanent error so we don't loop back into
+        // startLoginFlow → same IdP error → redirect → loop.
+        console.error("[catalog] consumePendingCallback threw", err);
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+          tags: { component: "auth", path: "oauth-callback" },
+          extra: { serviceUrl },
+        });
+        if (!cancelled) {
+          setBoot((b) => ({ ...b, error: err instanceof Error ? err.message : "Authentication failed" }));
+          return;
+        }
+      }
+      if (!cancelled) await loadAll();
+    })();
+    return () => { cancelled = true; };
+  }, [consentPending, loadAll, serviceUrl]);
+
+  // BroadcastChannel listener for the *popup* OAuth flow (shell ATTACH
+  // case). The main flow — top-level redirect from the homepage — is
+  // handled by the consumePendingCallback path above.
   useEffect(() => {
-    if (data?.catalogName) Sentry.setTag("catalog", data.catalogName);
-  }, [data?.catalogName]);
+    oauthBootstrap((result) => {
+      console.log("[catalog] OAuth login complete (broadcast) for", result.serviceUrl);
+      if (result.returnTo && result.returnTo !== window.location.href) {
+        window.location.href = result.returnTo;
+        return;
+      }
+      if (!shellPlanRef.current) void loadAll();
+    });
+  }, [loadAll]);
+
+  // Tag every Sentry event with the services and the default catalog. Lets
+  // us slice errors by tenant without putting URLs in messages.
+  const serviceTag = entries.map((e) => e.catalog.url).join(",");
+  useEffect(() => {
+    if (serviceTag) Sentry.setTag("service", serviceTag);
+  }, [serviceTag]);
+
+  // The default catalog: the engine's choice once it has attached (it falls
+  // back when the requested default failed), else the requested one when it
+  // loaded, else the first that did.
+  const plannedDefaultAlias = requestedDefaultEntry?.load.state === "ready"
+    ? requestedDefaultEntry.load.shell.alias
+    : readyEntries[0]?.load.shell.alias ?? null;
+  const defaultAlias = engineDefault.alias ?? plannedDefaultAlias;
+  const defaultEntry = readyEntries.find((e) => e.load.shell.alias === defaultAlias) ?? readyEntries[0];
+  // Only once every catalog has settled: until then the first to load would
+  // pass for the default.
+  const data: CatalogData | null = settled ? defaultEntry?.load.data ?? null : null;
+  useEffect(() => {
+    if (defaultAlias) Sentry.setTag("catalog", defaultAlias);
+  }, [defaultAlias]);
+  useEffect(() => {
+    if (engineDefault.alias) catalogInventory.setDefault(engineDefault.alias);
+  }, [engineDefault.alias]);
 
   // Identify the signed-in user once tokens are available. JWT decode is
   // synchronous; re-run when the service URL or catalog changes (post-login).
   // Also forward the identity to the shell worker so its Sentry isolate
   // tags every query span with the same user. We deliberately do NOT push a
-  // catalog tag to the worker — a single SQL statement can join across the
-  // primary catalog and any number of ATTACHed VGI catalogs, so a single
-  // catalog tag would be misleading. The per-span db.statement attribute
-  // already lets you trace which catalogs a query touched.
+  // catalog tag to the worker — a single SQL statement can join across
+  // any number of attached catalogs, so a single catalog tag would be
+  // misleading. The per-span db.statement attribute already lets you trace
+  // which catalogs a query touched.
   useEffect(() => {
+    if (!serviceUrl) return;
     const info = getUserInfo(serviceUrl);
     if (info?.email || info?.sub) {
       const user = { id: info.sub, email: info.email, username: info.name };
@@ -373,6 +619,128 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       if (config?.logo) setLogoUrl(config.logo);
     });
   }, []);
+
+  // What the engine attaches, frozen the first time the app can render: the
+  // shell reads it once at boot. A catalog retried later is attached directly
+  // (`retry`), never by re-initialising the shell.
+  const shellPlanRef = useRef<{ catalogs: ShellCatalog[]; defaultCatalog: DefaultRequest; serviceUrl: string; catalogName: string } | null>(null);
+  if (settled && data && !shellPlanRef.current) {
+    shellPlanRef.current = {
+      catalogs: readyEntries.map((e) => e.load.shell),
+      defaultCatalog: { alias: requestedDefaultAlias, schema: workspace?.defaultSchema ?? null },
+      serviceUrl,
+      catalogName: plannedDefaultAlias ?? data.catalogName,
+    };
+  }
+
+  // Every configured catalog's connection context goes to the inventory (so
+  // each catalog root gets its own ConnectBox), with the RPC previews as
+  // seeds until the engine has attached them.
+  useEffect(() => {
+    if (!settled) return;
+    const connections = new Map<string, CatalogConnection>();
+    const seeds: CatalogData[] = [];
+    for (const entry of entries) {
+      if (entry.load.state === "ready") {
+        const alias = entry.load.shell.alias;
+        const evaluated = evaluatedOptions[alias] ?? {};
+        const { plain, secret } = partitionSecrets(evaluated, entry.load.shell.specs);
+        connections.set(alias, {
+          ...entry.load.connection,
+          attachOptions: { ...entry.load.connection.attachOptions, ...plain },
+          secretOptionNames: [...new Set([...(entry.load.connection.secretOptionNames ?? []), ...Object.keys(secret)])],
+        });
+        seeds.push(entry.load.data);
+      } else if (entry.catalog.alias) {
+        connections.set(entry.catalog.alias, {
+          sourceUrl: entry.catalog.url,
+          catalogName: entry.catalog.catalogName || entry.catalog.alias,
+          databaseType: entry.catalog.kind,
+          attachOptions: entry.catalog.options,
+        });
+      }
+    }
+    catalogInventory.setConnections(connections, engineDefault.alias ?? plannedDefaultAlias, seeds);
+  }, [settled, entries, evaluatedOptions, engineDefault.alias, plannedDefaultAlias]);
+
+  const onOptionsEvaluated = useCallback((alias: string, values: Record<string, string>, problems: OptionProblem[]) => {
+    setEvaluatedOptions((prev) => ({ ...prev, [alias]: values }));
+    if (problems.length) setOptionNotices((prev) => [...prev, ...problems]);
+    const entry = entriesRef.current.find((e) => e.load.state === "ready" && e.load.shell.alias === alias);
+    if (entry && workspace?.source === "service" && (hasExplicitService() || entry.input.fromUrl) && entry.load.state === "ready") {
+      persistEvaluatedOptions(entry.catalog.url, entry.load.shell.catalogName, values, entry.load.shell.specs);
+    }
+  }, [workspace?.source]);
+
+  // Share links: one catalog keeps the `?service=` form with its non-secret
+  // options; a workspace link shares the workspace (`#ws=`, no secrets).
+  const defaultReady = requestedDefaultEntry?.load.state === "ready" ? requestedDefaultEntry.load : null;
+  const shareAttachOptions = useMemo(() => {
+    if (!defaultReady) return undefined;
+    const all = { ...defaultReady.shell.options, ...(evaluatedOptions[defaultReady.shell.alias] ?? {}) };
+    return shareableOptionsText(all, defaultReady.shell.specs) || undefined;
+  }, [defaultReady, evaluatedOptions]);
+  const [shareWorkspaceToken, setShareWorkspaceToken] = useState<string | undefined>();
+  useEffect(() => {
+    if (workspace?.source !== "link") return;
+    let live = true;
+    void encodeWorkspaceToken(toPortableFile(workspace)).then((token) => { if (live) setShareWorkspaceToken(token); }).catch(() => {});
+    return () => { live = false; };
+  }, [workspace]);
+
+  /** Retry one catalog: ask its server again and, once the engine is up,
+   *  attach it. A catalog that becomes the requested default gets `USE`. */
+  const retry = useCallback(async (id: string) => {
+    const entry = entriesRef.current.find((e) => e.catalog.id === id);
+    if (!entry) return;
+    setLoad(id, { state: "loading" });
+    setCatalogStatus({ alias: entry.catalog.alias || entry.catalog.url, url: entry.catalog.url, catalogName: entry.catalog.catalogName, state: "connecting" });
+    const result = await loadOne({ ...entry, load: { state: "loading" } });
+    if (result.load.state !== "ready" || !shellPlanRef.current) return;
+    const shell = result.load.shell;
+    await engine.attached;
+    catalogInventory.rebind(shell.alias);
+    const status = await attachCatalog(shell, {
+      single: false,
+      onAuthError: (title, message) => setAuthError({ title, message }),
+      onOptionsEvaluated,
+    });
+    if (status.state === "attached" && (shell.alias === shellPlanRef.current.defaultCatalog.alias || !engine.defaultCatalog.alias)) {
+      await applyDefaultCatalog([shell], shellPlanRef.current.defaultCatalog);
+    }
+    catalogInventory.invalidate();
+  }, [loadOne, setLoad, onOptionsEvaluated]);
+
+  /** Sign in to one catalog: a top-level redirect to its identity provider,
+   *  after saving which catalogs still need it, so the page that comes back
+   *  can say so. Only ever on a click; redirects are never chained. */
+  const signIn = useCallback((id: string) => {
+    const entry = entriesRef.current.find((e) => e.catalog.id === id);
+    if (!entry || !workspace) return;
+    const pending = entriesRef.current.filter((e) => e.load.state === "sign-in-required" || statuses.get(e.catalog.alias)?.state === "sign-in-required").map((e) => e.catalog.id);
+    savePendingSignIn({ workspaceId: workspace.id, workspace, signingIn: id, pendingSignIns: pending });
+    try { sessionStorage.setItem(redirectGuardKey(entry.catalog.url), String(Date.now())); } catch {}
+    startLoginFlow(entry.catalog.url).catch((err) => {
+      setCatalogStatus({ alias: entry.catalog.alias, url: entry.catalog.url, catalogName: entry.catalog.catalogName, state: "failed", error: `Sign-in could not start: ${err instanceof Error ? err.message : String(err)}` });
+    });
+  }, [workspace, statuses]);
+
+  // Back from a sign-in this tab started: say who is signed in now and who
+  // still needs it. Read once the catalogs have settled.
+  const [signInNotice, setSignInNotice] = useState<{ signedIn: string | null; remaining: string[] } | null>(null);
+  const signInNoticeReadRef = useRef(false);
+  useEffect(() => {
+    if (!settled || !workspace || workspace.source !== "link" || signInNoticeReadRef.current) return;
+    signInNoticeReadRef.current = true;
+    const pending = readPendingSignIn(workspace.id);
+    if (!pending) return;
+    clearPendingSignIn();
+    const target = entries.find((e) => e.catalog.id === pending.signingIn);
+    setSignInNotice({
+      signedIn: target && target.load.state !== "sign-in-required" ? target.catalog.alias : null,
+      remaining: entries.filter((e) => e.load.state === "sign-in-required").map((e) => e.catalog.id),
+    });
+  }, [settled, workspace, entries]);
 
   // Sidebar resize
   const SIDEBAR_MIN = 200;
@@ -416,14 +784,18 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     document.addEventListener("pointerup", onUp);
   }, [sidebarWidth]);
 
-  // Navigate: update selection, URL hash, and page title
+  // Navigate: update selection, URL hash, and page title. Every selection
+  // carries its catalog, so the hash names it (`#/catalog/<alias>/…`).
+  const defaultAliasRef = useRef(defaultAlias);
+  defaultAliasRef.current = defaultAlias;
   const navigate = useCallback(
     (sel: Selection | null) => {
-      setSelection(sel);
-      pushSelectionToUrl(sel);
-      if (data) updatePageTitle(sel, data.catalogName);
+      const resolved = resolveSelection(sel, defaultAliasRef.current ?? "");
+      setSelection(resolved);
+      pushSelectionToUrl(resolved);
+      if (defaultAliasRef.current) updatePageTitle(resolved, defaultAliasRef.current);
     },
-    [data]
+    []
   );
 
   // Expose navigate globally so AI agent can select newly created objects.
@@ -433,312 +805,181 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     return () => { ui.navigateToSelection = null; };
   }, [navigate]);
 
-  // A Grainlift gateway has no VGI catalog to fetch: seed an empty catalog
-  // under its ATTACH alias so the app (and the engine) start, and the
-  // inventory fills it in from DuckDB once the shell has attached it. A
-  // gateway that advertises OAuth gets a sign-in first, so the ATTACH can
-  // carry the token.
-  const loadGrainliftCatalog = useCallback(
-    async (isRefresh: boolean) => {
-      const alias = getCatalogNameFromUrl() ?? connInput.options.target;
-      if (!alias) {
-        setError("A Grainlift service needs ?target= naming the gateway's target, e.g. ?service=grainlift+https://host&target=sqlite");
-        setLoading(false);
-        return;
-      }
-      const httpUrl = grainliftHttpUrl(serviceUrl);
-      if (httpUrl && !(await getAuthTokenForService(serviceUrl)) && (await advertisesOAuth(httpUrl))) {
-        if (!beginLoginFlow(serviceUrl, "grainlift-precheck")) {
-          setError("Sign-in did not complete. Please try connecting again.");
-          setLoading(false);
-          return;
-        }
-        startLoginFlow(serviceUrl).catch((err) => {
-          console.error("[catalog] startLoginFlow failed:", err);
-          setError(err instanceof Error ? err.message : "Failed to start login");
-          setLoading(false);
-        });
-        return;
-      }
-      const catalog: CatalogData = { catalogName: alias, catalogComment: null, catalogTags: {}, defaultSchema: "main", schemas: [] };
-      const finalized = finalizeConnection(connInput, alias, []);
-      if (connInput.problems.length) setOptionNotices(connInput.problems);
-      setAttach({ kind: "grainlift", options: finalized.options, pending: finalized.pending, specs: [] });
-      setData(catalog);
-      catalogInventory.seed(catalog, serviceUrl, "grainlift");
-      setError(null);
-      if (!isRefresh) {
-        const initialSel = hashToSelection(window.location.hash)
-          ?? { type: "catalog" as const, name: alias, catalog: alias };
-        setSelection(initialSel);
-        updatePageTitle(initialSel, alias);
-      }
-      setLoading(false);
-      setRefreshing(false);
-    },
-    [serviceUrl, connInput]
-  );
-
-  const loadCatalog = useCallback(
-    async (isRefresh = false) => {
-      if (isRefresh && catalogInventory.getSnapshot().ready) {
-        await clearGrainliftCaches();
-        await catalogInventory.refresh();
-        return;
-      }
-      // No ?service= — don't try to fetchCatalog against cupola's own origin
-      // (which would 404 on /__describe__). The render path below detects
-      // "no data + no error + not loading + !hasExplicitService" and shows
-      // the welcome/connect page.
-      if (!hasExplicitService() && !defaultServiceUrl) {
-        setLoading(false);
-        setRefreshing(false);
-        return;
-      }
-      // A link whose options need evaluating waits for the consent screen.
-      if (connInput.needsConsent.length) {
-        setLoading(false);
-        return;
-      }
-      // Token-expired pre-check is service-scoped now that tokens live in
-      // the per-service SPA store. We only pre-emptively kick off a new
-      // login if we previously *had* tokens for this specific service and
-      // they're gone now (e.g. tokens revoked remotely). A missing token
-      // on first visit is fine — fetchCatalog will get 401 and the error
-      // branch will start the login flow.
-      if (isGrainliftService(serviceUrl)) {
-        await loadGrainliftCatalog(isRefresh);
-        return;
-      }
-      const haveTokenNow = await getAuthTokenForService(serviceUrl);
-      if (!haveTokenNow && hadAuthToken() && hasOAuthTokens(serviceUrl)) {
-        console.log("[catalog] Token expired but SPA tokens existed for this service, re-auth");
-        if (!beginLoginFlow(serviceUrl, "load-catalog-precheck")) {
-          setError("Sign-in did not complete. Please try connecting again.");
-          setLoading(false);
-          return;
-        }
-        startLoginFlow(serviceUrl).catch((err) => {
-          console.error("[catalog] startLoginFlow failed:", err);
-          setError(err instanceof Error ? err.message : "Failed to start login");
-          setLoading(false);
-        });
-        return;
-      }
-      if (isRefresh) setRefreshing(true);
-      else setLoading(true);
-      try {
-        const fetched = await fetchCatalog(serviceUrl, { hasOptions: hasAnyOptions(connInput) });
-        const catalog = fetched.catalog;
-        const finalized = finalizeConnection(connInput, catalog.catalogName, fetched.specs);
-        if (connInput.problems.length) setOptionNotices(connInput.problems);
-        if (finalized.missing.length) {
-          // Say so before ATTACH, rather than letting the server refuse it.
-          const stored = Object.fromEntries(Object.entries(finalized.options).filter(([name]) => !(name in connInput.sessionOptions)));
-          setOptionsNeeded({ catalogName: catalog.catalogName, specs: fetched.specs, options: stored });
-          return;
-        }
-        setAttach({
-          kind: "vgi",
-          options: finalized.options,
-          pending: finalized.pending,
-          specs: fetched.specs,
-          serverVersion: fetched.implementationVersion,
-        });
-        setData(catalog);
-        catalogInventory.seed(catalog, serviceUrl);
-        setError(null);
-        if (!isRefresh) {
-          // Restore selection from URL hash, or default to catalog root
-          const hashSel = hashToSelection(window.location.hash);
-          const defaultSchema = catalog.defaultSchema || catalog.schemas[0]?.info.name;
-          const initialSel = hashSel ?? (defaultSchema
-            ? { type: "schema" as const, name: defaultSchema, schema: defaultSchema, catalog: catalog.catalogName }
-            : { type: "catalog" as const, name: catalog.catalogName, catalog: catalog.catalogName });
-          setSelection(initialSel);
-          updatePageTitle(initialSel, catalog.catalogName);
-        }
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Failed to connect";
-        // Report connection errors and hard auth failures. Recoverable auth
-        // errors (handled by the SPA login redirect below) are routine, so
-        // we skip them to keep the dashboard signal clean.
-        if (!isRecoverableAuthMessage(message)) {
-          Sentry.captureException(err instanceof Error ? err : new Error(message), {
-            tags: { component: "catalog", path: "load" },
-            extra: { serviceUrl },
-          });
-        }
-        setError(message);
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [serviceUrl, defaultServiceUrl, loadGrainliftCatalog, connInput]
-  );
-
-  // Process any pending SPA OAuth callback before the first catalog fetch.
-  // This is the "returning from the IdP" path: oauth-callback.html stashed
-  // `{code, state}` in sessionStorage and navigated us back here. We need
-  // to exchange the code for tokens BEFORE loadCatalog runs — otherwise
-  // the first fetchCatalog call goes out with no Authorization header and
-  // triggers another OAuth redirect, creating a loop.
+  // The initial selection, once the default catalog is known: the hash (a
+  // legacy `#/schema/…` link resolves against the default catalog), else the
+  // default catalog's default schema.
+  const initialSelectionDoneRef = useRef(false);
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        await consumePendingCallback();
-      } catch (err) {
-        // IdP returned an error (e.g. invalid_client, consent_required).
-        // Surface it as a permanent error so we don't loop back into
-        // startLoginFlow → same IdP error → redirect → loop.
-        console.error("[catalog] consumePendingCallback threw", err);
-        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
-          tags: { component: "auth", path: "oauth-callback" },
-          extra: { serviceUrl },
-        });
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Authentication failed");
-          setLoading(false);
-          return;
-        }
-      }
-      if (!cancelled) loadCatalog();
-    })();
-    return () => { cancelled = true; };
-  }, [loadCatalog]);
-
-  // BroadcastChannel listener for the *popup* OAuth flow (shell ATTACH
-  // case). The main flow — top-level redirect from the homepage — is
-  // handled by the consumePendingCallback path above.
-  useEffect(() => {
-    oauthBootstrap((result) => {
-      console.log("[catalog] OAuth login complete (broadcast) for", result.serviceUrl);
-      if (result.returnTo && result.returnTo !== window.location.href) {
-        window.location.href = result.returnTo;
-        return;
-      }
-      loadCatalog();
-    });
-  }, [loadCatalog]);
+    if (!data || initialSelectionDoneRef.current) return;
+    initialSelectionDoneRef.current = true;
+    const alias = data.catalogName;
+    const hashSel = resolveSelection(hashToSelection(window.location.hash), alias);
+    const defaultSchema = data.defaultSchema || data.schemas[0]?.info.name;
+    const initialSel = hashSel ?? (defaultSchema
+      ? { type: "schema" as const, name: defaultSchema, schema: defaultSchema, catalog: alias }
+      : { type: "catalog" as const, name: alias, catalog: alias });
+    setSelection(initialSel);
+    updatePageTitle(initialSel, alias);
+  }, [data]);
 
   // Listen for browser back/forward
   useEffect(() => {
     function onPopState() {
-      const sel = hashToSelection(window.location.hash);
+      const alias = defaultAliasRef.current ?? "";
+      const sel = resolveSelection(hashToSelection(window.location.hash), alias);
       setSelection(sel);
-      if (data) updatePageTitle(sel, data.catalogName);
+      if (alias) updatePageTitle(sel, alias);
     }
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [data]);
+  }, []);
 
-  // Auth error — start the SPA login flow (full-page redirect to the IdP).
-  // Break the loop if we already tried recently so a misconfigured IdP can't
-  // trap the user in an infinite redirect.
+  // The only catalog needs sign-in: start the SPA login flow (full-page
+  // redirect to the IdP), as a `?service=` link always has. Break the loop if
+  // we already tried recently so a misconfigured IdP can't trap the user in
+  // an infinite redirect. With several catalogs nothing redirects by itself.
+  const onlyEntry = single ? entries[0] : undefined;
+  const onlyNeedsSignIn = onlyEntry?.load.state === "sign-in-required";
   useEffect(() => {
-    if (!error) return;
-    if (isRecoverableAuthMessage(error)) {
-      if (!beginLoginFlow(serviceUrl, "auth-error")) return;
-      console.log("[catalog] Auth error detected, starting SPA login. error:", error);
-      startLoginFlow(serviceUrl).catch((err) => {
-        console.error("[catalog] startLoginFlow failed:", err);
-        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
-          tags: { component: "auth", path: "start-login" },
-          extra: { serviceUrl },
-        });
-        setError(err instanceof Error ? err.message : "Failed to start login");
-      });
+    if (!onlyEntry || onlyEntry.load.state !== "sign-in-required") return;
+    const url = onlyEntry.catalog.url;
+    if (!beginLoginFlow(url, "auth-error")) {
+      setSignInBlocked("Sign-in did not complete. Please try connecting again.");
+      return;
     }
-  }, [error, serviceUrl]);
+    console.log("[catalog] Auth required, starting SPA login:", onlyEntry.load.message);
+    startLoginFlow(url).catch((err) => {
+      console.error("[catalog] startLoginFlow failed:", err);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+        tags: { component: "auth", path: "start-login" },
+        extra: { serviceUrl: url },
+      });
+      setSignInBlocked(err instanceof Error ? err.message : "Failed to start login");
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onlyNeedsSignIn]);
 
-  // No ?service= — render welcome/connect page without pretending cupola
-  // itself is a VGI server. Short-circuits before the "Connecting..." flash
-  // and the 404 on /__describe__ that the old code used as a signal.
+  // Announce status changes to screen readers, batched so several catalogs
+  // settling at once read as one sentence.
+  const announcement = useStatusAnnouncements(statuses);
+
+  // No ?service= or workspace — render welcome/connect page without
+  // pretending cupola itself is a VGI server.
   //
   // Gated on `mounted` to avoid a React 19 hydration mismatch: SSR can't
-  // read window.location, so hasExplicitService() is always false during
-  // SSR. On the client, ?service=... makes it true. Without the gate the
-  // SSR output (WelcomePage) and the first client render (loading spinner)
-  // disagree. After mount we're allowed to diverge from the SSR snapshot.
-  if (mounted && !defaultServiceUrl && !hasExplicitService()) {
-    return <WelcomePage logoUrl={logoUrl} />;
-  }
+  // read window.location, so the URL is unknown during SSR. Without the gate
+  // the SSR output (WelcomePage) and the first client render (loading
+  // spinner) disagree. After mount we're allowed to diverge.
+  if (!mounted) return <ConnectingScreen logoUrl={logoUrl} serviceUrl="" message="Loading" />;
 
-  // A link that sets options with SQL expressions: ask before evaluating them.
-  if (mounted && connInput.needsConsent.length) {
+  if (boot.error) {
+    return <ErrorScreen logoUrl={logoUrl} serviceUrl={workspace ? serviceUrl : "Workspace link"} error={boot.error} />;
+  }
+  if (boot.token) return <ConnectingScreen logoUrl={logoUrl} serviceUrl="" message="Opening workspace" />;
+  if (!workspace) return <WelcomePage logoUrl={logoUrl} />;
+
+  // A workspace link: list what it attaches before attaching anything.
+  if (workspace.source === "link" && !boot.consented) {
     return (
       <BrandShell>
         <div className="flex-1 flex items-start justify-center px-6 py-12">
-          <ConsentPanel
-            serviceUrl={serviceUrl}
-            entries={connInput.needsConsent}
-            onAnswer={(granted) => { setLoading(true); setConnInput((input) => applyConsent(input, granted)); }}
+          <CatalogsConsentPanel
+            workspace={workspace}
+            onAnswer={(granted) => {
+              if (!granted) {
+                window.location.href = window.location.pathname;
+                return;
+              }
+              markSessionWorkspaceConsented(workspace);
+              setBoot((b) => ({ ...b, consented: true }));
+            }}
           />
         </div>
       </BrandShell>
     );
   }
 
-  if (mounted && optionsNeeded) {
+  // A link that sets options with SQL expressions: ask before evaluating them.
+  const consentEntry = entries.find((e) => e.input.needsConsent.length > 0);
+  if (consentEntry) {
     return (
-      <OptionsRequiredScreen
-        logoUrl={logoUrl}
-        serviceUrl={serviceUrl}
-        catalogName={optionsNeeded.catalogName}
-        specs={optionsNeeded.specs}
-        initial={optionsNeeded.options}
-      />
+      <BrandShell>
+        <div className="flex-1 flex items-start justify-center px-6 py-12">
+          <ConsentPanel
+            serviceUrl={consentEntry.catalog.url}
+            entries={consentEntry.input.needsConsent}
+            onAnswer={(granted) => setEntries((list) => list.map((e) => e === consentEntry ? { ...e, input: applyConsent(e.input, granted) } : e))}
+          />
+        </div>
+      </BrandShell>
     );
   }
 
   // Loading state — animated connect screen with brand chrome so the user
-  // sees the page is alive while the catalog round-trip is in flight.
-  //
-  // Gated on `hasExplicitService()` as well as `loading`: before mount we
-  // can't read window.location, so `loading` starts true and this branch used
-  // to render on the very first paint of a no-service visit — flashing
-  // "Connecting to <cupola's own origin>" (ConnectingScreen falls back to
-  // getServiceUrl()) before the effect flipped `mounted` and the welcome page
-  // above took over. With no service there is nothing to connect to, so there
-  // is nothing to report progress on.
-  if (loading && (!mounted || defaultServiceUrl || hasExplicitService())) {
-    // Pre-mount (SSR + first client paint) we can't read window.location, so
-    // we don't yet know whether a service was named. Say something true and
-    // neutral; the heading firms up to "Connecting to <service>" one commit
-    // later, or gives way to the welcome page.
-    return mounted
-      ? <ConnectingScreen logoUrl={logoUrl} serviceUrl={serviceUrl} />
-      : <ConnectingScreen logoUrl={logoUrl} serviceUrl="" message="Loading" />;
+  // sees the page is alive while the catalog round-trips are in flight.
+  if (!settled) {
+    return <ConnectingScreen logoUrl={logoUrl} serviceUrl={single ? serviceUrl : `${entries.length} catalogs`} />;
   }
 
-  // Error state
-  if (error) {
-    // Same rule as the effect above — was a separate inline copy.
-    const isAuthError = isRecoverableAuthMessage(error);
-    const explicitService = hasExplicitService() || Boolean(defaultServiceUrl);
-
-    // Auth redirect is in progress
-    if (isAuthError) {
+  if (single && onlyEntry) {
+    const load = onlyEntry.load;
+    if (load.state === "options-needed") {
+      return (
+        <OptionsRequiredScreen
+          logoUrl={logoUrl}
+          serviceUrl={onlyEntry.catalog.url}
+          catalogName={load.catalogName}
+          specs={load.specs}
+          initial={load.options}
+        />
+      );
+    }
+    if (load.state === "sign-in-required") {
+      if (signInBlocked) return <ErrorScreen logoUrl={logoUrl} serviceUrl={serviceUrl} error={signInBlocked} />;
       return <ConnectingScreen logoUrl={logoUrl} serviceUrl={serviceUrl} message="Redirecting to sign in" />;
     }
-
-    // No ?service= param — show a welcome / connect page
-    if (!explicitService) {
-      return <WelcomePage logoUrl={logoUrl} />;
+    if (load.state === "failed") {
+      if (isRecoverableAuthMessage(load.message)) return <ConnectingScreen logoUrl={logoUrl} serviceUrl={serviceUrl} message="Redirecting to sign in" />;
+      return <ErrorScreen logoUrl={logoUrl} serviceUrl={serviceUrl} error={load.message} />;
     }
-
-    return <ErrorScreen logoUrl={logoUrl} serviceUrl={serviceUrl} error={error} />;
   }
 
-  if (!data) return null;
+  // Several catalogs and none could be read: one screen listing each.
+  if (!data) {
+    return (
+      <CatalogsFailedScreen
+        logoUrl={logoUrl}
+        entries={entries}
+        onRetry={(id) => void retry(id)}
+        onSignIn={signIn}
+        onDetails={setAttachError}
+      />
+    );
+  }
+
+  const plan = shellPlanRef.current!;
+  const catalogEntries = entries.map((e) => ({
+    id: e.catalog.id,
+    alias: e.load.state === "ready" ? e.load.shell.alias : e.catalog.alias || e.catalog.url,
+    url: e.catalog.url,
+    status: statuses.get(e.load.state === "ready" ? e.load.shell.alias : e.catalog.alias || e.catalog.url),
+    loading: e.load.state === "loading",
+  }));
+  const sidebarStatuses: SidebarCatalogStatus[] = single ? [] : catalogEntries.map((c) => ({
+    id: c.id,
+    alias: c.alias,
+    url: c.url,
+    state: c.loading ? "connecting" : c.status?.state ?? "connecting",
+    error: c.status?.error,
+    hasDetail: Boolean(c.status?.detail),
+    isDefault: c.alias === defaultAlias,
+  }));
 
   return (
     <SettingsProvider>
     <div className="flex flex-col h-dvh">
       <Header
-        catalogName={data.catalogName}
+        catalogName={defaultAlias ?? data.catalogName}
         serviceUrl={serviceUrl}
       />
       <AppTabBar
@@ -751,6 +992,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
         onCloseTab={closeTab}
       />
       <EngineStatusRibbon />
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only" data-testid="catalog-status-announcer">{announcement}</div>
       <div className="relative flex flex-1 overflow-hidden">
         {sidebarVisible && (
           <>
@@ -773,7 +1015,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
               <Sidebar
                 serviceUrl={serviceUrl}
                 catalogs={catalogs}
-                defaultCatalogName={data.catalogName}
+                defaultCatalogName={defaultAlias ?? data.catalogName}
                 inventoryError={inventory.error}
                 selection={selection}
                 onSelect={(sel) => { navigate(sel); if (isNarrow) setMobileSidebarOpen(false); }}
@@ -786,8 +1028,28 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                     shellInsertRef.current?.(text);
                   }
                 }}
-                onRefresh={() => loadCatalog(true)}
-                refreshing={refreshing || inventory.refreshing}
+                onRefresh={() => {
+                  void (async () => {
+                    await clearGrainliftCaches();
+                    await catalogInventory.refresh();
+                  })();
+                }}
+                refreshing={inventory.refreshing}
+                catalogStatuses={sidebarStatuses}
+                onRetryCatalog={(id) => void retry(id)}
+                onSignInCatalog={signIn}
+                onCatalogDetails={(alias) => {
+                  const detail = statuses.get(alias)?.detail;
+                  if (detail) setAttachError(detail);
+                }}
+                signInNotice={signInNotice ? {
+                  signedIn: signInNotice.signedIn,
+                  remaining: signInNotice.remaining
+                    .map((id) => entries.find((e) => e.catalog.id === id))
+                    .filter((e): e is CatalogEntry => Boolean(e) && e!.load.state === "sign-in-required")
+                    .map((e) => ({ id: e.catalog.id, alias: e.catalog.alias })),
+                } : null}
+                onDismissSignInNotice={() => setSignInNotice(null)}
               />
             </div>
             {!isNarrow && <div
@@ -811,7 +1073,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
               : "absolute inset-0 overflow-y-auto p-3 sm:p-6"}
             >
               <ErrorBoundary>
-                <ContentPanel catalogs={catalogs} defaultCatalogName={data.catalogName} selection={selection} attachOptions={attachOptionsAll} attachSpecs={attach?.specs} onNavigate={navigate} onOpenShell={() => setActiveTab("shell")} onPivotTable={pivotTable} />
+                <ContentPanel catalogs={catalogs} defaultCatalogName={defaultAlias ?? data.catalogName} selection={selection} onNavigate={navigate} onOpenShell={() => setActiveTab("shell")} onPivotTable={pivotTable} />
               </ErrorBoundary>
             </main>
           )}
@@ -826,7 +1088,8 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                     catalogData={data}
                     attachedCatalogs={attachedCatalogs}
                     serviceUrl={serviceUrl}
-                    attachOptions={shareAttachOptions}
+                    attachOptions={workspace.source === "service" ? shareAttachOptions : undefined}
+                    shareWorkspaceToken={workspace.source === "link" ? shareWorkspaceToken : undefined}
                     pendingSql={pendingEditorSql}
                     onPendingConsumed={() => { setPendingEditorSql(null); clearSharedSql(); }}
                     onAiBusyChange={setEditorAiBusy}
@@ -838,7 +1101,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
           {reportsMounted && (
             <div className="absolute inset-0 overflow-hidden" style={activeTab === "reports" ? undefined : { visibility: "hidden", zIndex: -1 }}>
               <ErrorBoundary><Suspense fallback={<div className="p-6">Loading reports…</div>}>
-                <EvidencePanel catalogName={data.catalogName} serviceUrl={serviceUrl} catalogs={catalogs} defaultToLibrary={initialTab !== "evidence"} />
+                <EvidencePanel catalogName={plan.catalogName} serviceUrl={serviceUrl} catalogs={catalogs} defaultToLibrary={initialTab !== "evidence"} />
               </Suspense></ErrorBoundary>
             </div>
           )}
@@ -852,8 +1115,10 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                   <div className="flex items-center justify-center h-full bg-terminal-bg text-terminal-accent text-sm">Loading…</div>
                 }>
                   <DuckDBShell
-                    serviceUrl={serviceUrl}
-                    catalogName={data.catalogName}
+                    serviceUrl={plan.serviceUrl}
+                    catalogName={plan.catalogName}
+                    catalogs={plan.catalogs}
+                    defaultCatalog={plan.defaultCatalog}
                     activeTab={activeTab}
                     onTabChange={setActiveTab}
                     onAiBusyChange={setAskAiBusy}
@@ -862,8 +1127,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                     attachedCatalogs={attachedCatalogs}
                     selection={selection}
                     onAuthError={(title, message) => setAuthError({ title, message })}
-                    onAttachError={setAttachError}
-                    attach={attach}
+                    onAttachError={(_alias, detail) => setAttachError(detail)}
                     onOptionsEvaluated={onOptionsEvaluated}
                   />
                 </Suspense>
@@ -902,16 +1166,106 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     <AttachErrorDialog
       detail={attachError}
       onClose={() => setAttachError(null)}
-      onEditOptions={() => {
-        const dest = new URL(window.location.href);
-        dest.searchParams.delete("service");
-        dest.searchParams.delete("attach_options");
-        dest.hash = `#prefill=${encodeURIComponent(serviceUrl)}`;
-        window.location.href = dest.toString();
-      }}
+      onEditOptions={() => editConnectionOptions(attachError?.serviceUrl ?? serviceUrl)}
     />
     <OptionsNoticeDialog problems={attachError ? [] : optionNotices} onClose={() => setOptionNotices([])} />
     </SettingsProvider>
+  );
+}
+
+/** Back to the connect form, prefilled with this service. */
+function editConnectionOptions(serviceUrl: string) {
+  const dest = new URL(window.location.href);
+  dest.searchParams.delete("service");
+  dest.searchParams.delete("attach_options");
+  dest.searchParams.delete(LOCAL_WS_PARAM);
+  dest.hash = `#prefill=${encodeURIComponent(serviceUrl)}`;
+  window.location.href = dest.toString();
+}
+
+const STATE_WORDS: Record<CatalogStatus["state"], string> = {
+  connecting: "connecting",
+  attached: "attached",
+  "sign-in-required": "needs sign-in",
+  failed: "failed to attach",
+  disabled: "disabled",
+};
+
+/** A polite live-region message for status changes, batched over a short
+ *  window so several catalogs settling together read as one announcement. */
+function useStatusAnnouncements(statuses: ReadonlyMap<string, CatalogStatus>): string {
+  const [message, setMessage] = useState("");
+  const previous = useRef<Map<string, CatalogStatus["state"]>>(new Map());
+  const pending = useRef<Map<string, CatalogStatus["state"]>>(new Map());
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    for (const [alias, status] of statuses) {
+      if (status.state === "connecting") continue;
+      if (previous.current.get(alias) === status.state) continue;
+      previous.current.set(alias, status.state);
+      pending.current.set(alias, status.state);
+    }
+    if (!pending.current.size || timer.current) return;
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      const parts = [...pending.current].map(([alias, state]) => `${alias} ${STATE_WORDS[state]}`);
+      pending.current.clear();
+      setMessage(`${parts.join(". ")}.`);
+    }, 750);
+  }, [statuses]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  return message;
+}
+
+/** Several catalogs, none of which could be read. */
+function CatalogsFailedScreen({
+  logoUrl,
+  entries,
+  onRetry,
+  onSignIn,
+  onDetails,
+}: {
+  logoUrl: string;
+  entries: CatalogEntry[];
+  onRetry: (id: string) => void;
+  onSignIn: (id: string) => void;
+  onDetails: (detail: AttachErrorDetail) => void;
+}) {
+  return (
+    <BrandShell>
+      <div className="flex-1 flex items-start justify-center px-6 py-12">
+        <div className="w-full max-w-xl" data-testid="catalogs-failed">
+          <div className="text-center mb-6">
+            <img src={logoUrl} alt="" aria-hidden="true" width={80} height={80} className="w-20 h-20 mx-auto mb-4 rounded-2xl shadow-lg" />
+            <h1 className="font-heading text-2xl font-bold text-soil-900 dark:text-cream mb-2">No catalog could be attached</h1>
+            <p className="text-sm text-muted-foreground">Retry a catalog, sign in, or check its server.</p>
+          </div>
+          <ul className="space-y-3">
+            {entries.map((e) => {
+              const load = e.load;
+              const detail = load.state === "failed" ? load.detail : load.state === "options-needed" ? load.detail : undefined;
+              const message = load.state === "failed" ? load.message
+                : load.state === "sign-in-required" ? "Sign-in required."
+                  : load.state === "options-needed" ? `Needs connection options: ${load.specs.filter((s) => s.required).map((s) => s.name).join(", ")}`
+                    : load.state === "loading" ? "Connecting…" : "";
+              return (
+                <li key={e.catalog.id} className="bg-card rounded-xl ring-1 ring-foreground/10 p-4" data-testid="catalog-failed-row">
+                  <div className="font-mono text-sm font-semibold text-foreground break-all">{e.catalog.alias || e.catalog.catalogName || e.catalog.url}</div>
+                  <div className="font-mono text-xs text-muted-foreground break-all">{e.catalog.url}</div>
+                  <div role="alert" className="mt-2 text-xs text-destructive break-words">{message}</div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {load.state === "sign-in-required"
+                      ? <Button size="sm" onClick={() => onSignIn(e.catalog.id)}>Sign in to {e.catalog.alias}</Button>
+                      : <Button size="sm" variant="outline" disabled={load.state === "loading"} onClick={() => onRetry(e.catalog.id)}>Retry</Button>}
+                    {detail && <Button size="sm" variant="ghost" onClick={() => onDetails(detail)}>Details</Button>}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      </div>
+    </BrandShell>
   );
 }
 
@@ -1042,6 +1396,7 @@ const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
     const dest = new URL(window.location.href);
     dest.searchParams.set("service", trimmed);
     dest.searchParams.delete("attach_options");
+    dest.searchParams.delete(LOCAL_WS_PARAM);
     dest.hash = "";
     window.location.href = dest.toString();
   };
@@ -1254,6 +1609,7 @@ function ErrorScreen({
   const connectTo = (url: string) => {
     const dest = new URL(window.location.href);
     dest.searchParams.set("service", url);
+    dest.searchParams.delete(LOCAL_WS_PARAM);
     dest.hash = "";
     window.location.href = dest.toString();
   };
@@ -1480,13 +1836,11 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
 }
 
 function ContentPanel({
-  catalogs, defaultCatalogName, selection, attachOptions, attachSpecs, onNavigate, onOpenShell, onPivotTable,
+  catalogs, defaultCatalogName, selection, onNavigate, onOpenShell, onPivotTable,
 }: {
   catalogs: CatalogData[];
   defaultCatalogName: string;
   selection: Selection | null;
-  attachOptions?: Record<string, string>;
-  attachSpecs?: OptionSpecInfo[];
   onNavigate: (selection: Selection) => void;
   onOpenShell?: () => void;
   /** Pivot the selected table in the Perspective tab. */
@@ -1499,7 +1853,7 @@ function ContentPanel({
   if (catalog.metadataError) return <div role="alert" className="p-6 text-sm"><p>Could not load all metadata for {catalog.catalogName}.</p><p className="text-muted-foreground mt-2">{catalog.metadataError}</p><Button className="mt-3" variant="outline" onClick={() => void catalogInventory.refresh()}>Retry catalog metadata</Button></div>;
   const overview = catalog.catalogName === "memory"
     ? <MemoryCatalogOverview catalog={catalog} onNavigate={onCatalogNavigate} />
-    : <CatalogOverview catalog={catalog} serviceUrl={catalog.sourceUrl} attachOptions={catalog.primary ? attachOptions : undefined} attachSpecs={catalog.primary ? attachSpecs : undefined} onNavigate={onCatalogNavigate} />;
+    : <CatalogOverview catalog={catalog} serviceUrl={catalog.sourceUrl} attachOptions={connectBoxOptions(catalog)} attachSpecs={catalog.attachSpecs} onNavigate={onCatalogNavigate} />;
   if (!selection || selection.type === "catalog") return overview;
 
   if (selection.type === "relationships") {
@@ -1524,7 +1878,7 @@ function ContentPanel({
 
   if (selection.type === "table") {
     const table = schema.tables.find((t) => t.name === selection.name);
-    if (table) return <TableDetail table={table} catalogName={catalog.catalogName} onNavigate={onCatalogNavigate} onOpenShell={onOpenShell} onPivot={onPivotTable} />;
+    if (table) return <TableDetail table={table} catalogName={catalog.catalogName} databaseType={catalog.databaseType} onNavigate={onCatalogNavigate} onOpenShell={onOpenShell} onPivot={onPivotTable} />;
   }
 
   if (selection.type === "view") {
@@ -1545,14 +1899,14 @@ function ContentPanel({
   return overview;
 }
 
-/** Whether a Grainlift gateway publishes OAuth discovery (RFC 9728). */
-async function advertisesOAuth(httpUrl: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${extractOrigin(httpUrl)}/.well-known/oauth-protected-resource`);
-    return response.ok;
-  } catch {
-    return false;
-  }
+/** The options a catalog's ConnectBox snippets show: the non-secret values,
+ *  plus each secret by name only (the snippet reads it with getenv()). */
+function connectBoxOptions(catalog: CatalogData): Record<string, string> | undefined {
+  if (!catalog.sourceUrl) return undefined;
+  return {
+    ...(catalog.attachOptions ?? {}),
+    ...Object.fromEntries((catalog.secretOptionNames ?? []).map((name) => [name, ""])),
+  };
 }
 
 /** The grainlift extension caches each attached gateway's schemas and tables;

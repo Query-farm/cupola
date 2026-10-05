@@ -67,10 +67,21 @@ export interface ResolvedSchema {
 
 /** Full catalog data ready for rendering. */
 export interface CatalogData {
+  /** The DuckDB alias: what SQL names this catalog by. */
   catalogName: string;
   databaseType?: string;
-  primary?: boolean;
+  /** The workspace's default catalog: the one `USE` points at. */
+  isDefault?: boolean;
+  /** Connection context, for catalogs the app attached itself
+   *  (catalog-inventory.ts `CatalogConnection`). */
   sourceUrl?: string;
+  /** The catalog's name on its server, when it differs from the alias. */
+  serverCatalogName?: string;
+  /** Non-secret attach options (DuckDB text). */
+  attachOptions?: Record<string, string>;
+  attachSpecs?: OptionSpecInfo[];
+  /** Options set with a secret value, by name only. */
+  secretOptionNames?: string[];
   /** Metadata may be partial; the attachment itself is still valid. */
   metadataError?: string;
   catalogComment: string | null;
@@ -167,6 +178,8 @@ export interface FetchedCatalog {
   /** True when the tree was NOT read over RPC and is left for DuckDB to fill
    *  in once the engine has attached the catalog (see `fetchCatalog`). */
   treeFromEngine: boolean;
+  /** Every catalog the service lists, by server name. */
+  availableCatalogs: string[];
 }
 
 /** Connect to a VGI service and fetch all catalog metadata.
@@ -180,7 +193,10 @@ export interface FetchedCatalog {
  *  attach is skipped and the tree comes from DuckDB alone: one source of
  *  truth, built from the same ATTACH the shell runs, rather than a second
  *  attach that has to replicate the options' typing in Arrow. */
-export async function fetchCatalog(serviceUrl: string, { hasOptions = false }: { hasOptions?: boolean } = {}): Promise<FetchedCatalog> {
+export async function fetchCatalog(
+  serviceUrl: string,
+  { hasOptions = false, catalogName: requested }: { hasOptions?: boolean; catalogName?: string } = {},
+): Promise<FetchedCatalog> {
   const token = await getAuthTokenForService(serviceUrl);
   console.log("[service] fetchCatalog:", serviceUrl, token ? "with token" : "NO TOKEN");
   const rpc = httpConnect(serviceUrl, {
@@ -190,8 +206,14 @@ export async function fetchCatalog(serviceUrl: string, { hasOptions = false }: {
 
   try {
     // Discover catalogs, their declared options, and attach
+    // A service may list several catalogs. A `?service=` link means its
+    // first; a workspace names the one it wants.
     const infos = await client.catalogsInfo();
-    const info = infos[0];
+    const availableCatalogs = infos.map((i) => i.name);
+    const info = requested ? infos.find((i) => i.name === requested) : infos[0];
+    if (requested && !info) {
+      throw new Error(`The service has no catalog named "${requested}"${availableCatalogs.length ? ` (it lists: ${availableCatalogs.join(", ")})` : ""}.`);
+    }
     const catalogName = info?.name ?? "unknown";
     const specs = decodeOptionSpecs(info?.attach_option_specs);
     const implementationVersion = info?.implementation_version ?? null;
@@ -201,6 +223,7 @@ export async function fetchCatalog(serviceUrl: string, { hasOptions = false }: {
         specs,
         implementationVersion,
         treeFromEngine: true,
+        availableCatalogs,
       };
     }
     const attach = await client.catalogAttach(catalogName);
@@ -249,6 +272,7 @@ export async function fetchCatalog(serviceUrl: string, { hasOptions = false }: {
       specs,
       implementationVersion,
       treeFromEngine: false,
+      availableCatalogs,
     };
   } finally {
     client.close();
