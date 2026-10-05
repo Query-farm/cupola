@@ -270,6 +270,9 @@ away.
 - **Renaming an alias** warns with counts of the reports and editor tabs that
   reference the old `alias.`, and offers to rewrite them through DuckDB's parser
   (`json_serialize_sql` + `json_deserialize_sql`), or just to warn.
+  - As built (phase 3C): a SQL tokenizer instead (`workspace/alias-rewrite.ts`). A
+    deserialized statement comes back reformatted, losing comments and layout, and
+    counting needs no booted engine. See CLAUDE.md for what counts as a reference.
 - **Workspace file:**
   - `{"$schema": ".../workspace-v1.json", "format": "cupola-workspaces", "version": 1, "workspaces": [...]}`.
   - Publish the JSON Schema at `public/schema/workspace-v1.json`.

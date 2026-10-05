@@ -1,6 +1,6 @@
 import { sessionCatalogs } from "@/lib/catalog-store";
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square, FileDown, MoreHorizontal, Loader2, Check, ChevronRight, Download, Upload } from 'lucide-react';
 import { Button, buttonVariants } from '../ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu';
@@ -10,7 +10,10 @@ import { hasSqlStatements, materializeReportQuery } from '../../lib/reports/para
 import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveParameters, saveEvidenceReport, validateEvidenceReport, describeReportError, saveRecoveryDraft, clearRecoveryDraft, loadRecoveryDraft, listUnsavedDrafts, titled, isQuotaError, UNTITLED_REPORT, STORAGE_FULL_MESSAGE, STORAGE_PREFIX, LEGACY_STORAGE_PREFIX, type EvidenceReport, type ParameterValues } from '../../lib/evidence/reports';
 import { newDrillExampleReport, newEvidenceReport } from '../../lib/evidence/templates';
 import { reportScope } from '../../lib/evidence/reports';
-import { listWorkspaces, workspaceLabel, type Workspace } from '../../lib/workspace/store';
+import { getWorkspace, hostOf, listWorkspaces, subscribeWorkspaces, workspaceLabel, type Workspace } from '../../lib/workspace/store';
+import { resolveRequires, rewriteReportAliases, withDerivedRequires, type RequireCatalog } from '../../lib/evidence/report-requires';
+import { rebindLabel, REPORT_REWRITE_EVENT, rewriteReportForRename, type ReportRewrite } from '../../lib/workspace/alias-rename';
+import { openAttachCatalog } from '../../lib/workspace/events';
 import { OPEN_REPORT_EVENT, type OpenReportDetail } from '../../lib/evidence/open-report';
 import { parseReportFile, planImport, reportFileName, serializeReportFile, REPORT_FILE_EXTENSION } from '../../lib/evidence/report-file';
 import { emptyHistory, loadReportHistory, mergeHistories, recordRevision, removeRevision, revisionReport, saveReportHistory, shrinkStoredHistory, specOf, type ReportHistory, type Revision, type RevisionMeta } from '../../lib/evidence/revisions';
@@ -52,6 +55,10 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   // Reports are kept per workspace (multi-catalog phase 2); without one (a test harness), per service.
   const scope = workspaceId ?? serviceUrl;
   const stamp = (next: EvidenceReport): EvidenceReport => workspaceId ? { ...next, workspaceId } : next;
+  // The workspace's catalogs, for the report's `requires`: derived on save, resolved on open.
+  const storedWorkspace = useSyncExternalStore(subscribeWorkspaces, () => workspaceId ? getWorkspace(workspaceId) : null, () => null);
+  const requireCatalogs = (ws: Workspace | null | undefined = workspaceId ? getWorkspace(workspaceId) : null): RequireCatalog[] =>
+    (ws?.catalogs ?? []).filter(c => c.alias).map(c => ({ alias: c.alias, url: c.url, catalogName: c.catalogName }));
   const [initial] = useState(() => {
     let reports: EvidenceReport[] = [], error = '';
     try { reports = listEvidenceReports(scope); } catch (e) { error = `Could not read saved reports: ${message(e)}`; }
@@ -511,7 +518,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     const before = savedRef.current ? JSON.parse(savedRef.current) as EvidenceReport : null;
     let stored: EvidenceReport;
     // A blank title (being retyped) saves as "Untitled report"; the field stays as typed.
-    try { stored = saveReport(titled(next)); }
+    // `requires` follows the SQL: the workspace catalogs it names, and earlier ones it still names.
+    try { stored = saveReport(withDerivedRequires(titled(next), requireCatalogs())); }
     catch (e) {
       const kept = saveRecoveryDraft(next);
       setSaveError(describeReportError(e) + (kept ? '' : isQuotaError(e) ? '. Your changes are only in this tab: export a report file before closing it' : ''));
@@ -585,6 +593,44 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     }
     session.current = crypto.randomUUID();
   }
+  /** A catalog alias rename (`AliasRenameDialog`) rewrites the open report here, through the same
+   *  save as an edit, so its revision and the draft on screen agree. Edits the reader made first are
+   *  saved before it, so the rename's label never claims them. */
+  const aliasRewrite = useRef<(detail: ReportRewrite) => void>(() => {});
+  aliasRewrite.current = detail => {
+    if (detail.scope !== scope || library && !savedRef.current) return;
+    const current = reportRef.current;
+    const next = rewriteReportForRename(current, detail.from, detail.to);
+    detail.handled.push(current.id);
+    if (!next) return;
+    if (!savedRef.current) { change(next); return; }
+    if (unsaved()) persist(current, { kind: 'edit', session: session.current });
+    change(next);
+    if (!persist(next, { kind: 'edit', label: detail.label })) detail.errors.push(`“${titled(next).title}” could not be saved; its changes are kept in this browser until it can be.`);
+    session.current = crypto.randomUUID();
+  };
+  useEffect(() => {
+    const rewrite = (event: Event) => aliasRewrite.current((event as CustomEvent<ReportRewrite>).detail);
+    window.addEventListener(REPORT_REWRITE_EVENT, rewrite);
+    return () => window.removeEventListener(REPORT_REWRITE_EVENT, rewrite);
+  }, []);
+
+  // `requires`: a report written for catalogs this workspace has under other aliases offers to
+  // rebind them; one that reads catalogs it doesn't have offers to attach them, or to open anyway.
+  const requires = useMemo(() => resolveRequires(report.requires, requireCatalogs(storedWorkspace)), [report.requires, storedWorkspace]);
+  const [requiresDismissed, setRequiresDismissed] = useState<ReadonlySet<string>>(new Set());
+  const showRequires = Boolean(workspaceId) && !library && !requires.ok && !requiresDismissed.has(report.id);
+  function rebind() {
+    const pairs = requires.rebind.map(({ from, to }) => ({ from, to }));
+    if (!pairs.length) return;
+    if (savedRef.current && unsaved()) persist(reportRef.current, { kind: 'edit', session: session.current });
+    const { report: next } = rewriteReportAliases(reportRef.current, Object.fromEntries(pairs.map(pair => [pair.from, pair.to])));
+    change(next);
+    if (savedRef.current && persist(next, { kind: 'edit', label: rebindLabel(pairs) })) setNotice(`${rebindLabel(pairs)}.`);
+    session.current = crypto.randomUUID();
+    void refresh(reportRef.current);
+  }
+
   function saveCopy() {
     try {
       const before = savedRef.current ? JSON.parse(savedRef.current) as EvidenceReport : null;
@@ -671,12 +717,14 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       let existing: EvidenceReport[] = [];
       try { existing = listEvidenceReports(target.id); } catch { /* Treated as empty. */ }
       const id = existing.some(r => r.id === item.id) ? crypto.randomUUID() : item.id;
-      const copied = saveEvidenceReport({ ...item, id, workspaceId: target.id, serviceUrl: targetDefault?.url ?? item.serviceUrl, title: id === item.id ? item.title : `${item.title} (copy)` });
+      // It carries what it reads here, so opening it there can offer Rebind or Attach.
+      const withRequires = withDerivedRequires(item, requireCatalogs());
+      const copied = saveEvidenceReport({ ...withRequires, id, workspaceId: target.id, serviceUrl: targetDefault?.url ?? item.serviceUrl, title: id === item.id ? item.title : `${item.title} (copy)` });
       try { saveReportHistory(target.id, copied.id, loadReportHistory(scope, item.id)); } catch { /* The copy starts its own history. */ }
-      const missing = [...new Set([...(item.source + '\n' + item.setupSql).matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_]/g)].map(m => m[1]))]
-        .filter(alias => catalogs.some(c => c.catalogName === alias) && !target.catalogs.some(c => c.alias.toLowerCase() === alias.toLowerCase()));
+      const unmet = resolveRequires(copied.requires, requireCatalogs(target));
+      const names = [...unmet.rebind.map(r => r.from), ...unmet.missing.map(r => r.alias)];
       setError('');
-      setNotice(`Copied “${item.title}” to ${workspaceLabel(target)}.${missing.length ? ` That workspace has no catalog named ${missing.join(', ')}, which the report reads.` : ''}`);
+      setNotice(`Copied “${item.title}” to ${workspaceLabel(target)}.${names.length ? ` That workspace has no catalog named ${names.join(', ')}, which the report reads; opening it there offers to rebind or attach ${names.length === 1 ? 'it' : 'them'}.` : ''}`);
     } catch (e) { setError(`Could not copy the report: ${describeReportError(e)}`); }
   }
   /** Download reports as a report file, to move them to another browser or person. */
@@ -742,9 +790,11 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       } catch (e) { problems.push(`“${plan.report.title}”: ${message(e)}`); }
     }
     reloadList();
+    // Reports written for catalogs this workspace has under other aliases, or doesn't have.
+    const unmet = plans.filter(plan => plan.action !== 'unchanged' && !resolveRequires(plan.report.requires, requireCatalogs()).ok).length;
     const imported = counts.new + counts.replace + counts.copy;
     const details = [counts.replace && `${counts.replace} replaced`, counts.copy && `${counts.copy} kept as a copy`, counts.unchanged && `${counts.unchanged} already saved`].filter(Boolean).join(', ');
-    setNotice(incoming.length ? `Imported ${imported} ${imported === 1 ? 'report' : 'reports'}${details ? ` (${details})` : ''}.` : '');
+    setNotice(incoming.length ? `Imported ${imported} ${imported === 1 ? 'report' : 'reports'}${details ? ` (${details})` : ''}.${unmet ? ` ${unmet === 1 ? 'One reads catalogs' : `${unmet} read catalogs`} this workspace has under another alias or doesn't have: open ${unmet === 1 ? 'it' : 'one'} to rebind or attach them.` : ''}` : '');
     setError(problems.length ? `Could not import:\n${problems.join('\n')}` : '');
   }
   function remove(item: EvidenceReport) {
@@ -840,6 +890,21 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     {error && <div role="alert" className="m-5 whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
     {notice && <p role="status" className="mx-5 mt-3 text-xs text-muted-foreground">{notice}</p>}
     {recovered && !library && <p role="status" className="mx-5 mt-3 text-xs text-muted-foreground">{RECOVERED_NOTICE}</p>}
+    {showRequires && <div role="region" aria-label="Report catalogs" data-testid="report-requires-banner" className="mx-5 mt-3 space-y-2 rounded-lg border border-amber-300 bg-amber-50/60 p-3 text-sm dark:border-amber-700/60 dark:bg-amber-950/20">
+      {requires.rebind.length > 0 && <div className="flex flex-wrap items-center gap-2">
+        <p className="min-w-0 flex-1">
+          This report was written for {requires.rebind.map((item, index) => <span key={item.from}>{index > 0 && ', '}<code>{item.from}</code>{item.from.toLowerCase() !== item.to.toLowerCase() && <> (here <code>{item.to}</code>)</>}</span>)}: the same {requires.rebind.length === 1 ? 'catalog' : 'catalogs'} under another alias in this workspace.
+        </p>
+        <Button size="sm" disabled={busy} onClick={rebind}>Rebind</Button>
+      </div>}
+      {requires.missing.map(item => <div key={item.alias} className="flex flex-wrap items-center gap-2">
+        <p className="min-w-0 flex-1">This report reads <code>{item.alias}</code> ({item.catalogName || 'catalog'} on {hostOf(item.url)}), which isn't in this workspace.</p>
+        <Button size="sm" variant="outline" onClick={() => openAttachCatalog({ url: item.url, catalogName: item.catalogName || undefined, alias: item.alias })}>Attach {item.alias}…</Button>
+      </div>)}
+      <div className="flex justify-end">
+        <Button size="sm" variant="ghost" onClick={() => setRequiresDismissed(current => new Set([...current, report.id]))}>{requires.missing.length ? 'Open anyway' : 'Not now'}</Button>
+      </div>
+    </div>}
     <section hidden={!library} className="mx-auto w-full max-w-6xl flex-1 overflow-auto space-y-5 p-5" aria-label="Saved reports list">
       <p className="text-sm text-muted-foreground">Reports for this worker are saved in this browser, including source, parameter definitions, and selected values. Data is refreshed when you open a report. Export report files to share reports or move them to another browser; an imported report runs its SQL with your connection when you open it, so import only reports you trust.</p>
       <div className="relative max-w-sm"><Search className="absolute left-2.5 top-2 size-4 text-muted-foreground" /><Input className="pl-8" aria-label="Search saved reports" placeholder="Search reports…" value={search} onChange={e => setSearch(e.target.value)} /></div>

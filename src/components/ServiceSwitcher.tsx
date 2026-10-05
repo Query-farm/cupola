@@ -29,6 +29,7 @@ import { hostOf, listWorkspaces, workspaceLabel, type Workspace } from "@/lib/wo
 import { CatalogChip, ChipStack } from "./workspace/CatalogChip";
 import { AttachCatalogForm, type AttachRequest } from "./workspace/AttachCatalogForm";
 import { cn } from "@/lib/utils";
+import { OPEN_ATTACH_EVENT, type AttachPrefill } from "@/lib/workspace/events";
 
 export interface PickerCatalog {
   id: string;
@@ -69,8 +70,9 @@ interface Props {
 }
 
 /** Open the picker on its "Attach a catalog…" form (the sidebar's empty
- *  workspace button). */
-export const OPEN_ATTACH_EVENT = "cupola:open-attach-catalog";
+ *  workspace button, a report's Attach, the command palette). Defined in
+ *  `lib/workspace/events.ts` so those can fire it without this component. */
+export { OPEN_ATTACH_EVENT } from "@/lib/workspace/events";
 
 const NEEDS_ATTENTION: ReadonlySet<CatalogAttachState> = new Set(["failed", "sign-in-required"]);
 
@@ -229,6 +231,8 @@ export function ServiceSwitcher({ workspace, catalogs, actions }: Props) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(workspace.name ?? "");
   const [attaching, setAttaching] = useState(false);
+  /** What the attach form opens with, when something asked for a particular catalog. */
+  const [prefill, setPrefill] = useState<AttachPrefill | null>(null);
   const [share, setShare] = useState<{ url: string; omitted: string[] } | null>(null);
   const [shareCopied, setShareCopied] = useState(false);
   const [others, setOthers] = useState<Workspace[]>([]);
@@ -242,7 +246,11 @@ export function ServiceSwitcher({ workspace, catalogs, actions }: Props) {
   }, [open]);
   useEffect(() => { setName(workspace.name ?? ""); }, [workspace.name]);
   useEffect(() => {
-    const openAttach = () => { setOpen(true); setTimeout(() => setAttaching(true), 0); };
+    const openAttach = (event: Event) => {
+      setPrefill((event as CustomEvent<AttachPrefill | undefined>).detail ?? null);
+      setOpen(true);
+      setTimeout(() => setAttaching(true), 0);
+    };
     window.addEventListener(OPEN_ATTACH_EVENT, openAttach);
     return () => window.removeEventListener(OPEN_ATTACH_EVENT, openAttach);
   }, []);
@@ -327,6 +335,8 @@ export function ServiceSwitcher({ workspace, catalogs, actions }: Props) {
           {attaching ? (
             <div className="border-t border-border">
               <AttachCatalogForm
+                key={prefill ? JSON.stringify(prefill) : "blank"}
+                initial={prefill ?? undefined}
                 takenAliases={catalogs.map((c) => c.alias)}
                 onCancel={() => setAttaching(false)}
                 onAttach={async (requests) => {
@@ -340,7 +350,7 @@ export function ServiceSwitcher({ workspace, catalogs, actions }: Props) {
             <button
               type="button"
               data-row-primary
-              onClick={() => setAttaching(true)}
+              onClick={() => { setPrefill(null); setAttaching(true); }}
               className="w-full flex items-center gap-2 px-4 py-2 text-left text-sm text-foreground hover:bg-muted focus-visible:bg-muted outline-none"
               data-testid="attach-catalog-open"
             >

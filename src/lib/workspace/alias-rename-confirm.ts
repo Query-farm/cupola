@@ -16,7 +16,7 @@ export function aliasRenameMessage(oldAlias: string, newAlias: string): string {
     + `Saved reports, editor tabs and queries that name "${oldAlias}." are not rewritten; they will fail until you change them.`;
 }
 
-// phase3-wire: AliasRenameDialog
+// The fallback when no AliasRenameDialog is wired (the app passes `requestAliasRename`).
 export function confirmAliasRenameWith(confirm: (message: string) => boolean): AliasRenameHandler {
   return async (workspaceId, catalogId, oldAlias, newAlias) => {
     if (!confirm(aliasRenameMessage(oldAlias, newAlias))) return false;

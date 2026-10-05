@@ -85,6 +85,27 @@ export function loadEditorState(serviceUrl?: string): EditorState {
   }
 }
 
+/** A scope's stored tabs without loading them for the editor: no seeding and no legacy
+ *  migration, so reading another workspace's tabs (the alias-rename dialog) changes nothing.
+ *  Falls back to the scope's pre-workspace key like `loadEditorState`. Null when none. */
+export function readEditorState(scope: string): EditorState | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    let raw = localStorage.getItem(storageKey(scope));
+    const legacyScope = legacyScopeFor(scope);
+    if (!raw && legacyScope) raw = localStorage.getItem(storageKey(legacyScope));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<EditorState>;
+    const docs = Array.isArray(parsed.docs)
+      ? parsed.docs.filter((d): d is EditorDoc => !!d && typeof d.id === "string" && typeof d.sql === "string")
+      : [];
+    if (!docs.length) return null;
+    return { version: 1, docs, activeId: docs.some((d) => d.id === parsed.activeId) ? parsed.activeId! : docs[0].id };
+  } catch {
+    return null;
+  }
+}
+
 /** Persist editor state for the given server. Never throws. */
 export function saveEditorState(state: EditorState, serviceUrl?: string): void {
   if (typeof localStorage === "undefined") return;

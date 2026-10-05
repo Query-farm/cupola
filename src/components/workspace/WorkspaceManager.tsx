@@ -89,7 +89,7 @@ export interface WorkspaceManagerProps {
   live?: LiveWorkspaceHooks;
   /** Asked before an alias changes; resolves true once it has changed.
    *  Defaults to a plain confirm that rewrites nothing. */
-  // phase3-wire: AliasRenameDialog
+  // The app passes `requestAliasRename` (the AliasRenameDialog, store-only).
   onAliasRenameRequested?: AliasRenameHandler;
 }
 

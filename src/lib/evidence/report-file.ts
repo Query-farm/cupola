@@ -4,7 +4,13 @@ import { compactHistory, emptyHistory, validateHistory, type ReportHistory } fro
 /** A report file: one or more complete report specifications (source, setup SQL, parameters and
  *  their values, drill paths, semantic datasets, pivots, appearance) with each report's revision
  *  history, for moving reports between browsers and people. Reports are otherwise saved only in
- *  this browser's localStorage. Version 1 files have no history and still import. */
+ *  this browser's localStorage. Version 1 files have no history and still import.
+ *
+ *  Each report also carries its `requires` (the catalogs its SQL names, by alias, URL and server
+ *  name). That field is additive and optional, so it needs no new version: a file without it
+ *  imports as before, and an older Cupola reading a file with it drops the unknown key (zod strips
+ *  it) rather than refusing the report. A malformed `requires` is dropped, not fatal. Importing
+ *  keeps the file's `requires` as is, so opening the report can offer Rebind or Attach. */
 export const REPORT_FILE_FORMAT = 'cupola-evidence-reports';
 export const REPORT_FILE_VERSION = 2;
 export const REPORT_FILE_EXTENSION = '.cupola-reports.json';
@@ -86,7 +92,7 @@ export type ImportAction = 'new' | 'replace' | 'copy' | 'unchanged';
 export interface PlannedImport { report: EvidenceReport; action: ImportAction; existing?: EvidenceReport }
 
 /** The content that makes two reports the same, whatever was saved when and where. */
-const spec = ({ createdAt: _c, updatedAt: _u, serviceUrl: _s, workspaceId: _w, ...rest }: EvidenceReport) => JSON.stringify(rest);
+const spec = ({ createdAt: _c, updatedAt: _u, serviceUrl: _s, workspaceId: _w, requires: _r, ...rest }: EvidenceReport) => JSON.stringify(rest);
 
 /** Plan an import into a workspace's saved reports (or, given a bare URL, a service's). Reports
  *  are saved against the workspace they are imported into, not the one they were exported from:

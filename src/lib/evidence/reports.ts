@@ -34,12 +34,19 @@ const parameterSchema = z.object({
 });
 /** An ordered chain of parameters a reader drills through by clicking charts and tables. */
 const drillPathSchema = z.object({ id: z.string().min(1), label: z.string().optional(), levels: z.array(z.string()).min(1) });
+/** A catalog a report's SQL names by alias (`alias.schema.table`), and which catalog that was when
+ *  it was saved: its service URL and its name on the server (multi-catalog phase 3). Derived on save
+ *  (`report-requires.ts`); opening the report where the same catalog has another alias offers to
+ *  rebind it, and where it is missing, to attach it. A malformed list is dropped, never fatal. */
+export const reportRequirementSchema = z.object({ alias: z.string().min(1), url: z.string(), catalogName: z.string() });
+export type ReportRequirement = z.infer<typeof reportRequirementSchema>;
 const reportSchema = z.object({
   version: z.literal(1), id: z.string().min(1), title: z.string().trim().min(1),
   source: z.string(), setupSql: z.string(), serviceUrl: z.string(),
   /** The workspace the report belongs to (multi-catalog phase 2). Reports saved before workspaces
    *  have none and are scoped by `serviceUrl`, the default catalog's URL at the time. */
   workspaceId: z.string().optional(),
+  requires: z.array(reportRequirementSchema).optional().catch(undefined),
   appearance: appearanceSchema.optional(),
   semanticDatasets: z.array(semanticDatasetSchema).optional(),
   pivots: z.array(z.object({ id: z.string().min(1), title: z.string().min(1), datasetId: z.string().min(1), config: z.record(z.string(), z.any()).optional() })).optional(),
