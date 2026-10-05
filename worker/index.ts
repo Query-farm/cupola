@@ -28,6 +28,7 @@ interface Env {
 declare global {
   interface R2ObjectBody {
     body: ReadableStream;
+    httpEtag?: string;
     text(): Promise<string>;
   }
   interface R2Bucket {
@@ -109,7 +110,27 @@ function cacheControl(key: string, isVersioned: boolean): string {
   return "public, max-age=3600";
 }
 
-function respond(obj: R2ObjectBody, key: string, extraHeaders?: Record<string, string>): Response {
+function conditionalResponse(request: Request, response: Response): Response {
+  if (request.method !== "GET" && request.method !== "HEAD") return response;
+  const condition = request.headers.get("If-None-Match");
+  const etag = response.headers.get("ETag");
+  // GET/HEAD use weak comparison; a list may contain quoted tags with commas.
+  const tags: string[] = condition?.match(/(?:W\/)?"[^"]*"|\*/g) ?? [];
+  const matches = tags.includes("*") || (etag && tags.some(tag => tag.replace(/^W\//, "") === etag.replace(/^W\//, "")));
+  if (response.status === 200 && matches) {
+    void response.body?.cancel().catch(() => {});
+    const headers = new Headers(response.headers);
+    headers.delete("Content-Length");
+    return new Response(null, { status: 304, headers });
+  }
+  if (request.method === "HEAD") {
+    void response.body?.cancel().catch(() => {});
+    return new Response(null, { status: response.status, headers: response.headers });
+  }
+  return response;
+}
+
+function respond(request: Request, obj: R2ObjectBody, key: string, extraHeaders?: Record<string, string>): Response {
   const headers = new Headers({
     "Content-Type": contentType(key),
     "Cache-Control": cacheControl(key, false),
@@ -117,10 +138,11 @@ function respond(obj: R2ObjectBody, key: string, extraHeaders?: Record<string, s
     "Cross-Origin-Embedder-Policy": "require-corp",
     "Cross-Origin-Resource-Policy": "cross-origin",
   });
+  if (obj.httpEtag) headers.set("ETag", obj.httpEtag);
   if (extraHeaders) {
     for (const [k, v] of Object.entries(extraHeaders)) headers.set(k, v);
   }
-  return new Response(obj.body, { headers });
+  return conditionalResponse(request, new Response(obj.body, { headers }));
 }
 
 async function readLatest(env: Env): Promise<string | null> {
@@ -197,7 +219,9 @@ export const handler = {
     if (path === "/_latest" || path.endsWith("/_latest")) {
       return new Response(await readLatest(env), { headers: { "Cache-Control": "no-store" } });
     }
-    const cache = (caches as unknown as { default: Cache }).default;
+    // New namespace retires cached responses missing ETags or using the old
+    // unconditional npm TTL. Browser caches already issued cannot be revoked.
+    const cache = await caches.open("cupola-assets-v2");
     // Stable paths always resolve against the live pointer, including HTML,
     // OAuth callbacks and unversioned compatibility assets.
     const cacheable = Boolean(versionMatch) || path.startsWith("/npm/");
@@ -206,12 +230,12 @@ export const handler = {
       if (cached) {
         const hit = new Response(cached.body, cached);
         hit.headers.set("x-cupola-cache", "HIT");
-        return hit;
+        return conditionalResponse(request, hit);
       }
     }
 
     const cacheAndReturn = async (res: Response): Promise<Response> => {
-      if (request.method !== "GET" || res.status !== 200 || !res.body || !cacheable || res.headers.get("Cache-Control") === "no-store") {
+      if (request.method !== "GET" || res.status !== 200 || !res.body || !cacheable || /\b(?:no-store|private|no-cache)\b/i.test(res.headers.get("Cache-Control") ?? "")) {
         res.headers.set("x-cupola-cache", "SKIP");
         return res;
       }
@@ -241,12 +265,17 @@ export const handler = {
 
     // ---- /npm/* → proxy to cdn.jsdelivr.net ----
     if (path.startsWith("/npm/")) {
-      const cdnUrl = `https://cdn.jsdelivr.net${path}`;
-      const cdnResp = await fetch(cdnUrl, { headers: { "User-Agent": "cupola" } });
+      const cdnUrl = `https://cdn.jsdelivr.net${path}${url.search}`;
+      const cdnResp = await fetch(cdnUrl, { method: request.method === "HEAD" ? "HEAD" : "GET", headers: { "User-Agent": "cupola" } });
       const headers = new Headers(cdnResp.headers);
       headers.set("Access-Control-Allow-Origin", "*");
-      headers.set("Cache-Control", "public, max-age=31536000, immutable");
-      return cacheAndReturn(new Response(cdnResp.body, { status: cdnResp.status, headers }));
+      if (!cdnResp.ok) {
+        headers.set("Cache-Control", "no-store");
+        headers.delete("Age");
+      } else if (!headers.has("Cache-Control")) {
+        headers.set("Cache-Control", "no-cache");
+      }
+      return conditionalResponse(request, await cacheAndReturn(new Response(cdnResp.body, { status: cdnResp.status, headers })));
     }
 
     // Immutable assets never fall back to another release or root files.
@@ -274,7 +303,7 @@ export const handler = {
       const resolvedKey =
         remainder === "" || remainder.endsWith("/") || !hasExtension ? "index.html" : r2Key;
       return cacheAndReturn(
-        respond(obj, resolvedKey, {
+        respond(request, obj, resolvedKey, {
           "Cache-Control": cacheControl(resolvedKey, true),
         }),
       );
@@ -288,7 +317,7 @@ export const handler = {
       const obj = await fetchWithFallback(env.ASSETS_BUCKET, r2Key, stripped);
       if (obj) {
         const contentKey = stripped.includes(".") ? stripped : "index.html";
-        return cacheAndReturn(respond(obj, contentKey, { "Cache-Control": "no-store" }));
+        return cacheAndReturn(respond(request, obj, contentKey, { "Cache-Control": "no-store" }));
       }
     }
 

@@ -1,21 +1,23 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { handler } from "../../worker/index";
 
 const previousCaches = globalThis.caches;
 afterEach(() => { Object.defineProperty(globalThis, "caches", { value: previousCaches, configurable: true }); });
-function setup(files: Record<string, string>, cached?: Response) {
+function setup(files: Record<string, string>, cached?: Response, etag = '"r2-tag"') {
+  const writes: Response[] = [];
   let matches = 0;
-  Object.defineProperty(globalThis, "caches", { configurable: true, value: { default: {
+  Object.defineProperty(globalThis, "caches", { configurable: true, value: { open: async () => ({
     match: async () => { matches++; return cached?.clone(); },
-    put: async () => {}, delete: async () => true,
-  } } });
+    put: async (_request: Request, response: Response) => { writes.push(response); }, delete: async () => true,
+  }) } });
   const bucket = { get: async (key: string) => {
     if (!(key in files)) return null;
-    return { body: new Response(files[key]).body!, text: async () => files[key] };
+    return { httpEtag: etag, body: new Response(files[key]).body!, text: async () => files[key] };
   } };
   return {
-    fetch: (path: string, accept = "text/html") => handler.fetch(new Request(`https://cupola.example${path}`, { headers: { Accept: accept } }), { ASSETS_BUCKET: bucket }, { waitUntil: () => {}, passThroughOnException: () => {} }),
+    fetch: (path: string, accept = "text/html", headers: Record<string, string> = {}, method = "GET") => handler.fetch(new Request(`https://cupola.example${path}`, { method, headers: { Accept: accept, ...headers } }), { ASSETS_BUCKET: bucket }, { waitUntil: () => {}, passThroughOnException: () => {} }),
     matches: () => matches,
+    writes,
   };
 }
 
@@ -62,5 +64,69 @@ describe("release routing", () => {
     expect(await response.json()).toEqual({ version: "2.0.0", publishedAt: "2026-10-05T12:00:00Z" });
     files._latest = "1.0.0";
     expect(await (await app.fetch("/release.json")).json()).toEqual({ version: "1.0.0", publishedAt: null });
+  });
+});
+
+
+describe("cache validators", () => {
+  test("forwards the quoted R2 ETag and stores it with the asset", async () => {
+    const app = setup({ "v1.0.0/a.js": "script" });
+    const response = await app.fetch("/v1.0.0/a.js");
+    expect(response.headers.get("ETag")).toBe('"r2-tag"');
+    expect(app.writes[0].headers.get("ETag")).toBe('"r2-tag"');
+    expect(await response.text()).toBe("script");
+  });
+  test("cold-cache exact, weak, list and wildcard matches return empty 304s", async () => {
+    for (const tag of ['"r2-tag"', 'W/"r2-tag"', '"other,tag", W/"r2-tag"', '*']) {
+      const app = setup({ "v1.0.0/a.js": "script" });
+      const response = await app.fetch("/v1.0.0/a.js", "*/*", { "If-None-Match": tag });
+      expect(response.status).toBe(304);
+      expect(response.headers.get("ETag")).toBe('"r2-tag"');
+      expect(response.headers.get("Cache-Control")).toContain("immutable");
+      expect(await response.text()).toBe("");
+      expect(app.writes).toHaveLength(0);
+    }
+  });
+  test("a different validator returns the complete body", async () => {
+    const app = setup({ "v1.0.0/a.js": "script" });
+    const response = await app.fetch("/v1.0.0/a.js", "*/*", { "If-None-Match": '"old"' });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("script");
+  });
+  test("warm-cache matches also return 304 without a body or content length", async () => {
+    const app = setup({}, new Response("script", { headers: { ETag: '"r2-tag"', "Content-Length": "6" } }));
+    const response = await app.fetch("/v1.0.0/a.js", "*/*", { "If-None-Match": 'W/"r2-tag"' });
+    expect(response.status).toBe(304);
+    expect(response.headers.get("Content-Length")).toBeNull();
+    expect(await response.text()).toBe("");
+  });
+  test("HEAD preserves validators without returning a body", async () => {
+    const app = setup({ "v1.0.0/a.js": "script" });
+    const response = await app.fetch("/v1.0.0/a.js", "*/*", {}, "HEAD");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("ETag")).toBe('"r2-tag"');
+    expect(await response.text()).toBe("");
+  });
+});
+
+describe("npm proxy caching", () => {
+  test("upstream errors are never advertised as immutable or cached", async () => {
+    const upstream = spyOn(globalThis, "fetch").mockResolvedValue(new Response("missing", { status: 404, headers: { "Cache-Control": "public, max-age=86400" } }));
+    try {
+      const app = setup({});
+      const response = await app.fetch("/npm/example@1.0.0/missing.js");
+      expect(response.status).toBe(404);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(app.writes).toHaveLength(0);
+    } finally { upstream.mockRestore(); }
+  });
+  test("moving aliases retain the upstream TTL and query string", async () => {
+    const upstream = spyOn(globalThis, "fetch").mockResolvedValue(new Response("module", { headers: { "Cache-Control": "public, max-age=60" } }));
+    try {
+      const app = setup({});
+      const response = await app.fetch("/npm/example@latest/index.js?module");
+      expect(response.headers.get("Cache-Control")).toBe("public, max-age=60");
+      expect(upstream.mock.calls[0][0]).toBe("https://cdn.jsdelivr.net/npm/example@latest/index.js?module");
+    } finally { upstream.mockRestore(); }
   });
 });
