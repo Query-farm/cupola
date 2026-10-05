@@ -23,6 +23,16 @@ Playwright suite's default `VGI_SERVICE_URL`, so `bun run test:e2e` works agains
 it with no configuration. Needs only [`uv`](https://docs.astral.sh/uv/);
 dependencies are declared inline in `stress_worker.py`.
 
+### Attach-options variant
+
+`CUPOLA_TEST_ATTACH_OPTIONS=1 PORT=9010 ./run.sh` serves the same data as
+`cupola_secure`, a catalog that declares attach options: `api_key` (required,
+secret), `region` (VARCHAR) and `max_rows` (INTEGER). It refuses an ATTACH
+without `api_key`, which is what `tests/attach-options.spec.ts` needs (it reads
+the variant's URL from `VGI_OPTIONS_SERVICE_URL`, default
+`http://localhost:9010`). Needs vgi-python 0.38+, the first release with the
+`secret` flag.
+
 From a DuckDB-compatible CLI, without HTTP:
 
 ```sql

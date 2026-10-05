@@ -16,8 +16,11 @@
 #     # the header fails at ATTACH only, so the sidebar tree renders fine from
 #     # the HTTP client and it is the SQL shell that is dead; a worker still on
 #     # `__describe__` 404s the catalog fetch instead, and nothing renders.
-#     "vgi-python[http]>=0.36.1,<0.37",
-#     "vgi-rpc>=0.47.1,<0.48",
+#     #
+#     # 0.38.0 added `secret` to attach option specs, which the
+#     # CUPOLA_TEST_ATTACH_OPTIONS variant below declares.
+#     "vgi-python[http]>=0.38.1,<0.39",
+#     "vgi-rpc>=0.47.2,<0.48",
 #     "numpy",
 #     "pyarrow",
 # ]
@@ -33,6 +36,7 @@ See README.md for the dataset inventory and how to run it.
 """
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar
@@ -45,6 +49,7 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi import Arg, Worker
 from vgi.arguments import Arguments
 from vgi.catalog import Catalog, Schema, Table, View
+from vgi.catalog.attach_option import AttachOption
 from vgi.table_function import (
     OutputCollector,
     ProcessParams,
@@ -871,11 +876,33 @@ EDGE = schema(
 )
 
 
+# CUPOLA_TEST_ATTACH_OPTIONS=1 serves the same data as `cupola_secure`, a
+# catalog that declares attach options: one required secret, one optional
+# string and one optional integer. It cannot be attached without `api_key`, so
+# it exercises Cupola's typed options form, the secret store and the
+# pre-ATTACH required/type checks. Run it on a second port beside the plain
+# worker (the suite's attach-options spec reads VGI_OPTIONS_SERVICE_URL):
+#
+#   CUPOLA_TEST_ATTACH_OPTIONS=1 PORT=9010 ./run.sh
+ATTACH_OPTIONS_VARIANT = os.environ.get("CUPOLA_TEST_ATTACH_OPTIONS") == "1"
+
+
+class SecureAttachOptions:
+    """Attach options of the ``cupola_secure`` variant."""
+
+    api_key: Annotated[str, AttachOption(desc="API key for the test catalog. Any non-empty value is accepted.", required=True, secret=True)]
+    region: Annotated[str, AttachOption(desc="Region label")] = "us-east-1"
+    max_rows: Annotated[int, AttachOption(desc="Row cap (an INTEGER)", arrow_type=pa.int32())] = 100
+
+
 class CupolaTestWorker(Worker):
-    """Serves the ``cupola_test`` catalog."""
+    """Serves the ``cupola_test`` catalog (or ``cupola_secure``, see above)."""
+
+    if ATTACH_OPTIONS_VARIANT:
+        AttachOptions = SecureAttachOptions
 
     catalog = Catalog(
-        name="cupola_test",
+        name="cupola_secure" if ATTACH_OPTIONS_VARIANT else "cupola_test",
         default_schema="small",
         comment="Synthetic datasets for testing Cupola: reports, grids, charts, Perspective",
         tags={
