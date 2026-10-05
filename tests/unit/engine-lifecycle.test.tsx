@@ -13,8 +13,8 @@ afterAll(() => GlobalRegistrator.unregister());
 
 describe("shared data-engine lifecycle", () => {
   test("does not become ready until the complete attach flow finishes", async () => {
-    setBootPhase("Downloading Haybarn", 42);
-    expect(getEngineLifecycleSnapshot()).toMatchObject({ status: "starting", phase: "Downloading Haybarn", progress: 42 });
+    setBootPhase("Downloading", 42);
+    expect(getEngineLifecycleSnapshot()).toMatchObject({ status: "starting", phase: "Downloading", progress: 42 });
 
     let resolved = false;
     const ready = waitForEngineReady().then(() => { resolved = true; });
@@ -37,17 +37,18 @@ describe("shared data-engine lifecycle", () => {
   });
 
   test("renders progress globally, then exposes a recoverable failure", async () => {
-    setBootPhase("Downloading Haybarn", 37);
+    setBootPhase("Downloading", 37);
     const view = render(<EngineStatusRibbon />);
     expect(view.getByTestId("engine-status-ribbon").getAttribute("data-engine-status")).toBe("starting");
     expect(view.getByText("37%")).toBeTruthy();
+    expect(view.getByText("Preparing the query engine")).toBeTruthy();
 
     await act(async () => setBootPhase("Connecting to weather", null, "attaching"));
     expect(view.getByTestId("engine-status-ribbon").getAttribute("data-engine-status")).toBe("attaching");
     expect(view.getByText("Connecting to weather")).toBeTruthy();
 
     await act(async () => setEngineLifecycleError("Catalog attach failed"));
-    expect(view.getByText("Data engine failed to start")).toBeTruthy();
+    expect(view.getByText("The query engine couldn't start")).toBeTruthy();
     expect(view.getByText("Catalog attach failed")).toBeTruthy();
     expect(view.getByRole("button", { name: "Retry" })).toBeTruthy();
 

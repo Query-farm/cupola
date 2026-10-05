@@ -46,7 +46,7 @@ export function ensureDuckDB(opts: DuckDBBootOptions): Promise<void> {
   // Seed a phase synchronously so the overlay has copy from the first frame
   // — before any awaits land. The microtask before doBoot runs is enough of
   // a gap on Safari to flicker the fallback otherwise.
-  setBootPhase("Starting Haybarn");
+  setBootPhase("Starting");
   engine.workerCreateStart = performance.now();
   bootPromise = doBoot(opts).catch((e) => {
     bootPromise = null; // allow retry
@@ -57,7 +57,7 @@ export function ensureDuckDB(opts: DuckDBBootOptions): Promise<void> {
 }
 
 async function doBoot(opts: DuckDBBootOptions): Promise<void> {
-  setBootPhase("Starting Haybarn");
+  setBootPhase("Starting");
   const { baseUrl, onAuthUrl } = opts;
   const base = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
   // The pthread worker URL is passed into the COI sub-worker, which then
@@ -92,7 +92,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
     },
   };
 
-  setBootPhase("Choosing Haybarn build");
+  setBootPhase("Checking browser support");
   const bundle = await duckdb.selectBundle(BUNDLES);
   mark("select-bundle");
 
@@ -153,10 +153,10 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
 
   const db = new duckdb.AsyncDuckDB(logger, subWorker);
 
-  setBootPhase("Downloading Haybarn", 0);
+  setBootPhase("Downloading", 0);
   // db.instantiate covers download + WASM compile + pthread spin-up, but the
   // progress callback only fires during the download. Once we see 100% we
-  // flip the label to "Warming up Haybarn" — on Safari the compile and
+  // flip the label to "Compiling" — on Safari the compile and
   // pthread phase can easily dwarf the download itself, and leaving the
   // label on "Downloading" makes users think the network is stuck.
   let warmingUp = false;
@@ -173,13 +173,13 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
         warmingUp = true;
         // null progress → indeterminate sweep, since compile + pthread
         // spin-up don't emit progress events.
-        setBootPhase("Warming up Haybarn", null);
+        setBootPhase("Compiling", null);
       }
     } else {
-      setBootPhase("Downloading Haybarn", Math.round(pct));
+      setBootPhase("Downloading", Math.round(pct));
     }
   });
-  if (!warmingUp) setBootPhase("Warming up Haybarn", null);
+  if (!warmingUp) setBootPhase("Compiling", null);
   mark("instantiate");
 
   // Ask the Arrow exporter to preserve HUGEINT/UHUGEINT/TIME_TZ/BIT/UUID as
@@ -199,11 +199,11 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // `ARROW:extension:metadata` this produces; without it they silently never
   // fire. `.test_formats` is the guard.
 
-  setBootPhase("Connecting to Haybarn");
+  setBootPhase("Opening the database");
   const conn = await db.connect();
   const connId = conn.useUnsafe((_db, id) => id);
   mark("connect");
-  setBootPhase("Haybarn ready", 100);
+  setBootPhase("Ready", 100);
 
   // SAB cancel — must be after instantiate. Null-checked because Safari w/o
   // crossOriginIsolated has no SharedArrayBuffer at all; non-SAB contexts can

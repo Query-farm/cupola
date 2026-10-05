@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { engine, onBootChange } from "@/lib/shell-bridge";
+import { engine, onBootChange, ENGINE_BOOT_TITLE } from "@/lib/shell-bridge";
 
 /**
  * Animated Haybarn boot indicator shown inside the SQL Shell panel while the
@@ -18,7 +18,7 @@ export function ShellBootScreen() {
     const unsub = onBootChange(() => force((n) => n + 1));
     return () => unsub();
   }, []);
-  const phase = engine.bootPhase || "Initializing Haybarn";
+  const phase = engine.bootPhase || "Starting";
   const progress = engine.bootProgress;
   const isDeterminate = typeof progress === "number" && progress > 0;
 
@@ -38,7 +38,8 @@ export function ShellBootScreen() {
   const showSafariTip =
     elapsedSec >= 8 &&
     (phase.startsWith("Downloading") ||
-      phase.startsWith("Warming up") ||
+      phase.startsWith("Compiling") ||
+      phase.startsWith("Opening") ||
       phase.startsWith("Connecting"));
 
   return (
@@ -57,7 +58,8 @@ export function ShellBootScreen() {
 
       {/* Phase label */}
       <div className="text-center">
-        <div className="text-sm font-medium text-terminal-fg">
+        <div className="text-sm font-medium text-terminal-fg">{ENGINE_BOOT_TITLE}</div>
+        <div className="text-xs text-terminal-muted mt-0.5">
           {phase}
           <span className="inline-block ml-0.5 text-field-400 animate-shell-ellipsis" aria-hidden="true">…</span>
         </div>

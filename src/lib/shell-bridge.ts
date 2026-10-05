@@ -246,6 +246,11 @@ function notifyBootChange(): void {
   for (const cb of bootListeners) cb();
 }
 
+/** What the app says while the engine boots; the current step (`phase`:
+ *  "Downloading", "Connecting to cupola_test", …) is shown beside it. */
+export const ENGINE_BOOT_TITLE = "Preparing the query engine";
+export const ENGINE_BOOT_FAILED = "The query engine couldn't start";
+
 export function setBootPhase(
   phase: string | null,
   progress: number | null = null,
@@ -265,7 +270,7 @@ export function setBootPhase(
 
 export function setEngineLifecycleError(error: unknown): void {
   engine.lifecycleStatus = "error";
-  engine.bootError = error instanceof Error ? error.message : String(error || "The data engine failed to start.");
+  engine.bootError = error instanceof Error ? error.message : String(error || "The query engine couldn't start.");
   engine.bootProgress = null;
   notifyBootChange();
 }
@@ -275,7 +280,7 @@ export function setEngineLifecycleError(error: unknown): void {
  * not themselves a sufficient readiness signal. */
 export function waitForEngineReady(timeoutMs = 60_000): Promise<void> {
   if (engine.lifecycleStatus === "ready") return Promise.resolve();
-  if (engine.lifecycleStatus === "error") return Promise.reject(new Error(engine.bootError ?? "The data engine failed to start."));
+  if (engine.lifecycleStatus === "error") return Promise.reject(new Error(engine.bootError ?? "The query engine couldn't start."));
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     const finish = (error?: Error) => {
@@ -288,10 +293,10 @@ export function waitForEngineReady(timeoutMs = 60_000): Promise<void> {
     };
     const onChange = () => {
       if (engine.lifecycleStatus === "ready") finish();
-      else if (engine.lifecycleStatus === "error") finish(new Error(engine.bootError ?? "The data engine failed to start."));
+      else if (engine.lifecycleStatus === "error") finish(new Error(engine.bootError ?? "The query engine couldn't start."));
     };
     const unsubscribe = onBootChange(onChange);
-    const timeout = window.setTimeout(() => finish(new Error("The data engine did not finish starting.")), timeoutMs);
+    const timeout = window.setTimeout(() => finish(new Error("The query engine did not finish starting.")), timeoutMs);
     onChange();
   });
 }

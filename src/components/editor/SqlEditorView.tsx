@@ -126,7 +126,6 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   const splitColRef = useRef<HTMLDivElement>(null);
   const engineLifecycle = useEngineLifecycle();
   const queryReady = engineLifecycle.status === "ready";
-  const bootPhase = engineLifecycle.phase;
 
   const editorRef = useRef<CodeMirrorSqlHandle | null>(null);
   const runIdRef = useRef(0);
@@ -225,13 +224,13 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       await waitForEngineReady();
     } catch (error) {
       release();
-      setActiveResult(docId, { running: false, error: error instanceof Error ? error.message : "The data engine failed to start." });
+      setActiveResult(docId, { running: false, error: error instanceof Error ? error.message : "The query engine couldn't start." });
       return;
     }
     const q = engine.query;
     if (!q) {
       release();
-      setActiveResult(docId, { running: false, error: "The data engine is not ready." });
+      setActiveResult(docId, { running: false, error: "The query engine is not ready yet." });
       return;
     }
 
@@ -601,7 +600,6 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       <EditorToolbar
         running={activeResult.running}
         queryReady={queryReady}
-        bootPhase={bootPhase}
         hasSelection={hasSelection}
         onRun={handleRun}
         onRunInPerspective={handleRunInPerspective}

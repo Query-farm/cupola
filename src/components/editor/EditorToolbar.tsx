@@ -9,8 +9,6 @@ interface Props {
   running: boolean;
   /** DuckDB booted, required extensions loaded, and the catalog attached. */
   queryReady: boolean;
-  /** Human-readable boot phase shown while the engine initializes. */
-  bootPhase?: string | null;
   /** True when text is selected in the editor (Run targets the selection). */
   hasSelection: boolean;
   onRun: () => void;
@@ -62,7 +60,6 @@ interface Props {
 export function EditorToolbar({
   running,
   queryReady,
-  bootPhase,
   hasSelection,
   onRun,
   onRunInPerspective,
@@ -175,16 +172,6 @@ export function EditorToolbar({
         <FileChartColumn className="h-3.5 w-3.5" />
         Add to report
       </Button>
-
-      {!queryReady && !running && (
-        <span
-          className="flex items-center gap-1.5 text-xs text-muted-foreground"
-          data-testid="editor-engine-initializing"
-        >
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          {bootPhase ? `${bootPhase}…` : "Initializing SQL engine…"}
-        </span>
-      )}
 
       <span className="h-5 w-px bg-border" aria-hidden="true" />
 

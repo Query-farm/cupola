@@ -530,7 +530,7 @@ export function initShell(
       // warning, most visible in Safari). Still time-boxed so a stall can't hold
       // up boot; the display path falls back to the browser zone regardless.
       console.log("[shell] syncing timezone…");
-      setBootPhase("Syncing timezone", null, "attaching");
+      setBootPhase("Setting the time zone", null, "attaching");
       const tzSync = (async () => {
         try {
           const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -635,7 +635,7 @@ export function initShell(
       console.error("[shell] post-ready initialization failed:", error);
       engine.markAttached?.();
       setEngineLifecycleError(error);
-      writeln(`Failed to finish starting the data engine: ${error instanceof Error ? error.message : String(error)}`, "31");
+      writeln(`Failed to finish starting the query engine: ${error instanceof Error ? error.message : String(error)}`, "31");
     });
   };
 

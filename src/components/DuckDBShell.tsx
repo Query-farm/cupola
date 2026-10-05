@@ -219,7 +219,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     // created before leaving the editor, so a query that cannot be wrapped
     // (not a single SELECT-like statement) reports its error in place.
     ui.showPerspectiveQuery = async (sql, mode) => {
-      if (!engine.query) return { ok: false, error: "The data engine is not ready." };
+      if (!engine.query) return { ok: false, error: "The query engine is not ready yet." };
       // Logged with the handler's queries, so the console shows the whole flow.
       const run = (statement: string) => runPerspectiveQuery(statement, "pivotSource");
       let source: QueryPivotSource;
@@ -310,7 +310,7 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
     if (!shellActivated) return;
     let cancelled = false;
 
-    if (engine.lifecycleStatus === "idle") setBootPhase("Preparing local data engine");
+    if (engine.lifecycleStatus === "idle") setBootPhase("Waiting to start");
 
     // Service or catalog switched — make sure any consumers awaiting the
     // previous ATTACH cycle now block on the new one.
