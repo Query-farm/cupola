@@ -65,11 +65,13 @@ def cleanup_plan(items, current, clock):
         prefix, _, filename = item["Key"].partition("/")
         if not prefix.startswith("v") or not VERSION.fullmatch(prefix[1:]) or not filename:
             continue
-        release = releases.setdefault(prefix[1:], {"newest": timestamp(item["LastModified"]), "complete": False, "keys": []})
+        release = releases.setdefault(prefix[1:], {"newest": timestamp(item["LastModified"]), "index": False, "reserved": False, "verified": False, "keys": []})
         release["newest"] = max(release["newest"], timestamp(item["LastModified"]))
-        release["complete"] |= filename == "index.html"
+        release["index"] |= filename == "index.html"
+        release["reserved"] |= filename == "_upload.json"
+        release["verified"] |= filename == "_release.json"
         release["keys"].append(item["Key"])
-    ordered = sorted((v for v in releases if releases[v]["complete"] and v != current), key=lambda v: releases[v]["newest"], reverse=True)
+    ordered = sorted((v for v in releases if releases[v]["index"] and (releases[v]["verified"] or not releases[v]["reserved"]) and v != current), key=lambda v: releases[v]["newest"], reverse=True)
     protected = {current, *ordered[:2]}
     return {v: data["keys"] for v, data in releases.items()
             if v not in protected and data["newest"] < clock - timedelta(days=30)}

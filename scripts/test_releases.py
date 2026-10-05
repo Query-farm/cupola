@@ -15,6 +15,12 @@ class ReleaseTests(unittest.TestCase):
                       {'Key': 'other/keep', 'LastModified': '2020-01-01T00:00:00Z'}])
         plan = releases.cleanup_plan(items, '1.0.0', datetime(2026, 10, 5, tzinfo=timezone.utc))
         self.assertEqual(set(plan), {'1.0.1', '1.0.2'})
+    def test_partial_upload_is_not_a_rollback_candidate(self):
+        items = [{'Key': 'v1.0.0/index.html', 'LastModified': '2020-01-01T00:00:00Z'},
+                 {'Key': 'v1.0.0/_upload.json', 'LastModified': '2020-01-01T00:00:00Z'}]
+        plan = releases.cleanup_plan(items, '2.0.0', datetime(2026, 10, 5, tzinfo=timezone.utc))
+        self.assertEqual(set(plan), {'1.0.0'})
+
     def test_activation_lease_protects_old_rollback(self):
         items = [{'Key': 'v1.0.0/index.html', 'LastModified': '2020-01-01T00:00:00Z'},
                  {'Key': 'v1.0.0/_retained.json', 'LastModified': '2026-10-04T00:00:00Z'}]
