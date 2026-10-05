@@ -11,6 +11,9 @@ import { APP_ORIGIN, BASE, SERVICE_URL, T_NORMAL, T_SHELL_BOOT, openEditor, shel
 // (INTEGER), and refuses an ATTACH without api_key.
 const OPTIONS_URL = process.env.VGI_OPTIONS_SERVICE_URL || "http://localhost:9010";
 const RECENTS = "vgi-recent-services";
+// Options are kept in the workspace store since multi-catalog phase 2; the
+// recent list is read-only, migrated once.
+const WORKSPACES = "cupola.workspaces.v1";
 const SECRETS = "cupola.catalog-secrets.v1";
 
 const appUrl = (service: string, attachOptions?: string) =>
@@ -33,7 +36,7 @@ async function freshStorage(page: Page) {
 }
 
 async function storage(page: Page) {
-  return page.evaluate(([r, s]) => ({ recents: localStorage.getItem(r) ?? "", secrets: localStorage.getItem(s) ?? "" }), [RECENTS, SECRETS]);
+  return page.evaluate(([r, w, s]) => ({ recents: localStorage.getItem(r) ?? "", workspaces: localStorage.getItem(w) ?? "", secrets: localStorage.getItem(s) ?? "" }), [RECENTS, WORKSPACES, SECRETS]);
 }
 
 async function regionCount(page: Page) {
@@ -71,7 +74,8 @@ test.describe("attach options", () => {
 
     await regionCount(page);
     const stored = await storage(page);
-    expect(stored.recents).toContain('"max_rows":"12"');
+    expect(stored.workspaces).toContain('"max_rows":"12"');
+    expect(stored.workspaces).not.toContain(secret);
     expect(stored.recents).not.toContain(secret);
     expect(stored.secrets).toContain(secret);
 
@@ -102,6 +106,7 @@ test.describe("attach options", () => {
     // The raw text has left the address bar and storage.
     expect(page.url()).not.toContain("attach_options");
     expect((await storage(page)).recents).not.toContain("pwned");
+    expect((await storage(page)).workspaces).not.toContain("pwned");
     await waitForShellBridge(page);
     await expect.poll(async () => (await shellQuery(page, "SELECT count(*)::INTEGER AS n FROM duckdb_databases() WHERE database_name = 'cupola_test'")).rows?.[0]?.n,
       { timeout: T_SHELL_BOOT }).toBe(1);
@@ -129,10 +134,10 @@ test.describe("attach options", () => {
     await expect(notice).toContainText("region upper('x')");
     await expect(notice).toContainText("Only constants are accepted");
     expect(page.url()).not.toContain("attach_options");
-    await expect.poll(async () => (await storage(page)).recents).toContain('"max_rows":"7"');
+    await expect.poll(async () => (await storage(page)).workspaces).toContain('"max_rows":"7"');
     const stored = await storage(page);
-    expect(stored.recents).not.toContain(secret);
-    expect(stored.recents).not.toContain("rawOptions");
+    expect(stored.workspaces).not.toContain(secret);
+    expect(stored.workspaces).not.toContain("rawOptions");
     expect(stored.secrets).toContain(secret);
   });
 
@@ -150,6 +155,9 @@ test.describe("attach options", () => {
     expect(stored.recents).not.toContain("attachOptions");
     expect(stored.recents).not.toContain(secret);
     expect(stored.recents).toContain('"max_rows":"5"');
+    // The boot migration made it a workspace, its secret keyed by workspace and catalog.
+    expect(stored.workspaces).toContain('"max_rows":"5"');
+    expect(stored.workspaces).not.toContain(secret);
     expect(stored.secrets).toContain(secret);
   });
 

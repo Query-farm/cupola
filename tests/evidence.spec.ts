@@ -401,7 +401,12 @@ test('reports save themselves, on close too, and a draft that cannot be saved is
     const report = { version: 1, id: 'autosaved', title: 'Autosaved report', serviceUrl, source: '# Autosaved report', setupSql: '', parameters: [], values: {}, createdAt: 1, updatedAt: 1000 };
     localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(serviceUrl)}:autosaved`, JSON.stringify(report));
   }, EVIDENCE_SERVICE_URL);
-  const stored = () => page.evaluate((serviceUrl) => JSON.parse(localStorage.getItem(`cupola.evidence.report.v2:${encodeURIComponent(serviceUrl)}:autosaved`)!).title, EVIDENCE_SERVICE_URL);
+  // Seeded under the service URL (before workspaces); saved under the workspace id, which reads the
+  // old key as a fallback. The saved copy is the newest one.
+  const stored = () => page.evaluate(() => Object.keys(localStorage)
+    .filter(key => key.startsWith('cupola.evidence.report.v2:') && key.endsWith(':autosaved'))
+    .map(key => JSON.parse(localStorage.getItem(key)!))
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0].title);
   await page.goto(evidencePath('evidence?evidence_report=autosaved'));
   const panel = page.getByTestId('evidence-panel');
   const status = panel.getByRole('status', { name: 'Save status' });
