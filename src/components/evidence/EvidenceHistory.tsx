@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react';
 import { Bot, FileDown, History, RotateCcw, Trash2, User } from 'lucide-react';
 import { Button } from '../ui/button';
+import { diffWithContext } from '../../lib/line-diff';
 import { fieldText, lineDiff, REVISION_FIELD_LABELS, revisionSpec, type DiffLine, type ReportHistory, type Revision, type RevisionField, type RevisionKind } from '../../lib/evidence/revisions';
 
 const KIND_LABELS: Record<RevisionKind, string> = { edit: 'You', agent: 'Report agent', restore: 'Restored', import: 'Imported', baseline: 'Earlier version' };
 const KIND_ICONS: Record<RevisionKind, typeof User> = { edit: User, agent: Bot, restore: RotateCcw, import: FileDown, baseline: History };
 /** Unchanged lines kept around each change. */
-const CONTEXT = 3;
 
 /** Every saved version of the report, newest first: who changed what, and a line diff of each
  *  changed field against the version before it. Any version can be restored into the draft, and
@@ -63,7 +63,7 @@ function FieldDiff({ field, before, after }: { field: RevisionField; before: unk
   return <div className="space-y-1">
     <h4 className="font-semibold">{REVISION_FIELD_LABELS[field]}</h4>
     {lines
-      ? <pre aria-label={`${REVISION_FIELD_LABELS[field]} changes`} className="max-h-72 overflow-auto rounded bg-muted p-2 font-mono text-[11px] leading-snug">{withContext(lines).map((line, i) => line === null
+      ? <pre aria-label={`${REVISION_FIELD_LABELS[field]} changes`} className="max-h-72 overflow-auto rounded bg-muted p-2 font-mono text-[11px] leading-snug">{diffWithContext(lines, 3).map((line, i) => line === null
           ? <div key={i} className="text-muted-foreground">⋯</div>
           : <div key={i} className={line.kind === 'added' ? 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-300' : line.kind === 'removed' ? 'bg-red-500/15 text-red-800 dark:text-red-300' : ''}>
               <span aria-hidden className="select-none text-muted-foreground">{line.kind === 'added' ? '+ ' : line.kind === 'removed' ? '- ' : '  '}</span>{line.text || ' '}
@@ -72,17 +72,3 @@ function FieldDiff({ field, before, after }: { field: RevisionField; before: unk
   </div>;
 }
 
-/** Changed lines with a few unchanged lines around them; `null` marks lines left out. */
-function withContext(lines: DiffLine[]): (DiffLine | null)[] {
-  const keep = lines.map(() => false);
-  lines.forEach((line, i) => {
-    if (line.kind === 'same') return;
-    for (let j = Math.max(0, i - CONTEXT); j <= Math.min(lines.length - 1, i + CONTEXT); j++) keep[j] = true;
-  });
-  const out: (DiffLine | null)[] = [];
-  lines.forEach((line, i) => {
-    if (keep[i]) out.push(line);
-    else if (out.at(-1) !== null) out.push(null);
-  });
-  return out;
-}

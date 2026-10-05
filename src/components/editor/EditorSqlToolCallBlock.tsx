@@ -8,6 +8,7 @@ import { Replace, FileText, TextCursorInput, SquarePlus, ChevronDown } from "luc
 import { Popover as BaseUIPopover } from "@base-ui/react/popover";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SqlToolCallBlock } from "@/components/chat/SqlToolCallBlock";
+import { displaySql } from "@/lib/sql/display-sql";
 import type { ToolCallEntry } from "@/components/chat/ChatMessageAssistant";
 
 export interface SqlApplyActions {
@@ -17,7 +18,9 @@ export interface SqlApplyActions {
   openInNewTab: (sql: string) => void;
 }
 
-export function SqlApplyBar({ sql, apply }: { sql: string; apply: SqlApplyActions }) {
+export function SqlApplyBar({ sql: rawSql, apply }: { sql: string; apply: SqlApplyActions }) {
+  // Apply what the block above shows, line breaks included.
+  const sql = displaySql(rawSql);
   return (
     <div className="flex items-center gap-1.5 px-0.5">
       <Popover>

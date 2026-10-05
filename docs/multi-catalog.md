@@ -191,7 +191,7 @@ Rules:
 | Editor tabs (`editor-store.ts`) | Per workspace |
 | Evidence reports, report history and drafts | Per workspace, with "Copy to workspace…" |
 | AI chats | Per workspace |
-| Query history | **Stored per workspace**, plus an "All workspaces" toggle in the History menu that reads every store and labels each entry with its workspace |
+| Query history | **Stored per workspace**, plus an "All workspaces" toggle in the History panel's All view that reads every store and labels each entry with its workspace |
 | Settings, API key, theme | Global |
 | OAuth tokens | Per URL origin, as now |
 

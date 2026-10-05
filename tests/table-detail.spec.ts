@@ -101,14 +101,14 @@ test.describe("Table detail rendering", () => {
     expect(found, "no table in the catalog renders an Example Queries section").toBe(true);
   });
 
-  test("at least one table renders a Description section", async ({ page }) => {
+  test("at least one table renders a Documentation section", async ({ page }) => {
     const tables = await listCatalogTables(page);
     let found = false;
     for (const t of tables) {
       if (!(await gotoTable(page, t))) continue;
       if (
         await page
-          .getByRole("button", { name: /^Description$/ })
+          .getByRole("button", { name: /^Documentation$/ })
           .isVisible({ timeout: 200 })
           .catch(() => false)
       ) {
@@ -117,7 +117,7 @@ test.describe("Table detail rendering", () => {
       }
     }
     if (!found) {
-      test.skip(true, "Connected catalog has no table with the vgi.description_md tag.");
+      test.skip(true, "Connected catalog has no table with the vgi.doc_md tag.");
     }
   });
 });

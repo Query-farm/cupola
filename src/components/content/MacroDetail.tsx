@@ -5,7 +5,7 @@ import { SqlCodeBlock } from "./SqlCodeBlock";
 import { TagsTable } from "./TagsTable";
 import { ExampleQueries } from "./ExampleQueries";
 import { filterDisplayTags, getTag, parseExecutableExamples, TAG_DOC_MD, TAG_EXAMPLE_QUERIES, TAG_TITLE } from "@/lib/tags";
-import { DescriptionSection } from "./DescriptionSection";
+import { DocumentationSection } from "./DocumentationSection";
 import { ObjectMeta } from "./ObjectMeta";
 import { useMemo } from "react";
 
@@ -31,7 +31,7 @@ export function MacroDetail({ macro, catalogName, schemaName, onNavigate, onOpen
         <p className="text-muted-foreground mb-4">{macro.comment}</p>
       )}
 
-      {docMd && <DescriptionSection markdown={docMd} />}
+      {docMd && <DocumentationSection markdown={docMd} />}
 
       <ObjectMeta tags={macro.tags} />
 

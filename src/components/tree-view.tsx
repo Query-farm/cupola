@@ -53,7 +53,12 @@ type TreeRenderItemParams = {
 type TreeProps = React.HTMLAttributes<HTMLDivElement> & {
     data: TreeDataItem[] | TreeDataItem
     initialSelectedItemId?: string
-    onSelectChange?: (item: TreeDataItem | undefined) => void
+    /** The click/key event is passed so a caller can treat modifier clicks
+     *  differently; call `preventDefault()` on it to skip selecting the item. */
+    onSelectChange?: (item: TreeDataItem | undefined, event?: React.MouseEvent | React.KeyboardEvent) => void
+    /** Hover/focus preview for a row, rendered lazily when the card opens.
+     *  Return null for rows without one. */
+    renderHover?: (item: TreeDataItem) => React.ReactNode | null
     expandAll?: boolean
     defaultNodeIcon?: React.ComponentType<{ className?: string }>
     defaultLeafIcon?: React.ComponentType<{ className?: string }>
@@ -67,13 +72,64 @@ type TreeProps = React.HTMLAttributes<HTMLDivElement> & {
     onExpandedChange?: (expanded: ReadonlySet<string>) => void
 }
 
+type SelectHandler = (item: TreeDataItem | undefined, event?: React.MouseEvent | React.KeyboardEvent) => void
+
 /** Select an item: update selection state and fire its own click handler. */
 function activateItem(
     item: TreeDataItem,
-    handleSelectChange: (item: TreeDataItem | undefined) => void
+    handleSelectChange: SelectHandler,
+    event?: React.MouseEvent | React.KeyboardEvent
 ) {
-    handleSelectChange(item)
+    handleSelectChange(item, event)
+    if (event?.defaultPrevented) return
     item.onClick?.()
+}
+
+const HOVER_DELAY_MS = 400
+
+interface HoverApi {
+    enter: (item: TreeDataItem, el: HTMLElement, immediate?: boolean) => void
+    leave: () => void
+}
+
+/** Rows report hover/focus here; the TreeView draws one card for the tree. */
+const HoverContext = React.createContext<HoverApi | null>(null)
+
+function useRowHover(item: TreeDataItem) {
+    const api = React.useContext(HoverContext)
+    if (!api) return {}
+    return {
+        onMouseEnter: (e: React.MouseEvent<HTMLElement>) => api.enter(item, e.currentTarget),
+        onMouseLeave: () => api.leave(),
+        onFocus: (e: React.FocusEvent<HTMLElement>) => {
+            // Only the row itself, not an action button inside it.
+            if (e.target === e.currentTarget) api.enter(item, e.currentTarget, false)
+        },
+        onBlur: () => api.leave(),
+    }
+}
+
+/** The single floating preview card, beside the row it describes. */
+function TreeHoverCard({ rect, children }: { rect: DOMRect; children: React.ReactNode }) {
+    const ref = React.useRef<HTMLDivElement>(null)
+    const [top, setTop] = React.useState(rect.top)
+    React.useLayoutEffect(() => {
+        const h = ref.current?.offsetHeight ?? 0
+        setTop(Math.max(8, Math.min(rect.top, window.innerHeight - h - 8)))
+    }, [rect])
+    const left = Math.min(rect.right + 8, window.innerWidth - 336)
+    return (
+        <div
+            ref={ref}
+            id="tree-hover-card"
+            role="tooltip"
+            data-testid="tree-hover-card"
+            className="fixed z-50 w-80 max-w-[calc(100vw-16px)] rounded-md border border-border bg-popover text-popover-foreground shadow-lg p-3 text-xs pointer-events-none"
+            style={{ top, left: Math.max(8, left) }}
+        >
+            {children}
+        </div>
+    )
 }
 
 /**
@@ -136,6 +192,7 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
             data,
             initialSelectedItemId,
             onSelectChange,
+            renderHover,
             expandAll,
             defaultLeafIcon,
             defaultNodeIcon,
@@ -149,6 +206,46 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
         },
         ref
     ) => {
+        // Kept out of context so opening a card doesn't re-render every row.
+        const [hover, setHover] = React.useState<{ item: TreeDataItem; el: HTMLElement; rect: DOMRect } | null>(null)
+        const hoverTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+        const renderHoverRef = React.useRef(renderHover)
+        renderHoverRef.current = renderHover
+        const hoverApi = React.useMemo<HoverApi | null>(() => renderHover ? {
+            enter: (item, el, immediate) => {
+                if (hoverTimer.current) clearTimeout(hoverTimer.current)
+                const open = () => setHover({ item, el, rect: el.getBoundingClientRect() })
+                if (immediate === false) open()
+                else hoverTimer.current = setTimeout(open, HOVER_DELAY_MS)
+            },
+            leave: () => {
+                if (hoverTimer.current) clearTimeout(hoverTimer.current)
+                hoverTimer.current = null
+                setHover(null)
+            },
+        } : null, [!!renderHover]) // eslint-disable-line react-hooks/exhaustive-deps
+        React.useEffect(() => {
+            if (!hover) return
+            const close = () => hoverApi?.leave()
+            const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+            window.addEventListener('scroll', close, true)
+            window.addEventListener('keydown', onKey)
+            window.addEventListener('pointerdown', close, true)
+            return () => {
+                window.removeEventListener('scroll', close, true)
+                window.removeEventListener('keydown', onKey)
+                window.removeEventListener('pointerdown', close, true)
+            }
+        }, [hover, hoverApi])
+        React.useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current) }, [])
+        const hoverContent = hover ? renderHoverRef.current?.(hover.item) ?? null : null
+        React.useEffect(() => {
+            if (!hover || !hoverContent) return
+            const el = hover.el
+            el.setAttribute('aria-describedby', 'tree-hover-card')
+            return () => el.removeAttribute('aria-describedby')
+        }, [hover, !!hoverContent]) // eslint-disable-line react-hooks/exhaustive-deps
+
         const [selectedItemId, setSelectedItemId] = React.useState<
             string | undefined
         >(initialSelectedItemId)
@@ -163,11 +260,11 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
         const [draggedItem, setDraggedItem] = React.useState<TreeDataItem | null>(null)
 
         const handleSelectChange = React.useCallback(
-            (item: TreeDataItem | undefined) => {
-                setSelectedItemId(item?.id)
+            (item: TreeDataItem | undefined, event?: React.MouseEvent | React.KeyboardEvent) => {
                 if (onSelectChange) {
-                    onSelectChange(item)
+                    onSelectChange(item, event)
                 }
+                if (!event?.defaultPrevented) setSelectedItemId(item?.id)
             },
             [onSelectChange]
         )
@@ -219,6 +316,7 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
         )
 
         return (
+            <HoverContext.Provider value={hoverApi}>
             <div className={cn('relative', className)}>
                 <TreeItem
                     data={data}
@@ -240,7 +338,9 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
                     className='w-full h-[48px]'
                     onDrop={() => { handleDrop({id: '', name: 'parent_div'})}}>
                 </div>}
+                {hover && hoverContent && <TreeHoverCard rect={hover.rect}>{hoverContent}</TreeHoverCard>}
             </div>
+            </HoverContext.Provider>
         )
     }
 )
@@ -248,7 +348,7 @@ TreeView.displayName = 'TreeView'
 
 type TreeItemProps = TreeProps & {
     selectedItemId?: string
-    handleSelectChange: (item: TreeDataItem | undefined) => void
+    handleSelectChange: SelectHandler
     expanded: Set<string>
     onToggleExpand: (id: string) => void
     defaultNodeIcon?: React.ComponentType<{ className?: string }>
@@ -276,6 +376,7 @@ const TreeItem = React.forwardRef<HTMLDivElement, TreeItemProps>(
             renderItem,
             level,
             onSelectChange,
+            renderHover,
             expandAll,
             initialSelectedItemId,
             onDocumentDrag,
@@ -357,7 +458,7 @@ const TreeNode = ({
     level = 0,
 }: {
     item: TreeDataItem
-    handleSelectChange: (item: TreeDataItem | undefined) => void
+    handleSelectChange: SelectHandler
     expanded: Set<string>
     onToggleExpand: (id: string) => void
     selectedItemId?: string
@@ -374,6 +475,7 @@ const TreeNode = ({
         handleDrop,
         draggedItem,
     })
+    const hoverProps = useRowHover(item)
     const hasChildren = !!item.children?.length
     const isSelected = selectedItemId === item.id
     const isOpen = expanded.has(item.id)
@@ -402,7 +504,8 @@ const TreeNode = ({
                         isDragOver && dragOverVariants(),
                         item.className
                     )}
-                    onClick={() => activateItem(item, handleSelectChange)}
+                    onClick={(e) => activateItem(item, handleSelectChange, e)}
+                    {...hoverProps}
                     {...dragProps}
                 >
                     {renderItem ? (
@@ -456,7 +559,7 @@ const TreeLeaf = React.forwardRef<
         item: TreeDataItem
         level: number
         selectedItemId?: string
-        handleSelectChange: (item: TreeDataItem | undefined) => void
+        handleSelectChange: SelectHandler
         defaultLeafIcon?: React.ComponentType<{ className?: string }>
         handleDragStart?: (item: TreeDataItem) => void
         handleDrop?: (item: TreeDataItem) => void
@@ -486,6 +589,7 @@ const TreeLeaf = React.forwardRef<
             draggedItem,
             respectDisabled: true,
         })
+        const hoverProps = useRowHover(item)
         const isSelected = selectedItemId === item.id
 
         return (
@@ -506,13 +610,14 @@ const TreeLeaf = React.forwardRef<
                     if (item.disabled) return
                     if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
-                        activateItem(item, handleSelectChange)
+                        activateItem(item, handleSelectChange, e)
                     }
                 }}
-                onClick={() => {
+                onClick={(e) => {
                     if (item.disabled) return
-                    activateItem(item, handleSelectChange)
+                    activateItem(item, handleSelectChange, e)
                 }}
+                {...hoverProps}
                 {...dragProps}
                 {...props}
             >

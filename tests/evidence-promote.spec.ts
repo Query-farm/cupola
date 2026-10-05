@@ -9,6 +9,7 @@ test('a query added to a report is saved without editing it', async ({ page }) =
   await waitForShellBridge(page);
   await openEditor(page);
   await typeInEditor(page, "SELECT 42 AS answer");
+  await page.getByTestId('editor-share-menu').click();
   await page.getByTestId('editor-add-to-report').click();
 
   await expect(page.getByTestId('tab-reports')).toHaveAttribute('aria-selected', 'true');

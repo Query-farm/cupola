@@ -48,6 +48,11 @@ export interface QueryHistoryEntry {
   source?: QuerySource;
   /** Consecutive identical runs folded into this entry (`query-history.ts`). */
   runs?: number;
+  /** The Query Editor tab it ran in, so the History panel can show one tab's runs. */
+  docId?: string;
+  /** That tab's whole text when it ran, when that differs from `sql` (the
+   *  statement or selection that ran). Restoring a run restores this. */
+  docSql?: string;
 }
 
 export type QuerySource = "editor" | "shell" | "ask-ai" | "editor-ai" | "shell-ai";
@@ -102,6 +107,8 @@ export function recordQuery(opts: {
   conversationId?: string;
   conversationName?: string;
   source?: QuerySource;
+  docId?: string;
+  docSql?: string;
 }): void {
   ui.addQueryHistoryEntry?.({
     id: Date.now(),
@@ -203,6 +210,9 @@ export const ui = {
   /** Insert text at the cursor of the active editor tab. Set by SqlEditorView
    *  while the editor is mounted; used by the sidebar's click-to-insert. */
   insertIntoEditor: null as ((text: string) => void) | null,
+  /** Insert a call to a function or macro into the active editor tab, as a
+   *  snippet whose arguments are tab stops. Set alongside `insertIntoEditor`. */
+  insertCallableIntoEditor: null as ((callable: import("./callable").Callable) => void) | null,
 
   memoryCatalog: null as CatalogData | null,
   attachedCatalogs: [] as CatalogData[],
@@ -327,6 +337,11 @@ function notifyBootChange(): void {
   for (const cb of bootListeners) cb();
 }
 
+/** What the app says while the engine boots; the current step (`phase`:
+ *  "Downloading", "Connecting to cupola_test", …) is shown beside it. */
+export const ENGINE_BOOT_TITLE = "Preparing the query engine";
+export const ENGINE_BOOT_FAILED = "The query engine couldn't start";
+
 export function setBootPhase(
   phase: string | null,
   progress: number | null = null,
@@ -346,7 +361,7 @@ export function setBootPhase(
 
 export function setEngineLifecycleError(error: unknown): void {
   engine.lifecycleStatus = "error";
-  engine.bootError = error instanceof Error ? error.message : String(error || "The data engine failed to start.");
+  engine.bootError = error instanceof Error ? error.message : String(error || "The query engine couldn't start.");
   engine.bootProgress = null;
   notifyBootChange();
 }
@@ -356,7 +371,7 @@ export function setEngineLifecycleError(error: unknown): void {
  * not themselves a sufficient readiness signal. */
 export function waitForEngineReady(timeoutMs = 60_000): Promise<void> {
   if (engine.lifecycleStatus === "ready") return Promise.resolve();
-  if (engine.lifecycleStatus === "error") return Promise.reject(new Error(engine.bootError ?? "The data engine failed to start."));
+  if (engine.lifecycleStatus === "error") return Promise.reject(new Error(engine.bootError ?? "The query engine couldn't start."));
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     const finish = (error?: Error) => {
@@ -369,10 +384,10 @@ export function waitForEngineReady(timeoutMs = 60_000): Promise<void> {
     };
     const onChange = () => {
       if (engine.lifecycleStatus === "ready") finish();
-      else if (engine.lifecycleStatus === "error") finish(new Error(engine.bootError ?? "The data engine failed to start."));
+      else if (engine.lifecycleStatus === "error") finish(new Error(engine.bootError ?? "The query engine couldn't start."));
     };
     const unsubscribe = onBootChange(onChange);
-    const timeout = window.setTimeout(() => finish(new Error("The data engine did not finish starting.")), timeoutMs);
+    const timeout = window.setTimeout(() => finish(new Error("The query engine did not finish starting.")), timeoutMs);
     onChange();
   });
 }

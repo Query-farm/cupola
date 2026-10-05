@@ -1,5 +1,6 @@
 import { AlertTriangle, Loader2, RotateCw } from "lucide-react";
 import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
+import { ENGINE_BOOT_FAILED, ENGINE_BOOT_TITLE } from "@/lib/shell-bridge";
 
 /** Compact, app-wide data-engine state. Catalog browsing remains available,
  * while every query-capable tab gets the same readiness and failure signal. */
@@ -8,7 +9,7 @@ export function EngineStatusRibbon() {
   if (lifecycle.status === "ready") return null;
 
   const failed = lifecycle.status === "error";
-  const phase = lifecycle.phase ?? (lifecycle.status === "idle" ? "Preparing local data engine" : "Starting local data engine");
+  const phase = lifecycle.phase ?? (lifecycle.status === "idle" ? "Waiting to start" : null);
   const progress = lifecycle.progress;
   const determinate = !failed && typeof progress === "number" && progress > 0;
 
@@ -24,7 +25,7 @@ export function EngineStatusRibbon() {
     >
       <div className="flex min-w-0 items-center gap-2">
         {failed ? <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> : <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />}
-        <span className="shrink-0 font-semibold">{failed ? "Data engine failed to start" : "Starting local data engine"}</span>
+        <span className="shrink-0 font-semibold">{failed ? ENGINE_BOOT_FAILED : ENGINE_BOOT_TITLE}</span>
         <span className="min-w-0 truncate opacity-80">{failed ? lifecycle.error : phase}</span>
         {determinate && <span className="ml-auto shrink-0 font-mono tabular-nums">{Math.round(progress)}%</span>}
         {failed && <button

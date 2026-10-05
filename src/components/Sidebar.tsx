@@ -1,5 +1,5 @@
 import { SavedReportsSidebar } from "./evidence/SavedReportsSidebar";
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { Search, Cpu, RefreshCw, Loader2, CheckCircle2, AlertTriangle, LogIn, Database, Star, Plus, X } from "lucide-react";
 import { CatalogChip, chipIcon } from "./workspace/CatalogChip";
 import { hostOf } from "@/lib/workspace/store";
@@ -10,7 +10,10 @@ import { SettingsModal } from "@/components/SettingsModal";
 import type { CatalogData } from "@/lib/service";
 import { quoteIdent } from "@/lib/duckdb-query";
 import { useSettings } from "@/lib/settings";
-import { buildTreeData, filterTree, parseSelection, selectionToTreeId, type Selection } from "@/lib/tree";
+import { buildTreeData, filterTree, parseSelection, selectionToTreeId, type Selection, type TreeDataItem } from "@/lib/tree";
+import { callablesForSelection, type Callable } from "@/lib/callable";
+import { findRelation } from "@/lib/relation";
+import { CallableHoverCard, RelationHoverCard } from "@/components/inspector/HoverCards";
 import type { CatalogAttachState } from "@/lib/shell-bridge";
 
 /** One configured catalog's status, for its sidebar root. */
@@ -42,8 +45,12 @@ interface Props {
   serviceUrl?: string;
   selection: Selection | null;
   onSelect: (selection: Selection | null) => void;
-  /** Insert text into the DuckDB shell. */
+  /** Insert text into the DuckDB shell (or the editor, per `insertTarget`). */
   onShellInsert?: (text: string) => void;
+  /** Insert a call to a function or macro. */
+  onInsertCallable?: (callable: Callable) => void;
+  /** Where inserts land. In the editor, a modifier-click inserts instead of selecting. */
+  insertTarget?: "shell" | "editor";
   onRefresh?: () => void;
   refreshing?: boolean;
   /** Each configured catalog's attach status. Empty for a single catalog,
@@ -83,7 +90,7 @@ function statusMark(status: SidebarCatalogStatus | undefined, meta: SidebarCatal
   );
 }
 
-export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onRefresh, refreshing, catalogStatuses = [], onRetryCatalog, onSignInCatalog, onCatalogDetails, signInNotice, onDismissSignInNotice, workspaceId, catalogMeta, initialExpanded, onExpandedChange, emptyWorkspace, onAttachCatalog, onEnableCatalog }: Props) {
+export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onInsertCallable, insertTarget = "shell", onRefresh, refreshing, catalogStatuses = [], onRetryCatalog, onSignInCatalog, onCatalogDetails, signInNotice, onDismissSignInNotice, workspaceId, catalogMeta, initialExpanded, onExpandedChange, emptyWorkspace, onAttachCatalog, onEnableCatalog }: Props) {
   const [search, setSearch] = useState("");
   // One dismissible strip for every catalog that needs attention. Dismissing
   // it hides it until that set changes.
@@ -97,6 +104,25 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
     onExpandedChange?.([...ids].filter((id) => catalogAliases.has(id)));
   }, [onExpandedChange, catalogAliases]);
   const { settings } = useSettings();
+  // The parent passes fresh callbacks every render; read them through refs so
+  // the tree (rebuilt only when its inputs change) never holds a stale one.
+  const insertRef = useRef(onShellInsert);
+  insertRef.current = onShellInsert;
+  const insertCallableRef = useRef(onInsertCallable);
+  insertCallableRef.current = onInsertCallable;
+  const catalogsRef = useRef(catalogs);
+  catalogsRef.current = catalogs;
+  const canInsert = !!onShellInsert;
+  const canInsertCallable = !!onInsertCallable;
+
+  const insertRelation = useCallback((catalog: string, schema: string, name: string) => {
+    insertRef.current?.([catalog, schema, name].map(quoteIdent).join("."));
+  }, []);
+  const insertCallable = useCallback((catalog: string, schema: string, name: string, kind: "function" | "macro") => {
+    const [callable] = callablesForSelection(catalogsRef.current, { type: kind, catalog, schema, name });
+    if (callable) insertCallableRef.current?.(callable);
+  }, []);
+
   const statusByAlias = useMemo(() => new Map(catalogStatuses.map((s) => [s.alias, s])), [catalogStatuses]);
   // Configured catalogs in workspace order, then anything else attached by
   // hand, by name; `memory` stays last, on its own.
@@ -117,10 +143,12 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
           rootTitle: isMemory ? "Local: in this browser only" : meta ? hostOf(meta.url) : catalog.sourceUrl ? hostOf(catalog.sourceUrl) : undefined,
           dividerBefore: isMemory ? "local" : undefined,
           rootActions: statusMark(statusByAlias.get(catalog.catalogName), meta),
-          onTableAction: onShellInsert ? (schema, table) => onShellInsert([catalog.catalogName, schema, table].map(quoteIdent).join(".")) : undefined,
+          insertTarget,
+          onTableAction: canInsert ? (schema, table) => insertRelation(catalog.catalogName, schema, table) : undefined,
+          onCallableAction: canInsertCallable ? (schema, name, kind) => insertCallable(catalog.catalogName, schema, name, kind) : undefined,
         });
       });
-  }, [catalogs, order, statusByAlias, catalogMeta, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, onShellInsert]);
+  }, [catalogs, order, statusByAlias, catalogMeta, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, canInsert, canInsertCallable, insertTarget, insertRelation, insertCallable]);
   // Configured catalogs that are not (yet) in DuckDB: a root each, with its
   // status and action, that does not expand.
   const inventoryNames = useMemo(() => new Set(catalogs.map((c) => c.catalogName)), [catalogs]);
@@ -132,14 +160,40 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
     [selection, defaultCatalogName]
   );
 
-  function handleSelectChange(item: { id: string } | undefined) {
+  function handleSelectChange(item: { id: string } | undefined, event?: React.MouseEvent | React.KeyboardEvent) {
     if (!item) {
       onSelect(null);
       return;
     }
     const sel = parseSelection(item.id);
+    // In the editor, a modifier-click writes the object into the query.
+    if (insertTarget === "editor" && event && (event.metaKey || event.ctrlKey) && sel?.catalog && sel.schema && !item.id.includes("::c:")) {
+      if (sel.type === "function" || sel.type === "macro") {
+        event.preventDefault();
+        insertCallable(sel.catalog, sel.schema, sel.name, sel.type);
+        return;
+      }
+      if (sel.type === "table" || sel.type === "view") {
+        event.preventDefault();
+        insertRelation(sel.catalog, sel.schema, sel.name);
+        return;
+      }
+    }
     onSelect(sel);
   }
+
+  // Built only when a card opens, so hovering costs nothing until then.
+  const renderHover = useCallback((item: TreeDataItem) => {
+    if (item.id.includes("::c:")) return null;
+    const sel = parseSelection(item.id);
+    if (!sel) return null;
+    const editor = insertTarget === "editor";
+    const callables = callablesForSelection(catalogsRef.current, sel);
+    if (callables.length) return <CallableHoverCard callables={callables} editor={editor} />;
+    const relation = findRelation(catalogsRef.current, sel);
+    if (relation) return <RelationHoverCard relation={relation} editor={editor} />;
+    return null;
+  }, [insertTarget]);
 
   return (
     <div className="bg-card flex flex-col h-full">
@@ -256,6 +310,7 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
           data={filteredData}
           expandAll={!!search}
           onSelectChange={handleSelectChange}
+          renderHover={renderHover}
           initialSelectedItemId={selectedTreeId}
           initialExpandedIds={initialExpanded}
           onExpandedChange={handleExpanded}

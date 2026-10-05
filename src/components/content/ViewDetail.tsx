@@ -10,7 +10,8 @@ import { SqlCodeBlock } from "./SqlCodeBlock";
 import { TagsTable } from "./TagsTable";
 import { ExampleQueries } from "./ExampleQueries";
 import { filterDisplayTags, getTag, parseExecutableExamples, TAG_DOC_MD, TAG_EXAMPLE_QUERIES, TAG_TITLE } from "@/lib/tags";
-import { DescriptionSection } from "./DescriptionSection";
+import { DocumentationSection } from "./DocumentationSection";
+import { displaySql } from "@/lib/sql/display-sql";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 import { ObjectMeta } from "./ObjectMeta";
 import { engine } from "@/lib/shell-bridge";
@@ -68,7 +69,7 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate, onOpenSh
   }, [view.name, catalogName, schemaName]);
 
   const handleCopyDef = () => {
-    navigator.clipboard.writeText(view.definition);
+    navigator.clipboard.writeText(displaySql(view.definition));
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -85,7 +86,7 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate, onOpenSh
         </div>
       )}
 
-      {docMd && <DescriptionSection markdown={docMd} />}
+      {docMd && <DocumentationSection markdown={docMd} />}
 
       <ObjectMeta tags={view.tags} />
 

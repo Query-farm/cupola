@@ -86,7 +86,7 @@ test.describe("attach options", () => {
 
     await openEditor(page);
     await typeInEditor(page, "SELECT 42");
-    await page.getByTestId("editor-script-menu").click();
+    await page.getByTestId("editor-share-menu").click();
     await page.getByTestId("editor-share-link").click();
     await expect.poll(() => page.evaluate(() => (window as any).__copied ?? "")).toContain("attach_options");
     const link = await page.evaluate(() => (window as any).__copied as string);

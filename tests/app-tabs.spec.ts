@@ -70,7 +70,7 @@ test.describe("Unified tab bar", () => {
     await openEditor(page);
     await typeInEditor(page, "SELECT 1 AS one");
     const downloadPromise = page.waitForEvent("download");
-    await page.getByTestId("editor-script-menu").click();
+    await page.getByTestId("editor-share-menu").click();
     await page.getByTestId("editor-download-sql").click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toMatch(/\.sql$/);

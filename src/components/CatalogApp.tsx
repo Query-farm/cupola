@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useCallback, useRef, useSyncExternalStore, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
+import { buildCallText } from "@/lib/editor/call-snippet";
 import { fetchCatalogSpecs, type CatalogData } from "@/lib/service";
 import { quoteIdent } from "@/lib/duckdb-query";
 import { useMediaQuery } from "@/lib/use-media-query";
@@ -631,7 +632,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   }, [activeTab]);
 
   // Every surface records its queries through this slot; they are kept per
-  // workspace and read in the editor's History menu.
+  // workspace and read in the editor's History panel.
   useEffect(() => {
     if (!workspaceId || !boot.consented) return;
     ui.addQueryHistoryEntry = (entry) => addQueryHistoryEntry(workspaceId, entry);
@@ -1286,14 +1287,16 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   const defaultAliasRef = useRef(defaultAlias);
   defaultAliasRef.current = defaultAlias;
   const navigate = useCallback(
-    (sel: Selection | null) => {
+    (sel: Selection | null, opts?: { replace?: boolean }) => {
       const resolved = resolveSelection(sel, defaultAliasRef.current ?? "");
       setSelection(resolved);
-      pushSelectionToUrl(resolved);
+      pushSelectionToUrl(resolved, opts);
       if (defaultAliasRef.current) updatePageTitle(resolved, defaultAliasRef.current);
     },
     []
   );
+  // Bumped when a sidebar click in the query editor should open the Inspector.
+  const [inspectRequest, setInspectRequest] = useState(0);
 
   // Expose navigate globally so AI agent can select newly created objects.
   // useEffect + cleanup so unmount drops the stale callback.
@@ -1628,7 +1631,25 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                 defaultCatalogName={defaultAlias ?? data.catalogName}
                 inventoryError={inventory.error}
                 selection={selection}
-                onSelect={(sel) => { navigate(sel); if (isNarrow) setMobileSidebarOpen(false); }}
+                onSelect={(sel) => {
+                  if (activeTab === "editor") {
+                    // The catalog page isn't on screen: show the pick in the
+                    // editor's Inspector instead, without a history entry.
+                    navigate(sel, { replace: true });
+                    if (sel && ["function", "macro", "table", "view"].includes(sel.type)) setInspectRequest((n) => n + 1);
+                  } else {
+                    navigate(sel);
+                  }
+                  if (isNarrow) setMobileSidebarOpen(false);
+                }}
+                insertTarget={activeTab === "editor" ? "editor" : "shell"}
+                onInsertCallable={(callable) => {
+                  if (activeTab === "editor" && ui.insertCallableIntoEditor) {
+                    ui.insertCallableIntoEditor(callable);
+                  } else {
+                    shellInsertRef.current?.(buildCallText(callable, { emptyDoc: false }));
+                  }
+                }}
                 onShellInsert={(text) => {
                   // In editor mode, route table/column clicks into the SQL
                   // editor at the cursor; otherwise into the xterm shell.
@@ -1711,6 +1732,9 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                     pendingSql={pendingEditorSql}
                     onPendingConsumed={() => { setPendingEditorSql(null); clearSharedSql(); }}
                     onAiBusyChange={setEditorAiBusy}
+                    selection={selection}
+                    inspectRequest={inspectRequest}
+                    onOpenFullPage={(sel) => { navigate(sel); setActiveTab("catalog"); }}
                   />
                 </Suspense>
               </ErrorBoundary>

@@ -95,7 +95,7 @@ export function treeIdToShellText(id: string): string | null {
       return colParts[1] || colParts[0];
     }
     if (rest.startsWith("v:")) return [catalog, schema, rest.slice(2)].map(identifier).join(".");
-    if (rest.startsWith("f:")) return rest.slice(2);
+    if (rest.startsWith("f:") || rest.startsWith("m:")) return rest.slice(2);
   }
   return null;
 }
@@ -108,6 +108,10 @@ export interface BuildTreeOptions {
   hideDollarTables?: boolean;
   /** When provided, adds a paste action button to table nodes. */
   onTableAction?: (schema: string, table: string) => void;
+  /** When provided, adds an insert-call button to function and macro nodes. */
+  onCallableAction?: (schema: string, name: string, kind: "function" | "macro") => void;
+  /** Where the paste buttons send text, for their labels. */
+  insertTarget?: "shell" | "editor";
   /** When provided, adds a refresh button to the catalog root node. */
   onRefresh?: () => void;
   refreshing?: boolean;
@@ -124,7 +128,7 @@ export interface BuildTreeOptions {
 
 /** Build the full tree from catalog data. Root node is the catalog. */
 export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = {}): TreeDataItem[] {
-  const { showDuckDBTypes = true, hideTableBackingFunctions = true, hideDollarTables = true, onTableAction, onRefresh, refreshing, rootIcon, rootActions, rootTitle, dividerBefore } = options;
+  const { showDuckDBTypes = true, hideTableBackingFunctions = true, hideDollarTables = true, onTableAction, onCallableAction, insertTarget = "shell", onRefresh, refreshing, rootIcon, rootActions, rootTitle, dividerBefore } = options;
   const sortedSchemas = [...catalog.schemas].sort((a, b) =>
     a.info.name.localeCompare(b.info.name)
   );
@@ -138,7 +142,7 @@ export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = 
     ...(rootTitle ? { title: rootTitle } : {}),
     ...(dividerBefore ? { dividerBefore } : {}),
     children: sortedSchemas.map((s) =>
-      buildSchemaNode(catalog.catalogName, s, showDuckDBTypes, hideTableBackingFunctions, hideDollarTables, s.info.name === catalog.defaultSchema, onTableAction)
+      buildSchemaNode(catalog.catalogName, s, showDuckDBTypes, hideTableBackingFunctions, hideDollarTables, s.info.name === catalog.defaultSchema, { onTableAction, onCallableAction, insertTarget })
     ),
     actions: onRefresh
       ? React.createElement("div", {
@@ -157,8 +161,29 @@ export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = 
   return [root];
 }
 
-function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDBTypes: boolean, hideTableBackingFunctions: boolean, hideDollarTables: boolean, isDefault: boolean, onTableAction?: (schema: string, table: string) => void): TreeDataItem {
+/** A row's hover-revealed paste button. */
+function insertButton(label: string, run: () => void): React.ReactNode {
+  return React.createElement("div", {
+    role: "button",
+    tabIndex: 0,
+    className: "opacity-0 group-hover:opacity-100 focus:opacity-100 p-0.5 text-muted-foreground hover:text-primary transition-all cursor-pointer",
+    title: label,
+    "aria-label": label,
+    "data-testid": "tree-insert",
+    onClick: (e: React.MouseEvent) => { e.stopPropagation(); run(); },
+    onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); e.preventDefault(); run(); } },
+  }, React.createElement(TerminalSquare, { className: "h-3 w-3" }));
+}
+
+interface InsertActions {
+  onTableAction?: (schema: string, table: string) => void;
+  onCallableAction?: (schema: string, name: string, kind: "function" | "macro") => void;
+  insertTarget: "shell" | "editor";
+}
+
+function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDBTypes: boolean, hideTableBackingFunctions: boolean, hideDollarTables: boolean, isDefault: boolean, { onTableAction, onCallableAction, insertTarget }: InsertActions): TreeDataItem {
   const schemaId = `${catalogName}::${schema.info.name}`;
+  const into = insertTarget === "editor" ? "query editor" : "shell";
   const children: TreeDataItem[] = [];
 
   const visibleTables = hideDollarTables ? schema.tables.filter((t) => !t.name.includes("$")) : schema.tables;
@@ -202,14 +227,7 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
       draggable: !!onTableAction,
       children: columnChildren.length > 0 ? columnChildren : undefined,
       actions: onTableAction
-        ? React.createElement("div", {
-            role: "button",
-            tabIndex: 0,
-            className: "opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-primary transition-all cursor-pointer",
-            title: `Paste ${schema.info.name}.${table.name} into shell`,
-            onClick: (e: React.MouseEvent) => { e.stopPropagation(); onTableAction(schema.info.name, table.name); },
-            onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); e.preventDefault(); onTableAction(schema.info.name, table.name); } },
-          }, React.createElement(TerminalSquare, { className: "h-3 w-3" }))
+        ? insertButton(`Paste ${schema.info.name}.${table.name} into ${into}`, () => onTableAction(schema.info.name, table.name))
         : undefined,
     });
   }
@@ -225,14 +243,7 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
       className: "text-accent/80",
       draggable: !!onTableAction,
       actions: onTableAction
-        ? React.createElement("div", {
-            role: "button",
-            tabIndex: 0,
-            className: "opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-primary transition-all cursor-pointer",
-            title: `Paste ${schema.info.name}.${view.name} into shell`,
-            onClick: (e: React.MouseEvent) => { e.stopPropagation(); onTableAction(schema.info.name, view.name); },
-            onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); e.preventDefault(); onTableAction(schema.info.name, view.name); } },
-          }, React.createElement(TerminalSquare, { className: "h-3 w-3" }))
+        ? insertButton(`Paste ${schema.info.name}.${view.name} into ${into}`, () => onTableAction(schema.info.name, view.name))
         : undefined,
     });
   }
@@ -241,26 +252,42 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
   const tableNames = hideTableBackingFunctions ? new Set(schema.tables.map((t) => t.name)) : null;
   const filteredFunctions = schema.functions.filter((f) => !tableNames || !tableNames.has(f.name));
   const sortedFunctions = [...filteredFunctions].sort((a, b) => a.name.localeCompare(b.name));
+  const seenFunctions = new Set<string>();
   for (const func of sortedFunctions) {
+    // One row per name: DuckDB lists each overload separately, and the row's
+    // id (and everything keyed on it) can only name the function, not an overload.
+    if (seenFunctions.has(func.name)) continue;
+    seenFunctions.add(func.name);
     children.push({
       id: `${schemaId}::f:${func.name}`,
       name: func.name,
       icon: FunctionSquare,
       selectedIcon: FunctionSquare,
       className: "text-muted-foreground",
+      draggable: !!onCallableAction,
+      actions: onCallableAction
+        ? insertButton(`Insert a call to ${func.name} into ${into}`, () => onCallableAction(schema.info.name, func.name, "function"))
+        : undefined,
     });
   }
 
   // Macros (sorted alphabetically)
   if (schema.macros?.length > 0) {
     const sortedMacros = [...schema.macros].sort((a, b) => a.name.localeCompare(b.name));
+    const seenMacros = new Set<string>();
     for (const macro of sortedMacros) {
+      if (seenMacros.has(macro.name)) continue;
+      seenMacros.add(macro.name);
       children.push({
         id: `${schemaId}::m:${macro.name}`,
         name: macro.name,
         icon: Braces,
         selectedIcon: Braces,
         className: "text-muted-foreground",
+        draggable: !!onCallableAction,
+        actions: onCallableAction
+          ? insertButton(`Insert a call to ${macro.name} into ${into}`, () => onCallableAction(schema.info.name, macro.name, "macro"))
+          : undefined,
       });
     }
   }

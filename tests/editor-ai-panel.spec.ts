@@ -37,7 +37,9 @@ test.describe("Editor Ask AI panel", () => {
     // apply bar — it sits beneath the block. Open the Apply menu.
     await page.getByTestId("ai-apply-menu").click();
     await page.getByTestId("ai-apply-replace-document").click();
-    await expect(page.locator(".cm-content")).toContainText("SELECT 777 AS applied", { timeout: T_NORMAL });
+    // Applied as the block shows it: formatted across lines.
+    await expect(page.locator(".cm-content")).toContainText("777 AS applied", { timeout: T_NORMAL });
+    await expect(page.locator(".cm-content .cm-line").first()).toHaveText("SELECT");
   });
 
   test("opens proposed SQL in a new editor tab", async ({ page }) => {

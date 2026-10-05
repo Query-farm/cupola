@@ -92,7 +92,7 @@ export async function readRows(sql: string): Promise<Record<string, any>[] | nul
 
 /** Metadata discovery must distinguish failure from an empty catalog. */
 export async function readRowsOrThrow(sql: string): Promise<Record<string, any>[]> {
-  if (!engine.query) throw new Error("The data engine is not ready.");
+  if (!engine.query) throw new Error("The query engine is not ready yet.");
   const result = await engine.query(sql);
   if (!result.ok) throw new Error(result.error || "Metadata query failed.");
   if (!result.arrowBuffers?.length) throw new Error("Metadata query returned no result.");

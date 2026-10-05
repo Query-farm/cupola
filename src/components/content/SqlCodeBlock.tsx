@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { format } from "sql-formatter";
+import { displaySql } from "@/lib/sql/display-sql";
 import hljs from "highlight.js/lib/core";
 import sql from "highlight.js/lib/languages/sql";
 
@@ -11,19 +11,9 @@ interface Props {
 
 export function SqlCodeBlock({ query }: Props) {
   const { highlighted } = useMemo(() => {
-    let fmt: string;
-    try {
-      fmt = format(query, {
-        language: "sql",
-        keywordCase: "upper",
-        tabWidth: 2,
-        useTabs: false,
-      });
-    } catch {
-      fmt = query;
-    }
-
-    const result = hljs.highlight(fmt, { language: "sql" });
+    // Copy/Run buttons beside a code block use displaySql too, so the text
+    // they hand on is the text shown here.
+    const result = hljs.highlight(displaySql(query), { language: "sql" });
     return { highlighted: result.value };
   }, [query]);
 

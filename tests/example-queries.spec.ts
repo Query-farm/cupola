@@ -163,3 +163,18 @@ test.describe("Example queries", () => {
     console.log(`Table example queries: ran ${totalRun}, asserted ${totalChecked}`);
   });
 });
+
+test("Run opens an example in the editor as displayed, line breaks included", async ({ page }) => {
+  await page.goto(`${APP_URL}#/schema/small/table/monthly_targets`);
+  await waitForShellBridge(page);
+  const shown = await extractExampleSqls(page);
+  test.skip(shown.length === 0, "monthly_targets has no example query on this server");
+  // The server sends this example on one line; the page formats it.
+  expect(shown[0]).toContain("\n");
+  await page.locator('h2:has-text("Example Quer") ~ * button:has-text("Run")').first().click();
+  await expect(page.getByTestId("sql-editor-view")).toBeVisible();
+  const lines = page.locator(".cm-content .cm-line");
+  await expect.poll(() => lines.count()).toBeGreaterThan(3);
+  const text = (await lines.allInnerTexts()).join("\n");
+  expect(text.replace(/\s+/g, " ").trim()).toBe(shown[0].replace(/\s+/g, " ").trim());
+});

@@ -127,8 +127,8 @@ test.describe("workspaces", () => {
     await openEditor(page);
     await expect(page.locator(".cm-content").first()).toContainText("old editor tab");
     await page.getByTestId("editor-history").click();
+    await page.getByTestId("editor-history-view-all").click();
     await expect(page.getByTestId("editor-history-panel")).toContainText("from the old history");
-    await page.keyboard.press("Escape");
     await expect(page.getByTestId("catalog-sidebar")).toContainText("Legacy workspace report");
   });
 
@@ -246,7 +246,7 @@ test.describe("workspaces", () => {
     await allSettled(page, { cupola_test: "attached", second: "attached" });
   });
 
-  test("the History menu's All workspaces lists every workspace's queries, labelled", async ({ page }) => {
+  test("the History panel's All workspaces lists every workspace's queries, labelled", async ({ page }) => {
     test.setTimeout(90_000);
     const entry = (sql: string) => JSON.stringify([{ id: 1, timestamp: Date.now(), sql, executionTimeMs: 1, success: true, source: "editor" }]);
     await seed(page, {
@@ -258,6 +258,7 @@ test.describe("workspaces", () => {
     await allSettled(page, { cupola_test: "attached", second: "attached" });
     await openEditor(page);
     await page.getByTestId("editor-history").click();
+    await page.getByTestId("editor-history-view-all").click();
     const history = page.getByTestId("editor-history-panel");
     await expect(history).toContainText("SELECT 'here'");
     await expect(history).not.toContainText("SELECT 'elsewhere'");

@@ -192,20 +192,46 @@ function argDisplayType(arg: FunctionArg): string {
  *  Named args render `name := TYPE`; varargs get a trailing `...`; a table function
  *  with an empty output schema renders `→ TABLE` (no parens). */
 export function formatFunctionSignature(func: FunctionInfo): string {
-  const args = getFunctionArgs(func);
-  const argParts = args.map((a) => {
-    const type = argDisplayType(a);
-    const base = a.named ? `${a.name} := ${type}` : `${a.name} ${type}`;
-    return a.isVarargs ? `${base}...` : base;
-  });
-  const call = `${func.name}(${argParts.join(", ")})`;
+  return formatSignature(func.name, getFunctionArgs(func), getFunctionReturn(func));
+}
 
-  const ret = getFunctionReturn(func);
+/** One argument as it appears in a signature: `name TYPE`, `name := TYPE`, or
+ *  `name TYPE...` for varargs. */
+export function formatArgSignature(arg: FunctionArg): string {
+  const type = argDisplayType(arg);
+  const base = arg.named ? `${arg.name} := ${type}` : `${arg.name} ${type}`;
+  return arg.isVarargs ? `${base}...` : base;
+}
+
+/** The ` → …` return suffix of a signature, or "" when the return type is unknown. */
+export function formatReturnSignature(ret: FunctionReturn): string {
   if (ret.isTable) {
-    if (ret.columns.length === 0) return `${call} → TABLE`;
-    const cols = ret.columns.map((c) => `${c.name} ${c.duckdbType}`).join(", ");
-    return `${call} → TABLE(${cols})`;
+    if (ret.columns.length === 0) return " → TABLE";
+    return ` → TABLE(${ret.columns.map((c) => `${c.name} ${c.duckdbType}`).join(", ")})`;
   }
   const retType = ret.columns[0]?.duckdbType ?? "";
-  return retType ? `${call} → ${retType}` : call;
+  return retType ? ` → ${retType}` : "";
+}
+
+/** Past this many named options a signature lists them as a count:
+ *  `read_csv(col0 VARCHAR, …45 named options)` rather than a paragraph. */
+export const MAX_SIGNATURE_OPTIONS = 6;
+
+/** Which arguments a signature spells out: every positional one, and named
+ *  ones while there are few (plus `keep`, the one being typed). Returns the
+ *  kept indices and how many named options were folded away. */
+export function signatureParts(args: readonly FunctionArg[], keep = -1): { shown: number[]; folded: number } {
+  const named = args.filter((a) => a.named).length;
+  const fold = named > MAX_SIGNATURE_OPTIONS;
+  const shown: number[] = [];
+  args.forEach((a, i) => { if (!fold || !a.named || i === keep) shown.push(i); });
+  return { shown, folded: args.length - shown.length };
+}
+
+/** Signature for any callable (function or macro) from its parsed parts. */
+export function formatSignature(name: string, args: FunctionArg[], ret: FunctionReturn): string {
+  const { shown, folded } = signatureParts(args);
+  const parts = shown.map((i) => formatArgSignature(args[i]));
+  if (folded) parts.push(`…${folded} named options`);
+  return `${name}(${parts.join(", ")})${formatReturnSignature(ret)}`;
 }

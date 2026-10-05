@@ -86,3 +86,30 @@ for (const type of [new Int32(), new Int64()]) {
     }
   });
 }
+
+test('built-in functions: functions-only mode, table-function options and variadic tails', async () => {
+  const previous = engine.query;
+  const seen: string[] = [];
+  const list = new List(new Field('item', new Utf8()));
+  const functions = new Table({
+    schema_name: vectorFromArray(['main', 'main']),
+    function_name: vectorFromArray(['read_csv', 'concat']),
+    function_type: vectorFromArray(['table', 'scalar']),
+    parameters: vectorFromArray([['col0', 'header', 'delim'], ['value']], list),
+    parameter_types: vectorFromArray([['VARCHAR', 'BOOLEAN', 'VARCHAR'], ['ANY']], list),
+    varargs: vectorFromArray([null, 'ANY']),
+    return_type: vectorFromArray([null, 'ANY']),
+  });
+  engine.query = async sql => {
+    seen.push(sql);
+    return { ok: true, arrowBuffers: [tableToIPC(sql.includes('duckdb_functions()') ? functions : tableFromArrays({ empty: [] })).slice().buffer as ArrayBuffer] };
+  };
+  try {
+    const catalog = await fetchAttachedCatalog('system', 'builtin', { functionsOnly: true, functionFilter: "function_type = 'scalar'" });
+    expect(seen.some(sql => /duckdb_(tables|views|columns|constraints)\(\)/.test(sql))).toBe(false);
+    expect(seen.find(sql => sql.includes('duckdb_functions()'))).toContain("AND (function_type = 'scalar')");
+    const [readCsv, concat] = catalog.schemas[0].functions as unknown as { _functionArgs: { name: string; named: boolean; isVarargs: boolean }[] }[];
+    expect(readCsv._functionArgs.map(a => `${a.name}:${a.named}`)).toEqual(['col0:false', 'delim:true', 'header:true']);
+    expect(concat._functionArgs.map(a => `${a.name}:${a.isVarargs}`)).toEqual(['value:false', 'args:true']);
+  } finally { engine.query = previous; }
+});

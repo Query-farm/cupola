@@ -9,7 +9,10 @@ import { Loader2 } from "lucide-react";
 import type { TabId } from "./AppTabBar";
 const AskAIChat = lazy(() => import("./AskAIChat").then(m => ({ default: m.AskAIChat })));
 import { getColumns } from "@/lib/service";
-import { treeIdToShellText } from "@/lib/tree";
+import { treeIdToShellText, parseSelection } from "@/lib/tree";
+import { catalogInventory } from "@/lib/catalog-store";
+import { callablesForSelection } from "@/lib/callable";
+import { buildCallText } from "@/lib/editor/call-snippet";
 import { VgiDuckDBHandler, perspectiveServeMode, runPerspectiveQuery, type PerspectiveServeMode } from "@/lib/perspective-duckdb-handler";
 import { createQueryPivotSource, dropQueryPivotSource, type QueryPivotSource } from "@/lib/pivot-source";
 import { useSettings } from "@/lib/settings";
@@ -224,7 +227,7 @@ export function DuckDBShell({ serviceUrl, catalogName, catalogs, defaultCatalog,
     // created before leaving the editor, so a query that cannot be wrapped
     // (not a single SELECT-like statement) reports its error in place.
     ui.showPerspectiveQuery = async (sql, mode) => {
-      if (!engine.query) return { ok: false, error: "The data engine is not ready." };
+      if (!engine.query) return { ok: false, error: "The query engine is not ready yet." };
       // Logged with the handler's queries, so the console shows the whole flow.
       const run = (statement: string) => runPerspectiveQuery(statement, "pivotSource");
       let source: QueryPivotSource;
@@ -315,7 +318,7 @@ export function DuckDBShell({ serviceUrl, catalogName, catalogs, defaultCatalog,
     if (!shellActivated) return;
     let cancelled = false;
 
-    if (engine.lifecycleStatus === "idle") setBootPhase("Preparing local data engine");
+    if (engine.lifecycleStatus === "idle") setBootPhase("Waiting to start");
 
     // Service or catalog switched — make sure any consumers awaiting the
     // previous ATTACH cycle now block on the new one.
@@ -502,6 +505,8 @@ export function DuckDBShell({ serviceUrl, catalogName, catalogs, defaultCatalog,
           e.preventDefault();
           const data = e.dataTransfer.getData("text/plain");
           if (data) {
+            const [callable] = /::[fm]:/.test(data) ? callablesForSelection(catalogInventory.getSnapshot().catalogs, parseSelection(data)) : [];
+            if (callable) { terminal.insertText?.(buildCallText(callable, { emptyDoc: false })); return; }
             const text = treeIdToShellText(data);
             if (text) {
               terminal.insertText?.(text);

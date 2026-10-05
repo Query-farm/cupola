@@ -35,6 +35,16 @@ import { SqlEditorTabs } from "./SqlEditorTabs";
 import { EditorToolbar } from "./EditorToolbar";
 import { EditorResultsPane, emptyResult, type ResultState } from "./EditorResultsPane";
 import { EditorAiPanel } from "./EditorAiPanel";
+import { RightDock, useDockState } from "./RightDock";
+import { ConfirmCloseQueryDialog, type PendingClose } from "./ConfirmCloseQueryDialog";
+import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
+import { HistoryPanel } from "./HistoryPanel";
+import { Inspector } from "@/components/inspector/Inspector";
+import { parseSelection, type Selection } from "@/lib/tree";
+import { callablesForSelection, type Callable } from "@/lib/callable";
+import { buildCatalogIndex } from "@/lib/catalog-index";
+import { builtinFunctions, loadBuiltinFunctions, onBuiltinFunctionsLoaded } from "@/lib/builtin-functions";
+import { buildCallSnippet } from "@/lib/editor/call-snippet";
 import { openPopout, updateLatest } from "@/lib/editor/result-popout";
 import type { SqlApplyActions } from "./EditorSqlToolCallBlock";
 import { buildShareQueryUrl } from "@/lib/share-query";
@@ -66,9 +76,17 @@ interface Props {
   /** True while any sub-tab's Ask AI conversation has a turn in flight, so the
    *  app tab bar can flag it from outside the editor. */
   onAiBusyChange?: (busy: boolean) => void;
+  /** The sidebar's current selection; the Inspector follows it. */
+  selection?: Selection | null;
+  /** Bumped each time the sidebar asks to inspect its selection. */
+  inspectRequest?: number;
+  /** Show a selection's full catalog page. */
+  onOpenFullPage?: (selection: Selection) => void;
 }
 
-export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, workspaceId, attachOptions, shareWorkspaceToken, pendingSql, onPendingConsumed, onAiBusyChange }: Props) {
+const INSPECTABLE = new Set(["function", "macro", "table", "view"]);
+
+export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, workspaceId, attachOptions, shareWorkspaceToken, pendingSql, onPendingConsumed, onAiBusyChange, selection = null, inspectRequest = 0, onOpenFullPage }: Props) {
   // Tabs and history are kept per workspace (multi-catalog phase 2); without one, per service.
   const storageScope = workspaceId ?? serviceUrl;
   const { settings } = useSettings();
@@ -78,16 +96,21 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   const [docState, setDocState] = useState<EditorDocState>(() => loadEditorState(storageScope));
   const [results, setResults] = useState<Record<string, ResultState>>({});
   const [hasSelection, setHasSelection] = useState(false);
-  // Docked Ask AI panel (right side) — persisted open state + width.
-  const AI_MIN = 320, AI_MAX = 720;
-  const [aiOpen, setAiOpen] = useState<boolean>(() => {
-    try { return localStorage.getItem("vgi-editor-ai-open") === "1"; } catch { return false; }
-  });
-  const [aiWidth, setAiWidth] = useState<number>(() => {
-    try { const n = parseInt(localStorage.getItem("vgi-editor-ai-width") || "", 10); if (n >= 320 && n <= 720) return n; } catch {}
-    return 400;
-  });
-  useEffect(() => { try { localStorage.setItem("vgi-editor-ai-open", aiOpen ? "1" : "0"); } catch {} }, [aiOpen]);
+  // Right-hand panel shared by the Inspector and Ask AI.
+  const dock = useDockState();
+  const aiOpen = dock.open && dock.tab === "ai";
+  // The Inspector shows the last function/macro/table/view picked in the
+  // sidebar (a schema click leaves it alone), unless pinned to one.
+  const [lastInspectable, setLastInspectable] = useState<Selection | null>(null);
+  const [pinned, setPinned] = useState<Selection | null>(null);
+  useEffect(() => {
+    if (selection && INSPECTABLE.has(selection.type)) setLastInspectable(selection);
+  }, [selection]);
+  const showDock = dock.show;
+  useEffect(() => {
+    if (inspectRequest > 0) showDock("inspector");
+  }, [inspectRequest, showDock]);
+  const inspectorTarget = pinned ?? lastInspectable;
   // Doc ids whose AI conversation is mid-turn. Conversations are per sub-tab
   // and the panel can be closed outright, so a running agent is otherwise
   // invisible the moment the user switches tabs or collapses the panel.
@@ -114,7 +137,6 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   const splitColRef = useRef<HTMLDivElement>(null);
   const engineLifecycle = useEngineLifecycle();
   const queryReady = engineLifecycle.status === "ready";
-  const bootPhase = engineLifecycle.phase;
 
   const editorRef = useRef<CodeMirrorSqlHandle | null>(null);
   const runIdRef = useRef(0);
@@ -204,10 +226,21 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     persist(addDoc(docState, sql));
   }, [docState, persist]);
 
-  const handleCloseTab = useCallback((id: string) => {
-    persist(removeDoc(docState, id));
+  const closeTab = useCallback((id: string) => {
+    persist(removeDoc(docStateRef.current, id));
     setResults((prev) => { const { [id]: _drop, ...rest } = prev; return rest; });
-  }, [docState, persist]);
+  }, [persist]);
+
+  // Closing a tab deletes its query, so one with SQL in it asks first.
+  const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
+  const handleCloseTab = useCallback((id: string) => {
+    const doc = docState.docs.find((d) => d.id === id);
+    if (!doc) return;
+    // The active tab's text is in CodeMirror; the stored copy lags by the save debounce.
+    const sql = id === docState.activeId && editorRef.current ? editorRef.current.getDoc() : doc.sql;
+    if (!sql.trim()) { closeTab(id); return; }
+    setPendingClose({ id, name: doc.name, sql });
+  }, [docState, closeTab]);
 
   const handleRename = useCallback((id: string, name: string) => {
     persist(renameDoc(docState, id, name));
@@ -225,6 +258,10 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   const runSql = useCallback(async (sql: string, docId: string) => {
     const trimmed = sql.trim();
     if (!trimmed) return;
+    // The tab's whole text as it ran, for the History panel's per-tab view.
+    const docText = (docId === docStateRef.current.activeId ? editorRef.current?.getDoc() : undefined)
+      ?? docStateRef.current.docs.find((d) => d.id === docId)?.sql ?? trimmed;
+    const tab = { docId, ...(docText.trim() !== trimmed ? { docSql: docText } : {}) };
     const myRun = ++runIdRef.current;
     const previous = activeRunRef.current;
     if (previous) {
@@ -242,13 +279,13 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       await waitForEngineReady();
     } catch (error) {
       release();
-      setActiveResult(docId, { running: false, error: error instanceof Error ? error.message : "The data engine failed to start." });
+      setActiveResult(docId, { running: false, error: error instanceof Error ? error.message : "The query engine couldn't start." });
       return;
     }
     const q = engine.query;
     if (!q) {
       release();
-      setActiveResult(docId, { running: false, error: "The data engine is not ready." });
+      setActiveResult(docId, { running: false, error: "The query engine is not ready yet." });
       return;
     }
 
@@ -263,7 +300,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       if (myRun !== runIdRef.current) return;
       if (controller.signal.aborted) {
         setActiveResult(docId, { running: false, cancelled: true, error: null, table: null });
-        recordQuery({ source: "editor", sql: trimmed, executionTimeMs: Math.round(performance.now() - t0), success: false, error: "Query cancelled" });
+        recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: Math.round(performance.now() - t0), success: false, error: "Query cancelled" });
         return;
       }
       setActiveResult(docId, { running: false, error: e instanceof Error ? e.message : String(e) });
@@ -275,7 +312,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
 
     if (!res.ok) {
       setActiveResult(docId, { running: false, error: res.error || "Query failed", ok: false, table: null });
-      recordQuery({ source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: false, error: res.error });
+      recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: false, error: res.error });
       maybeSelectError(res.error);
       return;
     }
@@ -284,7 +321,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     const isEmpty = !buf || (buf instanceof ArrayBuffer ? buf.byteLength === 0 : (buf as Uint8Array).length === 0);
     if (isEmpty) {
       setActiveResult(docId, { running: false, error: null, ok: true, table: null, rowCount: 0, elapsedMs });
-      recordQuery({ source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true });
+      recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true });
       return;
     }
     const table = decodeArrowBuffer(buf);
@@ -293,13 +330,13 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     const isCount = fields.length === 1 && fields[0].name === "Count" && table.numRows <= 1;
     if (isCount) {
       setActiveResult(docId, { running: false, error: null, ok: true, table: null, rowCount: 0, elapsedMs });
-      recordQuery({ source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true });
+      recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true });
       return;
     }
     setActiveResult(docId, {
       running: false, error: null, ok: true, table, sourceSql: trimmed, rowCount: table.numRows, elapsedMs,
     });
-    recordQuery({ source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true, rowCount: table.numRows });
+    recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true, rowCount: table.numRows });
   }, [setActiveResult]);
 
   /** Best-effort: if a DuckDB error names a character offset, select it. */
@@ -325,6 +362,21 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     const sql = sqlToRun();
     if (sql) runSql(sql, activeId);
   }, [activeId, runSql, sqlToRun]);
+
+  const handleRunAll = useCallback(() => {
+    if (!activeId || !editorRef.current) return;
+    runSql(editorRef.current.getDoc(), activeId);
+  }, [activeId, runSql]);
+
+  // EXPLAIN of what Run would execute; the results pane draws the plan.
+  const handleExplain = useCallback(() => {
+    if (!activeId) return;
+    const sql = sqlToRun()?.trim().replace(/;\s*$/, "");
+    if (!sql) return;
+    runSql(/^explain\b/i.test(sql) ? sql : `EXPLAIN ${sql}`, activeId);
+  }, [activeId, runSql, sqlToRun]);
+
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const handleRunStatementAtCursor = useCallback(() => {
     if (!editorRef.current || !activeId) return;
@@ -502,6 +554,23 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     editorRef.current?.insertAtCursor(sql);
   }, []);
 
+  // A function or macro call, as a snippet: Tab walks its arguments.
+  const insertCallable = useCallback((callable: Callable) => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    ed.insertSnippet(buildCallSnippet(callable, { emptyDoc: ed.getDoc().trim() === "" }));
+  }, []);
+
+  const getCatalogIndex = useCallback(
+    () => buildCatalogIndex(catalogInventory.getSnapshot().catalogs, builtinFunctions()),
+    [],
+  );
+  // Read DuckDB's built-ins as soon as the engine can, so help is ready on the
+  // first keystroke rather than the second.
+  useEffect(() => { if (queryReady) void loadBuiltinFunctions(); }, [queryReady]);
+  // A `fn(` typed before they arrived gets its help now, not on the next key.
+  useEffect(() => onBuiltinFunctionsLoaded(() => editorRef.current?.refreshCatalogHelp()), []);
+
   // Smart insert (matches the shell): a bare table reference dropped/clicked
   // into an empty editor expands to a SELECT (geometry excluded); otherwise the
   // raw text is inserted at the cursor. A column/expression inserts verbatim.
@@ -517,9 +586,11 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
 
   // Drop of a sidebar tree id onto the editor — decode to a name, then insert.
   const handleDropText = useCallback((raw: string) => {
+    const [callable] = /::[fm]:/.test(raw) ? callablesForSelection(catalogInventory.getSnapshot().catalogs, parseSelection(raw)) : [];
+    if (callable) { insertCallable(callable); return; }
     const text = treeIdToShellText(raw) ?? (raw.includes("::") ? null : raw);
     if (text) smartInsert(text);
-  }, [smartInsert]);
+  }, [smartInsert, insertCallable]);
 
   // Apply-back actions handed to the AI panel (it lives inside this component,
   // so it calls our editor handlers directly).
@@ -529,24 +600,6 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     insertAtCursor: applyInsertAtCursor,
     openInNewTab: (sql: string) => ui.openInEditor?.(sql),
   }), [applyReplaceStatement, applyReplaceDocument, applyInsertAtCursor]);
-
-  // Right-panel resize (inverted delta vs a left sidebar). Persist on release.
-  const onAiResizeStart = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = aiWidth;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const onMove = (ev: globalThis.PointerEvent) => {
-      setAiWidth(Math.min(AI_MAX, Math.max(AI_MIN, startW - (ev.clientX - startX))));
-    };
-    const onUp = () => {
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onUp);
-      setAiWidth((w) => { try { localStorage.setItem("vgi-editor-ai-width", String(w)); } catch {} return w; });
-    };
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onUp);
-  }, [aiWidth]);
 
   // Vertical split resize between the editor and results panes. Clamp so each
   // keeps at least ~120px; persist the fraction on release.
@@ -575,6 +628,10 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     ui.insertIntoEditor = smartInsert;
     return () => { if (ui.insertIntoEditor === smartInsert) ui.insertIntoEditor = null; };
   }, [smartInsert]);
+  useEffect(() => {
+    ui.insertCallableIntoEditor = insertCallable;
+    return () => { if (ui.insertCallableIntoEditor === insertCallable) ui.insertCallableIntoEditor = null; };
+  }, [insertCallable]);
 
   // SQL from outside this tab's text always lands in a new tab, which becomes active.
   const openInNewTab = useCallback((sql: string, autoRun: boolean) => {
@@ -603,6 +660,11 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-background" data-testid="sql-editor-view">
+      <ConfirmCloseQueryDialog
+        pending={pendingClose}
+        onCancel={() => setPendingClose(null)}
+        onConfirm={(id) => { setPendingClose(null); closeTab(id); }}
+      />
       <SqlEditorTabs
         docs={docState.docs}
         activeId={activeId}
@@ -615,28 +677,33 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       <EditorToolbar
         running={activeResult.running}
         queryReady={queryReady}
-        bootPhase={bootPhase}
         hasSelection={hasSelection}
         onRun={handleRun}
+        onRunAll={handleRunAll}
+        onExplain={handleExplain}
         onRunInPerspective={handleRunInPerspective}
         perspectiveBusy={pivotBusy}
         onStop={handleStop}
         onFormat={handleFormat}
-        onAskAI={() => setAiOpen((o) => !o)}
+        onAskAI={() => dock.toggle("ai")}
+        onInspector={() => dock.toggle("inspector")}
+        inspectorActive={dock.open && dock.tab === "inspector"}
+        onHistory={() => dock.toggle("history")}
+        historyActive={dock.open && dock.tab === "history"}
+        onShowShortcuts={() => setShortcutsOpen(true)}
         onAddToReport={handleAddToReport}
         aiActive={aiOpen}
         aiBusy={aiBusyDocs.size > 0}
         onDownloadSql={handleDownloadSql}
         onShareLink={handleShareLink}
         shareCopied={shareCopied}
-        serviceUrl={storageScope}
-        onOpenFromHistory={openInNewTab}
       />
+      <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       {/* Horizontal split: editor+results on the left, Ask AI panel on the
           right. The panel stays mounted (display:none when closed) so its
           per-tab conversations survive open/close toggles. */}
       <div className="flex flex-col md:flex-row flex-1 min-h-0">
-        <div ref={splitColRef} className={`flex flex-col flex-1 min-w-0 ${aiOpen && isNarrow ? "min-h-0 basis-[55%]" : ""}`}>
+        <div ref={splitColRef} className={`flex flex-col flex-1 min-w-0 ${dock.open && isNarrow ? "min-h-0 basis-[55%]" : ""}`}>
           <div className="min-h-[120px] overflow-hidden" style={{ height: `${editorFrac * 100}%` }}>
             <CodeMirrorSql
               key={activeDoc?.id ?? "none"}
@@ -648,6 +715,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
               onDropText={handleDropText}
               completionSource={completionSource}
               fontSize={settings.editorFontSize ?? 13}
+              getCatalogIndex={getCatalogIndex}
             />
           </div>
           <div
@@ -665,31 +733,43 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
             />
           </div>
         </div>
-        {aiOpen && !isNarrow && (
-          <div
-            onPointerDown={onAiResizeStart}
-            className="w-1.5 shrink-0 cursor-col-resize bg-border hover:bg-accent/60 active:bg-accent transition-colors"
-          />
-        )}
-        <div
-          className={isNarrow ? "min-h-0 border-t border-border overflow-hidden" : "shrink-0 overflow-hidden"}
-          style={aiOpen
-            ? (isNarrow ? { width: "100%", flex: "1 1 45%" } : { width: aiWidth })
-            : { width: 0, display: "none" }}
-        >
-          <EditorAiPanel
-            docId={activeDoc?.id ?? "none"}
-            catalogData={catalogData}
-            attachedCatalogs={attachedCatalogs}
-            serviceUrl={serviceUrl}
-            getCurrentSql={getCurrentSql}
-            apply={aiApply}
-            runIdRef={runIdRef}
-            setActiveResult={setActiveResult}
-            onClose={() => setAiOpen(false)}
-            onBusyChange={handleAiBusyChange}
-          />
-        </div>
+        <RightDock
+          state={dock}
+          isNarrow={isNarrow}
+          aiBusy={aiBusyDocs.size > 0}
+          inspector={
+            <Inspector
+              target={inspectorTarget}
+              pinned={!!pinned}
+              onTogglePin={() => setPinned((p) => (p ? null : inspectorTarget))}
+              onOpenFullPage={(sel) => onOpenFullPage?.(sel)}
+              onInsertText={applyInsertAtCursor}
+              onInsertCallable={insertCallable}
+              onInsertRelation={smartInsert}
+            />
+          }
+          history={
+            <HistoryPanel
+              serviceUrl={storageScope}
+              activeDocId={activeDoc?.id ?? null}
+              onOpen={openInNewTab}
+              onRestore={(sql) => { applyReplaceDocument(sql); editorRef.current?.focus(); }}
+            />
+          }
+          ai={
+            <EditorAiPanel
+              docId={activeDoc?.id ?? "none"}
+              catalogData={catalogData}
+              attachedCatalogs={attachedCatalogs}
+              serviceUrl={serviceUrl}
+              getCurrentSql={getCurrentSql}
+              apply={aiApply}
+              runIdRef={runIdRef}
+              setActiveResult={setActiveResult}
+              onBusyChange={handleAiBusyChange}
+            />
+          }
+        />
       </div>
     </div>
   );
