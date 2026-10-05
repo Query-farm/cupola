@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import type { QueryHistoryEntry } from "../../src/lib/shell-bridge";
-import { addQueryHistoryEntry, clearQueryHistory, loadQueryHistory, QUERY_HISTORY_LIMIT, removeQueryHistoryEntry } from "../../src/lib/editor/query-history";
-import { formatWhen } from "../../src/components/editor/QueryHistoryMenu";
+import { addQueryHistoryEntry, clearQueryHistory, loadQueryHistory, QUERY_HISTORY_LIMIT, removeQueryHistoryEntry, runSnapshot } from "../../src/lib/editor/query-history";
+import { formatWhen } from "../../src/components/editor/HistoryPanel";
 
 const original = (globalThis as { localStorage?: Storage }).localStorage;
 const store = new Map<string, string>();
@@ -62,5 +62,23 @@ describe("query history", () => {
     expect(formatWhen(now - 10_000, now)).toBe("just now");
     expect(formatWhen(now - 5 * 60_000, now)).toBe("5 min ago");
     expect(formatWhen(new Date(2026, 8, 29, 9, 5).getTime(), now)).toStartWith("Yesterday ");
+  });
+});
+
+describe("per-tab runs", () => {
+  test("a run in another tab, or of a changed tab, is its own entry", () => {
+    {
+      const svc = "http://tabs.test";
+      clearQueryHistory(svc);
+      const base = { timestamp: 1, executionTimeMs: 1, success: true, source: "editor" as const };
+      addQueryHistoryEntry(svc, { ...base, id: 1, sql: "SELECT 1", docId: "a", docSql: "SELECT 1;\nSELECT 2" });
+      addQueryHistoryEntry(svc, { ...base, id: 2, sql: "SELECT 1", docId: "a", docSql: "SELECT 1;\nSELECT 2" });
+      addQueryHistoryEntry(svc, { ...base, id: 3, sql: "SELECT 1", docId: "a", docSql: "SELECT 1;\nSELECT 3" });
+      addQueryHistoryEntry(svc, { ...base, id: 4, sql: "SELECT 1", docId: "b" });
+      const entries = loadQueryHistory(svc);
+      expect(entries.map((e) => [e.docId, e.runs ?? 1])).toEqual([["b", 1], ["a", 1], ["a", 2]]);
+      expect(runSnapshot(entries[1])).toBe("SELECT 1;\nSELECT 3");
+      expect(runSnapshot(entries[0])).toBe("SELECT 1");
+    }
   });
 });

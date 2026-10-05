@@ -37,6 +37,8 @@ import { EditorResultsPane, emptyResult, type ResultState } from "./EditorResult
 import { EditorAiPanel } from "./EditorAiPanel";
 import { RightDock, useDockState } from "./RightDock";
 import { ConfirmCloseQueryDialog, type PendingClose } from "./ConfirmCloseQueryDialog";
+import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
+import { HistoryPanel } from "./HistoryPanel";
 import { Inspector } from "@/components/inspector/Inspector";
 import { parseSelection, type Selection } from "@/lib/tree";
 import { callablesForSelection, type Callable } from "@/lib/callable";
@@ -219,6 +221,10 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   const runSql = useCallback(async (sql: string, docId: string) => {
     const trimmed = sql.trim();
     if (!trimmed) return;
+    // The tab's whole text as it ran, for the History panel's per-tab view.
+    const docText = (docId === docStateRef.current.activeId ? editorRef.current?.getDoc() : undefined)
+      ?? docStateRef.current.docs.find((d) => d.id === docId)?.sql ?? trimmed;
+    const tab = { docId, ...(docText.trim() !== trimmed ? { docSql: docText } : {}) };
     const myRun = ++runIdRef.current;
     const previous = activeRunRef.current;
     if (previous) {
@@ -257,7 +263,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       if (myRun !== runIdRef.current) return;
       if (controller.signal.aborted) {
         setActiveResult(docId, { running: false, cancelled: true, error: null, table: null });
-        recordQuery({ source: "editor", sql: trimmed, executionTimeMs: Math.round(performance.now() - t0), success: false, error: "Query cancelled" });
+        recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: Math.round(performance.now() - t0), success: false, error: "Query cancelled" });
         return;
       }
       setActiveResult(docId, { running: false, error: e instanceof Error ? e.message : String(e) });
@@ -269,7 +275,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
 
     if (!res.ok) {
       setActiveResult(docId, { running: false, error: res.error || "Query failed", ok: false, table: null });
-      recordQuery({ source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: false, error: res.error });
+      recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: false, error: res.error });
       maybeSelectError(res.error);
       return;
     }
@@ -278,7 +284,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     const isEmpty = !buf || (buf instanceof ArrayBuffer ? buf.byteLength === 0 : (buf as Uint8Array).length === 0);
     if (isEmpty) {
       setActiveResult(docId, { running: false, error: null, ok: true, table: null, rowCount: 0, elapsedMs });
-      recordQuery({ source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true });
+      recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true });
       return;
     }
     const table = decodeArrowBuffer(buf);
@@ -287,13 +293,13 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     const isCount = fields.length === 1 && fields[0].name === "Count" && table.numRows <= 1;
     if (isCount) {
       setActiveResult(docId, { running: false, error: null, ok: true, table: null, rowCount: 0, elapsedMs });
-      recordQuery({ source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true });
+      recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true });
       return;
     }
     setActiveResult(docId, {
       running: false, error: null, ok: true, table, sourceSql: trimmed, rowCount: table.numRows, elapsedMs,
     });
-    recordQuery({ source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true, rowCount: table.numRows });
+    recordQuery({ ...tab, source: "editor", sql: trimmed, executionTimeMs: elapsedMs, success: true, rowCount: table.numRows });
   }, [setActiveResult]);
 
   /** Best-effort: if a DuckDB error names a character offset, select it. */
@@ -319,6 +325,21 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     const sql = sqlToRun();
     if (sql) runSql(sql, activeId);
   }, [activeId, runSql, sqlToRun]);
+
+  const handleRunAll = useCallback(() => {
+    if (!activeId || !editorRef.current) return;
+    runSql(editorRef.current.getDoc(), activeId);
+  }, [activeId, runSql]);
+
+  // EXPLAIN of what Run would execute; the results pane draws the plan.
+  const handleExplain = useCallback(() => {
+    if (!activeId) return;
+    const sql = sqlToRun()?.trim().replace(/;\s*$/, "");
+    if (!sql) return;
+    runSql(/^explain\b/i.test(sql) ? sql : `EXPLAIN ${sql}`, activeId);
+  }, [activeId, runSql, sqlToRun]);
+
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const handleRunStatementAtCursor = useCallback(() => {
     if (!editorRef.current || !activeId) return;
@@ -619,6 +640,8 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
         queryReady={queryReady}
         hasSelection={hasSelection}
         onRun={handleRun}
+        onRunAll={handleRunAll}
+        onExplain={handleExplain}
         onRunInPerspective={handleRunInPerspective}
         perspectiveBusy={pivotBusy}
         onStop={handleStop}
@@ -626,15 +649,17 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
         onAskAI={() => dock.toggle("ai")}
         onInspector={() => dock.toggle("inspector")}
         inspectorActive={dock.open && dock.tab === "inspector"}
+        onHistory={() => dock.toggle("history")}
+        historyActive={dock.open && dock.tab === "history"}
+        onShowShortcuts={() => setShortcutsOpen(true)}
         onAddToReport={handleAddToReport}
         aiActive={aiOpen}
         aiBusy={aiBusyDocs.size > 0}
         onDownloadSql={handleDownloadSql}
         onShareLink={handleShareLink}
         shareCopied={shareCopied}
-        serviceUrl={serviceUrl}
-        onOpenFromHistory={openInNewTab}
       />
+      <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       {/* Horizontal split: editor+results on the left, Ask AI panel on the
           right. The panel stays mounted (display:none when closed) so its
           per-tab conversations survive open/close toggles. */}
@@ -682,6 +707,14 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
               onInsertText={applyInsertAtCursor}
               onInsertCallable={insertCallable}
               onInsertRelation={smartInsert}
+            />
+          }
+          history={
+            <HistoryPanel
+              serviceUrl={serviceUrl}
+              activeDocId={activeDoc?.id ?? null}
+              onOpen={openInNewTab}
+              onRestore={(sql) => { applyReplaceDocument(sql); editorRef.current?.focus(); }}
             />
           }
           ai={

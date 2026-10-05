@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { isolateHistory } from "@codemirror/commands";
 import { buildSqlExtensions, EditorState, EditorView } from "@/lib/editor/cm-sql-setup";
 import { snippet, type CompletionSource } from "@codemirror/autocomplete";
 import type { CatalogIndex } from "@/lib/catalog-index";
@@ -141,7 +142,12 @@ export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function Cod
     setDoc: (text: string) => {
       const view = viewRef.current;
       if (!view) return;
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+      // Its own undo step: a whole-document replacement (Format, Restore, an AI
+      // apply) must undo to exactly the text it replaced, never merged with typing.
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        annotations: isolateHistory.of("full"),
+      });
     },
     insertAtCursor: (text: string) => {
       const view = viewRef.current;

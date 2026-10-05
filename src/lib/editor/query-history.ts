@@ -59,7 +59,11 @@ function save(serviceUrl: string, entries: QueryHistoryEntry[]) {
 }
 
 const sameQuery = (a: QueryHistoryEntry, b: QueryHistoryEntry) =>
-  a.sql.trim() === b.sql.trim() && a.source === b.source && !a.conversationId && !b.conversationId && a.success === b.success;
+  a.sql.trim() === b.sql.trim() && a.source === b.source && !a.conversationId && !b.conversationId && a.success === b.success
+  && a.docId === b.docId && (a.docSql ?? a.sql).trim() === (b.docSql ?? b.sql).trim();
+
+/** The text a run left in its tab: the whole document when recorded. */
+export const runSnapshot = (entry: QueryHistoryEntry) => entry.docSql ?? entry.sql;
 
 /** Record a query. Running the same query again straight after replaces the
  *  previous entry and counts the run, so re-running in a loop doesn't bury

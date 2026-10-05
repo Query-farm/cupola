@@ -1,6 +1,7 @@
 /**
  * Query history — every surface records through `ui.addQueryHistoryEntry`, the
- * editor's History menu lists the entries, and they are kept per server in
+ * History tab of the editor's side panel lists the entries ("All", plus the
+ * current tab's runs as a diff stack), and they are kept per server in
  * localStorage, so they survive a reload.
  */
 import { test, expect } from "@playwright/test";
@@ -22,6 +23,7 @@ test.describe("Query history", () => {
     await page.getByRole("tree").first().waitFor({ state: "visible", timeout: T_SHELL_BOOT });
     await openEditor(page);
     await page.getByTestId("editor-history").click();
+    await page.getByTestId("editor-history-view-all").click();
     const entry = page.getByTestId("editor-history-entry").filter({ hasText: "SELECT 7 * 6 AS answer" });
     await expect(entry).toBeVisible({ timeout: T_NORMAL });
     await expect(entry).toContainText("Editor");
@@ -29,7 +31,6 @@ test.describe("Query history", () => {
 
     const tabsBefore = await page.getByTestId("editor-tab").count();
     await entry.getByTestId("editor-history-open").click();
-    await expect(page.getByTestId("editor-history-panel")).toHaveCount(0);
     await expect(page.locator(".cm-content").first()).toHaveText("SELECT 7 * 6 AS answer");
     await expect(page.getByTestId("editor-tab")).toHaveCount(tabsBefore + 1);
   });
@@ -39,6 +40,7 @@ test.describe("Query history", () => {
     await page.evaluate(() => (window as any).__bridge.runQuery("SELECT 'from the shell' AS origin"));
     await openEditor(page);
     await page.getByTestId("editor-history").click();
+    await page.getByTestId("editor-history-view-all").click();
     const entry = page.getByTestId("editor-history-entry").filter({ hasText: "from the shell" });
     await expect(entry).toBeVisible({ timeout: T_SHELL_BOOT });
     await expect(entry).toContainText("Shell");
@@ -55,6 +57,7 @@ test.describe("Query history", () => {
       add({ id: 2, timestamp: Date.now(), sql: "SELECT boom", executionTimeMs: 2, success: false, error: "Binder Error: boom", source: "ask-ai", userQuestion: "why boom" });
     });
     await page.getByTestId("editor-history").click();
+    await page.getByTestId("editor-history-view-all").click();
     const entries = page.getByTestId("editor-history-entry");
     await expect(entries).toHaveCount(2);
     await expect(entries.first()).toContainText("Binder Error: boom");
@@ -72,5 +75,35 @@ test.describe("Query history", () => {
     await page.getByTestId("editor-history-clear").click();
     await expect(entries).toHaveCount(0);
     await expect(page.getByTestId("editor-history-panel")).toContainText("No queries yet");
+  });
+
+  test("This tab lists the tab's runs as a diff stack, and Restore brings a version back", async ({ page }) => {
+    await page.getByTestId("editor-add-tab").click();
+    await typeInEditor(page, "SELECT 1 AS first_version");
+    await page.getByTestId("editor-run").click();
+    await expect(page.getByTestId("sql-editor-view").getByText("first_version", { exact: true })).toBeVisible({ timeout: T_SHELL_BOOT });
+    await typeInEditor(page, "SELECT 2 AS second_version");
+    await page.getByTestId("editor-run").click();
+    await expect(page.getByTestId("sql-editor-view").getByText("second_version", { exact: true })).toBeVisible({ timeout: T_SHELL_BOOT });
+
+    await page.getByTestId("editor-history").click();
+    await page.getByTestId("editor-history-view-tab").click();
+    const runs = page.getByTestId("editor-history-run-entry");
+    await expect(runs).toHaveCount(2);
+    // The newest run shows what changed since the one before it.
+    const diff = runs.first().getByTestId("editor-history-diff");
+    await expect(diff).toContainText("- SELECT 1 AS first_version");
+    await expect(diff).toContainText("+ SELECT 2 AS second_version");
+
+    await runs.last().getByTestId("editor-history-restore").click();
+    await expect(page.locator(".cm-content").first()).toHaveText("SELECT 1 AS first_version");
+    // Restoring is an edit like any other: undo takes it back.
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect(page.locator(".cm-content").first()).toHaveText("SELECT 2 AS second_version");
+
+    // Another tab has its own runs.
+    await page.getByTestId("editor-add-tab").click();
+    await expect(runs).toHaveCount(0);
   });
 });

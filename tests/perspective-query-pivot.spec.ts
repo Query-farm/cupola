@@ -166,7 +166,7 @@ test("Run in Perspective opens a query without running it in the editor", async 
   test.setTimeout(60_000);
   await openEditor(page);
   await typeInEditor(page, QUERY);
-  await page.getByTestId("editor-run-perspective").click();
+  await page.getByTestId("editor-run-menu").click();
   await page.getByTestId("editor-run-perspective-view").click();
 
   const opened = await viewerState(page);
@@ -184,7 +184,7 @@ test("Run in Perspective explains a statement it cannot wrap", async ({ page }) 
   test.setTimeout(60_000);
   await openEditor(page);
   await typeInEditor(page, "DESCRIBE memory.main.pivot_probe");
-  await page.getByTestId("editor-run-perspective").click();
+  await page.getByTestId("editor-run-menu").click();
   await page.getByTestId("editor-run-perspective-table").click();
 
   // No result grid is on screen, and the error still shows.
@@ -202,7 +202,7 @@ test("column names keep their underscores through a live view", async ({ page })
   expect(created.ok, created.error).toBe(true);
   await openEditor(page);
   await typeInEditor(page, "SELECT * FROM memory.main.sales_probe");
-  await page.getByTestId("editor-run-perspective").click();
+  await page.getByTestId("editor-run-menu").click();
   await page.getByTestId("editor-run-perspective-view").click();
 
   // Names pass through as written; the virtual server used to show order-id.

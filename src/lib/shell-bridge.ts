@@ -47,6 +47,11 @@ export interface QueryHistoryEntry {
   source?: QuerySource;
   /** Consecutive identical runs folded into this entry (`query-history.ts`). */
   runs?: number;
+  /** The Query Editor tab it ran in, so the History panel can show one tab's runs. */
+  docId?: string;
+  /** That tab's whole text when it ran, when that differs from `sql` (the
+   *  statement or selection that ran). Restoring a run restores this. */
+  docSql?: string;
 }
 
 export type QuerySource = "editor" | "shell" | "ask-ai" | "editor-ai" | "shell-ai";
@@ -72,6 +77,8 @@ export function recordQuery(opts: {
   conversationId?: string;
   conversationName?: string;
   source?: QuerySource;
+  docId?: string;
+  docSql?: string;
 }): void {
   ui.addQueryHistoryEntry?.({
     id: Date.now(),
