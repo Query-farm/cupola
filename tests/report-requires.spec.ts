@@ -58,7 +58,11 @@ test.describe("report requires", () => {
     await expect(banner).toBeVisible({ timeout: T_SHELL_BOOT });
     await expect(banner).toContainText("cupola_test");
     await expect(banner).toContainText("local_alias");
-    await banner.getByRole("button", { name: "Rebind" }).click();
+    // Rebind waits out the report's first refresh, which waits for the engine: boot, the
+    // extensions' LOAD (about 6s with two browsers booting) and ATTACH, past a click's 10s.
+    const rebind = banner.getByRole("button", { name: "Rebind" });
+    await expect(rebind).toBeEnabled({ timeout: T_SHELL_BOOT });
+    await rebind.click();
     await expect(banner).toBeHidden({ timeout: T_NORMAL });
     const stored = await page.evaluate(([r, h]) => ({ report: JSON.parse(localStorage.getItem(r)!), history: JSON.parse(localStorage.getItem(h) ?? "null") }), [reportKey("rebind"), historyKey("rebind")]);
     expect(stored.report.source).toContain("FROM local_alias.small.numbers");
@@ -79,7 +83,12 @@ test.describe("report requires", () => {
     const panel = page.getByTestId("workspace-picker-panel");
     await expect(panel).toBeVisible({ timeout: T_NORMAL });
     await expect(panel.locator("input").first()).toHaveValue(SECOND_URL);
+    // Escape closes the attach form first, then the picker.
     await page.keyboard.press("Escape");
+    await expect(panel.getByTestId("attach-catalog-form")).toBeHidden();
+    await expect(panel).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(panel).toBeHidden();
     await banner.getByRole("button", { name: "Open anyway" }).click();
     await expect(banner).toBeHidden();
   });

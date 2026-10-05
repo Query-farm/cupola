@@ -20,6 +20,7 @@ const sidebar = (page: Page) => page.getByTestId('catalog-sidebar');
 const literal = (s: string) => `'${s.replaceAll("'", "''")}'`;
 
 test.beforeEach(async ({ page }) => {
+  const t0 = Date.now(); page.on('console', (m) => { const t = m.text(); if (!/GL Driver|vite|DevTools/.test(t)) console.log(`PAGE ${Date.now() - t0}:`, t.slice(0, 200)); }); // DEBUG
   await gotoApp(page);
   await waitForShellBridge(page);
   await expect.poll(async () => (await inventory(page)).some(c => c.catalogName === 'memory')).toBe(true);

@@ -56,7 +56,8 @@ test.describe("workspace files", () => {
     await page.goto(WELCOME);
     await menu(page).click();
     const { name, text } = await downloadText(page, /Export all workspaces/);
-    expect(name).toBe("cupola-workspaces.cupola-workspaces.json");
+    // One workspace: the file is named after it (workspaceFileName).
+    expect(name).toBe("finance.cupola-workspaces.json");
     const file = JSON.parse(text);
     expect(file.$schema).toContain("/schema/workspace-v1.json");
     expect(file.format).toBe("cupola-workspaces");
@@ -108,6 +109,8 @@ test.describe("workspace files", () => {
     await expect(notice).toContainText("Imported 1 workspace", { timeout: T_NORMAL });
     await expect(page.getByTestId("workspace-import-secrets")).toContainText("sales.api_key");
     await expect(page.getByTestId("workspace-import-secrets")).toContainText("SALES_API_KEY");
+    // Imported, never opened here (not "Opened Dec 31, 1969").
+    await expect(page.getByTestId("welcome-workspace-card")).toContainText("Not opened yet");
     const stored = await page.evaluate((key) => localStorage.getItem(key) ?? "", WORKSPACES);
     expect(stored).toContain('"region":"eu"');
     expect(stored).not.toContain("api_key");

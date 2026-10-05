@@ -159,11 +159,12 @@ test.describe("workspace manager", () => {
     await expect(detail(page).getByRole("status")).toContainText("Moved second to position 1 of 2.");
 
     await catalogRow(page, "second").getByTestId("catalog-more").click();
-    await page.getByRole("menuitem", { name: "Move down" }).click();
+    await page.getByRole("menu", { name: "More actions for second" }).getByRole("menuitem", { name: "Move down" }).click();
     await expect.poll(() => storedOrder(page, TWO.id)).toEqual(["cupola_test", "second"]);
+    await expect(page.getByRole("menu", { name: "More actions for second" })).toBeHidden();
 
     await catalogRow(page, "cupola_test").getByTestId("catalog-more").click();
-    await expect(page.getByRole("menuitem", { name: "Move up" })).toBeDisabled();
+    await expect(page.getByRole("menu", { name: "More actions for cupola_test" }).getByRole("menuitem", { name: "Move up" })).toBeDisabled();
     await page.keyboard.press("Escape");
   });
 
@@ -214,14 +215,21 @@ test.describe("workspace manager", () => {
     await expect(editor).toContainText("Letters, digits");
     await alias.fill("renamed");
     await expect(alias).toHaveAttribute("aria-invalid", "false");
-    // The default handler is a plain confirm (phase 3C replaces it).
-    page.once("dialog", (d) => { expect(d.message()).toContain('"second" to "renamed"'); void d.accept(); });
+    // The app's handler is the alias-rename dialog, with the alias fixed to the draft's.
     await editor.getByTestId("catalog-editor-save").click();
+    const dialog = page.getByTestId("alias-rename-dialog");
+    await expect(dialog).toBeVisible({ timeout: T_NORMAL });
+    await expect(dialog.getByRole("heading")).toHaveText("Rename catalog second");
+    await expect(dialog.getByRole("textbox")).toHaveValue("renamed");
+    await expect(dialog.getByRole("textbox")).toHaveAttribute("readonly", "");
+    await expect(dialog.getByTestId("alias-rename-none")).toBeVisible();
+    await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+    await expect(dialog).toBeHidden({ timeout: T_NORMAL });
     await allSettled(page, { cupola_test: "attached", renamed: "attached" });
     expect((await shellQuery(page, "SELECT count(*)::INTEGER AS n FROM renamed.small.regions")).rows?.[0]?.n).toBe(8);
   });
 
-  test("declining the alias confirm saves nothing", async ({ page }) => {
+  test("cancelling the alias-rename dialog saves nothing", async ({ page }) => {
     await seed(page, workspaceStore([TWO]));
     await page.goto(workspaceUrl(TWO.id));
     await allSettled(page, { cupola_test: "attached", second: "attached" });
@@ -229,8 +237,11 @@ test.describe("workspace manager", () => {
     await catalogRow(page, "second").getByTestId("catalog-edit-toggle").click();
     const editor = catalogRow(page, "second").getByTestId("catalog-editor");
     await editor.getByTestId("catalog-alias-input").fill("renamed");
-    page.once("dialog", (d) => void d.dismiss());
     await editor.getByTestId("catalog-editor-save").click();
+    const dialog = page.getByTestId("alias-rename-dialog");
+    await expect(dialog).toBeVisible({ timeout: T_NORMAL });
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
     await expect(editor.getByTestId("catalog-editor-errors")).toContainText('still "second"');
     expect(await storedOrder(page, TWO.id)).toEqual(["cupola_test", "second"]);
   });

@@ -532,7 +532,11 @@ test('reports saved before revision history migrate on their first change', asyn
 
   await panel.getByLabel('Report title').fill('Legacy report, edited');
   await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
-  const encoded = encodeURIComponent(EVIDENCE_SERVICE_URL);
+  // Saved under the workspace the `?service=` link opened (reports are kept per workspace).
+  const workspaces = await page.evaluate(() => JSON.parse(localStorage.getItem('cupola.workspaces.v1')!).workspaces);
+  expect(workspaces).toHaveLength(1);
+  expect(workspaces[0].catalogs[0].url).toBe(EVIDENCE_SERVICE_URL);
+  const encoded = encodeURIComponent(workspaces[0].id);
   expect(await keys()).toEqual([`cupola.evidence.history.v1:${encoded}:legacy`, `cupola.evidence.report.v2:${encoded}:legacy`]);
   const revisions = panel.getByRole('list', { name: 'Revisions, newest first' }).getByRole('listitem');
   await expect(revisions).toHaveCount(2);

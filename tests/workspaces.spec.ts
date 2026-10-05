@@ -98,31 +98,34 @@ test.describe("workspaces", () => {
   });
 
   test("legacy storage is migrated: recents, history, editor tabs, a report and a secret show up under the workspace", async ({ page }) => {
+    // The secret is cupola_secure's required api_key: the catalog attaches only if it was migrated.
+    test.skip(!(await up(OPTIONS_URL)), `start the attach-options worker at ${OPTIONS_URL}`);
     test.setTimeout(120_000);
     const enc = encodeURIComponent;
-    const report = { version: 1, id: "legacy-report", title: "Legacy workspace report", serviceUrl: SERVICE_URL, source: "# Legacy workspace report", setupSql: "", parameters: [], values: {}, createdAt: 1, updatedAt: 1 };
+    const report = { version: 1, id: "legacy-report", title: "Legacy workspace report", serviceUrl: OPTIONS_URL, source: "# Legacy workspace report", setupSql: "", parameters: [], values: {}, createdAt: 1, updatedAt: 1 };
     await seed(page, {
-      "vgi-recent-services": JSON.stringify([{ url: SERVICE_URL, catalogName: "cupola_test", lastUsed: new Date().toISOString() }]),
-      [`cupola.query-history.v1::${SERVICE_URL}`]: JSON.stringify([{ id: 1, timestamp: Date.now(), sql: "SELECT 'from the old history'", executionTimeMs: 1, success: true, source: "editor" }]),
-      [`vgi-sql-editor-docs::${SERVICE_URL}`]: JSON.stringify({ version: 1, docs: [{ id: "d1", name: "Old tab", sql: "SELECT 'old editor tab'", createdAt: 1, updatedAt: 1 }], activeId: "d1" }),
-      [`cupola.evidence.report.v2:${enc(SERVICE_URL)}:legacy-report`]: JSON.stringify(report),
-      [SECRETS]: JSON.stringify({ [JSON.stringify([SERVICE_URL, "cupola_test", "api_token"])]: "legacy-secret-1" }),
+      "vgi-recent-services": JSON.stringify([{ url: OPTIONS_URL, catalogName: "cupola_secure", lastUsed: new Date().toISOString() }]),
+      [`cupola.query-history.v1::${OPTIONS_URL}`]: JSON.stringify([{ id: 1, timestamp: Date.now(), sql: "SELECT 'from the old history'", executionTimeMs: 1, success: true, source: "editor" }]),
+      [`vgi-sql-editor-docs::${OPTIONS_URL}`]: JSON.stringify({ version: 1, docs: [{ id: "d1", name: "Old tab", sql: "SELECT 'old editor tab'", createdAt: 1, updatedAt: 1 }], activeId: "d1" }),
+      [`cupola.evidence.report.v2:${enc(OPTIONS_URL)}:legacy-report`]: JSON.stringify(report),
+      [SECRETS]: JSON.stringify({ [JSON.stringify([OPTIONS_URL, "cupola_secure", "api_key"])]: "legacy-secret-1" }),
     });
-    await page.goto(serviceUrl(SERVICE_URL));
-    await allSettled(page, { cupola_test: "attached" });
+    await page.goto(serviceUrl(OPTIONS_URL));
+    await allSettled(page, { cupola_secure: "attached" });
 
     const storage = await page.evaluate(() => Object.fromEntries(Object.keys(localStorage).map((k) => [k, localStorage.getItem(k)!])));
     expect(storage["cupola.workspaces.migrated.v1"]).toBeTruthy();
     const ws = JSON.parse(storage["cupola.workspaces.v1"]).workspaces;
     expect(ws).toHaveLength(1);
     const id = ws[0].id;
-    expect(ws[0].catalogs[0].alias).toBe("cupola_test");
+    expect(ws[0].catalogs[0].alias).toBe("cupola_secure");
     expect(storage[`cupola.query-history.v1::${id}`]).toContain("from the old history");
     expect(storage[`vgi-sql-editor-docs::${id}`]).toContain("old editor tab");
     expect(storage[`cupola.evidence.report.v2:${enc(id)}:legacy-report`]).toContain(id);
-    expect(storage[SECRETS]).toContain(`${id}:${ws[0].catalogs[0].id}:api_token`);
+    expect(storage[SECRETS]).toContain(`${id}:${ws[0].catalogs[0].id}:api_key`);
+    expect(storage["cupola.workspaces.v1"]).not.toContain("legacy-secret-1");
     // Old keys are kept.
-    expect(storage[`cupola.query-history.v1::${SERVICE_URL}`]).toBeTruthy();
+    expect(storage[`cupola.query-history.v1::${OPTIONS_URL}`]).toBeTruthy();
 
     await openEditor(page);
     await expect(page.locator(".cm-content").first()).toContainText("old editor tab");
@@ -182,14 +185,19 @@ test.describe("workspaces", () => {
     expect((await shellQuery(page, "SELECT count(*)::INTEGER AS n FROM other.small.regions")).rows?.[0]?.n).toBe(8);
     await expect(page).toHaveURL(/local_ws=/);
 
-    await picker(page).click();
+    // The picker stays open after attaching, listing the new catalog with its status.
+    await expect(panel(page)).toBeVisible();
     const row = panel(page).locator('[data-testid="picker-catalog-row"][data-alias="other"]');
+    await expect(row).toHaveAttribute("data-state", "attached");
     await row.hover();
     await row.getByTestId("picker-catalog-more").click();
     await row.getByRole("menuitem", { name: "Detach" }).click();
     await expect.poll(async () => (await statuses(page)).map((s: any) => s.alias)).toEqual(["cupola_test"]);
     expect((await shellQuery(page, "SELECT count(*)::INTEGER AS n FROM duckdb_databases() WHERE database_name = 'other'")).rows?.[0]?.n).toBe(0);
-    await page.getByTestId("undo-toast").getByRole("button", { name: "Undo" }).click();
+    // Activated from the keyboard: in dev, Astro's toolbar sits over the bottom-centred toast.
+    const undo = page.getByTestId("undo-toast").getByRole("button", { name: "Undo" });
+    await undo.focus();
+    await page.keyboard.press("Enter");
     await allSettled(page, { cupola_test: "attached", other: "attached" });
   });
 
@@ -276,26 +284,29 @@ test.describe("workspaces", () => {
   });
 
   test("Share workspace link round-trips, and carries no secrets", async ({ page, context }) => {
+    // cupola_secure declares region and requires the secret api_key.
+    test.skip(!(await up(OPTIONS_URL)), `start the attach-options worker at ${OPTIONS_URL}`);
     test.setTimeout(120_000);
     await seed(page, {
-      ...workspaceStore([{ ...TWO, catalogs: [{ ...TWO.catalogs[0], options: { region: "eu" } }, TWO.catalogs[1]] }]),
-      [SECRETS]: JSON.stringify({ "ws-two:first:api_token": "never-in-a-link" }),
+      ...workspaceStore([{ ...TWO, catalogs: [{ id: "secure", url: OPTIONS_URL, catalogName: "cupola_secure", alias: "cupola_secure", options: { region: "eu" } }, TWO.catalogs[1]] }]),
+      [SECRETS]: JSON.stringify({ "ws-two:secure:api_key": "never-in-a-link" }),
     });
     await page.goto(workspaceUrl("ws-two"));
-    await allSettled(page, { cupola_test: "attached", second: "attached" });
+    await allSettled(page, { cupola_secure: "attached", second: "attached" });
     await picker(page).click();
     await panel(page).getByTestId("workspace-share-open").click();
     const link = await panel(page).getByTestId("workspace-share-url").inputValue();
     expect(link).toContain("#ws=");
     expect(link).not.toContain("never-in-a-link");
-    await expect(panel(page).getByTestId("workspace-share-omitted")).toContainText("api_token");
+    await expect(panel(page).getByTestId("workspace-share-omitted")).toContainText("api_key");
 
     const other = await context.newPage();
     await other.goto(link);
     const consent = other.getByTestId("workspace-consent");
     await expect(consent).toBeVisible({ timeout: T_SHELL_BOOT });
     await consent.getByRole("button", { name: "Attach 2 catalogs" }).click();
-    await allSettled(other, { cupola_test: "attached", second: "attached" });
+    // Without its api_key (the link has none) cupola_secure cannot attach.
+    await allSettled(other, { cupola_secure: "failed", second: "attached" });
     // A link opens as a new untitled workspace; the named one is untouched.
     const stored = await other.evaluate((k) => JSON.parse(localStorage.getItem(k)!).workspaces, WORKSPACES);
     expect(stored.filter((w: any) => w.name === null)).toHaveLength(1);
