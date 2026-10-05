@@ -97,6 +97,8 @@ function StatusIcon({ c, className }: { c: PickerCatalog; className?: string }) 
 
 /** "opened 3 days ago" */
 export function openedAgo(at: number, now = Date.now()): string {
+  // An imported workspace has never been opened here (lastOpenedAt 0), not opened in 1970.
+  if (!(at > 0)) return "not opened yet";
   const s = Math.max(0, Math.round((now - at) / 1000));
   if (s < 60) return "just now";
   const m = Math.round(s / 60);

@@ -1427,11 +1427,16 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
 
   // Loading state — animated connect screen with brand chrome so the user
   // sees the page is alive while the catalog round-trips are in flight.
-  if (!settled) {
+  // Boot only: once the app is up, a catalog attached, enabled or retried
+  // later loads on its own (its status says so). Returning this screen then
+  // unmounted the whole app, shell included, and the remounted shell
+  // restarted the engine with the boot plan while the new catalog's attach
+  // waited on it forever ("connecting").
+  if (!settled && !appUp.current) {
     return <ConnectingScreen logoUrl={logoUrl} serviceUrl={single ? serviceUrl : `${entries.length} catalogs`} />;
   }
 
-  if (single && onlyEntry) {
+  if (single && onlyEntry && !appUp.current) {
     const load = onlyEntry.load;
     if (load.state === "options-needed") {
       return (
@@ -2364,7 +2369,7 @@ function WorkspaceCards({ workspaces }: { workspaces: Workspace[] }) {
                 </span>
               ))}
             </span>
-            <span className="mt-1.5 block text-[11px] text-muted-foreground">Opened {openedAgo(w.lastOpenedAt)}</span>
+            <span className="mt-1.5 block text-[11px] text-muted-foreground">{w.lastOpenedAt > 0 ? `Opened ${openedAgo(w.lastOpenedAt)}` : "Not opened yet"}</span>
           </a>
         </li>
       ))}
@@ -2557,25 +2562,24 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
           <ConnectForm />
         </div>
 
-        {named.length > 0 ? (
-          <div className="mb-6" data-testid="welcome-workspaces">
-            <div className="flex items-center justify-between gap-2 mb-2">
-              <h2 className="text-sm font-semibold text-foreground">Workspaces</h2>
-              <div className="flex items-center gap-3">
-                <WorkspaceFileActions workspaces={workspaces} />
+        {/* One tree for both cases, so WorkspaceFileActions keeps its state (the import
+            notice) when the first import turns "Have a workspace file…" into the cards. */}
+        <div className="mb-6" data-testid={named.length > 0 ? "welcome-workspaces" : undefined}>
+          <div className={`flex items-center justify-between gap-2 ${named.length > 0 ? "mb-2" : "text-sm text-muted-foreground"}`}>
+            {named.length > 0
+              ? <h2 className="text-sm font-semibold text-foreground">Workspaces</h2>
+              : <span>Have a workspace file or DuckDB script?</span>}
+            <div className="flex items-center gap-3">
+              <WorkspaceFileActions workspaces={workspaces} />
+              {named.length > 0 && (
                 <button type="button" className="text-xs text-primary underline-offset-4 hover:underline" onClick={() => setManagerOpen(true)} data-testid="welcome-manage-workspaces">
                   Manage workspaces…
                 </button>
-              </div>
+              )}
             </div>
-            <WorkspaceCards workspaces={named} />
           </div>
-        ) : (
-          <div className="flex items-center justify-between gap-2 mb-6 text-sm text-muted-foreground">
-            <span>Have a workspace file or DuckDB script?</span>
-            <WorkspaceFileActions workspaces={workspaces} />
-          </div>
-        )}
+          {named.length > 0 && <WorkspaceCards workspaces={named} />}
+        </div>
         {named.length === 0 && returning && (
           <div className="mb-6 text-right">
             <button type="button" className="text-xs text-primary underline-offset-4 hover:underline" onClick={() => setManagerOpen(true)} data-testid="welcome-manage-workspaces">
