@@ -133,6 +133,51 @@ export function hasExplicitService(): boolean {
   return new URLSearchParams(window.location.search).has("service");
 }
 
+// ---------------------------------------------------------------------------
+// Multi-catalog workspaces
+// ---------------------------------------------------------------------------
+//
+// `#ws=<token>` carries a portable workspace (lib/workspace/codec.ts). It is
+// decoded once, stored for the tab, and swapped for `?local_ws=<id>` so a
+// reload finds the same catalog set (lib/workspace/session.ts). `?service=`
+// is the frozen single-catalog contract and still works unchanged; when both
+// are present the workspace link wins.
+
+export const WS_PARAM = "ws";
+export const LOCAL_WS_PARAM = "local_ws";
+
+/** The `#ws=` token, if the fragment carries one. Plain getter. */
+export function getWorkspaceTokenFromHash(): string | null {
+  if (!hasWindow()) return null;
+  return parseFragmentParams()?.get(WS_PARAM) || null;
+}
+
+/** `?local_ws=<id>`: this tab's stored catalog set. */
+export function getLocalWorkspaceId(): string | null {
+  if (!hasWindow()) return null;
+  return new URLSearchParams(window.location.search).get(LOCAL_WS_PARAM) || null;
+}
+
+/** Whether the URL names a workspace (`#ws=` or `?local_ws=`). */
+export function hasWorkspaceParam(): boolean {
+  return getWorkspaceTokenFromHash() !== null || getLocalWorkspaceId() !== null;
+}
+
+/** Whether the URL names anything to connect to. Drives the welcome page. */
+export function hasExplicitConnection(): boolean {
+  return hasExplicitService() || hasWorkspaceParam();
+}
+
+/** Replace `#ws=` with `?local_ws=<id>` once the workspace is stored. Every
+ *  other key, in the query and the fragment, is kept. */
+export function swapWorkspaceFragmentForId(id: string): void {
+  if (!hasWindow()) return;
+  rewriteUrl([], [WS_PARAM]);
+  const url = new URL(window.location.href);
+  url.searchParams.set(LOCAL_WS_PARAM, id);
+  try { window.history.replaceState(null, "", url.pathname + url.search + url.hash); } catch {}
+}
+
 /** Raw `?attach_options=` value. `undefined` = absent (caller falls back to
  *  localStorage); `""` = explicit empty (clear saved options). */
 export function getAttachOptionsFromUrl(): string | undefined {
@@ -284,7 +329,7 @@ export async function consumeSharedSql(): Promise<string | null> {
   // page and never mounts the editor. Consuming here would strip the SQL from
   // the URL and drop it on the floor, unrecoverably — leave it for a later
   // load that actually has somewhere to put it.
-  if (!hasExplicitService()) return null;
+  if (!hasExplicitConnection()) return null;
   const search = new URLSearchParams(window.location.search);
   const fragParams = parseFragmentParams();
   const hasSql = (p: URLSearchParams | null) => !!p && (p.has(SQL_PARAM) || p.has(SQL_Z_PARAM));
