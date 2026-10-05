@@ -914,8 +914,14 @@ async function loadStaticPerspectiveSnapshot(
     // Loading a Table directly used to hand the viewer ownership of it; under
     // the client+name pattern that's no longer implicit, which is why the
     // previous snapshot is freed explicitly above.
+    //
+    // `list_flatten: "stringify"` keeps one row per result row. Perspective's
+    // default (`zip`) expands a LIST column into one row per element, so a
+    // snapshot would silently show more rows than the query returned, and it
+    // aborts outright when two list columns in a row differ in length (USGS
+    // earthquakes' `ids` / `types`: "Cannot zip list columns ...").
     const tableName = `cupola-static-${++staticPerspectiveTableCounter}`;
-    host.table = await perspectiveWorker.table(ingest, { name: tableName });
+    host.table = await perspectiveWorker.table(ingest, { name: tableName, list_flatten: "stringify" });
     await viewer.load(perspectiveWorker);
 
     // Perspective defaults to showing every column when no config is

@@ -50,4 +50,48 @@ test.describe("Perspective tab", () => {
     expect(columns).not.toBeNull();
     expect(columns).toEqual(expect.arrayContaining(["n", "sq", "label"]));
   });
+
+  // Perspective's default `zip` list flattening expands LIST columns into one
+  // row per element and aborts when two lists in a row differ in length (the
+  // USGS earthquakes catalog's `ids` / `types`). Snapshots stringify instead.
+  test("keeps one row per result row for LIST columns of differing length", async ({ page }) => {
+    await page.waitForFunction(
+      () => typeof (window as any).__bridge?.showPerspective === "function",
+      null,
+      { timeout: T_NORMAL },
+    );
+
+    await page.evaluate(async () => {
+      const bridge = (window as any).__bridge;
+      const r = await bridge.query(
+        "SELECT * FROM (VALUES (1, ['a'], ['x', 'y']), (2, ['b', 'c', 'd'], [])) t(id, ids, types)",
+      );
+      if (!r.ok || !r.arrowBuffers?.length) throw new Error("query failed");
+      await bridge.showPerspective(new Uint8Array(r.arrowBuffers[0]));
+    });
+
+    await expect(page.locator("perspective-viewer")).toBeAttached({ timeout: T_SHELL_BOOT });
+
+    const data = await page.evaluate(async () => {
+      const el = document.querySelector("perspective-viewer") as any;
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        try {
+          const table = await el?.getTable?.();
+          if (table) {
+            const view = await table.view();
+            const cols = await view.to_columns();
+            await view.delete();
+            return cols;
+          }
+        } catch {}
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return null;
+    });
+    expect(data).not.toBeNull();
+    expect(data.id).toEqual([1, 2]);
+    expect(data.ids).toHaveLength(2);
+    expect(data.types).toHaveLength(2);
+  });
 });
