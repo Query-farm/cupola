@@ -105,7 +105,6 @@ export const engine = {
    *  back: a dry run that leaves the session as it found it. See duckdb-worker-boot. */
   rolledBack: null as (<T>(work: (run: (sql: string, params?: unknown[]) => Promise<QueryResult>) => Promise<T>, options?: QueryExecutionOptions) => Promise<T>) | null,
   querySync: null as ((sql: string, options?: QueryExecutionOptions) => Promise<QueryResult>) | null,
-  cancelQuery: null as (() => void) | null,
   /** True when a query run with a signal can be interrupted mid-execution, not
    *  only between polls (haybarn-wasm's `getInterruptHandle`, threads builds). */
   interruptsRunningQueries: false,
@@ -118,7 +117,6 @@ export const engine = {
    *  CatalogApp mount or lazily at DuckDBShell mount. */
   workerCreateStart: 0 as number,
   workerReadyData: null as { wasmVersion: string; totalMs: number; timings: Array<{ phase: string; ms: number }> } | null,
-  cancelInt32: null as Int32Array | null,
 
   /** Live boot state for the animated loading screen. `bootPhase` is the
    *  current human-readable step; `bootProgress` is 0-100 for the WASM
@@ -326,7 +324,6 @@ if (typeof window !== "undefined") {
     set queryPrepared(value) { engine.queryPrepared = value; },
     get getTableNames() { return engine.getTableNames; },
     get querySync() { return engine.querySync; },
-    get cancelQuery() { return engine.cancelQuery; },
     get interruptsRunningQueries() { return engine.interruptsRunningQueries; },
     get catalogName() { return engine.catalogName; },
     get worker() { return engine.worker; },

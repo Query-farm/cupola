@@ -61,12 +61,11 @@ export interface AITerminal {
 export interface AIShellOps {
   catalogData: CatalogData;
   serviceUrl: string;
-  runQueryAsync: (sql: string) => Promise<any>;
+  /** With a signal, aborting it cancels the query in the engine (see engine.query). */
+  runQueryAsync: (sql: string, signal?: AbortSignal) => Promise<any>;
   tableFromIPC: (buf: any) => any;
   printTable: (table: any, elapsedMs?: number) => Promise<void>;
   clearProgressBar: () => void;
-  /** Reset the cancel flag after a query completes. */
-  resetCancelFlag: () => void;
 }
 
 /** Read fresh AI settings from localStorage (user may change mid-session). */
@@ -137,7 +136,9 @@ function createToolExecutor(
   spinner: ReturnType<typeof createSpinner>,
   queryMode: AIQueryMode,
 ) {
-  return async (name: string, input: any): Promise<string> => {
+  // `signal` is the turn's: Ctrl+C or Esc aborts it, which cancels the query running in the engine.
+  return async (name: string, input: any, signal?: AbortSignal): Promise<string> => {
+    const query = (sql: string) => ops.runQueryAsync(sql, signal);
     const denied = deniedAIQueryToolResult(name, queryMode);
     if (denied) return denied;
     const catalogs = await catalogsForTool(name, [ops.catalogData, ...ui.attachedCatalogs, ui.memoryCatalog]
@@ -146,12 +147,12 @@ function createToolExecutor(
       const lastUserMsg = conv.messages.filter(m => m.role === "user").pop();
       const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
       return executeSemanticQuery(catalogs, input, {
-        query: ops.runQueryAsync,
-        queryPrepared: engine.queryPrepared ?? undefined,
+        query,
+        queryPrepared: engine.queryPrepared ? (sql, params) => engine.queryPrepared!(sql, params, { signal }) : undefined,
         resultCache: conv.resultCache,
       }, {
         onStart: () => { spinner.stop(); },
-        onEnd: () => { ops.clearProgressBar(); ops.resetCancelFlag(); },
+        onEnd: () => { ops.clearProgressBar(); },
         onOutcome: async (out) => {
           if (out.kind === "error") {
             term.println(`\x1b[31m  Error: ${out.errMsg}\x1b[0m`);
@@ -167,9 +168,9 @@ function createToolExecutor(
     if (name === "run_sql") {
       const lastUserMsg = conv.messages.filter(m => m.role === "user").pop();
       const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
-      return executeRunSql(input.sql, { query: ops.runQueryAsync, resultCache: conv.resultCache }, {
+      return executeRunSql(input.sql, { query, resultCache: conv.resultCache }, {
         onStart: () => { spinner.stop(); },
-        onEnd: () => { ops.clearProgressBar(); ops.resetCancelFlag(); },
+        onEnd: () => { ops.clearProgressBar(); },
         onOutcome: async (out) => {
           if (out.kind === "error") {
             term.println(`\x1b[31m  Error: ${out.errMsg}\x1b[0m`);
@@ -220,7 +221,7 @@ function createToolExecutor(
       return executeListCategories(catalogs, input);
     }
     if (name === "describe_table") {
-      return describeTableWithFallback(catalogs, { query: ops.runQueryAsync }, input);
+      return describeTableWithFallback(catalogs, { query }, input);
     }
     if (name === "describe_function") {
       return executeDescribeFunction(catalogs, input);

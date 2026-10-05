@@ -10,6 +10,7 @@
  */
 import { tableFromIPC, RecordBatchFileReader, Table } from "@query-farm/apache-arrow";
 import { engine } from "./shell-bridge";
+import type { QueryExecutionOptions } from "./query-execution";
 import { bignumBytesToBigInt, formatBitString, formatFixedBinaryTimeTz, formatUUID, getDuckDBExtensionType, readInt128 } from "./format";
 
 /** SQL-escape a string for inlining into a literal. DuckDB uses SQL-standard
@@ -74,18 +75,18 @@ export function tableFromIPCWithDictionaries(buf: ArrayBuffer | Uint8Array): Tab
 
 /** Run SQL and decode the result to an Apache Arrow `Table`. Returns null if
  *  the query failed, the bridge isn't ready, or no Arrow buffer came back. */
-export async function readTable(sql: string): Promise<Table | null> {
+export async function readTable(sql: string, options?: QueryExecutionOptions): Promise<Table | null> {
   const q = engine.query;
   if (!q) return null;
-  const r = await q(sql);
+  const r = await q(sql, options);
   if (!r.ok || !r.arrowBuffers?.length) return null;
   return decodeArrowBuffer(r.arrowBuffers[0]);
 }
 
 /** Read an Arrow-encoded query result into an array of plain-object rows.
  *  Returns null if the query failed or returned no arrow buffers. */
-export async function readRows(sql: string): Promise<Record<string, any>[] | null> {
-  const table = await readTable(sql);
+export async function readRows(sql: string, options?: QueryExecutionOptions): Promise<Record<string, any>[] | null> {
+  const table = await readTable(sql, options);
   if (!table) return null;
   return tableToRows(table);
 }

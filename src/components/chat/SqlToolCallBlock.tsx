@@ -34,8 +34,8 @@ import type { ToolCallEntry } from "./ChatMessageAssistant";
 interface Props {
   toolCall: ToolCallEntry;
   /** Called when the user clicks the inline cancel button while the
-   *  query is executing. Aborts the agent + cancels the in-flight DuckDB
-   *  query via engine.cancelQuery. */
+   *  query is executing. Aborts the agent's turn, whose signal cancels the
+   *  in-flight DuckDB query. */
   onCancel?: () => void;
 }
 
