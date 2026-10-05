@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { useSettings } from "@/lib/settings";
 import { Breadcrumb } from "./Breadcrumb";
 import { ColumnTypeBadge } from "./ColumnTypeBadge";
-import { DescriptionSection } from "./DescriptionSection";
+import { DocumentationSection } from "./DocumentationSection";
 import { ExampleQueries } from "./ExampleQueries";
 import { TagsTable } from "./TagsTable";
 import { ObjectMeta } from "./ObjectMeta";
@@ -180,12 +180,10 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOp
         <code className="font-mono text-sm whitespace-pre-wrap break-words text-foreground/90">{signature}</code>
       </div>
 
-      {/* Description */}
-      {descriptionMd ? (
-        <DescriptionSection markdown={descriptionMd} />
-      ) : (
-        plainDescription && <p className="text-muted-foreground mb-4">{plainDescription}</p>
-      )}
+      {/* The one-line summary, then the long-form documentation: they
+          complement each other (VGI102), so both show. */}
+      {plainDescription && <p className="text-muted-foreground mb-4">{plainDescription}</p>}
+      {descriptionMd && <DocumentationSection markdown={descriptionMd} />}
 
       <ObjectMeta tags={func.tags} />
 

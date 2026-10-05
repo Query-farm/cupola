@@ -41,6 +41,8 @@ test.describe("Sidebar in the query editor", () => {
     await expect(page.getByTestId("inspector-title")).toHaveText("slow_rows");
     await expect(inspector.getByTestId("callable-signature")).toContainText("slow_rows(rows");
     await expect(inspector.getByTestId("inspector-args")).toContainText("delay_ms");
+    // The one-line summary leads; a server's vgi.doc_md would follow it under "Documentation".
+    await expect(inspector.getByTestId("inspector-summary")).toContainText("Rows that arrive slowly");
     // Browsing from the editor replaces the history entry rather than adding one.
     expect(await page.evaluate(() => history.length)).toBe(hashBefore);
     await expect(page.getByTestId("editor-inspector-toggle")).toHaveAttribute("aria-pressed", "true");

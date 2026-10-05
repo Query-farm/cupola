@@ -20,7 +20,7 @@ import {
   TAG_CATEGORY,
   type CategoryDef,
 } from "@/lib/tags";
-import { DescriptionSection } from "./DescriptionSection";
+import { DocumentationSection } from "./DocumentationSection";
 import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 import { ObjectMeta } from "./ObjectMeta";
 import { Network } from "lucide-react";
@@ -124,7 +124,7 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
         <p className="text-muted-foreground mb-6">{schema.info.comment}</p>
       )}
 
-      {docMd && <DescriptionSection markdown={docMd} />}
+      {docMd && <DocumentationSection markdown={docMd} />}
 
       <ObjectMeta tags={schema.info.tags} />
 

@@ -120,7 +120,7 @@ src/
                              #   ViewDetail, FunctionDetail, MacroDetail, ColumnsTable,
                              #   ColumnProfile, DataPreview, DataGrid, GeometryViewer,
                              #   MemoryCatalogOverview, Breadcrumb, ExampleQueries,
-                             #   DescriptionSection, SqlCodeBlock, TagsTable, CatalogIcons,
+                             #   DocumentationSection, SqlCodeBlock, TagsTable, CatalogIcons,
                              #   CatalogListItem, ColumnTypeBadge
     chat/                    # AI chat sub-components: ChatInput, ChatMessageUser/Assistant,
                              #   ChatMarkdown, ThinkingIndicator, SqlToolCallBlock,

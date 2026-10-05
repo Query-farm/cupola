@@ -7,7 +7,7 @@ import type { Selection } from "@/lib/tree";
 import { CatalogListItem } from "./CatalogListItem";
 import { TagsTable } from "./TagsTable";
 import { filterDisplayTags, getTag, parseKeywords, TAG_DOC_MD, TAG_TITLE } from "@/lib/tags";
-import { DescriptionSection } from "./DescriptionSection";
+import { DocumentationSection } from "./DocumentationSection";
 import { MetaChips } from "./MetaChips";
 import { ProvenanceCard } from "./ProvenanceCard";
 import { Button } from "@/components/ui/button";
@@ -69,7 +69,7 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate
         <p className="text-muted-foreground mb-6">{catalog.catalogComment}</p>
       )}
 
-      {docMd && <DescriptionSection markdown={docMd} defaultOpen />}
+      {docMd && <DocumentationSection markdown={docMd} defaultOpen />}
 
       <MetaChips keywords={keywords} />
 

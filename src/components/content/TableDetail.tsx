@@ -9,7 +9,7 @@ import { ColumnsTable } from "./ColumnsTable";
 import { TagsTable } from "./TagsTable";
 import { ExampleQueries } from "./ExampleQueries";
 import { filterDisplayTags, getTag, parseExecutableExamples, TAG_DOC_MD, TAG_EXAMPLE_QUERIES, TAG_TITLE } from "@/lib/tags";
-import { DescriptionSection } from "./DescriptionSection";
+import { DocumentationSection } from "./DocumentationSection";
 import { ObjectMeta } from "./ObjectMeta";
 import { TableQueryButton } from "./TableQueryButton";
 import { Button } from "@/components/ui/button";
@@ -112,7 +112,7 @@ export function TableDetail({ table, catalogName, onNavigate, onOpenShell, onPiv
         <p className="text-muted-foreground mb-3">{table.comment}</p>
       )}
 
-      {docMd && <DescriptionSection markdown={docMd} />}
+      {docMd && <DocumentationSection markdown={docMd} />}
 
       <ObjectMeta tags={table.tags} />
 

@@ -20,7 +20,7 @@ import type { FunctionInfo } from "@/lib/vgi-catalog-types";
 import type { ProfileData } from "@/lib/column-profiler";
 import { sqlIdentifier } from "@/lib/editor/call-snippet";
 import { ColumnTypeBadge } from "@/components/content/ColumnTypeBadge";
-import { DescriptionSection } from "@/components/content/DescriptionSection";
+import { DocumentationSection } from "@/components/content/DocumentationSection";
 import { ExampleQueries } from "@/components/content/ExampleQueries";
 import { ColumnProfile } from "@/components/content/ColumnProfile";
 import { SignatureView, callableKindLabel } from "./SignatureView";
@@ -138,8 +138,8 @@ function CallableSection({ callables, onInsertText, onInsertCallable }: {
       <Button size="sm" className="mt-2 h-7 gap-1.5 text-xs" onClick={() => onInsertCallable(c)} data-testid="inspector-insert-call">
         <TerminalSquare className="h-3.5 w-3.5" /> Insert call
       </Button>
-      {c.description && <p className="mt-3 text-sm text-foreground/90 whitespace-pre-wrap">{c.description}</p>}
-      {c.docMd && <div className="mt-2 text-sm"><DescriptionSection markdown={c.docMd} defaultOpen={!c.description} /></div>}
+      {c.description && <p className="mt-3 text-sm text-foreground/90 whitespace-pre-wrap" data-testid="inspector-summary">{c.description}</p>}
+      {c.docMd && <DocumentationSection markdown={c.docMd} collapsible={false} />}
 
       {c.args.length > 0 && (
         <>
@@ -302,8 +302,8 @@ function RelationSection({ relation, onInsertText, onInsertRelation }: {
       <Button size="sm" className="mt-2 h-7 gap-1.5 text-xs" onClick={() => onInsertRelation(dotted)} data-testid="inspector-insert-relation">
         <TerminalSquare className="h-3.5 w-3.5" /> Insert {relation.kind}
       </Button>
-      {relation.description && <p className="mt-3 text-sm text-foreground/90 whitespace-pre-wrap">{relation.description}</p>}
-      {relation.docMd && <div className="mt-2 text-sm"><DescriptionSection markdown={relation.docMd} defaultOpen={!relation.description} /></div>}
+      {relation.description && <p className="mt-3 text-sm text-foreground/90 whitespace-pre-wrap" data-testid="inspector-summary">{relation.description}</p>}
+      {relation.docMd && <DocumentationSection markdown={relation.docMd} collapsible={false} />}
       {columns.length > 0 && (
         <>
           <SectionTitle>Columns</SectionTitle>
