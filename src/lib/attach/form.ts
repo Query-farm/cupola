@@ -4,7 +4,7 @@
  * fallback, which goes through the same legacy parser as a URL.
  */
 import { parsePlainLiteral, splitLegacyOptions } from "./legacy-options";
-import { isSecretOption, isValidOptionName, type OptionSpecInfo } from "./options";
+import { formatOptionList, isSecretOption, isValidOptionName, partitionSecrets, type OptionSpecInfo } from "./options";
 
 export interface CollectedOptions {
   /** Structured values, secrets included. */
@@ -76,4 +76,73 @@ export function fieldPlaceholder(spec: OptionSpecInfo): string {
   if (t.startsWith("TIMESTAMP")) return "2026-01-31 12:00:00";
   if (t.startsWith("INTERVAL")) return "1 day";
   return spec.duckdbType;
+}
+
+/** The control the workspace manager's options grid renders for a declared
+ *  option (richer than `fieldKind`, which the plain forms use):
+ *  - `secret`: masked, with a reveal toggle; stored in the secret store.
+ *  - `switch`: BOOLEAN.
+ *  - `integer` / `number`: a number input (integers step by 1).
+ *  - `date`: a date input (DATE's text form is ISO `YYYY-MM-DD`).
+ *  - `text`: VARCHAR and other scalar types typed as text (TIME, UUID, …).
+ *  - `duckdb`: nested and structured types (LIST, STRUCT, MAP, arrays,
+ *    INTERVAL, TIMESTAMP…), a text input that takes DuckDB's own literal
+ *    syntax, e.g. `[1, 2]` or `{'a': 1}`. The value is still stored as text
+ *    and cast by the extension; nothing in it runs as SQL. */
+export type OptionInputKind = "secret" | "switch" | "integer" | "number" | "date" | "text" | "duckdb";
+
+export function optionInputKind(spec: OptionSpecInfo): OptionInputKind {
+  const kind = fieldKind(spec);
+  if (kind === "boolean") return "switch";
+  if (kind !== "text") return kind;
+  const t = spec.duckdbType.toUpperCase().trim();
+  if (/^(?:VARCHAR|TEXT|STRING|CHAR|BPCHAR|UUID|BLOB|BIT|TIME|TIMETZ|TIME WITH TIME ZONE|JSON)$/.test(t)) return "text";
+  return "duckdb";
+}
+
+/** The rows of an options form: the server's declared options, plus a masked
+ *  row for a stored secret it does not declare and a text row for any other
+ *  stored option, so nothing stored is invisible (or silently dropped on save). */
+export function optionRows(specs: readonly OptionSpecInfo[], values: Record<string, string>): OptionSpecInfo[] {
+  const declared = new Set(specs.map((s) => s.name.toLowerCase()));
+  const extra = Object.keys(values).filter((name) => !declared.has(name.toLowerCase())).map((name): OptionSpecInfo => ({
+    name,
+    description: isSecretOption(name) ? "A stored secret this server does not declare." : "Stored option this server does not declare.",
+    duckdbType: "VARCHAR",
+    castType: "VARCHAR",
+    arrowType: "Utf8",
+    required: false,
+    secret: isSecretOption(name),
+  }));
+  return [...specs, ...extra];
+}
+
+/** The SQL tab's text for a catalog's options: the non-secret values as
+ *  `name 'text'` pairs (always string literals, through the one quoting
+ *  builder), then any raw text still awaiting evaluation. Secrets are left
+ *  out: the tab is for text people copy around, and they are edited in the
+ *  masked fields only. */
+export function optionsToSqlText(
+  values: Record<string, string>,
+  rawOptions: string,
+  specs: readonly OptionSpecInfo[] = [],
+): string {
+  const set = Object.fromEntries(Object.entries(values).filter(([name, v]) => v !== "" && isValidOptionName(name)));
+  const plain = formatOptionList(partitionSecrets(set, specs).plain);
+  return [plain, rawOptions.trim()].filter(Boolean).join(", ");
+}
+
+/** Read the SQL tab back. The text goes through the same legacy parser as a
+ *  URL (`collectFormOptions`): plain literals become values, anything else is
+ *  kept as raw text that is evaluated, against the constant-only allowlist,
+ *  before ATTACH. It is never spliced into a statement. Secret values come
+ *  from `secretValues` (the masked fields), and a secret named in the text is
+ *  refused unless it is a plain string. */
+export function sqlTextToOptions(
+  text: string,
+  secretValues: Record<string, string>,
+  specs: readonly OptionSpecInfo[],
+): CollectedOptions & { values: Record<string, string> } {
+  const collected = collectFormOptions(secretValues, text, specs);
+  return { ...collected, values: { ...collected.options } };
 }

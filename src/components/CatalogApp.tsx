@@ -114,6 +114,7 @@ import { Sidebar, type SidebarCatalogMeta, type SidebarCatalogStatus } from "./S
 import { OPEN_ATTACH_EVENT, type PickerCatalog, type WorkspaceActions } from "./ServiceSwitcher";
 import type { AttachRequest } from "./workspace/AttachCatalogForm";
 import { CatalogOptionsDialog, type OptionsEditTarget } from "./workspace/CatalogOptionsDialog";
+import { WorkspaceManager, type LiveWorkspaceHooks } from "./workspace/WorkspaceManager";
 import { CatalogChip, ChipStack } from "./workspace/CatalogChip";
 import { Button } from "./ui/button";
 import {
@@ -1125,6 +1126,47 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     return { url: await buildWorkspaceUrl(appUrl(), portableFileOf(stored)), omitted };
   }, [workspace]);
 
+  /** The manager saved a catalog's connection (URL, alias, server catalog,
+   *  options): detach it under the alias it had and attach the stored record
+   *  again, under its new alias. Disabled catalogs are not on the page; they
+   *  pick the change up when enabled. */
+  const reattachCatalog = useCallback(async (id: string) => {
+    if (!workspace) return;
+    const entry = entriesRef.current.find((e) => e.catalog.id === id);
+    const stored = getWorkspace(workspace.id)?.catalogs.find((c) => c.id === id);
+    if (!entry || !stored) return;
+    moveToStoredUrl();
+    const oldAlias = aliasOf(entry);
+    await detachFromEngine(entry);
+    const fresh = entryFor({ id: workspace.id, source: "link" }, toActiveCatalog(stored));
+    entriesRef.current = entriesRef.current.map((e) => (e.catalog.id === id ? fresh : e));
+    setEntries((list) => list.map((e) => (e.catalog.id === id ? fresh : e)));
+    setBoot((b) => b.workspace ? { ...b, workspace: { ...b.workspace, catalogs: b.workspace.catalogs.map((c) => (c.id === id ? fresh.catalog : c)) } } : b);
+    if (stored.alias && oldAlias !== stored.alias) {
+      removeCatalogStatus(oldAlias);
+      if (requestedDefaultRef.current?.alias === oldAlias) requestedDefaultRef.current = { alias: stored.alias, schema: requestedDefaultRef.current.schema };
+      if (selection?.catalog === oldAlias) navigate(null);
+    }
+    await loadAndAttach(fresh);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace, moveToStoredUrl, detachFromEngine, loadAndAttach, selection]);
+
+  /** The manager reordered the stored catalogs: the page's entries (and so
+   *  the sidebar roots) follow. */
+  const reorderEntries = useCallback(() => {
+    if (!workspace) return;
+    const order = getWorkspace(workspace.id)?.catalogs.map((c) => c.id) ?? [];
+    const rank = (id: string) => { const i = order.indexOf(id); return i < 0 ? order.length : i; };
+    const sorted = [...entriesRef.current].sort((a, b) => rank(a.catalog.id) - rank(b.catalog.id));
+    entriesRef.current = sorted;
+    setEntries(sorted);
+    setBoot((b) => b.workspace ? { ...b, workspace: { ...b.workspace, catalogs: [...b.workspace.catalogs].sort((a, b2) => rank(a.id) - rank(b2.id)) } } : b);
+    moveToStoredUrl();
+    catalogInventory.invalidate();
+  }, [workspace, moveToStoredUrl]);
+
+  const [managerOpen, setManagerOpen] = useState(false);
+
   /** The error panel's "Edit connection options": this catalog's options
    *  dialog, in place; the connect form only for a catalog not in the workspace. */
   const editFromError = () => {
@@ -1157,8 +1199,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       window.location.href = dest.toString();
     },
     switchTo: (id) => { window.location.href = appUrl({ [LOCAL_WS_PARAM]: id }); },
-    // The manager is phase 3; until then the welcome page lists every workspace.
-    manage: () => { window.location.href = appUrl({ workspaces: "1" }); },
+    manage: () => setManagerOpen(true),
   };
 
   // Expansion of the sidebar's catalog roots, remembered per workspace: with
@@ -1454,6 +1495,22 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     };
   });
 
+  // The manager's view of this page's engine: the picker's live actions, plus
+  // re-attach and reorder, which follow a store write the manager made.
+  const managerLive: LiveWorkspaceHooks = {
+    attach: attachRequests,
+    setEnabled,
+    makeDefault: (id) => void makeDefault(id),
+    remove: detach,
+    reattach: reattachCatalog,
+    reordered: reorderEntries,
+    rename: workspaceActions.rename,
+    status: (id) => {
+      const c = pickerCatalogs.find((p) => p.id === id);
+      return c ? { state: c.state, error: c.error } : undefined;
+    },
+  };
+
   return (
     <SettingsProvider>
     <div className="flex flex-col h-dvh">
@@ -1673,6 +1730,14 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     />
     <OptionsNoticeDialog problems={attachError ? [] : optionNotices} onClose={() => setOptionNotices([])} />
     <CatalogOptionsDialog target={optionsTarget} onClose={() => setOptionsTarget(null)} onSave={saveOptions} />
+    <WorkspaceManager
+      open={managerOpen}
+      onClose={() => setManagerOpen(false)}
+      currentWorkspaceId={storedWorkspace ? workspaceId : null}
+      onOpenWorkspace={(id) => { setManagerOpen(false); workspaceActions.switchTo(id); }}
+      live={managerLive}
+      /* phase3-wire: AliasRenameDialog (pass onAliasRenameRequested; the manager defaults to a plain confirm) */
+    />
     {undo && (
       <div role="status" className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 flex items-center gap-3 rounded-lg bg-foreground px-4 py-2 text-sm text-background shadow-lg" data-testid="undo-toast">
         <span>{undo.message}</span>
@@ -2381,6 +2446,7 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
   const named = workspaces.filter((w) => w.name !== null);
   const untitled = workspaces.filter((w) => w.name === null && w.catalogs.length > 0);
   const returning = workspaces.length > 0;
+  const [managerOpen, setManagerOpen] = useState(false);
 
   return (
     <BrandShell>
@@ -2411,10 +2477,28 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
 
         {named.length > 0 && (
           <div className="mb-6" data-testid="welcome-workspaces">
-            <h2 className="text-sm font-semibold text-foreground mb-2">Workspaces</h2>
+            <div className="flex items-baseline justify-between gap-2 mb-2">
+              <h2 className="text-sm font-semibold text-foreground">Workspaces</h2>
+              <button type="button" className="text-xs text-primary underline-offset-4 hover:underline" onClick={() => setManagerOpen(true)} data-testid="welcome-manage-workspaces">
+                Manage workspaces…
+              </button>
+            </div>
             <WorkspaceCards workspaces={named} />
           </div>
         )}
+        {named.length === 0 && returning && (
+          <div className="mb-6 text-right">
+            <button type="button" className="text-xs text-primary underline-offset-4 hover:underline" onClick={() => setManagerOpen(true)} data-testid="welcome-manage-workspaces">
+              Manage workspaces…
+            </button>
+          </div>
+        )}
+        <WorkspaceManager
+          open={managerOpen}
+          onClose={() => setManagerOpen(false)}
+          onOpenWorkspace={(id) => { window.location.href = openWorkspaceHref(id); }}
+          /* phase3-wire: AliasRenameDialog (pass onAliasRenameRequested; the manager defaults to a plain confirm) */
+        />
 
         {untitled.length > 0 && (
           <div className="bg-card rounded-lg border border-border p-6 mb-6">

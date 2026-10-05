@@ -12,8 +12,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from "../ui/button";
 import { OptionsFields } from "../AttachOptions";
 import { fetchServiceCatalogs } from "@/lib/service";
-import { collectFormOptions } from "@/lib/attach/form";
-import { isSecretOption, type OptionSpecInfo } from "@/lib/attach/options";
+import { collectFormOptions, optionRows } from "@/lib/attach/form";
+import type { OptionSpecInfo } from "@/lib/attach/options";
 
 export interface OptionsEditTarget {
   catalogId: string;
@@ -25,22 +25,6 @@ export interface OptionsEditTarget {
   options: Record<string, string>;
   secrets: Record<string, string>;
   rawOptions: string;
-}
-
-/** Specs for the rows: the server's, plus a masked row for a stored secret it
- *  does not declare, and a text row for any other stored option. */
-function rowsFor(specs: readonly OptionSpecInfo[], values: Record<string, string>): OptionSpecInfo[] {
-  const declared = new Set(specs.map((s) => s.name.toLowerCase()));
-  const extra = Object.keys(values).filter((name) => !declared.has(name.toLowerCase())).map((name): OptionSpecInfo => ({
-    name,
-    description: isSecretOption(name) ? "A stored secret this server does not declare." : "Stored option this server does not declare.",
-    duckdbType: "VARCHAR",
-    castType: "VARCHAR",
-    arrowType: "Utf8",
-    required: false,
-    secret: isSecretOption(name),
-  }));
-  return [...specs, ...extra];
 }
 
 export function CatalogOptionsDialog({
@@ -75,7 +59,7 @@ export function CatalogOptionsDialog({
     return () => { live = false; };
   }, [target]);
 
-  const rows = rowsFor(specs ?? [], values);
+  const rows = optionRows(specs ?? [], values);
   const save = async () => {
     if (!target || !specs) return;
     const collected = collectFormOptions(values, raw, rows);

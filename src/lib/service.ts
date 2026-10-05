@@ -30,6 +30,7 @@ import { readRows, esc } from "./duckdb-query";
 import { decodeOptionSpecs } from "./attach/specs";
 import type { OptionSpecInfo } from "./attach/options";
 import { isRecoverableAuthError } from "./auth-errors";
+import type { ConnectionTest } from "./workspace/manager";
 
 /** Column info extracted from a TableInfo's serialized Arrow schema. */
 export interface ColumnInfo {
@@ -315,6 +316,40 @@ export async function fetchServiceCatalogs(serviceUrl: string): Promise<
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, error: message, signInRequired: isRecoverableAuthError(message) };
+  } finally {
+    client?.close();
+  }
+}
+
+/** The workspace manager's Test connection: `catalogsInfo` over RPC, timed,
+ *  then (when the catalog needs no options to attach) the number of schemas
+ *  it serves. A catalog with a required option is not attached here: the RPC
+ *  attach carries no options, so its count would be wrong or an error. */
+export async function testServiceConnection(serviceUrl: string, catalogName: string): Promise<ConnectionTest> {
+  const started = performance.now();
+  let client: VgiClient | null = null;
+  try {
+    const token = await getAuthTokenForService(serviceUrl);
+    client = new VgiClient(httpConnect(serviceUrl, { authorization: token ? `Bearer ${token}` : undefined }));
+    const infos = await client.catalogsInfo();
+    const latencyMs = performance.now() - started;
+    const catalogs = infos.map((i) => i.name);
+    const info = catalogName ? infos.find((i) => i.name === catalogName) : infos[0];
+    if (!info) return { ok: true, latencyMs, catalogFound: false, catalogs, schemaCount: null };
+    if (decodeOptionSpecs(info.attach_option_specs).some((s) => s.required)) {
+      return { ok: true, latencyMs, catalogFound: true, catalogs, schemaCount: null, schemaNote: "schemas are counted once it is attached with its required options" };
+    }
+    try {
+      const attach = await client.catalogAttach(info.name);
+      const schemas = await client.schemas(attach.attach_opaque_data);
+      await client.catalogDetach(attach.attach_opaque_data).catch(() => {});
+      return { ok: true, latencyMs, catalogFound: true, catalogs, schemaCount: schemas.length };
+    } catch (error) {
+      return { ok: true, latencyMs, catalogFound: true, catalogs, schemaCount: null, schemaNote: `schemas not listed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, latencyMs: performance.now() - started, error: message, signInRequired: isRecoverableAuthError(message) };
   } finally {
     client?.close();
   }
