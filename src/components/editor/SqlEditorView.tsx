@@ -51,6 +51,8 @@ interface Props {
   catalogData: CatalogData;
   attachedCatalogs?: CatalogData[];
   serviceUrl: string;
+  /** The workspace whose editor tabs and query history these are. */
+  workspaceId?: string;
   /** Resolved ATTACH options fragment, propagated into share links. */
   attachOptions?: string;
   /** A workspace link's `#ws=` token: share links carry the whole catalog
@@ -65,12 +67,14 @@ interface Props {
   onAiBusyChange?: (busy: boolean) => void;
 }
 
-export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, attachOptions, shareWorkspaceToken, pendingSql, onPendingConsumed, onAiBusyChange }: Props) {
+export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, workspaceId, attachOptions, shareWorkspaceToken, pendingSql, onPendingConsumed, onAiBusyChange }: Props) {
+  // Tabs and history are kept per workspace (multi-catalog phase 2); without one, per service.
+  const storageScope = workspaceId ?? serviceUrl;
   const { settings } = useSettings();
   const isNarrow = useMediaQuery("(max-width: 767px)");
   // Transient "Copied" confirmation on the Share button.
   const [shareCopied, setShareCopied] = useState(false);
-  const [docState, setDocState] = useState<EditorDocState>(() => loadEditorState(serviceUrl));
+  const [docState, setDocState] = useState<EditorDocState>(() => loadEditorState(storageScope));
   const [results, setResults] = useState<Record<string, ResultState>>({});
   const [hasSelection, setHasSelection] = useState(false);
   // Docked Ask AI panel (right side) — persisted open state + width.
@@ -134,8 +138,8 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
 
   const persist = useCallback((next: EditorDocState) => {
     setDocState(next);
-    saveEditorState(next, serviceUrl);
-  }, [serviceUrl]);
+    saveEditorState(next, storageScope);
+  }, [storageScope]);
 
   // Flush any pending debounced save when the page is hidden/closed or the
   // editor unmounts. CatalogApp keeps this view mounted across tab switches
@@ -144,7 +148,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   useEffect(() => {
     const flush = () => {
       if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
-      saveEditorState(docStateRef.current, serviceUrl);
+      saveEditorState(docStateRef.current, storageScope);
     };
     window.addEventListener("pagehide", flush);
     document.addEventListener("visibilitychange", flush);
@@ -153,7 +157,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       document.removeEventListener("visibilitychange", flush);
       flush();
     };
-  }, [serviceUrl]);
+  }, [storageScope]);
 
   // ---- document model -----------------------------------------------------
   const handleDocChange = useCallback((sql: string) => {
@@ -161,10 +165,10 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     setDocState((prev) => {
       const next = updateDocSql(prev, activeId, sql);
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => saveEditorState(next, serviceUrl), 400);
+      saveTimer.current = setTimeout(() => saveEditorState(next, storageScope), 400);
       return next;
     });
-  }, [activeId, serviceUrl]);
+  }, [activeId, storageScope]);
 
   const handleAddTab = useCallback((sql = "") => {
     persist(addDoc(docState, sql));
@@ -546,13 +550,13 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   const openInNewTab = useCallback((sql: string, autoRun: boolean) => {
     setDocState((prev) => {
       const next = addDoc(prev, sql);
-      saveEditorState(next, serviceUrl);
+      saveEditorState(next, storageScope);
       const newId = next.activeId!;
       // Run once the editor remounts with the new active doc.
       if (autoRun) setTimeout(() => runSql(sql, newId), 60);
       return next;
     });
-  }, [runSql, serviceUrl]);
+  }, [runSql, storageScope]);
 
   // ---- externally-pushed SQL (example queries, AI panels, share links) -----
   useEffect(() => {
@@ -595,7 +599,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
         onDownloadSql={handleDownloadSql}
         onShareLink={handleShareLink}
         shareCopied={shareCopied}
-        serviceUrl={serviceUrl}
+        serviceUrl={storageScope}
         onOpenFromHistory={openInNewTab}
       />
       {/* Horizontal split: editor+results on the left, Ask AI panel on the

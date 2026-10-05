@@ -24,6 +24,8 @@ interface TreeDataItem {
   className?: string;
   /** Hover tooltip for the node's label (e.g. a column's comment). */
   title?: string;
+  /** A divider above this top-level row, with an optional caption. */
+  dividerBefore?: string | true;
 }
 
 export type { TreeDataItem };
@@ -114,11 +116,15 @@ export interface BuildTreeOptions {
   /** Trailing content on the root node (a catalog's attach status). Ignored
    *  when `onRefresh` supplies the root's refresh button. */
   rootActions?: React.ReactNode;
+  /** Tooltip on the root's label (the catalog's host). */
+  rootTitle?: string;
+  /** A divider above the root, with a caption (`memory`, "local"). */
+  dividerBefore?: string;
 }
 
 /** Build the full tree from catalog data. Root node is the catalog. */
 export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = {}): TreeDataItem[] {
-  const { showDuckDBTypes = true, hideTableBackingFunctions = true, hideDollarTables = true, onTableAction, onRefresh, refreshing, rootIcon, rootActions } = options;
+  const { showDuckDBTypes = true, hideTableBackingFunctions = true, hideDollarTables = true, onTableAction, onRefresh, refreshing, rootIcon, rootActions, rootTitle, dividerBefore } = options;
   const sortedSchemas = [...catalog.schemas].sort((a, b) =>
     a.info.name.localeCompare(b.info.name)
   );
@@ -129,6 +135,8 @@ export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = 
     selectedIcon: rootIcon || Database,
     openIcon: rootIcon || Database,
     className: "text-primary font-bold",
+    ...(rootTitle ? { title: rootTitle } : {}),
+    ...(dividerBefore ? { dividerBefore } : {}),
     children: sortedSchemas.map((s) =>
       buildSchemaNode(catalog.catalogName, s, showDuckDBTypes, hideTableBackingFunctions, hideDollarTables, s.info.name === catalog.defaultSchema, onTableAction)
     ),

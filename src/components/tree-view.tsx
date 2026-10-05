@@ -36,6 +36,9 @@ interface TreeDataItem {
     className?: string
     /** Hover tooltip for the node's label (e.g. a column's comment). */
     title?: string
+    /** Draw a divider above this (top-level) row, with an optional caption.
+     *  Visual only: the row itself says what it is. */
+    dividerBefore?: string | true
 }
 
 type TreeRenderItemParams = {
@@ -58,6 +61,10 @@ type TreeProps = React.HTMLAttributes<HTMLDivElement> & {
     renderItem?: (params: TreeRenderItemParams) => React.ReactNode
     /** Space below the last row for dropping onto the root. Off when something follows the tree. */
     trailingDropZone?: boolean
+    /** Ids expanded at first render (before any reveal of the selection). */
+    initialExpandedIds?: readonly string[]
+    /** Called with the expanded ids after the reader expands or collapses a node. */
+    onExpandedChange?: (expanded: ReadonlySet<string>) => void
 }
 
 /** Select an item: update selection state and fire its own click handler. */
@@ -136,6 +143,8 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
             onDocumentDrag,
             renderItem,
             trailingDropZone = true,
+            initialExpandedIds,
+            onExpandedChange,
             ...props
         },
         ref
@@ -183,8 +192,10 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
         // The chevron toggles ids directly; external navigation only *reveals*
         // (adds ancestors), so a user's collapse is never undone in the same tick.
         const [expanded, setExpanded] = React.useState<Set<string>>(() =>
-            revealPath(new Set(), dataArray, initialSelectedItemId)
+            revealPath(new Set(initialExpandedIds ?? []), dataArray, initialSelectedItemId)
         )
+        const onExpandedChangeRef = React.useRef(onExpandedChange)
+        onExpandedChangeRef.current = onExpandedChange
 
         React.useEffect(() => {
             if (initialSelectedItemId !== undefined) {
@@ -193,7 +204,11 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
         }, [initialSelectedItemId, dataArray])
 
         const handleToggleExpand = React.useCallback((id: string) => {
-            setExpanded((prev) => toggleExpanded(prev, id))
+            setExpanded((prev) => {
+                const next = toggleExpanded(prev, id)
+                queueMicrotask(() => onExpandedChangeRef.current?.(next))
+                return next
+            })
         }, [])
 
         // While searching (expandAll), reveal everything transiently without
@@ -280,7 +295,15 @@ const TreeItem = React.forwardRef<HTMLDivElement, TreeItemProps>(
                     that relationship. */}
                 <ul role={isRoot ? "tree" : "group"}>
                     {data.map((item) => (
-                        <li role="none" key={item.id}>
+                        <React.Fragment key={item.id}>
+                        {isRoot && item.dividerBefore && (
+                            <li role="none" aria-hidden="true" className="mt-2 mb-1 flex items-center gap-2 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground" data-testid="tree-divider">
+                                <span className="h-px flex-1 bg-border" />
+                                {typeof item.dividerBefore === 'string' && <span>{item.dividerBefore}</span>}
+                                <span className="h-px flex-1 bg-border" />
+                            </li>
+                        )}
+                        <li role="none">
                             {item.children ? (
                                 <TreeNode
                                     item={item}
@@ -310,6 +333,7 @@ const TreeItem = React.forwardRef<HTMLDivElement, TreeItemProps>(
                                 />
                             )}
                         </li>
+                        </React.Fragment>
                     ))}
                 </ul>
             </div>

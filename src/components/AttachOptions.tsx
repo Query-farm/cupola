@@ -33,15 +33,17 @@ export interface OptionsFieldsProps {
   onRawChange: (raw: string) => void;
   /** Show the raw-text box. Always shown when there are no specs. */
   showRaw?: boolean;
+  /** Prefix of the field ids, so several forms can share a page. */
+  idPrefix?: string;
 }
 
 /** One row per declared option, plus the raw-text fallback. */
-export function OptionsFields({ specs, values, onChange, raw, onRawChange, showRaw = true }: OptionsFieldsProps) {
+export function OptionsFields({ specs, values, onChange, raw, onRawChange, showRaw = true, idPrefix = "attach-opt" }: OptionsFieldsProps) {
   const set = (name: string, value: string) => onChange({ ...values, [name]: value });
   return (
     <div className="flex flex-col gap-3" data-testid="attach-options-fields">
       {specs.map((spec) => {
-        const id = `attach-opt-${spec.name}`;
+        const id = `${idPrefix}-${spec.name}`;
         const kind = fieldKind(spec);
         const value = values[spec.name] ?? "";
         return (
@@ -78,11 +80,11 @@ export function OptionsFields({ specs, values, onChange, raw, onRawChange, showR
       })}
       {(showRaw || specs.length === 0) && (
         <div className="flex flex-col gap-1">
-          <label htmlFor="attach-opt-raw" className="text-xs font-medium text-foreground">
+          <label htmlFor={`${idPrefix}-raw`} className="text-xs font-medium text-foreground">
             {specs.length ? "Other options" : "Connection options"}
           </label>
           <textarea
-            id="attach-opt-raw"
+            id={`${idPrefix}-raw`}
             value={raw}
             onChange={(e) => onRawChange(e.target.value)}
             placeholder="e.g. opt_string 'hello', opt_int64 42, opt_bool true"

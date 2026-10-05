@@ -1,6 +1,8 @@
 import { ChevronRight } from "lucide-react";
 import type { Selection } from "@/lib/tree";
 import { CatalogIcon, type CatalogObjectType } from "./CatalogIcons";
+import { CatalogChip } from "../workspace/CatalogChip";
+import { useCatalogColor } from "@/lib/workspace/catalog-colors";
 
 interface Crumb {
   type: Selection["type"];
@@ -19,6 +21,11 @@ interface Props {
 }
 
 export function Breadcrumb({ catalogName, schemaName, itemName, itemType, onNavigate, trailing }: Props) {
+  // The catalog crumb wears the catalog's chip, as its sidebar root does.
+  const color = useCatalogColor(catalogName);
+  const icon = (crumb: Crumb, className: string) => crumb.type === "catalog" && color !== undefined
+    ? <CatalogChip alias={catalogName} color={color} />
+    : <CatalogIcon type={crumb.type as CatalogObjectType} className={className} />;
   const crumbs: Crumb[] = [
     { type: "catalog", label: catalogName, selection: { type: "catalog", name: catalogName, catalog: catalogName } },
   ];
@@ -48,12 +55,12 @@ export function Breadcrumb({ catalogName, schemaName, itemName, itemType, onNavi
                 className="inline-flex items-center gap-1.5 hover:text-primary hover:underline transition-colors"
                 onClick={(e) => { e.preventDefault(); onNavigate?.(crumb.selection!); }}
               >
-                <CatalogIcon type={crumb.type as CatalogObjectType} className="h-3.5 w-3.5" />
+                {icon(crumb, "h-3.5 w-3.5")}
                 {crumb.label}
               </a>
             ) : (
               <span className={`inline-flex items-center gap-1.5 ${isLast && itemType ? "font-heading text-xl font-bold text-foreground" : "text-foreground font-medium"}`}>
-                <CatalogIcon type={crumb.type as CatalogObjectType} className={isLast && itemType ? "h-5 w-5" : "h-3.5 w-3.5"} />
+                {icon(crumb, isLast && itemType ? "h-5 w-5" : "h-3.5 w-3.5")}
                 {crumb.label}
               </span>
             )}

@@ -200,6 +200,20 @@
     --sidebar-ring: var(--field-700);
 
     /* Terminal: rock, never a coloured band (brief §3). */
+    /* Catalog chips (multi-catalog workspaces): eight hues from the Okabe-Ito
+       palette, which stays distinguishable under the common colour-vision
+       deficiencies. A chip always carries the alias's initial too, so colour
+       is never the only cue. `-fg` is the initial's colour, chosen for
+       contrast against its chip. */
+    --catalog-chip-0: #0072b2;  --catalog-chip-0-fg: #ffffff;
+    --catalog-chip-1: #e69f00;  --catalog-chip-1-fg: #1f1a10;
+    --catalog-chip-2: #009e73;  --catalog-chip-2-fg: #ffffff;
+    --catalog-chip-3: #cc79a7;  --catalog-chip-3-fg: #1f1a10;
+    --catalog-chip-4: #56b4e9;  --catalog-chip-4-fg: #1f1a10;
+    --catalog-chip-5: #d55e00;  --catalog-chip-5-fg: #ffffff;
+    --catalog-chip-6: #f0e442;  --catalog-chip-6-fg: #1f1a10;
+    --catalog-chip-7: #6b6b5a;  --catalog-chip-7-fg: #ffffff;
+
     --terminal-bg: var(--rock-900);
     --terminal-fg: var(--cream);
     --terminal-accent: var(--sun-400);
@@ -244,6 +258,16 @@
     --sidebar-accent-foreground: var(--cream);
     --sidebar-border: var(--rock-800);
     --sidebar-ring: #8cb878;
+
+    /* Catalog chips, lifted for a dark background (same hue order). */
+    --catalog-chip-0: #3d9ad6;  --catalog-chip-0-fg: #10141a;
+    --catalog-chip-1: #f0b43c;  --catalog-chip-1-fg: #1f1a10;
+    --catalog-chip-2: #2fc497;  --catalog-chip-2-fg: #10141a;
+    --catalog-chip-3: #e09ac2;  --catalog-chip-3-fg: #1f1a10;
+    --catalog-chip-4: #86ccf2;  --catalog-chip-4-fg: #10141a;
+    --catalog-chip-5: #f08a3c;  --catalog-chip-5-fg: #1f1a10;
+    --catalog-chip-6: #f5ec7a;  --catalog-chip-6-fg: #1f1a10;
+    --catalog-chip-7: #b3ad98;  --catalog-chip-7-fg: #1f1a10;
 
     --terminal-bg: var(--rock-950);
     --terminal-fg: var(--cream);

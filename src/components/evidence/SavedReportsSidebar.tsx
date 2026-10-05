@@ -9,14 +9,15 @@ import { OPEN_REPORT_EVENT, type OpenReportDetail } from '../../lib/evidence/ope
  *  whole page again. */
 const OPEN_KEY = 'cupola.sidebar.reports-open';
 const ROW = 'flex items-center rounded-md px-2 py-2 text-sm transition-colors hover:bg-muted/60';
-export function SavedReportsSidebar({ serviceUrl, search = '' }: { serviceUrl: string; search?: string }) {
+export function SavedReportsSidebar({ serviceUrl, workspaceId, search = '' }: { serviceUrl: string; workspaceId?: string; search?: string }) {
+  const scope = workspaceId ?? serviceUrl;
   const [reports, setReports] = useState<EvidenceReport[]>([]);
   const [error, setError] = useState(false);
   const [open, setOpen] = useState(() => { try { return localStorage.getItem(OPEN_KEY) !== '0'; } catch { return true; } });
   const toggle = () => setOpen(current => { try { localStorage.setItem(OPEN_KEY, current ? '0' : '1'); } catch { /* Stays as toggled for this page. */ } return !current; });
   useEffect(() => {
     const reload = () => {
-      try { setReports(listEvidenceReports(serviceUrl)); setError(false); }
+      try { setReports(listEvidenceReports(scope)); setError(false); }
       catch { setReports([]); setError(true); }
     };
     const storageChanged = (event: StorageEvent) => {
@@ -29,14 +30,16 @@ export function SavedReportsSidebar({ serviceUrl, search = '' }: { serviceUrl: s
       window.removeEventListener(EVIDENCE_REPORTS_CHANGED, reload);
       window.removeEventListener('storage', storageChanged);
     };
-  }, [serviceUrl]);
+  }, [scope]);
   const base = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/reports`;
-  const href = (id?: string) => `${base}${id ? '' : '/saved'}?${new URLSearchParams({ service: serviceUrl, ...(id ? { evidence_report: id } : {}) })}`;
+  // A workspace tab names its catalogs with `?local_ws=`; a `?service=` tab by the service.
+  const localWs = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('local_ws');
+  const href = (id?: string) => `${base}${id ? '' : '/saved'}?${new URLSearchParams({ ...(localWs ? { local_ws: localWs } : { service: serviceUrl }), ...(id ? { evidence_report: id } : {}) })}`;
   function openReport(event: MouseEvent<HTMLAnchorElement>, id?: string) {
     // Modified and middle clicks keep the browser's own behavior (new tab, new window).
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, id, href: href(id) } }));
+    window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId, id, href: href(id) } }));
   }
   const visible = reports.filter(report => report.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
   // While filtering, the section shows only when a report matches, like a catalog with no matches.

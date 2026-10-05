@@ -1,21 +1,24 @@
 /**
- * "History" — every query run against this server, from any surface (this
+ * "History" — every query run in this workspace, from any surface (this
  * editor, the shell, the AI panels), newest first. Kept in localStorage per
- * server (`query-history.ts`), so it outlives the page.
+ * workspace (`query-history.ts`), so it outlives the page. "All workspaces"
+ * lists every workspace's, each entry labelled with its workspace.
  *
  * Choosing an entry opens it in a new editor tab without running it; Run
  * opens it and runs it there. This replaced a top-level Query History tab
  * whose Re-run always went to the shell, wherever the query came from.
  */
 import { useMemo, useState, useSyncExternalStore } from "react";
+import { listWorkspaces, workspaceLabel } from "@/lib/workspace/store";
 import { Check, Copy, History, Play, Trash2, X } from "lucide-react";
 import { Popover as BaseUIPopover } from "@base-ui/react/popover";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import type { QueryHistoryEntry, QuerySource } from "@/lib/shell-bridge";
-import { clearQueryHistory, loadQueryHistory, removeQueryHistoryEntry, subscribeQueryHistory } from "@/lib/editor/query-history";
+import { clearQueryHistory, loadAllQueryHistories, loadQueryHistory, removeQueryHistoryEntry, subscribeQueryHistory } from "@/lib/editor/query-history";
 
 interface Props {
+  /** The workspace whose history this is (a service URL outside a workspace). */
   serviceUrl: string;
   /** Open the SQL in a new editor tab; `run` also executes it. */
   onOpen: (sql: string, run: boolean) => void;
@@ -42,13 +45,25 @@ export function formatWhen(timestamp: number, now = Date.now()): string {
 const formatDuration = (ms: number) => ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
 
 export function QueryHistoryMenu({ serviceUrl, onOpen }: Props) {
-  const entries = useSyncExternalStore(subscribeQueryHistory, () => loadQueryHistory(serviceUrl), () => loadQueryHistory(serviceUrl));
+  const own = useSyncExternalStore(subscribeQueryHistory, () => loadQueryHistory(serviceUrl), () => loadQueryHistory(serviceUrl));
+  const [allWorkspaces, setAllWorkspaces] = useState(false);
+  const [open, setOpen] = useState(false);
+  // Every workspace's list, read when the toggle is on (the menu is open).
+  const labelled = useMemo(() => {
+    if (!allWorkspaces || !open) return null;
+    const known = new Map(listWorkspaces().map((w) => [w.id, workspaceLabel(w)]));
+    known.set(serviceUrl, known.get(serviceUrl) ?? "This workspace");
+    return loadAllQueryHistories((scope) => known.has(scope)).map(({ scope, entry }) => ({ scope, entry, label: scope === serviceUrl ? `${known.get(scope)} (this one)` : known.get(scope)! }));
+  }, [allWorkspaces, open, serviceUrl, own]);
+  const rows = labelled ?? own.map((entry) => ({ scope: serviceUrl, entry, label: null as string | null }));
+  const entries = own;
   const [filter, setFilter] = useState("");
   const [copied, setCopied] = useState<number | null>(null);
-  const shown = useMemo(() => {
+  const shownRows = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    return q ? entries.filter((entry) => entry.sql.toLowerCase().includes(q) || entry.userQuestion?.toLowerCase().includes(q) || entry.conversationName?.toLowerCase().includes(q)) : entries;
-  }, [entries, filter]);
+    return q ? rows.filter(({ entry, label }) => entry.sql.toLowerCase().includes(q) || entry.userQuestion?.toLowerCase().includes(q) || entry.conversationName?.toLowerCase().includes(q) || label?.toLowerCase().includes(q)) : rows;
+  }, [rows, filter]);
+  const shown = shownRows.map((r) => r.entry);
   const copy = (entry: QueryHistoryEntry) => {
     void navigator.clipboard.writeText(entry.sql).then(() => {
       setCopied(entry.id);
@@ -57,10 +72,10 @@ export function QueryHistoryMenu({ serviceUrl, onOpen }: Props) {
   };
 
   return (
-    <Popover onOpenChange={(open) => { if (!open) setFilter(""); }}>
+    <Popover onOpenChange={(next) => { setOpen(next); if (!next) setFilter(""); }}>
       <PopoverTrigger
         className="flex items-center gap-1.5 h-7 px-2 text-xs rounded hover:bg-foreground/5 transition-colors"
-        title="Queries run against this server, from the editor, the shell and the AI panels"
+        title="Queries run in this workspace, from the editor, the shell and the AI panels"
         data-testid="editor-history"
       >
         <History className="h-3.5 w-3.5" />
@@ -76,7 +91,11 @@ export function QueryHistoryMenu({ serviceUrl, onOpen }: Props) {
             className="h-7 text-xs"
             autoFocus
           />
-          {entries.length > 0 && (
+          <label className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground cursor-pointer select-none" title="List the queries of every workspace in this browser">
+            <input type="checkbox" checked={allWorkspaces} onChange={(e) => setAllWorkspaces(e.target.checked)} data-testid="editor-history-all" />
+            All workspaces
+          </label>
+          {entries.length > 0 && !allWorkspaces && (
             <button
               type="button"
               onClick={() => { if (window.confirm(`Clear all ${entries.length} queries from history?`)) clearQueryHistory(serviceUrl); }}
@@ -90,15 +109,16 @@ export function QueryHistoryMenu({ serviceUrl, onOpen }: Props) {
         </div>
         {shown.length === 0 ? (
           <p className="px-4 py-8 text-center text-xs text-muted-foreground">
-            {entries.length === 0 ? "No queries yet. Queries you run here, in the shell or through Ask AI appear here." : "No queries match."}
+            {rows.length === 0 ? "No queries yet. Queries you run here, in the shell or through Ask AI appear here." : "No queries match."}
           </p>
         ) : (
           <ol className="max-h-[60vh] overflow-y-auto divide-y divide-border" aria-label="Query history">
-            {shown.map((entry, index) => {
+            {shownRows.map(({ entry, scope, label }, index) => {
               const conversation = entry.conversationId && shown[index - 1]?.conversationId !== entry.conversationId
                 ? entry.conversationName || entry.userQuestion : null;
               return (
-                <li key={entry.id} className="group relative" data-testid="editor-history-entry">
+                <li key={`${scope}:${entry.id}`} className="group relative" data-testid="editor-history-entry" data-workspace={label ?? undefined}>
+                  {label && <div className="px-3 pt-2 text-[11px] font-medium text-muted-foreground truncate" data-testid="editor-history-workspace">{label}</div>}
                   {conversation && <div className="px-3 pt-2 text-[11px] font-medium text-violet-600 dark:text-violet-400 truncate">AI conversation: {conversation}</div>}
                   <BaseUIPopover.Close
                     onClick={() => onOpen(entry.sql, false)}
@@ -133,7 +153,7 @@ export function QueryHistoryMenu({ serviceUrl, onOpen }: Props) {
                     <button type="button" onClick={() => copy(entry)} className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-foreground/5" title="Copy SQL" aria-label="Copy SQL">
                       {copied === entry.id ? <Check className="h-3.5 w-3.5 text-accent" /> : <Copy className="h-3.5 w-3.5" />}
                     </button>
-                    <button type="button" onClick={() => removeQueryHistoryEntry(serviceUrl, entry.id)} className="p-1 rounded text-muted-foreground hover:text-destructive hover:bg-foreground/5" title="Remove from history" aria-label="Remove from history">
+                    <button type="button" onClick={() => removeQueryHistoryEntry(scope, entry.id)} className="p-1 rounded text-muted-foreground hover:text-destructive hover:bg-foreground/5" title="Remove from history" aria-label="Remove from history">
                       <X className="h-3.5 w-3.5" />
                     </button>
                   </div>
