@@ -33,6 +33,14 @@ the variant's URL from `VGI_OPTIONS_SERVICE_URL`, default
 `http://localhost:9010`). Needs vgi-python 0.38+, the first release with the
 `secret` flag.
 
+### Two catalogs
+
+`tests/multi-catalog.spec.ts` needs a second worker beside the first:
+`PORT=9011 ./run.sh` (the spec reads it from `VGI_SECOND_SERVICE_URL`). Both
+serve `cupola_test`, which is the point: the second is attached as
+`cupola_test_2`, so the same pair covers several catalogs, a cross-catalog join
+and alias de-duplication.
+
 From a DuckDB-compatible CLI, without HTTP:
 
 ```sql
