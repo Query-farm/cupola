@@ -1,12 +1,27 @@
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
-import { fetchCatalog, type CatalogData } from "@/lib/service";
+import { fetchCatalog, fetchCatalogSpecs, type CatalogData } from "@/lib/service";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { OPEN_REPORT_EVENT, type OpenReportDetail } from "@/lib/evidence/open-report";
-import { getServiceUrl, getAttachOptionsFromUrl, getDataVersionSpecFromUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql, clearSharedSql, isGrainliftService, grainliftHttpUrl, getTargetFromUrl, getCatalogNameFromUrl } from "@/lib/url-params";
+import { getServiceUrl, hasExplicitService, consumePrefillFromHash, consumeSharedSql, clearSharedSql, isGrainliftService, grainliftHttpUrl, getCatalogNameFromUrl } from "@/lib/url-params";
 import type { PendingEditorSql } from "./editor/SqlEditorView";
 import { catalogInventory } from "@/lib/catalog-store";
 import { useCatalogInventory } from "@/lib/use-catalog-inventory";
-import { quoteLiteral } from "@/lib/duckdb-query";
+import {
+  applyConsent,
+  finalizeConnection,
+  hasAnyOptions,
+  persistEvaluatedOptions,
+  readConnectionInput,
+  saveFormOptions,
+  type ConnectionInput,
+} from "@/lib/attach/connection";
+import { collectFormOptions } from "@/lib/attach/form";
+import { isSecretOption, shareableOptionsText, type OptionSpecInfo } from "@/lib/attach/options";
+import type { OptionProblem } from "@/lib/attach/legacy-options";
+import { secretsFor } from "@/lib/attach/secret-store";
+import type { AttachErrorDetail } from "@/lib/attach/error-detail";
+import type { ShellAttachConfig } from "@/lib/shell-init";
+import { AttachErrorDialog, ConsentPanel, OptionsFields, OptionsNoticeDialog } from "./AttachOptions";
 import { isRecoverableAuthError } from "@/lib/auth-errors";
 import { type Selection } from "@/lib/tree";
 import { getAuthTokenForService, getUserInfo, hadAuthToken } from "@/lib/auth";
@@ -51,10 +66,10 @@ import { ViewDetail } from "./content/ViewDetail";
 import { FunctionDetail } from "./content/FunctionDetail";
 import { MacroDetail } from "./content/MacroDetail";
 import {
+  describeRecentOptions,
+  getRecentService,
   getRecentServices,
-  saveRecentService,
   removeRecentService,
-  getAttachOptionsFor,
   type RecentService,
 } from "@/lib/recent-services";
 
@@ -223,7 +238,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // header and error screens". The prop is now actually used.
   const [logoUrl, setLogoUrl] = useState(CUPOLA_MARK);
   const [authError, setAuthError] = useState<{ title: string; message: string } | null>(null);
-  const [attachError, setAttachError] = useState<{ title: string; message: string } | null>(null);
+  const [attachError, setAttachError] = useState<AttachErrorDetail | null>(null);
   // True only after client-side hydration. We use this to gate any render
   // branch that depends on `window` state — without it the SSR output (no
   // window) and the first client render (with window) diverge and React 19
@@ -295,35 +310,33 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     ui.addQueryHistoryEntry = (entry) => addQueryHistoryEntry(serviceUrl, entry);
     return () => { ui.addQueryHistoryEntry = null; };
   }, [serviceUrl]);
-  // `?attach_options=` URL param wins over the localStorage value and is
-  // persisted so a future visit without the param keeps the same options.
-  // An explicit empty value clears them.
-  const attachOptions = useMemo(() => {
-    const fromUrl = getAttachOptionsFromUrl();
-    let base: string | undefined;
-    if (fromUrl !== undefined && hasExplicitService()) {
-      saveRecentService(serviceUrl, "", fromUrl);
-      base = fromUrl || undefined;
-    } else {
-      base = getAttachOptionsFor(serviceUrl);
+  // This catalog's attach options (lib/attach/connection.ts): stored values,
+  // stored secrets and the URL's `?attach_options=` / `?data_version_spec=` /
+  // Grainlift `?target=`. URL expressions wait for the reader's consent;
+  // nothing is persisted until the catalog's specs say what is secret.
+  const [connInput, setConnInput] = useState<ConnectionInput>(() =>
+    readConnectionInput(serviceUrl, { grainlift: isGrainliftService(serviceUrl) }));
+  // What the shell attaches with, set once the catalog (and its specs) is known.
+  const [attach, setAttach] = useState<ShellAttachConfig | undefined>();
+  // Expressions the engine evaluated before ATTACH, now plain values.
+  const [evaluatedOptions, setEvaluatedOptions] = useState<Record<string, string>>({});
+  // A catalog that cannot attach without options the reader has not given.
+  const [optionsNeeded, setOptionsNeeded] = useState<{ catalogName: string; specs: OptionSpecInfo[]; options: Record<string, string> } | null>(null);
+  // Options that were refused or dropped, reported once.
+  const [optionNotices, setOptionNotices] = useState<OptionProblem[]>([]);
+  const attachOptionsAll = useMemo(() => ({ ...(attach?.options ?? {}), ...evaluatedOptions }), [attach, evaluatedOptions]);
+  // Share links carry the non-secret options only, as plain literals.
+  const shareAttachOptions = useMemo(
+    () => shareableOptionsText(attachOptionsAll, attach?.specs) || undefined,
+    [attachOptionsAll, attach?.specs],
+  );
+  const onOptionsEvaluated = useCallback((values: Record<string, string>, problems: OptionProblem[]) => {
+    setEvaluatedOptions(values);
+    if (problems.length) setOptionNotices((prev) => [...prev, ...problems]);
+    if (data?.catalogName && (hasExplicitService() || connInput.fromUrl)) {
+      persistEvaluatedOptions(serviceUrl, data.catalogName, values, attach?.specs);
     }
-    // `?data_version_spec=` pins the catalog's data version at ATTACH time
-    // (the VGI extension reads a `data_version_spec` ATTACH option). The worker
-    // landing page emits it when a user selects a non-latest version.
-    // A Grainlift service's `?target=` is an ATTACH option, saved with the
-    // service so a later visit (e.g. from the recent list) needs no URL params.
-    const target = isGrainliftService(serviceUrl) ? getTargetFromUrl() : undefined;
-    if (target && !grainliftTarget(base)) {
-      base = base ? `target ${quoteLiteral(target)}, ${base}` : `target ${quoteLiteral(target)}`;
-      if (hasExplicitService()) saveRecentService(serviceUrl, "", base);
-    }
-    const dvs = getDataVersionSpecFromUrl();
-    if (dvs) {
-      const opt = `data_version_spec ${quoteLiteral(dvs)}`;
-      return base ? `${base}, ${opt}` : opt;
-    }
-    return base;
-  }, [serviceUrl]);
+  }, [data?.catalogName, serviceUrl, attach?.specs, connInput.fromUrl]);
 
   // Tag every Sentry event with the service URL and (when known) the catalog
   // name. Lets us slice errors by tenant without putting URLs in messages.
@@ -427,7 +440,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // carry the token.
   const loadGrainliftCatalog = useCallback(
     async (isRefresh: boolean) => {
-      const alias = getCatalogNameFromUrl() ?? grainliftTarget(attachOptions);
+      const alias = getCatalogNameFromUrl() ?? connInput.options.target;
       if (!alias) {
         setError("A Grainlift service needs ?target= naming the gateway's target, e.g. ?service=grainlift+https://host&target=sqlite");
         setLoading(false);
@@ -448,10 +461,12 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
         return;
       }
       const catalog: CatalogData = { catalogName: alias, catalogComment: null, catalogTags: {}, defaultSchema: "main", schemas: [] };
+      const finalized = finalizeConnection(connInput, alias, []);
+      if (connInput.problems.length) setOptionNotices(connInput.problems);
+      setAttach({ kind: "grainlift", options: finalized.options, pending: finalized.pending, specs: [] });
       setData(catalog);
       catalogInventory.seed(catalog, serviceUrl, "grainlift");
       setError(null);
-      if (hasExplicitService()) saveRecentService(serviceUrl, alias, attachOptions);
       if (!isRefresh) {
         const initialSel = hashToSelection(window.location.hash)
           ?? { type: "catalog" as const, name: alias, catalog: alias };
@@ -461,7 +476,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       setLoading(false);
       setRefreshing(false);
     },
-    [serviceUrl, attachOptions]
+    [serviceUrl, connInput]
   );
 
   const loadCatalog = useCallback(
@@ -478,6 +493,11 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       if (!hasExplicitService() && !defaultServiceUrl) {
         setLoading(false);
         setRefreshing(false);
+        return;
+      }
+      // A link whose options need evaluating waits for the consent screen.
+      if (connInput.needsConsent.length) {
+        setLoading(false);
         return;
       }
       // Token-expired pre-check is service-scoped now that tokens live in
@@ -508,13 +528,26 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       if (isRefresh) setRefreshing(true);
       else setLoading(true);
       try {
-        const catalog = await fetchCatalog(serviceUrl);
+        const fetched = await fetchCatalog(serviceUrl, { hasOptions: hasAnyOptions(connInput) });
+        const catalog = fetched.catalog;
+        const finalized = finalizeConnection(connInput, catalog.catalogName, fetched.specs);
+        if (connInput.problems.length) setOptionNotices(connInput.problems);
+        if (finalized.missing.length) {
+          // Say so before ATTACH, rather than letting the server refuse it.
+          const stored = Object.fromEntries(Object.entries(finalized.options).filter(([name]) => !(name in connInput.sessionOptions)));
+          setOptionsNeeded({ catalogName: catalog.catalogName, specs: fetched.specs, options: stored });
+          return;
+        }
+        setAttach({
+          kind: "vgi",
+          options: finalized.options,
+          pending: finalized.pending,
+          specs: fetched.specs,
+          serverVersion: fetched.implementationVersion,
+        });
         setData(catalog);
         catalogInventory.seed(catalog, serviceUrl);
         setError(null);
-        if (hasExplicitService()) {
-          saveRecentService(serviceUrl, catalog.catalogName);
-        }
         if (!isRefresh) {
           // Restore selection from URL hash, or default to catalog root
           const hashSel = hashToSelection(window.location.hash);
@@ -542,7 +575,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
         setRefreshing(false);
       }
     },
-    [serviceUrl, defaultServiceUrl, loadGrainliftCatalog]
+    [serviceUrl, defaultServiceUrl, loadGrainliftCatalog, connInput]
   );
 
   // Process any pending SPA OAuth callback before the first catalog fetch.
@@ -631,6 +664,33 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // disagree. After mount we're allowed to diverge from the SSR snapshot.
   if (mounted && !defaultServiceUrl && !hasExplicitService()) {
     return <WelcomePage logoUrl={logoUrl} />;
+  }
+
+  // A link that sets options with SQL expressions: ask before evaluating them.
+  if (mounted && connInput.needsConsent.length) {
+    return (
+      <BrandShell>
+        <div className="flex-1 flex items-start justify-center px-6 py-12">
+          <ConsentPanel
+            serviceUrl={serviceUrl}
+            entries={connInput.needsConsent}
+            onAnswer={(granted) => { setLoading(true); setConnInput((input) => applyConsent(input, granted)); }}
+          />
+        </div>
+      </BrandShell>
+    );
+  }
+
+  if (mounted && optionsNeeded) {
+    return (
+      <OptionsRequiredScreen
+        logoUrl={logoUrl}
+        serviceUrl={serviceUrl}
+        catalogName={optionsNeeded.catalogName}
+        specs={optionsNeeded.specs}
+        initial={optionsNeeded.options}
+      />
+    );
   }
 
   // Loading state — animated connect screen with brand chrome so the user
@@ -751,7 +811,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
               : "absolute inset-0 overflow-y-auto p-3 sm:p-6"}
             >
               <ErrorBoundary>
-                <ContentPanel catalogs={catalogs} defaultCatalogName={data.catalogName} selection={selection} attachOptions={attachOptions} onNavigate={navigate} onOpenShell={() => setActiveTab("shell")} onPivotTable={pivotTable} />
+                <ContentPanel catalogs={catalogs} defaultCatalogName={data.catalogName} selection={selection} attachOptions={attachOptionsAll} attachSpecs={attach?.specs} onNavigate={navigate} onOpenShell={() => setActiveTab("shell")} onPivotTable={pivotTable} />
               </ErrorBoundary>
             </main>
           )}
@@ -766,7 +826,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                     catalogData={data}
                     attachedCatalogs={attachedCatalogs}
                     serviceUrl={serviceUrl}
-                    attachOptions={attachOptions}
+                    attachOptions={shareAttachOptions}
                     pendingSql={pendingEditorSql}
                     onPendingConsumed={() => { setPendingEditorSql(null); clearSharedSql(); }}
                     onAiBusyChange={setEditorAiBusy}
@@ -802,8 +862,9 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                     attachedCatalogs={attachedCatalogs}
                     selection={selection}
                     onAuthError={(title, message) => setAuthError({ title, message })}
-                    onAttachError={(title, message) => setAttachError({ title, message })}
-                    attachOptions={attachOptions}
+                    onAttachError={setAttachError}
+                    attach={attach}
+                    onOptionsEvaluated={onOptionsEvaluated}
                   />
                 </Suspense>
               </ErrorBoundary>
@@ -838,51 +899,18 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
         </DialogFooter>
       </DialogContent>
     </Dialog>
-    <Dialog open={!!attachError} onOpenChange={(open) => { if (!open) setAttachError(null); }}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{attachError?.title ?? "Connection failed"}</DialogTitle>
-          <DialogDescription>
-            DuckDB rejected the ATTACH statement. This is usually a malformed
-            or unrecognized entry in the connection options for this server.
-          </DialogDescription>
-        </DialogHeader>
-        {attachOptions && (
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-              Current connection options
-            </div>
-            <pre className="text-xs bg-muted p-3 rounded-md overflow-auto whitespace-pre-wrap font-mono">
-              {attachOptions}
-            </pre>
-          </div>
-        )}
-        <pre className="text-xs bg-muted p-3 rounded-md overflow-auto max-h-96 whitespace-pre-wrap font-mono">
-          {attachError?.message}
-        </pre>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => {
-              if (attachError?.message) navigator.clipboard?.writeText(attachError.message).catch(() => {});
-            }}
-          >
-            Copy
-          </Button>
-          <Button
-            onClick={() => {
-              const dest = new URL(window.location.href);
-              dest.searchParams.delete("service");
-              dest.hash = `#prefill=${encodeURIComponent(serviceUrl)}`;
-              window.location.href = dest.toString();
-            }}
-          >
-            Edit connection options
-          </Button>
-          <Button variant="ghost" onClick={() => setAttachError(null)}>Dismiss</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <AttachErrorDialog
+      detail={attachError}
+      onClose={() => setAttachError(null)}
+      onEditOptions={() => {
+        const dest = new URL(window.location.href);
+        dest.searchParams.delete("service");
+        dest.searchParams.delete("attach_options");
+        dest.hash = `#prefill=${encodeURIComponent(serviceUrl)}`;
+        window.location.href = dest.toString();
+      }}
+    />
+    <OptionsNoticeDialog problems={attachError ? [] : optionNotices} onClose={() => setOptionNotices([])} />
     </SettingsProvider>
   );
 }
@@ -897,48 +925,128 @@ export interface ConnectFormHandle {
   prefill: (url: string) => void;
 }
 
+/** Stored options for a service, ready for the form: structured values plus
+ *  stored secrets (shown masked), and the raw text still awaiting migration. */
+function storedFormValues(url: string): { values: Record<string, string>; raw: string; catalogName: string } {
+  const found = getRecentService(url);
+  const catalogName = found?.catalogName ?? "";
+  return {
+    values: { ...(found?.options ?? {}), ...secretsFor(url, catalogName) },
+    raw: found?.rawOptions ?? "",
+    catalogName,
+  };
+}
+
+/** Specs for the form's rows: the server's, plus a masked row for any stored
+ *  secret the server does not declare (so its value is never shown as text). */
+function formSpecs(specs: readonly OptionSpecInfo[], values: Record<string, string>): OptionSpecInfo[] {
+  const declared = new Set(specs.map((s) => s.name.toLowerCase()));
+  const extra = Object.keys(values)
+    .filter((name) => !declared.has(name.toLowerCase()) && isSecretOption(name))
+    .map((name): OptionSpecInfo => ({
+      name, description: "A stored secret this server does not declare.", duckdbType: "VARCHAR",
+      castType: "VARCHAR", arrowType: "Utf8", required: false, secret: true,
+    }));
+  return [...specs, ...extra];
+}
+
+/** Move stored values the form has no row for into the raw-text box, so
+ *  nothing set is invisible. Secrets keep their masked row instead. */
+function absorbExtras(
+  specs: readonly OptionSpecInfo[],
+  values: Record<string, string>,
+  raw: string,
+): { values: Record<string, string>; raw: string } {
+  const declared = new Set(specs.map((s) => s.name.toLowerCase()));
+  const kept: Record<string, string> = {};
+  const moved: string[] = [];
+  for (const [name, value] of Object.entries(values)) {
+    if (declared.has(name.toLowerCase()) || isSecretOption(name)) kept[name] = value;
+    else moved.push(`${name} ${quoteForRaw(value)}`);
+  }
+  return { values: kept, raw: [...moved, raw].filter(Boolean).join(", ") };
+}
+
+function quoteForRaw(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
   const [url, setUrl] = useState("");
-  const [options, setOptions] = useState("");
+  const [form, setForm] = useState<{ values: Record<string, string>; raw: string }>({ values: {}, raw: "" });
+  const { values, raw } = form;
+  const setValues = (next: Record<string, string>) => setForm((f) => ({ ...f, values: next }));
+  const setRaw = (next: string) => setForm((f) => ({ ...f, raw: next }));
+  const [catalogName, setCatalogName] = useState("");
+  const [specs, setSpecs] = useState<OptionSpecInfo[]>([]);
+  const [specsFor, setSpecsFor] = useState<string | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [open, setOpen] = useState(false);
+
+  const load = useCallback((target: string) => {
+    const stored = storedFormValues(target);
+    setUrl(target);
+    setForm({ values: stored.values, raw: stored.raw });
+    setCatalogName(stored.catalogName);
+    setErrors([]);
+    if (Object.keys(stored.values).length || stored.raw) setOpen(true);
+  }, []);
 
   // Apply ?#prefill=<url> hash on mount — used by the attach-error modal's
   // "Edit connection options" button to bring the user back to a populated
   // form without invoking ?service= (which would auto-connect).
   useEffect(() => {
     const target = consumePrefillFromHash();
-    if (target) {
-      const found = getRecentServices().find((s) => s.url === target);
-      if (found) {
-        setUrl(found.url);
-        setOptions(found.attachOptions ?? "");
-      } else {
-        setUrl(target);
-      }
-    }
-  }, []);
+    if (target) load(target);
+  }, [load]);
 
-  useImperativeHandle(ref, () => ({
-    prefill: (target: string) => {
-      const found = getRecentServices().find((s) => s.url === target);
-      setUrl(target);
-      setOptions(found?.attachOptions ?? "");
-    },
-  }), []);
+  useImperativeHandle(ref, () => ({ prefill: load }), [load]);
+
+  // Discover the declared options of whatever the URL names. A server that
+  // cannot be reached, or wants a sign-in first, gets the raw-text box only.
+  useEffect(() => {
+    const target = url.trim();
+    setSpecs([]);
+    setSpecsFor(null);
+    if (!/^https?:\/\/[^/\s]+/i.test(target)) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      void fetchCatalogSpecs(target).then((found) => {
+        if (!live) return;
+        const next = found?.specs ?? [];
+        setSpecs(next);
+        setSpecsFor(target);
+        if (found?.catalogName) setCatalogName(found.catalogName);
+        if (next.length) setOpen(true);
+        // Fold stored values without a row into the raw box.
+        setForm((current) => absorbExtras(next, current.values, current.raw));
+      });
+    }, 400);
+    return () => { live = false; clearTimeout(timer); };
+  }, [url]);
+
+  const rows = formSpecs(specs, values);
 
   const connect = () => {
     const trimmed = url.trim();
     if (!trimmed) return;
-    const optsTrimmed = options.trim();
-    // Persist options (and clear them when blank) before redirect so the
-    // shell can pick them up via getAttachOptionsFor on the next page load.
-    saveRecentService(trimmed, "", optsTrimmed);
+    const collected = collectFormOptions(values, raw, rows);
+    if (collected.errors.length) {
+      setErrors(collected.errors);
+      setOpen(true);
+      return;
+    }
+    // Persist before the redirect, so the next page load attaches with them.
+    // Secrets go to the secret store, never into the recent list or the URL.
+    saveFormOptions(trimmed, specsFor === trimmed ? catalogName : (getRecentService(trimmed)?.catalogName ?? ""), collected.options, collected.rawOptions, rows);
     const dest = new URL(window.location.href);
     dest.searchParams.set("service", trimmed);
+    dest.searchParams.delete("attach_options");
     dest.hash = "";
     window.location.href = dest.toString();
   };
   return (
-    <div className="flex flex-col gap-2 max-w-md mx-auto">
+    <div className="flex flex-col gap-2 max-w-md mx-auto" data-testid="connect-form">
       <div className="flex gap-2">
         <input
           type="url"
@@ -946,6 +1054,7 @@ const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && connect()}
           placeholder="https://my-server.example.com"
+          aria-label="Service URL"
           className="flex-1 px-3 py-2 rounded-md border border-input bg-card text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         />
         <button
@@ -955,25 +1064,77 @@ const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
           Connect
         </button>
       </div>
-      <details className="group">
+      <details className="group" open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
         <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground select-none">
-          Connection options (optional)
+          Connection options{specs.some((s) => s.required) ? "" : " (optional)"}
         </summary>
-        <textarea
-          value={options}
-          onChange={(e) => setOptions(e.target.value)}
-          placeholder="e.g. opt_string 'hello', opt_int64 42, opt_bool true"
-          rows={3}
-          spellCheck={false}
-          className="mt-2 w-full px-3 py-2 rounded-md border border-input bg-card text-foreground text-xs font-mono focus:outline-none focus:ring-2 focus:ring-ring resize-y"
-        />
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          Spliced into the <code className="font-mono">ATTACH</code> statement after <code className="font-mono">LOCATION</code>. Comma-separate entries.
-        </p>
+        <div className="mt-2">
+          <OptionsFields specs={rows} values={values} onChange={setValues} raw={raw} onRawChange={setRaw} />
+        </div>
       </details>
+      {errors.length > 0 && (
+        <ul role="alert" className="text-xs text-destructive space-y-0.5">
+          {errors.map((e) => <li key={e}>{e}</li>)}
+        </ul>
+      )}
     </div>
   );
 });
+
+/** A catalog that cannot be attached without options the reader has not
+ *  given yet: ask for them before ATTACH, using the server's own specs. */
+function OptionsRequiredScreen({
+  logoUrl,
+  serviceUrl,
+  catalogName,
+  specs,
+  initial,
+}: { logoUrl: string; serviceUrl: string; catalogName: string; specs: OptionSpecInfo[]; initial: Record<string, string> }) {
+  const [values, setValues] = useState<Record<string, string>>(() => absorbExtras(specs, initial, "").values);
+  const [raw, setRaw] = useState(() => absorbExtras(specs, initial, "").raw);
+  const [errors, setErrors] = useState<string[]>([]);
+  const rows = formSpecs(specs, values);
+  const missing = specs.filter((s) => s.required && !values[s.name]);
+  const submit = () => {
+    const collected = collectFormOptions(values, raw, rows);
+    if (collected.errors.length) {
+      setErrors(collected.errors);
+      return;
+    }
+    saveFormOptions(serviceUrl, catalogName, collected.options, collected.rawOptions, rows);
+    window.location.reload();
+  };
+  return (
+    <BrandShell>
+      <div className="flex-1 flex items-start justify-center px-6 py-12">
+        <div className="w-full max-w-lg bg-card rounded-xl ring-1 ring-foreground/10 p-5" data-testid="attach-options-required">
+          <div className="flex items-center gap-3 mb-3">
+            <img src={logoUrl} alt="" aria-hidden="true" width={40} height={40} className="w-10 h-10 rounded-lg" />
+            <div className="min-w-0">
+              <h1 className="font-heading text-lg font-semibold text-foreground">{catalogName} needs connection options</h1>
+              <p className="text-xs text-muted-foreground font-mono truncate">{serviceUrl}</p>
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground mb-4">
+            This catalog cannot be attached without {missing.map((s) => s.name).join(", ") || "the options marked required"}.
+            Secret values are kept in this browser only and are never put in links.
+          </p>
+          <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
+            <OptionsFields specs={rows} values={values} onChange={setValues} raw={raw} onRawChange={setRaw} showRaw={Boolean(raw)} />
+            {errors.length > 0 && (
+              <ul role="alert" className="mt-3 text-xs text-destructive space-y-0.5">
+                {errors.map((e) => <li key={e}>{e}</li>)}
+              </ul>
+            )}
+            <div className="mt-4 flex justify-end">
+              <Button type="submit">Connect</Button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </BrandShell>
+  );
+}
 
 /**
  * Shared chrome for full-page non-app screens (welcome, connecting,
@@ -1191,7 +1352,7 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
         (s) =>
           s.catalogName.toLowerCase().includes(q) ||
           s.url.toLowerCase().includes(q) ||
-          (s.attachOptions ?? "").toLowerCase().includes(q),
+          describeRecentOptions(s).toLowerCase().includes(q),
       )
     : recent;
   const visibleRecent = showAllRecent ? filteredRecent : recent.slice(0, RECENT_PREVIEW);
@@ -1270,14 +1431,14 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
                 <li key={s.url} className="flex items-center gap-2 group">
                   <button
                     onClick={(e) => connectTo(s.url, e)}
-                    title={s.attachOptions ? `Has connection options · shift-click to connect immediately` : "Shift-click to connect immediately"}
+                    title={describeRecentOptions(s) ? `Has connection options · shift-click to connect immediately` : "Shift-click to connect immediately"}
                     className="flex-1 text-left px-3 py-2 rounded-md hover:bg-muted transition-colors min-w-0"
                   >
                     <span className="block text-sm font-medium text-primary truncate">{s.catalogName}</span>
                     <span className="block text-xs text-muted-foreground truncate">{s.url}</span>
-                    {s.attachOptions && (
+                    {describeRecentOptions(s) && (
                       <span className="block text-[11px] text-muted-foreground/80 truncate font-mono">
-                        {s.attachOptions}
+                        {describeRecentOptions(s)}
                       </span>
                     )}
                   </button>
@@ -1319,12 +1480,13 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
 }
 
 function ContentPanel({
-  catalogs, defaultCatalogName, selection, attachOptions, onNavigate, onOpenShell, onPivotTable,
+  catalogs, defaultCatalogName, selection, attachOptions, attachSpecs, onNavigate, onOpenShell, onPivotTable,
 }: {
   catalogs: CatalogData[];
   defaultCatalogName: string;
   selection: Selection | null;
-  attachOptions?: string;
+  attachOptions?: Record<string, string>;
+  attachSpecs?: OptionSpecInfo[];
   onNavigate: (selection: Selection) => void;
   onOpenShell?: () => void;
   /** Pivot the selected table in the Perspective tab. */
@@ -1337,7 +1499,7 @@ function ContentPanel({
   if (catalog.metadataError) return <div role="alert" className="p-6 text-sm"><p>Could not load all metadata for {catalog.catalogName}.</p><p className="text-muted-foreground mt-2">{catalog.metadataError}</p><Button className="mt-3" variant="outline" onClick={() => void catalogInventory.refresh()}>Retry catalog metadata</Button></div>;
   const overview = catalog.catalogName === "memory"
     ? <MemoryCatalogOverview catalog={catalog} onNavigate={onCatalogNavigate} />
-    : <CatalogOverview catalog={catalog} serviceUrl={catalog.sourceUrl} attachOptions={catalog.primary ? attachOptions : undefined} onNavigate={onCatalogNavigate} />;
+    : <CatalogOverview catalog={catalog} serviceUrl={catalog.sourceUrl} attachOptions={catalog.primary ? attachOptions : undefined} attachSpecs={catalog.primary ? attachSpecs : undefined} onNavigate={onCatalogNavigate} />;
   if (!selection || selection.type === "catalog") return overview;
 
   if (selection.type === "relationships") {
@@ -1381,12 +1543,6 @@ function ContentPanel({
   }
 
   return overview;
-}
-
-/** The `target '...'` ATTACH option of a Grainlift service, if set. */
-function grainliftTarget(attachOptions: string | undefined): string | undefined {
-  const match = /\btarget\s+'((?:[^']|'')*)'/i.exec(attachOptions ?? "");
-  return match ? match[1].replaceAll("''", "'") : undefined;
 }
 
 /** Whether a Grainlift gateway publishes OAuth discovery (RFC 9728). */

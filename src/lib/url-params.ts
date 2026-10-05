@@ -142,6 +142,13 @@ export function getAttachOptionsFromUrl(): string | undefined {
   return params.get("attach_options") ?? "";
 }
 
+/** Remove `?attach_options=` from the address bar once its values have been
+ *  migrated into the structured store (`lib/attach/connection.ts`). The raw
+ *  text can carry a credential, and a reload must not re-run its migration. */
+export function stripAttachOptionsFromUrl(): void {
+  rewriteUrl(["attach_options"], []);
+}
+
 /** `?data_version_spec=<spec>` — pins the catalog's served data version at
  *  ATTACH time. The VGI DuckDB extension reads a `data_version_spec` ATTACH
  *  option (see vgi_extension.cpp); the worker landing page emits this param

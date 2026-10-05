@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { LogOutIcon } from "lucide-react";
 import { clearAllAuth } from "@/lib/auth";
 import { clearAllRecentServices } from "@/lib/recent-services";
+import { clearAllSecrets } from "@/lib/attach/secret-store";
 import { getLogoutInfo } from "@/lib/oauth-client";
 
 export function SignOutPage() {
@@ -16,6 +17,7 @@ export function SignOutPage() {
 
     clearAllAuth();
     clearAllRecentServices();
+    clearAllSecrets();
 
     if (logoutInfo) {
       // Redirect to the IdP's end_session_endpoint to clear the browser

@@ -4,15 +4,16 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { extensionInstallSql, shellExtensionsForVgiVersion } from "@/lib/duckdb-engine";
 import { getVgiExtensionVersionSetting, isGrainliftService } from "@/lib/url-params";
+import { buildAttachSql, isSecretOption, type AttachSpec, type OptionSpecInfo } from "@/lib/attach/options";
+import { quoteIdent, quoteLiteral } from "@/lib/duckdb-query";
 
 interface Props {
   catalogName: string;
   serviceUrl: string;
-  attachOptions?: string;
-}
-
-function normalizeOptions(raw?: string): string {
-  return raw ? raw.trim().replace(/^,\s*/, "") : "";
+  /** Structured attach options. Secret values are never printed: the
+   *  snippets read them with `getenv('<ALIAS>_<OPTION>')`. */
+  attachOptions?: Record<string, string>;
+  attachSpecs?: OptionSpecInfo[];
 }
 
 type LangId = "duckdb" | "python" | "typescript";
@@ -37,17 +38,20 @@ const LANGS: { id: LangId; label: string }[] = [
  * worked here but not when pasted into a fresh client, which is exactly where
  * these snippets get pasted.
  */
-function buildSnippets(catalogName: string, serviceUrl: string, opts: string) {
-  if (isGrainliftService(serviceUrl)) return buildGrainliftSnippets(catalogName, serviceUrl, opts);
-  const optsFragment = opts ? `, ${opts}` : "";
+function buildSnippets(catalogName: string, serviceUrl: string, options: Record<string, string>, specs?: OptionSpecInfo[]) {
+  if (isGrainliftService(serviceUrl)) return buildGrainliftSnippets(catalogName, serviceUrl, options);
   const setting = getVgiExtensionVersionSetting();
   const vgi = shellExtensionsForVgiVersion(setting.error ? undefined : setting.value)
     .find((extension) => extension.name === "vgi")!;
   const installVgi = extensionInstallSql(vgi);
-  const attach = `ATTACH '${catalogName}' AS ${catalogName} (TYPE vgi, LOCATION '${serviceUrl}'${optsFragment});`;
-  // Same statement inside a host-language string literal. The SQL uses single
-  // quotes throughout, so double-quoting the host string needs no escaping.
-  const attachInline = attach.replace(/;$/, "");
+  // The same builder the engine's ATTACH uses, in its CLI mode: quoted alias
+  // and literals, secrets as getenv(), no sign-in credentials (a client signs
+  // in by itself).
+  const spec: AttachSpec = { kind: "vgi", url: serviceUrl, catalogName, alias: catalogName, options: withoutSecretValues(options, specs), specs };
+  const attach = `${buildAttachSql(spec, "cli")};`;
+  // The same statement inside a host-language string literal. The SQL now
+  // carries double-quoted identifiers, so the host string is JSON-escaped.
+  const attachInline = JSON.stringify(attach.replace(/;$/, ""));
 
   return {
     duckdb: [
@@ -66,7 +70,7 @@ function buildSnippets(catalogName: string, serviceUrl: string, opts: string) {
       "con = haybarn.connect()",
       `con.execute("${installVgi}")`,
       'con.execute("LOAD vgi")',
-      `con.execute("${attachInline}")`,
+      `con.execute(${attachInline})`,
       "",
       'con.sql("SHOW ALL TABLES").show()',
     ].join("\n"),
@@ -80,12 +84,18 @@ function buildSnippets(catalogName: string, serviceUrl: string, opts: string) {
       "",
       `await connection.run("${installVgi}");`,
       'await connection.run("LOAD vgi");',
-      `await connection.run("${attachInline}");`,
+      `await connection.run(${attachInline});`,
       "",
       'const reader = await connection.runAndReadAll("SHOW ALL TABLES");',
       "console.log(reader.getRows());",
     ].join("\n"),
   } satisfies Record<LangId, string>;
+}
+
+/** Blank out secret values before they reach a component that renders text:
+ *  the CLI builder prints getenv() for them regardless of the value. */
+function withoutSecretValues(options: Record<string, string>, specs?: OptionSpecInfo[]): Record<string, string> {
+  return Object.fromEntries(Object.entries(options).map(([k, v]) => [k, isSecretOption(k, specs) ? "" : v]));
 }
 
 /**
@@ -95,14 +105,14 @@ function buildSnippets(catalogName: string, serviceUrl: string, opts: string) {
  * by itself (browser or device code) when the gateway uses OAuth; Python uses
  * the driver directly.
  */
-function buildGrainliftSnippets(catalogName: string, serviceUrl: string, opts: string) {
-  const target = /\btarget\s+'((?:[^']|'')*)'/i.exec(opts)?.[1] ?? "<target>";
+function buildGrainliftSnippets(catalogName: string, serviceUrl: string, options: Record<string, string>) {
+  const target = options.target ?? "<target>";
   const driver = [
     "-- The Grainlift ADBC driver: pip install adbc-driver-grainlift, then",
     "-- export GRAINLIFT_DRIVER=$(python -c 'import adbc_driver_grainlift as g; print(g.driver_path())')",
   ];
-  const attach = `ATTACH '' AS ${catalogName} (TYPE adbc, driver getenv('GRAINLIFT_DRIVER'), entrypoint 'AdbcDriverGrainliftInit', "grainlift.uri" '${serviceUrl}', "grainlift.target" '${target}');`;
-  const attachInline = attach.replace(/;$/, "").replaceAll('"', '\\"');
+  const attach = `ATTACH '' AS ${quoteIdent(catalogName)} (TYPE adbc, driver getenv('GRAINLIFT_DRIVER'), entrypoint 'AdbcDriverGrainliftInit', "grainlift.uri" ${quoteLiteral(serviceUrl)}, "grainlift.target" ${quoteLiteral(target)});`;
+  const attachInline = JSON.stringify(attach.replace(/;$/, ""));
   return {
     duckdb: [...driver, "INSTALL adbc_scanner FROM community;", "LOAD adbc_scanner;", "", attach, "", "SHOW ALL TABLES;"].join("\n"),
 
@@ -111,7 +121,7 @@ function buildGrainliftSnippets(catalogName: string, serviceUrl: string, opts: s
       "import adbc_driver_grainlift.dbapi",
       "",
       "with adbc_driver_grainlift.dbapi.connect(",
-      `    db_kwargs={"grainlift.uri": "${serviceUrl}", "grainlift.target": "${target}"},`,
+      `    db_kwargs={"grainlift.uri": ${JSON.stringify(serviceUrl)}, "grainlift.target": ${JSON.stringify(target)}},`,
       "    autocommit=True,",
       ") as connection:",
       '    print(connection.adbc_get_objects(depth="tables").read_all())',
@@ -126,7 +136,7 @@ function buildGrainliftSnippets(catalogName: string, serviceUrl: string, opts: s
       "",
       'await connection.run("INSTALL adbc_scanner FROM community");',
       'await connection.run("LOAD adbc_scanner");',
-      `await connection.run("${attachInline}");`,
+      `await connection.run(${attachInline});`,
       "",
       'const reader = await connection.runAndReadAll("SHOW ALL TABLES");',
       "console.log(reader.getRows());",
@@ -175,7 +185,7 @@ const RULES: Record<LangId, Rule[]> = {
   ],
   python: [
     { t: "comment", re: /#.*/y },
-    { t: "string", re: /'[^']*'|"[^"]*"/y },
+    { t: "string", re: /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/y },
     { t: "fn", re: /[A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)*(?=\s*\()/y, call: true },
     { t: "keyword", re: /\b(?:import|from|as|def|return|await|async|with|for|in|if|else|None|True|False)\b/y },
     { t: "num", re: /\d+(?:\.\d+)?/y },
@@ -183,7 +193,7 @@ const RULES: Record<LangId, Rule[]> = {
   ],
   typescript: [
     { t: "comment", re: /\/\/.*/y },
-    { t: "string", re: /'[^']*'|"[^"]*"|`[^`]*`/y },
+    { t: "string", re: /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`[^`]*`/y },
     { t: "fn", re: /[A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)*(?=\s*\()/y, call: true },
     { t: "keyword", re: /\b(?:import|from|const|let|var|await|async|new|return|export|default|function|type|interface)\b/y },
     { t: "num", re: /\d+(?:\.\d+)?/y },
@@ -252,11 +262,11 @@ function CodeLine({ line, lang }: { line: string; lang: LangId }) {
   );
 }
 
-export function ConnectBox({ catalogName, serviceUrl, attachOptions }: Props) {
+export function ConnectBox({ catalogName, serviceUrl, attachOptions, attachSpecs }: Props) {
   const [lang, setLang] = useState<LangId>("duckdb");
   const [copied, setCopied] = useState(false);
 
-  const snippets = buildSnippets(catalogName, serviceUrl, normalizeOptions(attachOptions));
+  const snippets = buildSnippets(catalogName, serviceUrl, attachOptions ?? {}, attachSpecs);
   const source = snippets[lang];
 
   function handleCopy() {

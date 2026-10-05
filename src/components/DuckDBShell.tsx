@@ -23,7 +23,9 @@ import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { ShellBootScreen } from "./ShellBootScreen";
 import * as Sentry from "@sentry/astro";
 import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
-import { initShell } from "@/lib/shell-init";
+import { initShell, type ShellAttachConfig } from "@/lib/shell-init";
+import type { AttachErrorDetail } from "@/lib/attach/error-detail";
+import type { OptionProblem } from "@/lib/attach/legacy-options";
 import { describePerspectiveArrowInput } from "@/lib/perspective-diagnostics";
 
 import type { CatalogData } from "@/lib/service";
@@ -61,9 +63,11 @@ interface Props {
    * parent surfaces this in a modal so users notice even if the shell is
    * minimized.
    */
-  onAttachError?: (title: string, message: string) => void;
-  /** Free-form raw SQL fragment to splice into the ATTACH parens. */
-  attachOptions?: string;
+  onAttachError?: (detail: AttachErrorDetail) => void;
+  /** The catalog's attach options (structured; see lib/attach/options.ts). */
+  attach?: ShellAttachConfig;
+  /** Legacy expressions were evaluated before ATTACH (see ShellCallbacks). */
+  onOptionsEvaluated?: (values: Record<string, string>, problems: OptionProblem[]) => void;
 }
 
 // CDN script URLs (matching public/shell/index.html versions)
@@ -119,7 +123,7 @@ function loadScripts(): Promise<void> {
   return scriptsLoading;
 }
 
-export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, onAiBusyChange, onShellReady, catalogData, attachedCatalogs = [], selection, onAuthError, onAttachError, attachOptions }: Props) {
+export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, onAiBusyChange, onShellReady, catalogData, attachedCatalogs = [], selection, onAuthError, onAttachError, attach, onOptionsEvaluated }: Props) {
   const inventory = useCatalogInventory();
   // The parent controls the active tab; expose a local alias so the existing
   // setActiveTab(...) call sites (bridge slots) keep working.
@@ -330,9 +334,9 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
         console.log("[shell] Initializing DuckDB shell, token:", shellToken ? shellToken.substring(0, 20) + "..." : "NONE");
         const { cleanup, insertText } = initShell(
           containerRef.current,
-          { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, threadCount: resolveThreadCount(settings.shellThreads), catalogData, aiApiKey: settings.anthropicApiKey, aiWorkspaceId: settings.anthropicWorkspaceId, aiModel: settings.aiModel, attachOptions },
+          { serviceUrl, catalogName, token: shellToken, fontSize: settings.shellFontSize, threadCount: resolveThreadCount(settings.shellThreads), catalogData, aiApiKey: settings.anthropicApiKey, aiWorkspaceId: settings.anthropicWorkspaceId, aiModel: settings.aiModel, attach },
           { tableFromIPC: tableFromIPCWithDictionaries, Readline },
-          { onAuthError, onAttachError }
+          { onAuthError, onAttachError, onOptionsEvaluated }
         );
         cleanupRef.current = cleanup;
         onShellReady?.(insertText);

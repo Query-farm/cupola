@@ -1,4 +1,5 @@
 import { Database, Folder, Network } from "lucide-react";
+import type { OptionSpecInfo } from "@/lib/attach/options";
 import { getColorForType } from "./CatalogIcons";
 import { ConnectBox } from "@/components/ConnectBox";
 import { useSettings } from "@/lib/settings";
@@ -15,11 +16,13 @@ import { Button } from "@/components/ui/button";
 interface Props {
   catalog: CatalogData;
   serviceUrl?: string;
-  attachOptions?: string;
+  /** The catalog's attach options (secrets included; snippets print them as getenv()). */
+  attachOptions?: Record<string, string>;
+  attachSpecs?: OptionSpecInfo[];
   onNavigate: (selection: Selection) => void;
 }
 
-export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate }: Props) {
+export function CatalogOverview({ catalog, serviceUrl, attachOptions, attachSpecs, onNavigate }: Props) {
   const { settings } = useSettings();
   const totalTables = catalog.schemas.reduce((sum, s) => {
     if (settings.hideDollarTables) {
@@ -77,7 +80,7 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, onNavigate
           switcher in the top-right, which shows the same name/email and owns
           sign-in and sign-out — so this was a second, read-only copy of it
           halfway down the page. */}
-      {serviceUrl && <ConnectBox catalogName={catalog.catalogName} serviceUrl={serviceUrl} attachOptions={attachOptions} />}
+      {serviceUrl && <ConnectBox catalogName={catalog.catalogName} serviceUrl={serviceUrl} attachOptions={attachOptions} attachSpecs={attachSpecs} />}
 
       {catalog.schemas.length > 0 && (
         <>

@@ -27,6 +27,8 @@ import { getAuthTokenForService } from "./auth";
 import { arrowFieldToDuckDB } from "./arrow-to-duckdb";
 import { engine } from "./shell-bridge";
 import { readRows, esc } from "./duckdb-query";
+import { decodeOptionSpecs } from "./attach/specs";
+import type { OptionSpecInfo } from "./attach/options";
 
 /** Column info extracted from a TableInfo's serialized Arrow schema. */
 export interface ColumnInfo {
@@ -155,8 +157,30 @@ export function getForeignKeys(table: TableInfo): ForeignKeyInfo[] {
   }
 }
 
-/** Connect to a VGI service and fetch all catalog metadata. */
-export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
+/** A catalog as discovered over RPC, with what is needed to attach it. */
+export interface FetchedCatalog {
+  catalog: CatalogData;
+  /** Declared attach options (`catalogsInfo().attach_option_specs`). */
+  specs: OptionSpecInfo[];
+  /** The server's implementation version, when it reports one. */
+  implementationVersion: string | null;
+  /** True when the tree was NOT read over RPC and is left for DuckDB to fill
+   *  in once the engine has attached the catalog (see `fetchCatalog`). */
+  treeFromEngine: boolean;
+}
+
+/** Connect to a VGI service and fetch all catalog metadata.
+ *
+ *  The RPC tree is a preview: once the engine has attached the catalog, the
+ *  inventory (`catalog-store.ts`) re-reads every database from DuckDB, and
+ *  that is what the sidebar shows from then on. The RPC attach below carries
+ *  no options, so it only matches what DuckDB attaches when there are none.
+ *  With any option set (`hasOptions`), or a catalog that declares a
+ *  `required` option (which refuses an option-less attach outright), the RPC
+ *  attach is skipped and the tree comes from DuckDB alone: one source of
+ *  truth, built from the same ATTACH the shell runs, rather than a second
+ *  attach that has to replicate the options' typing in Arrow. */
+export async function fetchCatalog(serviceUrl: string, { hasOptions = false }: { hasOptions?: boolean } = {}): Promise<FetchedCatalog> {
   const token = await getAuthTokenForService(serviceUrl);
   console.log("[service] fetchCatalog:", serviceUrl, token ? "with token" : "NO TOKEN");
   const rpc = httpConnect(serviceUrl, {
@@ -165,9 +189,20 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
   const client = new VgiClient(rpc);
 
   try {
-    // Discover catalogs and attach
-    const catalogs = await client.catalogs();
-    const catalogName = catalogs[0] ?? "unknown";
+    // Discover catalogs, their declared options, and attach
+    const infos = await client.catalogsInfo();
+    const info = infos[0];
+    const catalogName = info?.name ?? "unknown";
+    const specs = decodeOptionSpecs(info?.attach_option_specs);
+    const implementationVersion = info?.implementation_version ?? null;
+    if (hasOptions || specs.some((s) => s.required)) {
+      return {
+        catalog: { catalogName, catalogComment: null, catalogTags: {}, defaultSchema: null, schemas: [] },
+        specs,
+        implementationVersion,
+        treeFromEngine: true,
+      };
+    }
     const attach = await client.catalogAttach(catalogName);
     const attachId = attach.attach_opaque_data;
     const defaultSchema = attach.default_schema ?? null;
@@ -209,9 +244,33 @@ export async function fetchCatalog(serviceUrl: string): Promise<CatalogData> {
     });
 
     await client.catalogDetach(attachId);
-    return { catalogName, catalogComment, catalogTags, defaultSchema, schemas };
+    return {
+      catalog: { catalogName, catalogComment, catalogTags, defaultSchema, schemas },
+      specs,
+      implementationVersion,
+      treeFromEngine: false,
+    };
   } finally {
     client.close();
+  }
+}
+
+/** Just the declared attach options of a service's first catalog, for the
+ *  connect form. Null when the server cannot be reached or refuses an
+ *  anonymous discovery call (the form then offers raw text only). */
+export async function fetchCatalogSpecs(serviceUrl: string): Promise<{ catalogName: string; specs: OptionSpecInfo[] } | null> {
+  let client: VgiClient | null = null;
+  try {
+    const token = await getAuthTokenForService(serviceUrl);
+    client = new VgiClient(httpConnect(serviceUrl, { authorization: token ? `Bearer ${token}` : undefined }));
+    const info = (await client.catalogsInfo())[0];
+    if (!info) return null;
+    return { catalogName: info.name, specs: decodeOptionSpecs(info.attach_option_specs) };
+  } catch (error) {
+    console.warn("[service] could not read attach option specs:", error instanceof Error ? error.message : error);
+    return null;
+  } finally {
+    client?.close();
   }
 }
 

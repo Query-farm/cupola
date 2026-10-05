@@ -86,7 +86,9 @@ export interface ShareQueryLinkOptions {
   sql: string;
   /** VGI service URL. Omitted from the link when absent. */
   serviceUrl?: string;
-  /** Raw ATTACH options fragment, so the recipient attaches identically. */
+  /** The author's NON-SECRET attach options as `name 'text'` literals
+   *  (`shareableOptionsText` in lib/attach/options.ts), so the recipient
+   *  attaches identically. Secrets are never put in a link. */
   attachOptions?: string;
   /** Pinned catalog data version, if the author had one. */
   dataVersionSpec?: string;
