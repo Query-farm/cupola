@@ -27,6 +27,7 @@ function formatElapsed(s: number): string {
   return `${m}m${r.toString().padStart(2, "0")}s`;
 }
 import { SqlCodeBlock } from "../content/SqlCodeBlock";
+import { displaySql } from "@/lib/sql/display-sql";
 import { QueryResultTable } from "./QueryResultTable";
 import type { ToolCallEntry } from "./ChatMessageAssistant";
 
@@ -113,7 +114,7 @@ export function SqlToolCallBlock({ toolCall, onCancel }: Props) {
               <button
                 className="text-muted-foreground/50 hover:text-primary transition-colors p-0.5"
                 title="Copy SQL"
-                onClick={() => navigator.clipboard.writeText(toolCall.input?.sql || "")}
+                onClick={() => navigator.clipboard.writeText(displaySql(toolCall.input?.sql || ""))}
               >
                 <Copy className="h-3 w-3" />
               </button>
