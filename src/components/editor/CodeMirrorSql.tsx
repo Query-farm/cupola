@@ -1,6 +1,8 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { buildSqlExtensions, EditorState, EditorView } from "@/lib/editor/cm-sql-setup";
-import type { CompletionSource } from "@codemirror/autocomplete";
+import { snippet, type CompletionSource } from "@codemirror/autocomplete";
+import type { CatalogIndex } from "@/lib/catalog-index";
+import { refreshCatalogHelp } from "@/lib/editor/cm-catalog-help";
 import { statementAtCursor, type SqlStatement } from "@/lib/editor/sql-statements";
 
 export interface CodeMirrorSqlHandle {
@@ -13,6 +15,10 @@ export interface CodeMirrorSqlHandle {
   setDoc: (text: string) => void;
   /** Insert text at the primary cursor (replacing any selection). */
   insertAtCursor: (text: string) => void;
+  /** Insert a CodeMirror snippet template (`${1:arg}` fields, Tab moves between them). */
+  insertSnippet: (template: string) => void;
+  /** The catalog behind hover/signature help changed; redraw any help showing. */
+  refreshCatalogHelp: () => void;
   /** Move the selection to [from, to] and scroll it into view. */
   selectRange: (from: number, to: number) => void;
   focus: () => void;
@@ -34,6 +40,8 @@ interface Props {
   onDropText?: (raw: string) => void;
   completionSource?: CompletionSource | null;
   fontSize?: number;
+  /** Catalog lookup for function hover and signature help; read on demand. */
+  getCatalogIndex?: () => CatalogIndex | null;
 }
 
 /**
@@ -44,7 +52,7 @@ interface Props {
  * recreating the editor.
  */
 export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function CodeMirrorSql(
-  { initialDoc, onChange, onRunStatement, onSelectionChange, onDropText, completionSource, fontSize },
+  { initialDoc, onChange, onRunStatement, onSelectionChange, onDropText, completionSource, fontSize, getCatalogIndex },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -57,6 +65,8 @@ export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function Cod
   onRunRef.current = onRunStatement;
   onSelRef.current = onSelectionChange;
   onDropRef.current = onDropText;
+  const indexRef = useRef(getCatalogIndex);
+  indexRef.current = getCatalogIndex;
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -70,6 +80,7 @@ export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function Cod
           },
           completionSource: completionSource ?? null,
           fontSize,
+          getCatalogIndex: () => indexRef.current?.() ?? null,
         }),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) onChangeRef.current?.(u.state.doc.toString());
@@ -142,6 +153,14 @@ export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function Cod
       });
       view.focus();
     },
+    insertSnippet: (template: string) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const sel = view.state.selection.main;
+      snippet(template)({ state: view.state, dispatch: (tr) => view.dispatch(tr) }, null, sel.from, sel.to);
+      view.focus();
+    },
+    refreshCatalogHelp: () => viewRef.current?.dispatch({ effects: refreshCatalogHelp.of(null) }),
     selectRange: (from: number, to: number) => {
       const view = viewRef.current;
       if (!view) return;

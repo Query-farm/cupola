@@ -1,4 +1,4 @@
-import { Play, Square, Sparkles, WandSparkles, Loader2, FileChartColumn } from "lucide-react";
+import { Play, Square, Sparkles, WandSparkles, Loader2, FileChartColumn, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScriptMenu } from "./ScriptMenu";
 import { PivotMenu } from "./PivotMenu";
@@ -22,6 +22,9 @@ interface Props {
   onStop: () => void;
   onFormat: () => void;
   onAskAI: () => void;
+  /** Toggle the Inspector side panel. */
+  onInspector?: () => void;
+  inspectorActive?: boolean;
   onAddToReport: () => void;
   /** Whether the Ask AI panel is currently open (renders the button pressed). */
   aiActive?: boolean;
@@ -67,6 +70,8 @@ export function EditorToolbar({
   onStop,
   onFormat,
   onAskAI,
+  onInspector,
+  inspectorActive,
   onAddToReport,
   aiActive,
   aiBusy,
@@ -124,6 +129,21 @@ export function EditorToolbar({
         itemTestIdPrefix="editor-run-perspective"
         align="start"
       />
+
+      {onInspector && (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onInspector}
+          className={inspectorActive ? "h-7 gap-1.5 bg-muted" : "h-7 gap-1.5"}
+          title="Toggle the Inspector: details of what you pick in the sidebar"
+          aria-pressed={!!inspectorActive}
+          data-testid="editor-inspector-toggle"
+        >
+          <Info className="h-3.5 w-3.5" />
+          <span className="hidden lg:inline">Inspector</span>
+        </Button>
+      )}
 
       <Button
         size="sm"

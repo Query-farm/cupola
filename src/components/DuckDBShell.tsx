@@ -9,7 +9,10 @@ import { Loader2 } from "lucide-react";
 import type { TabId } from "./AppTabBar";
 const AskAIChat = lazy(() => import("./AskAIChat").then(m => ({ default: m.AskAIChat })));
 import { getColumns } from "@/lib/service";
-import { treeIdToShellText } from "@/lib/tree";
+import { treeIdToShellText, parseSelection } from "@/lib/tree";
+import { catalogInventory } from "@/lib/catalog-store";
+import { callablesForSelection } from "@/lib/callable";
+import { buildCallText } from "@/lib/editor/call-snippet";
 import { VgiDuckDBHandler, perspectiveServeMode, runPerspectiveQuery, type PerspectiveServeMode } from "@/lib/perspective-duckdb-handler";
 import { createQueryPivotSource, dropQueryPivotSource, type QueryPivotSource } from "@/lib/pivot-source";
 import { getAuthToken, getAuthTokenForService } from "@/lib/auth";
@@ -497,6 +500,8 @@ export function DuckDBShell({ serviceUrl, catalogName, activeTab, onTabChange, o
           e.preventDefault();
           const data = e.dataTransfer.getData("text/plain");
           if (data) {
+            const [callable] = /::[fm]:/.test(data) ? callablesForSelection(catalogInventory.getSnapshot().catalogs, parseSelection(data)) : [];
+            if (callable) { terminal.insertText?.(buildCallText(callable, { emptyDoc: false })); return; }
             const text = treeIdToShellText(data);
             if (text) {
               terminal.insertText?.(text);

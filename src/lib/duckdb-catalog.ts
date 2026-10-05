@@ -137,6 +137,58 @@ function normalizeFunctionType(value: string): FunctionInfo["function_type"] {
   }
 }
 
+/** Arguments from `duckdb_functions()`'s parallel name/type lists. For a
+ *  table function that list mixes positional arguments, which DuckDB names
+ *  `col0`, `col1`, …, with its named options in no stable order
+ *  (`read_csv(col0, all_varchar, header, …)`): only the `colN` ones are
+ *  positional, and the options are listed after them by name. */
+function parameterArgs(names: string[], types: string[], functionType: FunctionInfo["function_type"]): FunctionArg[] {
+  const isTable = functionType === "TABLE" || functionType === "TABLE_BUFFERING";
+  const all = names.map((name, index) => {
+    const type = types[index] || "ANY";
+    const named = isTable && !/^col\d+$/.test(name);
+    return {
+      name,
+      arrowType: type,
+      duckdbType: type,
+      nullable: true,
+      named,
+      positional: !named,
+      position: named ? undefined : index,
+      fieldIndex: index,
+      isTableInput: false,
+      isAnyType: type.toUpperCase() === "ANY",
+      isVarargs: false,
+      isConst: false,
+    };
+  });
+  if (!isTable) return all;
+  return [
+    ...all.filter((a) => !a.named),
+    ...all.filter((a) => a.named).sort((a, b) => a.name.localeCompare(b.name)),
+  ];
+}
+
+/** `duckdb_functions().varargs` names the type of a variadic tail
+ *  (`concat(ANY...)`); null when the function takes a fixed list. */
+function varargsArg(varargs: unknown, index: number): FunctionArg[] {
+  if (varargs == null || varargs === "") return [];
+  const type = String(varargs);
+  return [{
+    name: "args",
+    arrowType: type,
+    duckdbType: type,
+    nullable: true,
+    named: false,
+    positional: false,
+    fieldIndex: index,
+    isTableInput: false,
+    isAnyType: type.toUpperCase() === "ANY",
+    isVarargs: true,
+    isConst: false,
+  }];
+}
+
 /** DuckDB function_type values that represent macros (as opposed to regular
  *  functions). Everything else lands in the functions list. */
 const MACRO_TYPES = new Set(["macro", "table_macro"]);
@@ -145,7 +197,15 @@ const MACRO_TYPES = new Set(["macro", "table_macro"]);
  * Fetch a full `CatalogData` for an attached DuckDB database by name.
  * Keeps partial metadata and reports query failures on the catalog itself.
  */
-export async function fetchAttachedCatalog(databaseName: string, databaseType = "vgi"): Promise<CatalogData> {
+export interface FetchCatalogOptions {
+  /** Read only functions and macros: no tables, views, columns or constraints. */
+  functionsOnly?: boolean;
+  /** Extra SQL condition on `duckdb_functions()` rows. */
+  functionFilter?: string;
+}
+
+export async function fetchAttachedCatalog(databaseName: string, databaseType = "vgi", options: FetchCatalogOptions = {}): Promise<CatalogData> {
+  const { functionsOnly = false, functionFilter } = options;
   const errors: string[] = [];
   const readRows = async (sql: string, optional = false): Promise<Record<string, any>[]> => {
     try { return await readRowsOrThrow(sql); }
@@ -157,18 +217,20 @@ export async function fetchAttachedCatalog(databaseName: string, databaseType = 
   const dbLit = `'${esc(databaseName)}'`;
 
   // Parallel metadata fetches — none depend on each other.
+  const none = Promise.resolve([] as Record<string, any>[]);
+  const unlessFunctionsOnly = (sql: string) => functionsOnly ? none : readRows(sql);
   const [databaseRows, schemaRows, tableRows, viewRows, columnRows, functionRows, constraintRows, argumentRows] = await Promise.all([
     readRows(`SELECT * FROM duckdb_databases() WHERE database_name = ${dbLit}`),
     readRows(
       `SELECT * FROM duckdb_schemas() WHERE database_name = ${dbLit} ORDER BY schema_name`
     ),
-    readRows(
+    unlessFunctionsOnly(
       `SELECT * FROM duckdb_tables() WHERE database_name = ${dbLit} AND NOT temporary ORDER BY schema_name, table_name`
     ),
-    readRows(
+    unlessFunctionsOnly(
       `SELECT * FROM duckdb_views() WHERE database_name = ${dbLit} AND NOT temporary ORDER BY schema_name, view_name`
     ),
-    readRows(
+    unlessFunctionsOnly(
       `SELECT * FROM duckdb_columns() WHERE database_name = ${dbLit} ORDER BY schema_name, table_name, column_index`
     ),
     // VGI-registered table functions are marked internal=1, so we cannot
@@ -176,9 +238,9 @@ export async function fetchAttachedCatalog(databaseName: string, databaseType = 
     // and rely on the sidebar's `hideTableBackingFunctions` setting to
     // dedupe same-named table + table function pairs.
     readRows(
-      `SELECT * FROM duckdb_functions() WHERE database_name = ${dbLit} ORDER BY schema_name, function_name`
+      `SELECT * FROM duckdb_functions() WHERE database_name = ${dbLit}${functionFilter ? ` AND (${functionFilter})` : ""} ORDER BY schema_name, function_name`
     ),
-    readRows(
+    unlessFunctionsOnly(
       `SELECT schema_name, table_name, constraint_type, constraint_text,
               constraint_column_indexes, constraint_column_names, constraint_name,
               referenced_table, referenced_column_names
@@ -547,20 +609,7 @@ export async function fetchAttachedCatalog(databaseName: string, databaseType = 
         },
         _functionArgsDetailed: argsByFunction.has(argumentFunctionKey(schemaName, name, functionType)),
         _functionArgs: argsByFunction.get(argumentFunctionKey(schemaName, name, functionType))
-          ?? parameters.map((parameter, index) => ({
-            name: parameter,
-            arrowType: parameterTypes[index] || "ANY",
-            duckdbType: parameterTypes[index] || "ANY",
-            nullable: true,
-            named: false,
-            positional: true,
-            position: index,
-            fieldIndex: index,
-            isTableInput: false,
-            isAnyType: (parameterTypes[index] || "").toUpperCase() === "ANY",
-            isVarargs: false,
-            isConst: false,
-          })),
+          ?? [...parameterArgs(parameters, parameterTypes, normalizeFunctionType(functionType)), ...varargsArg(row.varargs, parameters.length)],
       };
       getSchema(schemaName).functions.push(entry);
     }

@@ -83,10 +83,13 @@ export function updatePageTitle(selection: Selection | null, catalogName: string
   document.title = `${catalogName} / ${selection.schema} / ${selection.name} - VGI`;
 }
 
-/** Push the selection into the URL hash, creating a history entry. */
-export function pushSelectionToUrl(selection: Selection | null) {
+/** Push the selection into the URL hash, creating a history entry, or
+ *  (`replace`) updating the current one: browsing the sidebar from the query
+ *  editor shouldn't fill Back with entries for a page the reader never saw. */
+export function pushSelectionToUrl(selection: Selection | null, { replace = false }: { replace?: boolean } = {}) {
   if (typeof window === "undefined") return;
   const hash = selectionToHash(selection);
   const url = window.location.pathname + window.location.search + hash;
-  window.history.pushState(null, "", url);
+  if (replace) window.history.replaceState(null, "", url);
+  else window.history.pushState(null, "", url);
 }

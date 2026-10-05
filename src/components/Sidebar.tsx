@@ -1,5 +1,5 @@
 import { SavedReportsSidebar } from "./evidence/SavedReportsSidebar";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { Search, Cpu, RefreshCw, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,10 @@ import { SettingsModal } from "@/components/SettingsModal";
 import type { CatalogData } from "@/lib/service";
 import { quoteIdent } from "@/lib/duckdb-query";
 import { useSettings } from "@/lib/settings";
-import { buildTreeData, filterTree, parseSelection, selectionToTreeId, type Selection } from "@/lib/tree";
+import { buildTreeData, filterTree, parseSelection, selectionToTreeId, type Selection, type TreeDataItem } from "@/lib/tree";
+import { callablesForSelection, type Callable } from "@/lib/callable";
+import { findRelation } from "@/lib/relation";
+import { CallableHoverCard, RelationHoverCard } from "@/components/inspector/HoverCards";
 
 interface Props {
   catalogs: CatalogData[];
@@ -17,22 +20,47 @@ interface Props {
   serviceUrl?: string;
   selection: Selection | null;
   onSelect: (selection: Selection | null) => void;
-  /** Insert text into the DuckDB shell. */
+  /** Insert text into the DuckDB shell (or the editor, per `insertTarget`). */
   onShellInsert?: (text: string) => void;
+  /** Insert a call to a function or macro. */
+  onInsertCallable?: (callable: Callable) => void;
+  /** Where inserts land. In the editor, a modifier-click inserts instead of selecting. */
+  insertTarget?: "shell" | "editor";
   onRefresh?: () => void;
   refreshing?: boolean;
 }
 
-export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onRefresh, refreshing }: Props) {
+export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onInsertCallable, insertTarget = "shell", onRefresh, refreshing }: Props) {
   const [search, setSearch] = useState("");
   const { settings } = useSettings();
+  // The parent passes fresh callbacks every render; read them through refs so
+  // the tree (rebuilt only when its inputs change) never holds a stale one.
+  const insertRef = useRef(onShellInsert);
+  insertRef.current = onShellInsert;
+  const insertCallableRef = useRef(onInsertCallable);
+  insertCallableRef.current = onInsertCallable;
+  const catalogsRef = useRef(catalogs);
+  catalogsRef.current = catalogs;
+  const canInsert = !!onShellInsert;
+  const canInsertCallable = !!onInsertCallable;
+
+  const insertRelation = useCallback((catalog: string, schema: string, name: string) => {
+    insertRef.current?.([catalog, schema, name].map(quoteIdent).join("."));
+  }, []);
+  const insertCallable = useCallback((catalog: string, schema: string, name: string, kind: "function" | "macro") => {
+    const [callable] = callablesForSelection(catalogsRef.current, { type: kind, catalog, schema, name });
+    if (callable) insertCallableRef.current?.(callable);
+  }, []);
+
   const combinedData = useMemo(() => catalogs.flatMap(catalog => buildTreeData(catalog, {
     showDuckDBTypes: settings.showDuckDBTypes,
     hideTableBackingFunctions: settings.hideTableBackingFunctions,
     hideDollarTables: settings.hideDollarTables,
     rootIcon: catalog.catalogName === "memory" ? Cpu : undefined,
-    onTableAction: onShellInsert ? (schema, table) => onShellInsert([catalog.catalogName, schema, table].map(quoteIdent).join(".")) : undefined,
-  })).sort((a, b) => a.name.localeCompare(b.name)), [catalogs, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, onShellInsert]);
+    insertTarget,
+    onTableAction: canInsert ? (schema, table) => insertRelation(catalog.catalogName, schema, table) : undefined,
+    onCallableAction: canInsertCallable ? (schema, name, kind) => insertCallable(catalog.catalogName, schema, name, kind) : undefined,
+  })).sort((a, b) => a.name.localeCompare(b.name)), [catalogs, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, canInsert, canInsertCallable, insertTarget, insertRelation, insertCallable]);
   const filteredData = useMemo(() => filterTree(combinedData, search), [combinedData, search]);
 
   const selectedTreeId = useMemo(
@@ -40,14 +68,40 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
     [selection, defaultCatalogName]
   );
 
-  function handleSelectChange(item: { id: string } | undefined) {
+  function handleSelectChange(item: { id: string } | undefined, event?: React.MouseEvent | React.KeyboardEvent) {
     if (!item) {
       onSelect(null);
       return;
     }
     const sel = parseSelection(item.id);
+    // In the editor, a modifier-click writes the object into the query.
+    if (insertTarget === "editor" && event && (event.metaKey || event.ctrlKey) && sel?.catalog && sel.schema && !item.id.includes("::c:")) {
+      if (sel.type === "function" || sel.type === "macro") {
+        event.preventDefault();
+        insertCallable(sel.catalog, sel.schema, sel.name, sel.type);
+        return;
+      }
+      if (sel.type === "table" || sel.type === "view") {
+        event.preventDefault();
+        insertRelation(sel.catalog, sel.schema, sel.name);
+        return;
+      }
+    }
     onSelect(sel);
   }
+
+  // Built only when a card opens, so hovering costs nothing until then.
+  const renderHover = useCallback((item: TreeDataItem) => {
+    if (item.id.includes("::c:")) return null;
+    const sel = parseSelection(item.id);
+    if (!sel) return null;
+    const editor = insertTarget === "editor";
+    const callables = callablesForSelection(catalogsRef.current, sel);
+    if (callables.length) return <CallableHoverCard callables={callables} editor={editor} />;
+    const relation = findRelation(catalogsRef.current, sel);
+    if (relation) return <RelationHoverCard relation={relation} editor={editor} />;
+    return null;
+  }, [insertTarget]);
 
   return (
     <div className="bg-card flex flex-col h-full">
@@ -87,6 +141,7 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
           data={filteredData}
           expandAll={!!search}
           onSelectChange={handleSelectChange}
+          renderHover={renderHover}
           initialSelectedItemId={selectedTreeId}
           trailingDropZone={false}
         />

@@ -93,7 +93,8 @@ interface Props {
   /** Shared with manual runs so the latest run (AI or manual) wins the grid. */
   runIdRef: React.RefObject<number>;
   setActiveResult: (docId: string, patch: Partial<ResultState>) => void;
-  onClose: () => void;
+  /** Omitted when a surrounding panel owns closing. */
+  onClose?: () => void;
   /** Fired when a doc's turn starts/ends. Conversations are per sub-tab and
    *  the panel itself can be closed, so the surfaces that stay visible (the
    *  editor tab strip, the toolbar button, the app tab bar) need to say that
@@ -520,18 +521,22 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
   );
 
   return (
-    <div className="flex flex-col h-full border-l border-border bg-background" data-testid="editor-ai-panel">
+    <div className={`flex flex-col h-full bg-background ${onClose ? "border-l border-border" : ""}`} data-testid="editor-ai-panel">
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border shrink-0">
-        <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-          <Sparkles className="h-3.5 w-3.5 text-accent" /> Ask AI
-        </span>
+        {onClose ? (
+          <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Sparkles className="h-3.5 w-3.5 text-accent" /> Ask AI
+          </span>
+        ) : <span />}
         <div className="flex items-center gap-1">
           <button onClick={handleNew} className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors px-1.5 py-0.5" title="New conversation">
             <RotateCcw className="h-3 w-3" /> New
           </button>
-          <button onClick={onClose} className="p-1 text-muted-foreground hover:text-foreground transition-colors" title="Close Ask AI" aria-label="Close Ask AI panel">
-            <X className="h-4 w-4" />
-          </button>
+          {onClose && (
+            <button onClick={onClose} className="p-1 text-muted-foreground hover:text-foreground transition-colors" title="Close Ask AI" aria-label="Close Ask AI panel">
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
 

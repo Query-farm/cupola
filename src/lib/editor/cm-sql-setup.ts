@@ -14,6 +14,7 @@ import {
   type CompletionSource,
 } from "@codemirror/autocomplete";
 import { bracketMatching, indentOnInput, syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
+import { catalogHelp, type GetCatalogIndex } from "./cm-catalog-help";
 
 export interface SqlSetupOptions {
   /** Called when Mod-Enter (Cmd/Ctrl+Enter) is pressed — run statement at cursor. */
@@ -21,6 +22,8 @@ export interface SqlSetupOptions {
   /** Completion source for autocomplete, or null to disable. */
   completionSource?: CompletionSource | null;
   fontSize?: number;
+  /** Session catalog lookup for function hover and signature help. */
+  getCatalogIndex?: GetCatalogIndex;
 }
 
 /** A light theme that inherits the app's CSS variables so the editor matches
@@ -82,6 +85,8 @@ export function buildSqlExtensions(opts: SqlSetupOptions): Extension[] {
       indentWithTab,
     ]),
   ];
+
+  if (opts.getCatalogIndex) exts.push(catalogHelp(opts.getCatalogIndex));
 
   if (opts.completionSource) {
     exts.push(

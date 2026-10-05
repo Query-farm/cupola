@@ -165,6 +165,9 @@ export const ui = {
   /** Insert text at the cursor of the active editor tab. Set by SqlEditorView
    *  while the editor is mounted; used by the sidebar's click-to-insert. */
   insertIntoEditor: null as ((text: string) => void) | null,
+  /** Insert a call to a function or macro into the active editor tab, as a
+   *  snippet whose arguments are tab stops. Set alongside `insertIntoEditor`. */
+  insertCallableIntoEditor: null as ((callable: import("./callable").Callable) => void) | null,
 
   memoryCatalog: null as CatalogData | null,
   attachedCatalogs: [] as CatalogData[],
