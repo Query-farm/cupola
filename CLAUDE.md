@@ -59,7 +59,7 @@ The app reads the following parameters from the URL. VGI servers issuing the red
 | Parameter | Purpose |
 |-----------|---------|
 | `service` | VGI server base URL. When absent, the welcome / connect page is shown instead of attempting to fetch a catalog. |
-| `attach_options` | Raw SQL fragment spliced into the DuckDB `ATTACH` statement after `LOCATION` (e.g. `opt_string 'hello', opt_int64 42`). Takes precedence over the localStorage value, and is persisted via `saveRecentService` so a later visit without the param keeps it. An explicit empty value clears any saved options. |
+| `attach_options` | Legacy raw ATTACH option text (`opt_string 'hello', opt_int64 42`). **Never spliced into SQL**: it is migrated into structured options (`src/lib/attach/`, see "Attach options are structured"). Plain string/number/boolean literals apply at once; any other value is an expression, and the link first shows a **consent screen** listing them, then each is evaluated only if DuckDB's own parse of `SELECT CAST((<expr>) AS VARCHAR)` passes the constant allowlist. Refused values are reported and dropped. Takes precedence over stored values for the same option; once the catalog's specs are known the values are saved (non-secret ones to the recent list, secrets to `cupola.catalog-secrets.v1`) and the param is **stripped from the address bar**. An explicit empty value clears the saved options and secrets for the service. Share links write it back as `name 'text'` literals of the non-secret options only. |
 | `ai_key` | Anthropic API key for the AI agent. Also accepted in the URL fragment (see below — fragments aren't sent to servers, so prefer that form). Merged into `settings.anthropicApiKey`, persisted to localStorage, and **stripped from the URL via `replaceState`** on first read so it doesn't linger in browser history or get sent as a referrer. Treat it as one-shot: passing the param overwrites any previously stored key. The query-string form takes precedence if both are set. |
 | `sql` / `sql_z` | SQL for a shared query link. Accepted here for links a VGI server or a human composes server-side, but the Share button emits the fragment form (see below) — prefer that, since fragments aren't sent to servers. The query-string form takes precedence if both are set. |
 | `target` | For a Grainlift gateway (`service=grainlift+https://host`, `grainlift://host` for HTTPS, `grainlift+http://`, or `grainlift+iroh://<endpoint-id>`): the gateway's server-side target. Becomes the `target '...'` ATTACH option and is saved with the service. The catalog is attached with the grainlift extension and read from DuckDB; a gateway that publishes OAuth metadata gets a sign-in first (Cupola's PKCE flow against its origin), and the bearer + refresh token ride on the ATTACH. |
@@ -136,6 +136,11 @@ src/
     tree-expansion.ts        # Pure expand/collapse state logic for the sidebar tree
     navigation.ts            # URL hash routing, page title updates
     share-query.ts           # Shareable query links: ?sql= / ?sql_z= codec + builder
+    attach/                  # Structured ATTACH options: options.ts (builder, secrets),
+                             #   legacy-options.ts (raw text migration + AST allowlist),
+                             #   prepare.ts (engine evaluation + TRY_CAST checks), specs.ts,
+                             #   secret-store.ts, connection.ts (sources/persistence),
+                             #   form.ts, error-detail.ts
     settings.tsx             # Settings context + localStorage persistence
     utils.ts                 # cn() Tailwind class merge utility
 
@@ -344,6 +349,14 @@ Open in Query Editor fills `$parameters` in with the refresh's values (`material
 
 **Terminal readiness is not `terminal.runQuery` being set** (`shell-init.ts`): `runQuery` drives the terminal through `term.paste()`, which xterm-readline only accepts from inside `rl.read()`. Outside it the input is dropped, or throws `Cannot read properties of undefined (reading 'inputType')`. The post-ready handoff therefore resolves the prompt's catalog **before** hiding the boot overlay and publishing `runQuery`, so `readLoop()` runs synchronously as far as its first `rl.read()`. **Do not add an `await` ahead of that read.** It previously did (`await refreshCatalog()` was readLoop's first line), which left a window one query round-trip wide where the shell looked ready but silently swallowed anything submitted — a fast user, or the editor / query-history / AI panel reacting to `duckdb-ready`. Safari hit it constantly because its slower WASM widens the window; the only recovery was reloading. `waitForShell` in `shell.spec.ts` guards it by requiring the terminal to echo a `.help`.
 
+**Attach options are structured** (`src/lib/attach/`). An option is stored as name → its DuckDB **text** form and always emitted as `name 'text'` through `quoteLiteral`, with names held to `^[A-Za-z_][A-Za-z0-9_]*$`; the VGI extension casts each declared option with `DefaultTryCastAs`, and the VARCHAR text form round-trips every type. `buildAttachSql(spec, mode)` (`options.ts`) is the only ATTACH builder: the shell runs `execute`, the `[shell] ATTACH SQL:` log and the error panel use `redacted` (`'***'`), and the ConnectBox snippets and the error panel's **Copy as duckdb CLI** use `cli` (secrets as `getenv('<ALIAS>_<OPTION>')`, no sign-in tokens). `AttachSpec` is per catalog on purpose: multi-catalog phase 1 attaches a list of them. Points worth not re-deriving:
+
+- **The raw splice was SQL injection through a link.** `shell-init.ts` used to append `?attach_options=` to the ATTACH unescaped. Legacy text now goes through `legacy-options.ts`: split at top-level commas (quotes and brackets tracked; anything unbalanced is refused whole), plain literals converted in JS, and every other value checked by walking `json_serialize_sql`'s AST against an allowlist (CONSTANT, CAST, unary minus, `list_value`/`struct_pack`/`map`/`row`). The AST checked is that of the **exact statement then run**, `SELECT CAST((<expr>) AS VARCHAR)`, not of the fragment, so no quoting trick can make the two differ. Without the json extension only plain literals pass. `tests/fixtures/attach-option-asts.json` is DuckDB's real parse output (`bun scripts/attach-option-asts.ts` regenerates it with the `duckdb` CLI).
+- **Specs come from `client.catalogsInfo()`** (`attach_option_specs`, decoded by `vgi/client`'s `deserializeAttachOptionSpecs`, vgi ≥ 0.37.1). Before ATTACH, `prepare.ts` checks every required option is present and runs `SELECT TRY_CAST(? AS <type>) IS NOT NULL` for each declared one, with the type in DuckDB's CAST syntax from `arrowTypeToDuckDBCast` (the display form writes `STRUCT<{a: BIGINT}>`, which is not SQL). A problem stops the ATTACH and opens the error panel with the statement that would have run. Undeclared options go to the extension, which knows its own built-ins (`pool`, `cache`, `data_version_spec`) and refuses the rest by name.
+- **Secrets**: `spec.secret`, or a credential-like name (`/(key|token|secret|password|passwd|credential|auth)/i`) for servers predating the flag. Their values live only in `cupola.catalog-secrets.v1` (`secret-store.ts`), keyed by service URL + catalog name + option until phase 2 re-keys it by workspace; never in `vgi-recent-services`, a share link, a snippet, a log line or Sentry. The store registers each value with `sentry-scrub.ts`, which also filters `attach_options` from URLs and any `<credential-name> '…'` literal from event text, breadcrumbs and extras (DuckDB quotes the offending value in a cast error). A pre-structured recent's raw `attachOptions` is migrated on first read, moving credential-named literals to the secret store.
+- **`fetchCatalog` skips the RPC tree whenever options are set** (or a spec is `required`) and leaves the tree to DuckDB. The RPC `catalog_attach` carries no options, so its tree only matches the engine's ATTACH when there are none, and a required option makes it fail outright. After ATTACH the inventory re-reads every database from DuckDB anyway (`catalog-store.ts`), so this is one source of truth rather than a second attach that would have to rebuild each option's Arrow type for `optionsBytes`. The cost is an empty sidebar until the engine attaches, which Grainlift already had. A catalog with a missing required option shows the options form (`OptionsRequiredScreen`) before anything attaches.
+- **The probe in the error panel is a GET**, body cancelled: a vgi-rpc HTTP server answers HEAD with 405, which read as a server error.
+
 **Arrow-to-DuckDB types**: Column types from the VGI server are Arrow types (Utf8, Int64, Date32). `arrow-to-duckdb.ts` converts these to DuckDB display names (VARCHAR, BIGINT, DATE). Checks `ARROW:extension:name` metadata for `geoarrow.wkb` → `GEOMETRY`.
 
 **SQL string literals vs identifiers**: use `quoteLiteral()` for VALUES and `quoteIdent()` for NAMES, both from `src/lib/duckdb-query.ts`. Mixing them is silent: `WHERE database_name = "memory"` is an identifier reference, so DuckDB raises `Binder Error: Referenced column "memory" not found`, and callers that treat a failed query as "not found" swallow it. That bug disabled `describe_table` for memory/attached catalogs for many releases.
@@ -448,6 +461,7 @@ For end-to-end work, test with Playwright (or Playwright MCP) against a running 
 ```bash
 # Start the test VGI worker (no auth) — needs only uv
 ./test-worker/run.sh                                           # :9009
+CUPOLA_TEST_ATTACH_OPTIONS=1 PORT=9010 ./test-worker/run.sh    # cupola_secure, for attach-options.spec.ts
 
 # Start frontend dev server
 cd ~/Development/vgi-web-frontend && bun run dev
@@ -469,6 +483,7 @@ portable:
 | var | purpose |
 |-----|---------|
 | `VGI_SERVICE_URL` | VGI server (default `http://localhost:9009`) |
+| `VGI_OPTIONS_SERVICE_URL` | the test worker's attach-options variant (default `http://localhost:9010`); `attach-options.spec.ts` skips its option tests when it is not running |
 | `CUPOLA_APP_ORIGIN` | app origin — **set this when 4321 is taken**; `astro dev` silently falls through to 4322/4323 and the suite would otherwise drive whatever else is squatting there |
 | `CUPOLA_BASE` | base path, e.g. `/v0.4.109/` |
 
