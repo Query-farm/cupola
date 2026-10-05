@@ -115,6 +115,7 @@ import { OPEN_ATTACH_EVENT, type PickerCatalog, type WorkspaceActions } from "./
 import type { AttachRequest } from "./workspace/AttachCatalogForm";
 import { CatalogOptionsDialog, type OptionsEditTarget } from "./workspace/CatalogOptionsDialog";
 import { CatalogChip, ChipStack } from "./workspace/CatalogChip";
+import { WorkspaceFileActions } from "./workspace/WorkspaceFileActions";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -2409,10 +2410,18 @@ function WelcomePage({ logoUrl }: { logoUrl: string }) {
           <ConnectForm />
         </div>
 
-        {named.length > 0 && (
+        {named.length > 0 ? (
           <div className="mb-6" data-testid="welcome-workspaces">
-            <h2 className="text-sm font-semibold text-foreground mb-2">Workspaces</h2>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h2 className="text-sm font-semibold text-foreground">Workspaces</h2>
+              <WorkspaceFileActions workspaces={workspaces} />
+            </div>
             <WorkspaceCards workspaces={named} />
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-2 mb-6 text-sm text-muted-foreground">
+            <span>Have a workspace file or DuckDB script?</span>
+            <WorkspaceFileActions workspaces={workspaces} />
           </div>
         )}
 
