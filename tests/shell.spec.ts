@@ -279,6 +279,23 @@ test.describe("DuckDB WASM Shell", () => {
       expect(result.rows![0].f).toBeFalsy();
     });
 
+    test("results keep DuckDB's own types (arrowLosslessConversion)", async ({ page }) => {
+      // Without the open-time config key (duckdb-worker-boot.ts) UHUGEINT arrives as a
+      // signed DECIMAL (2^128-1 reads as -1) and BIT as an untagged blob. 0.4.204-0.4.214
+      // shipped that way after a cleanup deleted the `db.open` call, and nothing failed
+      // loudly: `.test_formats` reported 101/110, which was misread as an engine build issue.
+      const fields = await page.evaluate(async () => {
+        const res = await (window as any).__bridge.query("SELECT 340282366920938463463374607431768211455::UHUGEINT AS u, '10101'::BIT AS b");
+        if (!res.ok) throw new Error(res.error);
+        const arrowUrl = "/node_modules/@query-farm/apache-arrow/Arrow.mjs";
+        const { tableFromIPC } = await import(arrowUrl);
+        const table = tableFromIPC(new Uint8Array(res.arrowBuffers[0]));
+        return table.schema.fields.map((f: any) => f.metadata.get("ARROW:extension:metadata") ?? "");
+      });
+      expect(fields[0]).toContain('"type_name":"uhugeint"');
+      expect(fields[1]).toContain('"type_name":"bit"');
+    });
+
     test("NULL handling", async ({ page }) => {
       const result = await shellQuery(page, "SELECT NULL as n, COALESCE(NULL, 42) as c");
       expect(result.ok).toBe(true);

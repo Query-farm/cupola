@@ -198,6 +198,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // `src/lib/format.ts` keys its hugeint/timetz/bit/uuid handlers off the
   // `ARROW:extension:metadata` this produces; without it they silently never
   // fire. `.test_formats` is the guard.
+  await db.open({ arrowLosslessConversion: true });
 
   setBootPhase("Opening the database");
   const conn = await db.connect();
