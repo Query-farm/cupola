@@ -40,6 +40,7 @@ import {
 } from "./ui/dialog";
 const DuckDBShell = lazy(() => import("./DuckDBShell").then(m => ({ default: m.DuckDBShell })));
 const SqlEditorView = lazy(() => import("./editor/SqlEditorView").then(m => ({ default: m.SqlEditorView })));
+const NotebookPanel = lazy(() => import("./notebooks/NotebookPanel").then(m => ({ default: m.NotebookPanel })));
 const EvidencePanel = lazy(() => import("./evidence/EvidencePanel").then(m => ({ default: m.EvidencePanel })));
 const CatalogRelationships = lazy(() => import("./content/CatalogRelationships").then(m => ({ default: m.CatalogRelationships })));
 import { AppTabBar, type TabId } from "./AppTabBar";
@@ -126,7 +127,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       if (stored === "perspective") return "catalog";
       // Query History was a tab until it moved into the editor's History menu.
       if ((stored as string) === "queries") return "editor";
-      if (stored && ["catalog", "editor", "shell", "askai", "reports", "evidence"].includes(stored)) return stored;
+      if (stored && ["catalog", "editor", "shell", "askai", "reports", "notebooks", "evidence"].includes(stored)) return stored;
       if (localStorage.getItem("vgi-app-view") === "editor") return "editor";
     } catch {}
     return "catalog";
@@ -156,7 +157,8 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // (a) DuckDB boots + ATTACHes once (column stats, previews work on the
   // catalog tab), and (b) terminal / chat / perspective state survives tab
   // switches. It's visible only on an engine-backed tab.
-  const engineVisible = activeTab !== "catalog" && activeTab !== "editor" && activeTab !== "reports" && activeTab !== "evidence";
+  const [notebookBusy, setNotebookBusy] = useState(false);
+  const engineVisible = activeTab !== "notebooks" && activeTab !== "catalog" && activeTab !== "editor" && activeTab !== "reports" && activeTab !== "evidence";
   // The editor mounts on its first visit and then stays mounted (hidden the
   // same way as the engine host) for the rest of the session. Its result grid
   // holds a decoded Arrow table in component state, so unmounting on every tab
@@ -164,10 +166,12 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // and column widths. Mounting lazily rather than always keeps the CodeMirror
   // chunk off the critical path for someone who only browses the catalog.
   const [editorMounted, setEditorMounted] = useState(activeTab === "editor");
+  const [notebooksMounted, setNotebooksMounted] = useState(activeTab === "notebooks");
   const [reportsMounted, setReportsMounted] = useState(activeTab === "reports");
   useEffect(() => {
     if (activeTab === "editor") setEditorMounted(true);
     if (activeTab === "reports") setReportsMounted(true);
+    if (activeTab === "notebooks") setNotebooksMounted(true);
   }, [activeTab]);
   // The Perspective tab is shown only while it holds something: every way in
   // (a table's Pivot button, the editor's Pivot menu, `.perspective`) switches
@@ -687,7 +691,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       <AppTabBar
         activeTab={activeTab}
         onSelect={setActiveTab}
-        busyTabs={{ askai: askAiBusy, editor: editorAiBusy }}
+        busyTabs={{ notebooks: notebookBusy, askai: askAiBusy, editor: editorAiBusy }}
         sidebarCollapsed={!sidebarVisible}
         onToggleSidebar={() => isNarrow ? setMobileSidebarOpen((open) => !open) : setSidebarCollapsed((c) => !c)}
         openTabs={{ perspective: perspectiveOpen }}
@@ -797,6 +801,13 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                   />
                 </Suspense>
               </ErrorBoundary>
+            </div>
+          )}
+          {notebooksMounted && (
+            <div className="absolute inset-0 overflow-hidden" style={activeTab === "notebooks" ? undefined : { visibility: "hidden", zIndex: -1 }}>
+              <ErrorBoundary><Suspense fallback={<div className="p-6">Loading notebooks…</div>}>
+                <NotebookPanel key={serviceUrl} serviceUrl={serviceUrl} catalogs={catalogs} onBusyChange={setNotebookBusy} />
+              </Suspense></ErrorBoundary>
             </div>
           )}
           {reportsMounted && (
