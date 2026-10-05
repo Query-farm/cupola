@@ -14,6 +14,7 @@ export interface NotebookProposal {
   summary: string;
   base: string;
   document: Notebook;
+  before: Notebook;
 }
 export function notebookProposal(current: Notebook, input: unknown, mode: AIQueryMode): NotebookProposal {
   const edit = editSchema.parse(input);
@@ -38,7 +39,12 @@ export function notebookProposal(current: Notebook, input: unknown, mode: AIQuer
     throw new Error(
       'The proposed notebook contains no changes. Revise the proposal to include the requested edits.',
     );
-  return { summary: edit.summary, base: fingerprint(current), document };
+  return {
+    summary: edit.summary,
+    base: fingerprint(current),
+    document,
+    before: current,
+  };
 }
 export function applyNotebookProposal(current: Notebook, proposal: NotebookProposal): Notebook {
   if (fingerprint(current) !== proposal.base)
@@ -84,7 +90,7 @@ export const NOTEBOOK_PROMPT = `You help users author Cupola SQL notebooks. Read
 Use propose_notebook_edit to stage changes; the user must apply them. Never claim a proposal was applied, saved, or executed. Preserve unchanged cells and their IDs, ordering and chart definitions. Explain changes briefly. Do not put secrets or credentials in notebook content.
 Cell JSON schema:
 Markdown: {id:string,type:"markdown",title:string,source:string,collapsed:boolean}
-SQL: {id:string,type:"sql",title:string,source:string,collapsed:boolean,charts:Chart[],outputHeight?:number}
-Chart: {id:string,title:string,type:"bar"|"line"|"area"|"scatter"|"histogram",x:string,y:string,color:string,xType:"nominal"|"quantitative"|"temporal",sort:"ascending"|"descending",xTitle:string,yTitle:string,yFormat:string}
-outputHeight is an optional saved table viewport height in pixels (integer 240–4000); preserve it when present. Use unique IDs for new cells and charts. Use empty strings for optional chart fields. Charts consume the parent SQL result, with no SQL execution or implicit aggregation. Except histograms (which bin/count x), Y must be numeric; aggregate in SQL. Chart previews are limited to 10000 returned rows. yFormat is a D3 number format like ,.2f. Limit 200 cells and 20 charts per SQL cell.
+SQL: {id:string,type:"sql",title:string,source:string,collapsed:boolean,charts:Chart[],outputHeight?:number,codeHidden?:boolean,outputHidden?:boolean}
+Chart: {id:string,title:string,type:"bar"|"line"|"area"|"scatter"|"histogram",x:string,y:string,color:string,xType:"nominal"|"quantitative"|"temporal",sort:"result"|"ascending"|"descending",xTitle:string,yTitle:string,yFormat:string}
+codeHidden and outputHidden independently hide SQL or its results; preserve these when present. outputHeight is an optional saved output viewport height in pixels (integer 240–4000); preserve it when present. Use unique IDs for new cells and charts. Use empty strings for optional chart fields. Charts consume the parent SQL result, with no SQL execution or implicit aggregation. Except histograms (which bin/count x), Y must be numeric; aggregate in SQL. Chart previews are limited to 10000 returned rows. Use sort="result" to preserve SQL result order for categorical axes; temporal axes use chronological scales. yFormat is a D3 number format like ,.2f. Limit 200 cells and 20 charts per SQL cell.
 In semantic-only mode you may explain, change Markdown or charts and reorganize existing SQL cells, but must not create or modify raw SQL. Explain this limitation when necessary.`;

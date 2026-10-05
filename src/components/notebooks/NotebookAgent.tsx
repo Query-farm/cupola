@@ -1,3 +1,12 @@
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '../ui/dialog';
+import { NotebookProposalReview } from './NotebookProposalReview';
 import { useEffect, useRef, useState } from 'react';
 import { Sparkles, RotateCcw, X } from 'lucide-react';
 import { ChatInput } from '../chat/ChatInput';
@@ -28,6 +37,7 @@ import { validateSelectQuery, type CellResult } from '../../lib/notebooks/execut
 import type { CatalogData } from '../../lib/service';
 
 export function NotebookAgent({
+  active,
   disabled,
   document,
   results,
@@ -37,6 +47,7 @@ export function NotebookAgent({
   onBusy,
   onClose,
 }: {
+  active: boolean;
   disabled: boolean;
   document: Notebook;
   results: Record<string, CellResult>;
@@ -47,6 +58,17 @@ export function NotebookAgent({
   onClose: () => void;
 }) {
   const { settings } = useSettings();
+  const panel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!active) return;
+    const frame = requestAnimationFrame(() => {
+      const target =
+        panel.current?.querySelector<HTMLElement>('textarea:not(:disabled)') ??
+        panel.current?.querySelector<HTMLElement>('[aria-label="Close Ask AI panel"]');
+      target?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active]);
   const [messages, setMessages] = useState<
     {
       id: string;
@@ -60,6 +82,7 @@ export function NotebookAgent({
   const [activity, setActivity] = useState('');
   const [error, setError] = useState('');
   const [applied, setApplied] = useState('');
+  const [reviewExpanded, setReviewExpanded] = useState(false);
   const [proposal, setProposal] = useState<NotebookProposal | null>(null);
   const latest = useRef({ document, results, selectedCell });
   latest.current = { document, results, selectedCell };
@@ -104,6 +127,7 @@ export function NotebookAgent({
     setError('');
     setApplied('');
     setProposal(null);
+    setReviewExpanded(false);
     setActivity('Connecting…');
     const assistantId = uid();
     follow.current = true;
@@ -278,6 +302,7 @@ export function NotebookAgent({
   }
   return (
     <aside
+      ref={panel}
       className="border-l border-border bg-background flex flex-col w-full min-w-0 shrink-0 min-h-0 h-full"
       aria-label="Notebook assistant"
     >
@@ -357,19 +382,26 @@ export function NotebookAgent({
             <p>
               {proposal.document.title} · {proposal.document.cells.length} cells
             </p>
-            <details>
-              <summary className="cursor-pointer">Review proposed notebook</summary>
-              <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">
-                {JSON.stringify(
-                  {
-                    title: proposal.document.title,
-                    cells: proposal.document.cells,
-                  },
-                  null,
-                  2,
-                )}
-              </pre>
-            </details>
+            <Button size="sm" variant="outline" onClick={() => setReviewExpanded(true)}>
+              Expand review
+            </Button>
+            <NotebookProposalReview before={proposal.before} after={proposal.document} />
+            <Dialog open={reviewExpanded} onOpenChange={setReviewExpanded}>
+              <DialogContent className="sm:max-w-3xl max-h-[90dvh] flex flex-col overflow-hidden">
+                <DialogHeader>
+                  <DialogTitle>Review notebook changes</DialogTitle>
+                  <DialogDescription>{proposal.summary}</DialogDescription>
+                </DialogHeader>
+                <div className="min-h-0 overflow-y-auto">
+                  <NotebookProposalReview before={proposal.before} after={proposal.document} />
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setReviewExpanded(false)}>
+                    Back to assistant
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
             {fingerprint(document) !== proposal.base && (
               <p>The notebook has changed. Ask for an updated proposal.</p>
             )}

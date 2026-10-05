@@ -7,20 +7,41 @@ async function openNotebook(page: Page) {
     timeout: 30_000,
   });
   await waitForShellBridge(page, 30_000);
-  await page.getByRole('button', { name: 'New notebook', exact: true }).click();
+  await page.getByTestId('notebook-library').getByRole('button', { name: 'New notebook', exact: true }).click();
   await expect(page.getByTestId('notebook-workspace')).toBeVisible();
 }
 async function sql(cell: Locator, source: string) {
   const editor = cell.locator('.cm-content');
   await editor.fill(source);
 }
+
+async function cellAction(page: Page, cell: Locator, action: string) {
+  await cell.getByRole('button', { name: 'Cell actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: action, exact: true }).click();
+}
+async function notebookAction(page: Page, action: string) {
+  await page.getByRole('button', { name: 'Notebook actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: action, exact: true }).click();
+}
+async function insertCell(page: Page, type: 'SQL' | 'Markdown', position?: number) {
+  const buttons = page.getByRole('button', { name: /Insert cell at position/ });
+  await (position === undefined ? buttons.last() : buttons.nth(position)).click();
+  await page.getByRole('menuitem', { name: `${type} cell`, exact: true }).click();
+  const added =
+    position === undefined
+      ? page.getByTestId('notebook-cell').last()
+      : page.getByTestId('notebook-cell').nth(position);
+  await expect(added.locator('.cm-content')).toBeFocused();
+}
+async function chartAction(page: Page, cell: Locator, name: string, action: string) {
+  await cell.getByRole('button', { name: `Actions for ${name}`, exact: true }).click();
+  await page.getByRole('menuitem', { name: action, exact: true }).click();
+}
+
 const SAMPLE = "SELECT * FROM (VALUES ('Jan', 10), ('Feb', 20)) AS sales(month, revenue)";
 
-test('runs SQL, configures charts without querying, preserves stale results and saves/reopens', async ({
-  page,
-}) => {
+test('chart drafts, resizing, stale results and saved presentation survive reopening', async ({ page }) => {
   await openNotebook(page);
-  const workspace = page.getByTestId('notebook-workspace');
   await page.getByRole('textbox', { name: 'Notebook title', exact: true }).fill('Revenue investigation');
   const cell = page.getByTestId('notebook-cell').first();
   await sql(cell, SAMPLE);
@@ -28,7 +49,18 @@ test('runs SQL, configures charts without querying, preserves stale results and 
   await expect(cell.getByText(/2 returned rows/)).toBeVisible({
     timeout: 20_000,
   });
-  await cell.getByRole('button', { name: '+ Chart', exact: true }).click();
+  await cell.getByRole('button', { name: 'Add chart', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('textbox', { name: 'Chart name' })).toBeFocused();
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(cell.getByRole('tab')).toHaveCount(1);
+  await cell.getByRole('button', { name: 'Add chart', exact: true }).click();
+  await dialog.getByRole('textbox', { name: 'Chart name' }).fill('Revenue by month');
+  await dialog.getByRole('combobox', { name: 'Chart type', exact: true }).click();
+  await page.getByRole('option', { name: 'line', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Save chart', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(cell.getByRole('combobox')).toHaveCount(0);
   await expect(cell.getByTestId('notebook-chart').locator('canvas,svg').first()).toBeVisible({
     timeout: 15_000,
   });
@@ -38,72 +70,78 @@ test('runs SQL, configures charts without querying, preserves stale results and 
     await page.getByTestId(`chart-download-${format}`).click();
     expect((await downloaded).suggestedFilename()).toMatch(new RegExp(`\\.${format}$`));
   }
-  await cell.getByRole('textbox', { name: 'Chart name', exact: true }).fill('Revenue by month');
-  await cell.getByRole('combobox', { name: 'Chart type', exact: true }).click();
-  await page.getByRole('option', { name: 'line', exact: true }).click();
-  await expect(cell.getByRole('tab', { name: 'Revenue by month' })).toBeVisible();
-  await cell.getByRole('tab', { name: 'Revenue by month', exact: true }).focus();
+  await chartAction(page, cell, 'Revenue by month', 'Edit chart');
+  await dialog.getByRole('textbox', { name: 'Chart name' }).fill('Discarded edit');
+  await dialog.press('Escape');
+  await expect(cell.getByRole('tab', { name: 'Revenue by month', exact: true })).toBeVisible();
+  await chartAction(page, cell, 'Revenue by month', 'Duplicate chart');
+  await expect(cell.getByRole('tab', { name: 'Revenue by month copy', exact: true })).toBeVisible();
+  await chartAction(page, cell, 'Revenue by month copy', 'Delete chart');
+  await expect(cell.getByRole('tab')).toHaveCount(2);
+  await cell.getByRole('tab', { name: 'Revenue by month', exact: true }).click();
   await cell.getByRole('tab', { name: 'Revenue by month', exact: true }).press('ArrowLeft');
   await expect(cell.getByRole('tab', { name: 'Table', exact: true })).toHaveAttribute(
     'aria-selected',
     'true',
   );
-  await cell.getByRole('button', { name: 'Tall', exact: true }).click();
-  await expect(cell.getByTestId('notebook-table-viewport')).toHaveCSS('height', '1200px');
+  const handle = cell.getByRole('separator', { name: 'Resize cell output' });
+  await handle.press('ArrowDown');
+  await expect(cell.getByTestId('notebook-table-viewport')).toHaveCSS('height', '352px');
+  const box = (await handle.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 100, {
+    steps: 4,
+  });
+  await page.mouse.up();
+  await expect(handle).toHaveAttribute('aria-valuenow', '452');
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(handle).toHaveAttribute('aria-valuenow', '352');
   await cell.getByRole('tab', { name: 'Revenue by month', exact: true }).click();
-  const ran = await cell.getByText(/2 returned rows/).textContent();
-  await cell.getByRole('combobox', { name: 'Chart type', exact: true }).click();
-  await page.getByRole('option', { name: 'bar', exact: true }).click();
-  expect(await cell.getByText(/2 returned rows/).textContent()).toBe(ran);
   await sql(cell, SAMPLE.replace('revenue)', 'amount)'));
   await expect(cell.getByText('Stale output — run to update')).toBeVisible();
   await cell.getByRole('button', { name: 'Run', exact: true }).click();
   await expect(cell.getByRole('alert')).toContainText('missing column “revenue”');
-  await cell.getByRole('combobox', { name: 'Y column', exact: true }).click();
+  await chartAction(page, cell, 'Revenue by month', 'Edit chart');
+  await dialog.getByRole('combobox', { name: 'Y column', exact: true }).click();
   await page.getByRole('option', { name: 'amount', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Save chart', exact: true }).click();
   await expect(cell.getByTestId('notebook-chart').locator('canvas,svg').first()).toBeVisible();
   await sql(cell, 'select nonexistent from missing_table');
   await cell.getByRole('button', { name: 'Run', exact: true }).click();
   await expect(cell.getByText(/Previous result retained/)).toBeVisible();
-  await expect(cell.getByText('Stale output — run to update')).toBeVisible();
-  await expect(cell.getByTestId('notebook-chart').locator('canvas,svg').first()).toBeVisible();
-  await page.getByRole('button', { name: '+ Markdown cell', exact: true }).click();
+  await cellAction(page, cell, 'Hide code');
+  await expect(cell.locator('.cm-content')).toHaveCount(0);
+  await expect(cell.getByTestId('notebook-chart')).toBeVisible();
+  await insertCell(page, 'Markdown');
   const markdown = page.getByTestId('notebook-cell').last();
   await markdown.getByRole('textbox', { name: 'Markdown source' }).fill('## Findings\nRevenue increased.');
   await markdown.getByRole('button', { name: 'Preview Markdown' }).click();
   await expect(markdown.getByRole('heading', { name: 'Findings' })).toBeVisible();
-  await workspace.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(workspace.getByText('Saved in this browser', { exact: true })).toBeVisible();
-  await page.getByTestId('tab-editor').click();
-  await page.getByTestId('tab-notebooks').click();
-  await expect(cell.getByText(/Previous result retained/)).toBeVisible();
+  await notebookAction(page, 'Save');
   await page.reload();
-  await expect(page.getByTestId('notebook-library')).toBeVisible({
-    timeout: 30_000,
-  });
-  await page.getByRole('button', { name: /Revenue investigation.*2 cells/ }).click();
-  await expect(page.getByRole('textbox', { name: 'Notebook title' })).toHaveValue('Revenue investigation');
-  await expect(page.getByTestId('notebook-cell')).toHaveCount(2);
-  await expect(page.getByText(/Not run ·/)).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'Revenue by month' })).toBeVisible();
-  await expect(cell.getByTestId('notebook-table-viewport')).toHaveCSS('height', '1200px');
-  await cell.getByRole('button', { name: 'Compact', exact: true }).click();
-  await expect(cell.getByTestId('notebook-table-viewport')).toHaveCSS('height', '288px');
+  await expect(page.getByTestId('notebook-workspace')).toBeVisible();
+  await expect(cell.getByText('Not run', { exact: true })).toBeVisible();
+  await expect(cell.getByRole('tab', { name: 'Revenue by month' })).toBeVisible();
+  await expect(cell.getByTestId('notebook-table-viewport')).toHaveCSS('height', '352px');
+  await expect(cell.locator('.cm-content')).toHaveCount(0);
+  await cell.getByRole('button', { name: 'Show code', exact: true }).click();
+  await expect(cell.locator('.cm-content')).toContainText('missing_table');
 });
 
 test('cell operations, undo, run changed and notebook export/import', async ({ page }) => {
   await openNotebook(page);
   const first = page.getByTestId('notebook-cell').first();
   await sql(first, 'select 1 as first_value');
-  await first.getByRole('button', { name: 'Duplicate', exact: true }).click();
+  await cellAction(page, first, 'Duplicate cell');
   const second = page.getByTestId('notebook-cell').nth(1);
   await sql(second, 'select 2 as second_value');
   await second.getByRole('textbox', { name: 'Cell name' }).fill('Second');
-  await second.getByRole('button', { name: 'Move cell up' }).click();
+  await cellAction(page, second, 'Move cell up');
   await expect(first.getByRole('textbox', { name: 'Cell name' })).toHaveValue('Second');
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(second.getByRole('textbox', { name: 'Cell name' })).toHaveValue('Second');
-  await second.getByRole('button', { name: 'Delete', exact: true }).click();
+  await cellAction(page, second, 'Delete cell');
   await expect(page.getByTestId('notebook-cell')).toHaveCount(1);
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.getByTestId('notebook-cell')).toHaveCount(2);
@@ -117,7 +155,7 @@ test('cell operations, undo, run changed and notebook export/import', async ({ p
   await expect(second.getByText('Stale output — run to update')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Run changed' })).toBeDisabled();
   const downloadPromise = page.waitForEvent('download');
-  await page.getByTestId('notebook-workspace').getByRole('button', { name: 'Export', exact: true }).click();
+  await notebookAction(page, 'Export notebook');
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/\.notebook\.json$/);
   const path = await download.path();
@@ -125,21 +163,21 @@ test('cell operations, undo, run changed and notebook export/import', async ({ p
   await page.getByLabel('Import notebook file').setInputFiles(path!);
   await expect(page.getByTestId('notebook-workspace')).toBeVisible();
   await expect(page.getByTestId('notebook-cell')).toHaveCount(2);
-  await expect(page.getByText(/Not run ·/)).toHaveCount(2);
+  await expect(page.getByText('Not run', { exact: true })).toHaveCount(2);
 });
 
 test('run all stops on errors and cancellation leaves the engine usable', async ({ page }) => {
   await openNotebook(page);
   const first = page.getByTestId('notebook-cell').first();
   await sql(first, 'select * from absent_table');
-  await page.getByRole('button', { name: '+ SQL cell', exact: true }).click();
+  await insertCell(page, 'SQL');
   const second = page.getByTestId('notebook-cell').nth(1);
   await sql(second, 'select 42 as answer');
   await page.getByRole('button', { name: 'Run all', exact: true }).click();
   await expect(first.getByRole('alert')).toContainText('absent_table', {
     timeout: 20_000,
   });
-  await expect(second.getByText(/Not run ·/)).toBeVisible();
+  await expect(second.getByText('Not run', { exact: true })).toBeVisible();
   await sql(first, 'WITH rows AS (SELECT 1) DELETE FROM absent_table');
   await first.getByRole('button', { name: 'Run', exact: true }).click();
   await expect(first.getByRole('alert')).toContainText('Notebook cells accept one SELECT query');
@@ -151,7 +189,7 @@ test('run all stops on errors and cancellation leaves the engine usable', async 
   // readiness wait would not prove that the worker's active query is interrupted.
   await page.waitForTimeout(2500);
   await first.getByRole('button', { name: 'Stop', exact: true }).click();
-  await expect(first.getByText('Query cancelled.')).toBeVisible({
+  await expect(first.getByText('Cancelled', { exact: true })).toBeVisible({
     timeout: 10_000,
   });
   await second.getByRole('button', { name: 'Run', exact: true }).click();
@@ -162,7 +200,7 @@ test('run all stops on errors and cancellation leaves the engine usable', async 
 
 test('storage conflicts preserve the other tab’s version and offer export', async ({ page }) => {
   await openNotebook(page);
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await notebookAction(page, 'Save');
   await page.evaluate(() => {
     const key = Object.keys(localStorage).find((key) => key.startsWith('cupola.notebook.v1:'))!;
     const doc = JSON.parse(localStorage.getItem(key)!);
@@ -181,7 +219,9 @@ test('storage conflicts preserve the other tab’s version and offer export', as
         ).title,
     ),
   ).toBe('Another tab');
-  await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Notebook actions' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Export notebook' })).toBeEnabled();
+  await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Discard local edits…', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Discard unsaved edits?' });
   await expect(dialog.getByRole('button', { name: 'Keep editing' })).toBeFocused();
@@ -278,10 +318,18 @@ test('AI stages an editable notebook, applies without executing, and supports un
   await agent.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect(agent.getByRole('button', { name: 'Apply changes' })).toBeEnabled({ timeout: 15_000 });
   await expect(page.getByTestId('notebook-cell')).toHaveCount(1);
+  const review = agent.getByTestId('notebook-proposal-review');
+  await expect(review).toContainText('Added SQL');
+  await expect(review).toContainText('Added Markdown');
+  await expect(review).toContainText('+ select 42 as answer');
+  await agent.getByRole('button', { name: 'Expand review' }).click();
+  const expanded = page.getByRole('dialog', { name: 'Review notebook changes' });
+  await expect(expanded).toContainText('Added SQL');
+  await expanded.getByRole('button', { name: 'Back to assistant' }).click();
   await agent.getByRole('button', { name: 'Apply changes' }).click();
   await expect(page.getByRole('textbox', { name: 'Notebook title' })).toHaveValue('AI analysis');
   await expect(page.getByTestId('notebook-cell')).toHaveCount(2);
-  await expect(page.getByText(/Not run ·/)).toBeVisible();
+  await expect(page.getByText('Not run', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'Notebook title' })).toHaveValue('Untitled notebook');
   await expect(page.getByTestId('notebook-cell')).toHaveCount(1);
@@ -431,7 +479,13 @@ test('shared notebook chat supports multiline input and Escape cancellation', as
   });
   await page.route('https://api.anthropic.com/v1/messages', async (route) => {
     await ready;
-    await route.fulfill({ status: 200, contentType: 'text/event-stream', body: stream() }).catch(() => {});
+    await route
+      .fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: stream(),
+      })
+      .catch(() => {});
   });
   await openNotebook(page);
   await page.getByRole('button', { name: 'Ask AI', exact: true }).click();
@@ -456,21 +510,25 @@ test('shared notebook chat supports multiline input and Escape cancellation', as
 test('notebook assistant shares resizing and persists its own width', async ({ page }) => {
   await openNotebook(page);
   await page.getByRole('button', { name: 'Ask AI', exact: true }).click();
-  const handle = page.getByRole('separator', { name: 'Resize notebook assistant' });
+  const handle = page.getByRole('separator', {
+    name: 'Resize notebook assistant',
+  });
   const agent = page.getByRole('complementary', { name: 'Notebook assistant' });
   await expect(handle).toHaveAttribute('aria-valuenow', '384');
   const box = (await handle.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 - 100, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.move(box.x + box.width / 2 - 100, box.y + box.height / 2, {
+    steps: 5,
+  });
   await page.mouse.up();
   await expect(handle).toHaveAttribute('aria-valuenow', '484');
   await handle.press('ArrowLeft');
   await expect(handle).toHaveAttribute('aria-valuenow', '500');
   await expect(agent).toHaveCSS('width', '500px');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await notebookAction(page, 'Save');
   await page.reload();
-  await page.getByRole('button', { name: /Untitled notebook.*1 cells/ }).click();
+  await expect(page.getByTestId('notebook-workspace')).toBeVisible();
   await page.getByRole('button', { name: 'Ask AI', exact: true }).click();
   await expect(handle).toHaveAttribute('aria-valuenow', '500');
   expect(await page.evaluate(() => localStorage.getItem('vgi-editor-ai-width'))).toBeNull();
@@ -481,7 +539,7 @@ test('notebook assistant shares resizing and persists its own width', async ({ p
 
 test('notebook deletion uses a dialog with safe initial focus and cancellation', async ({ page }) => {
   await openNotebook(page);
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await notebookAction(page, 'Save');
   await page.getByRole('button', { name: 'Notebooks', exact: true }).click();
   const library = page.getByTestId('notebook-library');
   await library.getByRole('button', { name: 'Delete', exact: true }).click();
@@ -494,4 +552,92 @@ test('notebook deletion uses a dialog with safe initial focus and cancellation',
   await dialog.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   await expect(dialog).toBeHidden();
   await expect(library.getByRole('heading', { name: 'Start an investigation' })).toBeVisible();
+});
+
+test('insertion, scoped runs and independent output visibility', async ({ page }) => {
+  await openNotebook(page);
+  const cells = page.getByTestId('notebook-cell');
+  await sql(cells.nth(0), 'select 1 as first');
+  await insertCell(page, 'SQL');
+  await sql(cells.nth(1), 'select 2 as second');
+  await insertCell(page, 'Markdown', 1);
+  await expect(cells.nth(1)).toHaveAttribute('aria-label', 'Markdown cell: Notes');
+  await cells.nth(1).getByRole('textbox', { name: 'Markdown source' }).fill('## Between queries');
+  await cells.nth(1).getByRole('button', { name: 'Preview Markdown' }).click();
+  await cells.nth(2).getByRole('button', { name: 'Run options' }).click();
+  await page.getByRole('menuitem', { name: 'Run above', exact: true }).click();
+  await expect(cells.nth(0).getByText(/1 returned rows/)).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(cells.nth(2).getByText('Not run', { exact: true })).toBeVisible();
+  await cells.nth(2).getByRole('button', { name: 'Run options' }).click();
+  await page.getByRole('menuitem', { name: 'Run below', exact: true }).click();
+  await expect(cells.nth(2).getByText(/1 returned rows/)).toBeVisible();
+  await cellAction(page, cells.nth(0), 'Hide output');
+  await expect(cells.nth(0).getByTestId('notebook-table-viewport')).toHaveCount(0);
+  await expect(cells.nth(0).locator('.cm-content')).toBeVisible();
+  await cells.nth(0).getByRole('button', { name: 'Show output' }).click();
+  await expect(cells.nth(0).getByTestId('notebook-table-viewport')).toBeVisible();
+  await cellAction(page, cells.nth(0), 'Clear output');
+  await expect(cells.nth(0).getByTestId('notebook-table-viewport')).toHaveCount(0);
+  await expect(cells.nth(0).locator('.cm-content')).toContainText('select 1');
+  await expect(cells.nth(2).getByTestId('notebook-table-viewport')).toBeVisible();
+  await notebookAction(page, 'Clear all outputs');
+  await expect(page.getByTestId('notebook-table-viewport')).toHaveCount(0);
+});
+
+test('mobile charts, persistent dialog actions and full-height assistant remain usable', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 740 });
+  await openNotebook(page);
+  const cell = page.getByTestId('notebook-cell').first();
+  await sql(cell, SAMPLE);
+  // Editing a name must not execute the query through a bubbling shortcut.
+  await cell.getByRole('textbox', { name: 'Cell name' }).press('Shift+Enter');
+  await expect(cell.getByText('Not run', { exact: true })).toBeVisible();
+  await cell.locator('.cm-content').press('Shift+Enter');
+  await expect(cell.getByText(/2 returned rows/)).toBeVisible({ timeout: 20_000 });
+  expect(await cell.locator('.cm-content').innerText()).toBe(SAMPLE);
+  await cell.getByRole('button', { name: 'Add chart', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  const save = dialog.getByRole('button', { name: 'Save chart', exact: true });
+  await expect(save).toBeInViewport();
+  await dialog.getByRole('combobox', { name: 'X sort' }).click();
+  await expect(page.getByRole('option', { name: 'Result order', exact: true })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await page.keyboard.press('Escape');
+  await save.click();
+  const svg = cell.locator('svg.marks');
+  await expect(svg).toBeVisible();
+  expect(await svg.evaluate((el) => el.getBoundingClientRect().width)).toBeLessThanOrEqual(366);
+  await page
+    .getByTestId('notebook-workspace')
+    .locator('main')
+    .evaluate((el) => {
+      el.scrollTop = 70;
+    });
+  const scroll = await page
+    .getByTestId('notebook-workspace')
+    .locator('main')
+    .evaluate((el) => el.scrollTop);
+  await page.getByRole('button', { name: 'Ask AI', exact: true }).click();
+  const assistant = page.getByRole('complementary', { name: 'Notebook assistant' });
+  await expect(assistant).toBeVisible();
+  await expect(assistant.getByRole('button', { name: 'Close Ask AI panel' })).toBeFocused();
+  await expect(page.getByTestId('notebook-workspace').locator('main')).toBeHidden();
+  expect((await assistant.boundingBox())!.height).toBeGreaterThan(450);
+  await assistant.getByRole('button', { name: 'Close Ask AI panel' }).click();
+  await expect(cell).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Ask AI', exact: true })).toBeFocused();
+  expect(
+    await page
+      .getByTestId('notebook-workspace')
+      .locator('main')
+      .evaluate((el) => el.scrollTop),
+  ).toBe(scroll);
+  await cellAction(page, cell, 'Ask AI about this cell');
+  await expect(assistant.getByRole('button', { name: 'Close Ask AI panel' })).toBeFocused();
+  await assistant.getByRole('button', { name: 'Close Ask AI panel' }).click();
+  await expect(cell.getByRole('button', { name: 'Cell actions' })).toBeFocused();
 });

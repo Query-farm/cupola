@@ -53,7 +53,7 @@ export function chartSpec(
         field: field(chart.x),
         type: chart.type === 'histogram' ? 'quantitative' : chart.xType,
         ...(chart.type === 'histogram' ? { bin: true } : {}),
-        sort: chart.sort,
+        sort: chart.sort === 'result' ? null : chart.sort,
         title: chart.xTitle || chart.x,
       },
       y:

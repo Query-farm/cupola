@@ -1,7 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { Prec } from "@codemirror/state";
+import { keymap } from "@codemirror/view";
 import { isolateHistory } from "@codemirror/commands";
 import { buildSqlExtensions, EditorState, EditorView } from "@/lib/editor/cm-sql-setup";
-import { snippet, type CompletionSource } from "@codemirror/autocomplete";
+import { closeCompletion, snippet, type CompletionSource } from "@codemirror/autocomplete";
 import type { CatalogIndex } from "@/lib/catalog-index";
 import { refreshCatalogHelp } from "@/lib/editor/cm-catalog-help";
 import { statementAtCursor, type SqlStatement } from "@/lib/editor/sql-statements";
@@ -33,6 +35,8 @@ interface Props {
   onChange?: (doc: string) => void;
   /** Run the statement at the cursor — bound to Cmd/Ctrl+Enter. */
   onRunStatement?: () => void;
+  /** Notebook-only Shift+Enter command. Consumes the key without inserting a newline. */
+  onRunCell?: () => void;
   /** Fires when the selection emptiness changes (true = non-empty selection). */
   onSelectionChange?: (hasSelection: boolean) => void;
   /** Handle a drop of `text/plain` (e.g. a sidebar tree id) — the cursor is
@@ -53,13 +57,15 @@ interface Props {
  * recreating the editor.
  */
 export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function CodeMirrorSql(
-  { initialDoc, onChange, onRunStatement, onSelectionChange, onDropText, completionSource, fontSize, getCatalogIndex },
+  { initialDoc, onChange, onRunStatement, onRunCell, onSelectionChange, onDropText, completionSource, fontSize, getCatalogIndex },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onRunRef = useRef(onRunStatement);
+  const onRunCellRef = useRef(onRunCell);
+  onRunCellRef.current = onRunCell;
   const onSelRef = useRef(onSelectionChange);
   const onDropRef = useRef(onDropText);
   onChangeRef.current = onChange;
@@ -74,6 +80,14 @@ export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function Cod
     const state = EditorState.create({
       doc: initialDoc,
       extensions: [
+        Prec.highest(keymap.of([{
+          key: "Shift-Enter",
+          run: () => {
+            if (!onRunCellRef.current) return false;
+            onRunCellRef.current();
+            return true;
+          },
+        }])),
         ...buildSqlExtensions({
           onRunStatement: () => {
             onRunRef.current?.();
@@ -93,6 +107,10 @@ export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function Cod
         // Intercept drops (sidebar tree ids) so CodeMirror doesn't insert the
         // raw payload — move the cursor to the drop point, then delegate.
         EditorView.domEventHandlers({
+          blur(_event, view) {
+            closeCompletion(view);
+            return false;
+          },
           dragover(e) {
             if (!onDropRef.current) return false;
             e.preventDefault();

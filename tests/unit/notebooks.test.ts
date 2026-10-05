@@ -268,3 +268,16 @@ test('AI rejects unchanged proposals regardless of cell property order', () => {
     notebookProposal(doc, { summary: 'No edits', title: doc.title, cells: [reordered] }, 'unrestricted-sql'),
   ).toThrow('no changes');
 });
+
+test('new charts preserve SQL result order and older explicit sorting remains valid', () => {
+  const columns = [
+    { name: 'month', numeric: false, temporal: false },
+    { name: 'revenue', numeric: true, temporal: false },
+  ];
+  const chart = defaultChart(columns);
+  expect((chartSpec(chart, columns) as any).encoding.x.sort).toBeNull();
+  expect((chartSpec({ ...chart, sort: 'ascending' }, columns) as any).encoding.x.sort).toBe('ascending');
+  const doc = newNotebook('a');
+  (doc.cells[0] as SqlCell).charts.push({ ...chart, sort: 'descending' });
+  expect(() => notebookSchema.parse(doc)).not.toThrow();
+});

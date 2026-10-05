@@ -10,7 +10,7 @@ export const chartSchema = z
     y: z.string(),
     color: z.string(),
     xType: z.enum(['nominal', 'quantitative', 'temporal']),
-    sort: z.enum(['ascending', 'descending']),
+    sort: z.enum(['result', 'ascending', 'descending']),
     xTitle: z.string(),
     yTitle: z.string(),
     yFormat: z.string().max(50),
@@ -21,6 +21,8 @@ const common = {
   title: z.string().max(200),
   source: z.string().max(500_000),
   collapsed: z.boolean(),
+  codeHidden: z.boolean().optional(),
+  outputHidden: z.boolean().optional(),
 };
 export const cellSchema = z.discriminatedUnion('type', [
   z.object({ ...common, type: z.literal('markdown') }).strict(),
@@ -87,7 +89,11 @@ export function fingerprint(doc: Notebook): string {
   // Do not validate here: an in-progress editor value may exceed save limits.
   return JSON.stringify([doc.id, doc.serviceUrl, doc.title, doc.cells], (_key, value) =>
     value && typeof value === 'object' && !Array.isArray(value)
-      ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]]))
+      ? Object.fromEntries(
+          Object.keys(value)
+            .sort()
+            .map((key) => [key, value[key]]),
+        )
       : value,
   );
 }
@@ -112,7 +118,7 @@ export function defaultChart(
     y: y?.name ?? '',
     color: '',
     xType: x?.temporal ? 'temporal' : x?.numeric ? 'quantitative' : 'nominal',
-    sort: 'ascending',
+    sort: 'result',
     xTitle: '',
     yTitle: '',
     yFormat: '',
@@ -120,11 +126,16 @@ export function defaultChart(
 }
 
 export const STORAGE_PREFIX = 'cupola.notebook.v1:';
+export const NOTEBOOKS_CHANGED = 'cupola:notebooks-changed';
 export function storageKey(serviceUrl: string, id: string) {
   return `${STORAGE_PREFIX}${encodeURIComponent(serviceUrl)}:${encodeURIComponent(id)}`;
 }
 export function saveNotebook(doc: Notebook, storage: Storage = localStorage): void {
-  storage.setItem(storageKey(doc.serviceUrl, doc.id), JSON.stringify(notebookSchema.parse(doc)));
+  const key = storageKey(doc.serviceUrl, doc.id);
+  const value = JSON.stringify(notebookSchema.parse(doc));
+  const changed = storage.getItem?.(key) !== value;
+  storage.setItem(key, value);
+  if (changed && typeof window !== 'undefined' && storage === window.localStorage) window.dispatchEvent(new Event(NOTEBOOKS_CHANGED));
 }
 export function listNotebooks(
   serviceUrl: string,
@@ -161,4 +172,9 @@ export function importNotebook(text: string, serviceUrl: string): Notebook {
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
+}
+
+export function deleteNotebook(serviceUrl: string, id: string, storage: Storage = localStorage): void {
+  storage.removeItem(storageKey(serviceUrl, id));
+  if (typeof window !== 'undefined' && storage === window.localStorage) window.dispatchEvent(new Event(NOTEBOOKS_CHANGED));
 }

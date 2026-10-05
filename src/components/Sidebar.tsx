@@ -1,3 +1,4 @@
+import { SavedNotebooksSidebar } from './notebooks/SavedNotebooksSidebar';
 import { SavedReportsSidebar } from "./evidence/SavedReportsSidebar";
 import { useState, useMemo, useRef, useCallback } from "react";
 import { Search, Cpu, RefreshCw, Loader2 } from "lucide-react";
@@ -18,6 +19,8 @@ interface Props {
   defaultCatalogName: string;
   inventoryError?: string | null;
   serviceUrl?: string;
+  activeNotebookId?: string | null;
+  notebooksActive?: boolean;
   selection: Selection | null;
   onSelect: (selection: Selection | null) => void;
   /** Insert text into the DuckDB shell (or the editor, per `insertTarget`). */
@@ -30,7 +33,7 @@ interface Props {
   refreshing?: boolean;
 }
 
-export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onInsertCallable, insertTarget = "shell", onRefresh, refreshing }: Props) {
+export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onInsertCallable, insertTarget = "shell", onRefresh, refreshing }: Props) {
   const [search, setSearch] = useState("");
   const { settings } = useSettings();
   // The parent passes fresh callbacks every render; read them through refs so
@@ -145,6 +148,7 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
           initialSelectedItemId={selectedTreeId}
           trailingDropZone={false}
         />
+        {serviceUrl && <SavedNotebooksSidebar key={`notebooks-${serviceUrl}`} serviceUrl={serviceUrl} search={search} activeId={notebooksActive ? activeNotebookId : undefined} libraryActive={notebooksActive && !activeNotebookId} />}
         {/* Reports follow the catalogs, drawn as one more root of the same tree. */}
         {serviceUrl && <SavedReportsSidebar key={serviceUrl} serviceUrl={serviceUrl} search={search} />}
       </div>

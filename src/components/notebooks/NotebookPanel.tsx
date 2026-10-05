@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { notebookHref, type NotebookNavigation } from '../../lib/notebooks/navigation';
+import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { Button } from '../ui/button';
 import { PanelResizeHandle, usePanelWidth } from '../shared/PanelResizeHandle';
 import {
@@ -10,6 +11,14 @@ import {
   DialogFooter,
 } from '../ui/dialog';
 import { Input } from '../ui/input';
+import { MoreHorizontal, Plus, Undo2, Redo2, ChevronLeft, Check, Loader2, AlertCircle } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '../ui/dropdown-menu';
 import { NotebookCellView } from './NotebookCellView';
 const NotebookAgent = lazy(() =>
   import('./NotebookAgent').then((module) => ({
@@ -24,6 +33,8 @@ import {
   listNotebooks,
   saveNotebook,
   storageKey,
+  deleteNotebook,
+  NOTEBOOKS_CHANGED,
   importNotebook,
   type Notebook,
   type NotebookCell,
@@ -44,12 +55,61 @@ export function NotebookPanel({
   serviceUrl,
   catalogs,
   onBusyChange,
+  navigation,
+  onActiveChange,
 }: {
+  navigation?: NotebookNavigation | null;
+  onActiveChange?: (id: string | null) => void;
   serviceUrl: string;
   catalogs: readonly CatalogData[];
   onBusyChange?: (busy: boolean) => void;
 }) {
   const [active, setActive] = useState<Notebook | null>(null);
+  const [navigationError, setNavigationError] = useState('');
+  const beforeLeave = useRef<(() => boolean) | null>(null);
+  const handledNavigation = useRef<number | null>(null);
+  function openDocument(doc: Notebook | null, fromHistory = false) {
+    setNavigationError('');
+    setActive(doc);
+    onActiveChange?.(doc?.id ?? null);
+    const href = notebookHref(serviceUrl, doc?.id) + window.location.hash;
+    if (!fromHistory && href !== window.location.pathname + window.location.search + window.location.hash)
+      window.history.pushState(window.history.state, '', href);
+  }
+  useEffect(() => {
+    if (!navigation || navigation.serviceUrl !== serviceUrl || handledNavigation.current === navigation.token)
+      return;
+    handledNavigation.current = navigation.token;
+    if (!navigation.create && navigation.id === active?.id) return;
+    if (beforeLeave.current && !beforeLeave.current()) {
+      setNavigationError(
+        'Notebook was kept open. Stop the running query or AI response, or resolve the save error, before switching notebooks.',
+      );
+      if (navigation.fromHistory)
+        window.history.pushState(
+          window.history.state,
+          '',
+          notebookHref(serviceUrl, active?.id) + window.location.hash,
+        );
+      return;
+    }
+    try {
+      const target = navigation.create
+        ? newNotebook(serviceUrl)
+        : navigation.id
+          ? listNotebooks(serviceUrl).documents.find((doc) => doc.id === navigation.id)
+          : null;
+      if (navigation.id && !target) {
+        setNavigationError(
+          'This notebook is unavailable in this browser for the current connection. It may have been deleted.',
+        );
+        return;
+      }
+      openDocument(target ?? null, navigation.fromHistory);
+    } catch (e) {
+      setNavigationError(`Could not open notebook: ${String(e)}`);
+    }
+  }, [navigation, serviceUrl]);
   const [documents, setDocuments] = useState<Notebook[]>([]);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -73,24 +133,43 @@ export function NotebookPanel({
     refresh();
     const handler = () => refresh();
     window.addEventListener('storage', handler);
-    return () => window.removeEventListener('storage', handler);
+    window.addEventListener(NOTEBOOKS_CHANGED, handler);
+    return () => {
+      window.removeEventListener('storage', handler);
+      window.removeEventListener(NOTEBOOKS_CHANGED, handler);
+    };
   }, [serviceUrl]);
   if (active)
     return (
-      <NotebookWorkspace
-        key={active.id}
-        initial={active}
-        catalogs={catalogs}
-        onBusyChange={onBusyChange}
-        onClose={() => {
-          setActive(null);
-          refresh();
-        }}
-      />
+      <div className="h-full flex flex-col min-h-0">
+        {navigationError && (
+          <p role="alert" className="shrink-0 border-b px-4 py-2 text-sm text-destructive">
+            {navigationError}
+          </p>
+        )}
+        <div className="flex-1 min-h-0">
+          <NotebookWorkspace
+            key={active.id}
+            beforeLeave={beforeLeave}
+            initial={active}
+            catalogs={catalogs}
+            onBusyChange={onBusyChange}
+            onClose={() => {
+              openDocument(null);
+              refresh();
+            }}
+          />
+        </div>
+      </div>
     );
   return (
     <div className="h-full overflow-auto p-4 md:p-6" data-testid="notebook-library">
       <div className="mx-auto max-w-5xl space-y-5">
+        {navigationError && (
+          <p role="alert" className="text-sm text-destructive">
+            {navigationError}
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex-1">
             <h1 className="text-2xl font-semibold">Notebooks</h1>
@@ -98,7 +177,7 @@ export function NotebookPanel({
               Explore with SQL, charts, and notes in one document.
             </p>
           </div>
-          <Button onClick={() => setActive(newNotebook(serviceUrl))}>New notebook</Button>
+          <Button onClick={() => openDocument(newNotebook(serviceUrl))}>New notebook</Button>
           <Button variant="outline" onClick={() => file.current?.click()}>
             Import notebook
           </Button>
@@ -117,7 +196,7 @@ export function NotebookPanel({
               if (selected.size > 5_000_000) throw new Error('Notebook files must be smaller than 5 MB.');
               const doc = importNotebook(await selected.text(), serviceUrl);
               saveNotebook(doc);
-              setActive(doc);
+              openDocument(doc);
             } catch (e) {
               setError(`Import failed: ${e instanceof Error ? e.message : String(e)}`);
             }
@@ -151,7 +230,7 @@ export function NotebookPanel({
             .filter((doc) => doc.title.toLowerCase().includes(search.toLowerCase()))
             .map((doc) => (
               <div key={doc.id} className="rounded-lg border p-4 flex flex-wrap items-center gap-3">
-                <button className="text-left flex-1 min-w-40" onClick={() => setActive(doc)}>
+                <button className="text-left flex-1 min-w-40" onClick={() => openDocument(doc)}>
                   <strong>{doc.title || 'Untitled notebook'}</strong>
                   <p className="text-xs text-muted-foreground mt-1">
                     {doc.cells.length} cells · Updated {new Date(doc.updatedAt).toLocaleString()}
@@ -189,7 +268,7 @@ export function NotebookPanel({
                 onClick={() => {
                   if (!deleteId) return;
                   try {
-                    localStorage.removeItem(storageKey(serviceUrl, deleteId));
+                    deleteNotebook(serviceUrl, deleteId);
                     setDeleteId(null);
                     refresh();
                   } catch (e) {
@@ -209,11 +288,13 @@ export function NotebookPanel({
 }
 
 function NotebookWorkspace({
+  beforeLeave,
   initial,
   catalogs,
   onClose,
   onBusyChange,
 }: {
+  beforeLeave: RefObject<(() => boolean) | null>;
   initial: Notebook;
   catalogs: readonly CatalogData[];
   onClose: () => void;
@@ -226,6 +307,18 @@ function NotebookWorkspace({
   const [running, setRunning] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [showAi, setShowAi] = useState(false);
+  const aiReturnFocus = useRef<HTMLElement | null>(null);
+  function openAi(returnTo: HTMLElement | null) {
+    aiReturnFocus.current = returnTo;
+    setAiMounted(true);
+    setShowAi(true);
+  }
+  function closeAi() {
+    setShowAi(false);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => aiReturnFocus.current?.focus({ preventScroll: true })),
+    );
+  }
   const aiSizing = usePanelWidth('cupola-notebook-ai-width', 384);
   const keepEditing = useRef<HTMLButtonElement>(null);
   const [aiMounted, setAiMounted] = useState(false);
@@ -357,18 +450,37 @@ function NotebookWorkspace({
     }
   }
   const busy = running || aiBusy;
+  useEffect(() => {
+    beforeLeave.current = () => !busy && persist();
+    return () => {
+      beforeLeave.current = null;
+    };
+  }, [busy, doc]);
   const changed = doc.cells
     .filter((cell) => cell.type === 'sql' && (!results[cell.id]?.table || isStale(cell, results[cell.id])))
     .map((cell) => cell.id);
-  function add(type: NotebookCell['type']) {
-    const cell = newCell(type);
-    change({ ...latest.current, cells: [...latest.current.cells, cell] });
-    setSelected(cell.id);
+  function focusCell(id?: string, editor = true) {
     requestAnimationFrame(() =>
-      window.document
-        .getElementById(`notebook-${cell.id}`)
-        ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }),
+      requestAnimationFrame(() => {
+        const target = id ? window.document.getElementById(`notebook-${id}`) : null;
+        target?.scrollIntoView({ block: 'nearest' });
+        const control =
+          (editor ? target?.querySelector<HTMLElement>('.cm-content') : null) ??
+          target?.querySelector<HTMLElement>('input[aria-label="Cell name"]');
+        control?.focus({ preventScroll: true });
+        if (!target)
+          window.document.querySelector<HTMLElement>('[aria-label="Insert cell at position 1"]')?.focus();
+      }),
     );
+  }
+  function add(type: NotebookCell['type'], index = latest.current.cells.length) {
+    if (busy || latest.current.cells.length >= 200) return;
+    const cell = newCell(type);
+    const cells = [...latest.current.cells];
+    cells.splice(index, 0, cell);
+    change({ ...latest.current, cells });
+    setSelected(cell.id);
+    focusCell(cell.id);
   }
   return (
     <div
@@ -398,8 +510,11 @@ function NotebookWorkspace({
           onClick={() => {
             if (persist()) onClose();
           }}
+          aria-label="Notebooks"
+          title="Back to notebooks"
         >
-          Notebooks
+          <ChevronLeft className="size-4 sm:hidden" />
+          <span className="hidden sm:inline">Notebooks</span>
         </Button>
         <Input
           className="flex-1 min-w-40 max-w-md font-medium"
@@ -408,20 +523,58 @@ function NotebookWorkspace({
           maxLength={200}
           onChange={(event) => change({ ...doc, title: event.target.value })}
         />
-        <span className="text-xs text-muted-foreground" role="status">
-          {storageError ? 'Not saved' : saved === fingerprint(doc) ? 'Saved in this browser' : 'Saving…'}
+        <span
+          className="text-xs text-muted-foreground"
+          role="status"
+          title={
+            storageError ? 'Not saved' : saved === fingerprint(doc) ? 'Saved in this browser' : 'Saving…'
+          }
+        >
+          <span className="sr-only sm:not-sr-only">
+            {storageError ? 'Not saved' : saved === fingerprint(doc) ? 'Saved in this browser' : 'Saving…'}
+          </span>
+          {storageError ? (
+            <AlertCircle className="size-4 text-destructive sm:hidden" />
+          ) : saved === fingerprint(doc) ? (
+            <Check className="size-4 sm:hidden" />
+          ) : (
+            <Loader2 className="size-4 animate-spin sm:hidden" />
+          )}
         </span>
-        <Button size="sm" variant="outline" onClick={persist}>
-          Save
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={<Button size="icon-sm" variant="ghost" aria-label="Notebook actions" />}
+          >
+            <MoreHorizontal className="size-4" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="w-48">
+            <DropdownMenuItem onClick={persist}>Save</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => download(doc)}>Export notebook</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem disabled={busy || !Object.keys(results).length} onClick={() => setResults({})}>
+              Clear all outputs
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="Undo"
+          title="Undo"
+          disabled={!canUndo || busy}
+          onClick={() => restore('undo')}
+        >
+          <Undo2 className="size-4" />
         </Button>
-        <Button size="sm" variant="outline" onClick={() => download(doc)}>
-          Export
-        </Button>
-        <Button size="sm" variant="ghost" disabled={!canUndo || busy} onClick={() => restore('undo')}>
-          Undo
-        </Button>
-        <Button size="sm" variant="ghost" disabled={!canRedo || busy} onClick={() => restore('redo')}>
-          Redo
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="Redo"
+          title="Redo"
+          disabled={!canRedo || busy}
+          onClick={() => restore('redo')}
+        >
+          <Redo2 className="size-4" />
         </Button>
         {running ? (
           <Button size="sm" variant="destructive" onClick={() => runner.current!.stop()}>
@@ -447,9 +600,9 @@ function NotebookWorkspace({
         <Button
           size="sm"
           variant={showAi ? 'secondary' : 'outline'}
-          onClick={() => {
-            setAiMounted(true);
-            setShowAi(!showAi);
+          onClick={(event) => {
+            if (showAi) closeAi();
+            else openAi(event.currentTarget);
           }}
         >
           Ask AI
@@ -483,62 +636,68 @@ function NotebookWorkspace({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-        <main className="flex-1 min-w-0 min-h-0 overflow-auto p-3 md:p-5 space-y-4">
-          <p className="text-xs text-muted-foreground">
-            SQL cells run independently against the current connection. Run all executes top to bottom and
-            stops on an error. Charts use the last returned result.
-          </p>
-          {doc.cells.map((cell, index) => (
-            <div key={cell.id} id={`notebook-${cell.id}`} onFocusCapture={() => setSelected(cell.id)}>
-              <NotebookCellView
-                cell={cell}
-                result={results[cell.id]}
-                busy={busy}
-                first={index === 0}
-                last={index === doc.cells.length - 1}
-                onChange={updateCell}
-                onRun={() => void run([cell.id])}
-                onStop={() => runner.current!.stop()}
-                onMove={(direction) => {
-                  const cells = [...doc.cells];
-                  [cells[index], cells[index + direction]] = [cells[index + direction], cells[index]];
-                  change({ ...doc, cells });
-                }}
-                onDuplicate={() => {
-                  if (doc.cells.length >= 200) return;
-                  const cells = [...doc.cells];
-                  cells.splice(index + 1, 0, duplicateCell(cell));
-                  change({ ...doc, cells });
-                }}
-                onDelete={() => {
-                  change({
-                    ...doc,
-                    cells: doc.cells.filter((item) => item.id !== cell.id),
-                  });
-                  setResults((previous) => {
-                    const next = { ...previous };
-                    delete next[cell.id];
-                    return next;
-                  });
-                }}
-              />
-            </div>
-          ))}
-          {!doc.cells.length && (
-            <p className="text-sm text-muted-foreground">Add a SQL cell or Markdown notes to begin.</p>
-          )}
-          <div className="flex gap-2 pb-5">
-            <Button variant="outline" disabled={doc.cells.length >= 200 || busy} onClick={() => add('sql')}>
-              + SQL cell
-            </Button>
-            <Button
-              variant="outline"
-              disabled={doc.cells.length >= 200 || busy}
-              onClick={() => add('markdown')}
-            >
-              + Markdown cell
-            </Button>
+      <div className="relative flex-1 min-h-0 flex flex-col lg:flex-row">
+        <main
+          className={`flex-1 min-w-0 min-h-0 overflow-auto px-3 py-5 md:px-8 ${showAi ? 'hidden lg:block' : ''}`}
+        >
+          <div className="mx-auto max-w-5xl">
+            <InsertCell index={0} disabled={busy || doc.cells.length >= 200} onAdd={add} />
+            {doc.cells.map((cell, index) => (
+              <div key={cell.id} id={`notebook-${cell.id}`} onFocusCapture={() => setSelected(cell.id)}>
+                <NotebookCellView
+                  cell={cell}
+                  result={results[cell.id]}
+                  busy={busy}
+                  first={index === 0}
+                  last={index === doc.cells.length - 1}
+                  onChange={updateCell}
+                  onRun={() => void run([cell.id])}
+                  onRunAbove={() => void run(doc.cells.slice(0, index).map((item) => item.id))}
+                  onRunBelow={() => void run(doc.cells.slice(index).map((item) => item.id))}
+                  onClearOutput={() =>
+                    setResults((previous) =>
+                      Object.fromEntries(Object.entries(previous).filter(([id]) => id !== cell.id)),
+                    )
+                  }
+                  onAskAi={() => {
+                    setSelected(cell.id);
+                    openAi(
+                      window.document
+                        .getElementById(`notebook-${cell.id}`)
+                        ?.querySelector<HTMLElement>('[aria-label="Cell actions"]') ?? null,
+                    );
+                  }}
+                  onStop={() => runner.current!.stop()}
+                  onMove={(direction) => {
+                    const cells = [...doc.cells];
+                    [cells[index], cells[index + direction]] = [cells[index + direction], cells[index]];
+                    change({ ...doc, cells });
+                  }}
+                  onDuplicate={() => {
+                    if (doc.cells.length >= 200) return;
+                    const cells = [...doc.cells];
+                    cells.splice(index + 1, 0, duplicateCell(cell));
+                    change({ ...doc, cells });
+                  }}
+                  onDelete={() => {
+                    focusCell(doc.cells[index + 1]?.id ?? doc.cells[index - 1]?.id, false);
+                    change({
+                      ...doc,
+                      cells: doc.cells.filter((item) => item.id !== cell.id),
+                    });
+                    setResults((previous) => {
+                      const next = { ...previous };
+                      delete next[cell.id];
+                      return next;
+                    });
+                  }}
+                />
+                <InsertCell index={index + 1} disabled={busy || doc.cells.length >= 200} onAdd={add} />
+              </div>
+            ))}
+            {!doc.cells.length && (
+              <p className="text-sm text-muted-foreground">Add a SQL cell or Markdown notes to begin.</p>
+            )}
           </div>
         </main>
         {showAi && (
@@ -551,12 +710,15 @@ function NotebookWorkspace({
         {aiMounted && (
           <div
             className={
-              showAi ? 'flex min-h-0 h-96 lg:h-auto lg:w-[var(--notebook-ai-width)] shrink-0' : 'hidden'
+              showAi
+                ? 'absolute inset-0 z-20 flex min-h-0 w-full lg:static lg:z-auto lg:w-[var(--notebook-ai-width)] shrink-0'
+                : 'hidden'
             }
             style={{ '--notebook-ai-width': `${aiSizing.width}px` } as CSSProperties}
           >
             <Suspense fallback={<p className="p-3">Loading assistant…</p>}>
               <NotebookAgent
+                active={showAi}
                 disabled={running}
                 document={doc}
                 results={results}
@@ -581,13 +743,52 @@ function NotebookWorkspace({
                     );
                   }
                 }}
-                onClose={() => setShowAi(false)}
+                onClose={closeAi}
                 onBusy={setAiBusy}
               />
             </Suspense>
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function InsertCell({
+  index,
+  disabled,
+  onAdd,
+}: {
+  index: number;
+  disabled: boolean;
+  onAdd: (type: NotebookCell['type'], index: number) => void;
+}) {
+  return (
+    <div
+      className="group/insert flex h-9 items-center justify-center gap-2"
+      aria-label={`Insert at position ${index + 1}`}
+    >
+      <span className="h-px flex-1 bg-border/0 group-hover/insert:bg-border group-focus-within/insert:bg-border" />
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          disabled={disabled}
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Insert cell at position ${index + 1}`}
+              className="text-muted-foreground/60 hover:text-foreground"
+            />
+          }
+        >
+          <Plus className="size-3.5" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="w-44">
+          <DropdownMenuItem onClick={() => onAdd('sql', index)}>SQL cell</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => onAdd('markdown', index)}>Markdown cell</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <span className="h-px flex-1 bg-border/0 group-hover/insert:bg-border group-focus-within/insert:bg-border" />
     </div>
   );
 }

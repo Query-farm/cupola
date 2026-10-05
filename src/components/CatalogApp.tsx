@@ -1,3 +1,4 @@
+import { OPEN_NOTEBOOK_EVENT, type OpenNotebookDetail, type NotebookNavigation } from '../lib/notebooks/navigation';
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
 import { buildCallText } from "@/lib/editor/call-snippet";
 import { fetchCatalog, type CatalogData } from "@/lib/service";
@@ -294,6 +295,30 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   }, [activeTab]);
 
   const serviceUrl = useMemo(() => hasExplicitService() ? getServiceUrl() : defaultServiceUrl || getServiceUrl(), [defaultServiceUrl]);
+  const [notebookNavigation, setNotebookNavigation] = useState<NotebookNavigation | null>(null);
+  const [activeNotebookId, setActiveNotebookId] = useState<string | null>(null);
+  const notebookNavigationToken = useRef(0);
+  useEffect(() => {
+    const request = (detail: OpenNotebookDetail, fromHistory = false) => {
+      if (detail.serviceUrl !== serviceUrl) return;
+      setNotebookNavigation({ ...detail, token: ++notebookNavigationToken.current, fromHistory });
+      setActiveTab("notebooks");
+      setMobileSidebarOpen(false);
+    };
+    const open = (event: Event) => request((event as CustomEvent<OpenNotebookDetail>).detail);
+    const fromUrl = () => {
+      const path = window.location.pathname.replace(/\/$/, "");
+      if (!path.endsWith("/notebooks")) {
+        if (lastTabRef.current === "notebooks") setActiveTab(path.includes("/reports") ? "reports" : path.endsWith("/editor") ? "editor" : path.endsWith("/shell") ? "shell" : "catalog");
+        return;
+      }
+      request({ serviceUrl, id: new URLSearchParams(window.location.search).get("notebook") || undefined }, true);
+    };
+    fromUrl();
+    window.addEventListener(OPEN_NOTEBOOK_EVENT, open);
+    window.addEventListener("popstate", fromUrl);
+    return () => { window.removeEventListener(OPEN_NOTEBOOK_EVENT, open); window.removeEventListener("popstate", fromUrl); };
+  }, [serviceUrl]);
   // Every surface records its queries through this slot; they are kept per server
   // and read in the editor's History menu.
   useEffect(() => {
@@ -719,6 +744,8 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
             >
               <Sidebar
                 serviceUrl={serviceUrl}
+                activeNotebookId={activeNotebookId}
+                notebooksActive={activeTab === "notebooks"}
                 catalogs={catalogs}
                 defaultCatalogName={data.catalogName}
                 inventoryError={inventory.error}
@@ -806,7 +833,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
           {notebooksMounted && (
             <div className="absolute inset-0 overflow-hidden" style={activeTab === "notebooks" ? undefined : { visibility: "hidden", zIndex: -1 }}>
               <ErrorBoundary><Suspense fallback={<div className="p-6">Loading notebooks…</div>}>
-                <NotebookPanel key={serviceUrl} serviceUrl={serviceUrl} catalogs={catalogs} onBusyChange={setNotebookBusy} />
+                <NotebookPanel key={serviceUrl} serviceUrl={serviceUrl} catalogs={catalogs} onBusyChange={setNotebookBusy} navigation={notebookNavigation} onActiveChange={setActiveNotebookId} />
               </Suspense></ErrorBoundary>
             </div>
           )}
