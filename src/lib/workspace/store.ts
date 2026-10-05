@@ -593,7 +593,7 @@ export function removeCatalog(id: string, catalogId: string): { catalog: Workspa
   return { catalog, index, wasDefault };
 }
 
-export type CatalogPatch = Partial<Pick<WorkspaceCatalog, "catalogName" | "alias" | "options" | "rawOptions" | "target" | "dataVersionSpec">>;
+export type CatalogPatch = Partial<Pick<WorkspaceCatalog, "url" | "catalogName" | "alias" | "options" | "rawOptions" | "target" | "dataVersionSpec">>;
 
 /** Update a catalog's portable fields. An alias that is not valid, or is
  *  taken, is refused (false). */
@@ -608,6 +608,7 @@ export function updateCatalog(id: string, catalogId: string, patch: CatalogPatch
   if (unchanged) return true;
   mutate(id, (stored) => {
     const c = stored.catalogs.find((x) => x.id === catalogId)!;
+    if (patch.url !== undefined && patch.url.trim()) c.url = patch.url.trim();
     if (patch.catalogName !== undefined) c.catalogName = patch.catalogName;
     if (patch.alias !== undefined) c.alias = patch.alias;
     if (patch.options !== undefined) c.options = { ...patch.options };
@@ -625,6 +626,76 @@ export function setDefaultCatalog(id: string, catalogId: string): void {
     ws.defaultCatalogId = catalogId;
     ws.updatedAt = clock();
   });
+}
+
+/** Put the catalogs in this order (the sidebar's root order). `order` must
+ *  name every catalog exactly once; anything else is refused (false), so a
+ *  stale list from another tab can never drop a catalog. */
+export function reorderCatalogs(id: string, order: readonly string[]): boolean {
+  const ws = getWorkspace(id);
+  if (!ws) return false;
+  const ids = ws.catalogs.map((c) => c.id);
+  if (order.length !== ids.length || new Set(order).size !== order.length || !order.every((x) => ids.includes(x))) return false;
+  if (order.every((x, i) => x === ids[i])) return true;
+  mutate(id, (stored) => {
+    const byId = new Map(stored.catalogs.map((c) => [c.id, c]));
+    stored.catalogs = order.map((x) => byId.get(x)!);
+    stored.updatedAt = clock();
+  });
+  return true;
+}
+
+/** A name not used by any other workspace: `base`, `base (2)`, `base (3)`, … */
+export function uniqueWorkspaceName(base: string, exceptId?: string): string {
+  const taken = new Set(listWorkspaces().filter((w) => w.id !== exceptId && w.name).map((w) => w.name!.toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base} (${n})`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
+/** Duplicate a workspace: a new workspace id and new catalog ids, the same
+ *  aliases (the SQL contract travels with the copy), options, default
+ *  catalog, colours and enabled flags. The copy is always **named**
+ *  ("<name> (copy)"): an untitled copy would share its source's fingerprint,
+ *  and the next `?service=` redirect could open either.
+ *
+ *  Secrets are copied by default (`copySecrets`): the copy lives in the same
+ *  browser, so nothing leaves it, and a copy that cannot attach until every
+ *  credential is typed again is not much of a copy. They are re-keyed under
+ *  the new ids, so deleting either workspace leaves the other's intact.
+ *  Editor tabs, query history and reports are not copied: they belong to the
+ *  workspace they were written in. */
+export function duplicateWorkspace(id: string, { copySecrets = true, name }: { copySecrets?: boolean; name?: string } = {}): Workspace | null {
+  const source = getWorkspace(id);
+  if (!source) return null;
+  const idMap = new Map(source.catalogs.map((c) => [c.id, idFactory()]));
+  const copy = createWorkspace(source.catalogs.map((c) => ({
+    id: idMap.get(c.id)!,
+    url: c.url,
+    catalogName: c.catalogName,
+    alias: c.alias,
+    options: { ...c.options },
+    rawOptions: c.rawOptions,
+    target: c.target,
+    dataVersionSpec: c.dataVersionSpec,
+    color: c.color,
+    enabled: c.enabled,
+  })), {
+    name: uniqueWorkspaceName(name?.trim() || `${workspaceLabel(source)} (copy)`),
+    defaultCatalogId: source.defaultCatalogId ? idMap.get(source.defaultCatalogId) ?? null : null,
+    defaultSchema: source.defaultSchema ?? null,
+  });
+  if (copySecrets) {
+    for (const c of source.catalogs) {
+      const values = catalogSecrets({ workspaceId: source.id, catalogId: c.id, url: c.url, catalogName: c.catalogName });
+      if (Object.keys(values).length) {
+        saveCatalogSecrets({ workspaceId: copy.id, catalogId: idMap.get(c.id)!, url: c.url, catalogName: c.catalogName }, values);
+      }
+    }
+  }
+  return copy;
 }
 
 /** Personal: whether a catalog is attached at load. */

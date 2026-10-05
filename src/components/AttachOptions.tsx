@@ -16,7 +16,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./ui/dialog";
-import { fieldKind, fieldPlaceholder } from "@/lib/attach/form";
+import { Eye, EyeOff } from "lucide-react";
+import { Switch } from "./ui/switch";
+import { fieldKind, fieldPlaceholder, optionInputKind } from "@/lib/attach/form";
 import type { OptionSpecInfo } from "@/lib/attach/options";
 import type { LegacyEntry, OptionProblem } from "@/lib/attach/legacy-options";
 import type { ActiveWorkspace } from "@/lib/workspace/spec";
@@ -35,14 +37,19 @@ export interface OptionsFieldsProps {
   showRaw?: boolean;
   /** Prefix of the field ids, so several forms can share a page. */
   idPrefix?: string;
+  /** The workspace manager's grid (`optionInputKind`): BOOLEAN as a switch,
+   *  numbers as number inputs, nested types marked as DuckDB syntax, and a
+   *  reveal toggle on secrets. The plain forms keep the simpler controls. */
+  rich?: boolean;
 }
 
 /** One row per declared option, plus the raw-text fallback. */
-export function OptionsFields({ specs, values, onChange, raw, onRawChange, showRaw = true, idPrefix = "attach-opt" }: OptionsFieldsProps) {
+export function OptionsFields({ specs, values, onChange, raw, onRawChange, showRaw = true, idPrefix = "attach-opt", rich = false }: OptionsFieldsProps) {
   const set = (name: string, value: string) => onChange({ ...values, [name]: value });
   return (
-    <div className="flex flex-col gap-3" data-testid="attach-options-fields">
+    <div className={rich ? "grid gap-3 sm:grid-cols-2" : "flex flex-col gap-3"} data-testid="attach-options-fields">
       {specs.map((spec) => {
+        if (rich) return <RichOptionField key={spec.name} spec={spec} id={`${idPrefix}-${spec.name}`} value={values[spec.name] ?? ""} onChange={(v) => set(spec.name, v)} />;
         const id = `${idPrefix}-${spec.name}`;
         const kind = fieldKind(spec);
         const value = values[spec.name] ?? "";
@@ -79,7 +86,7 @@ export function OptionsFields({ specs, values, onChange, raw, onRawChange, showR
         );
       })}
       {(showRaw || specs.length === 0) && (
-        <div className="flex flex-col gap-1">
+        <div className={rich ? "flex flex-col gap-1 sm:col-span-2" : "flex flex-col gap-1"}>
           <label htmlFor={`${idPrefix}-raw`} className="text-xs font-medium text-foreground">
             {specs.length ? "Other options" : "Connection options"}
           </label>
@@ -98,6 +105,85 @@ export function OptionsFields({ specs, values, onChange, raw, onRawChange, showR
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+/** One option in the manager's grid. The label carries the name, type and
+ *  a "required" marker in text (never colour alone); the description is the
+ *  help text, tied to the control with `aria-describedby`. */
+function RichOptionField({ spec, id, value, onChange }: { spec: OptionSpecInfo; id: string; value: string; onChange: (value: string) => void }) {
+  const [revealed, setRevealed] = useState(false);
+  const kind = optionInputKind(spec);
+  const helpId = `${id}-help`;
+  const describedBy = spec.description || kind === "duckdb" ? helpId : undefined;
+  const label = (
+    <label htmlFor={id} className="flex flex-wrap items-baseline gap-1.5 text-xs font-medium text-foreground">
+      <code className="font-mono">{spec.name}</code>
+      <span className="text-muted-foreground font-normal">{spec.duckdbType}</span>
+      {spec.required && <span className="text-destructive" data-testid="option-required">* required</span>}
+      {spec.secret && <span className="text-muted-foreground font-normal">· secret, kept in this browser</span>}
+    </label>
+  );
+  const help = describedBy && (
+    <p id={helpId} className="text-[11px] text-muted-foreground">
+      {spec.description}
+      {kind === "duckdb" && <>{spec.description ? " " : ""}DuckDB syntax, e.g. <code className="font-mono">{fieldPlaceholder(spec)}</code>.</>}
+    </p>
+  );
+  if (kind === "switch") {
+    const effective = value !== "" ? value === "true" : spec.defaultText === "true";
+    return (
+      <div className="flex flex-col gap-1" data-option={spec.name} data-kind={kind}>
+        {label}
+        <div className="flex items-center gap-2">
+          <Switch id={id} checked={effective} onCheckedChange={(checked) => onChange(checked ? "true" : "false")} aria-describedby={describedBy} />
+          <span className="text-xs text-muted-foreground">
+            {value === "" ? (spec.defaultText != null ? `Default (${spec.defaultText})` : "Not set") : value}
+          </span>
+          {value !== "" && (
+            <button type="button" className="text-[11px] text-muted-foreground underline-offset-2 hover:underline" onClick={() => onChange("")}>
+              {spec.defaultText != null ? "Use default" : "Unset"}
+            </button>
+          )}
+        </div>
+        {help}
+      </div>
+    );
+  }
+  const type = kind === "secret" && !revealed ? "password" : kind === "date" ? "date" : kind === "integer" || kind === "number" ? "number" : "text";
+  return (
+    <div className="flex flex-col gap-1" data-option={spec.name} data-kind={kind}>
+      {label}
+      <div className="flex items-center gap-1">
+        <input
+          id={id}
+          type={type}
+          step={kind === "integer" ? 1 : kind === "number" ? "any" : undefined}
+          autoComplete={kind === "secret" ? "new-password" : "off"}
+          spellCheck={false}
+          required={spec.required}
+          aria-required={spec.required || undefined}
+          aria-describedby={describedBy}
+          value={value}
+          placeholder={kind === "secret" ? "" : fieldPlaceholder(spec)}
+          onChange={(e) => onChange(e.target.value)}
+          className={`${inputClass} font-mono`}
+        />
+        {kind === "secret" && (
+          <button
+            type="button"
+            onClick={() => setRevealed((r) => !r)}
+            aria-pressed={revealed}
+            aria-label={revealed ? `Hide ${spec.name}` : `Show ${spec.name}`}
+            className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="option-reveal"
+          >
+            {revealed ? <EyeOff className="size-4" aria-hidden="true" /> : <Eye className="size-4" aria-hidden="true" />}
+          </button>
+        )}
+      </div>
+      {help}
     </div>
   );
 }

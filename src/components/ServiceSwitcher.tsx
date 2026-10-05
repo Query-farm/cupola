@@ -58,7 +58,7 @@ export interface WorkspaceActions {
   shareLink: () => Promise<{ url: string; omitted: string[] }>;
   signOutAll: () => void;
   switchTo: (id: string) => void;
-  /** Manage workspaces… (the manager itself is phase 3). */
+  /** Manage workspaces…: opens the workspace manager (`WorkspaceManager`). */
   manage: () => void;
 }
 
