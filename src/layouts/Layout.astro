@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import { ReleaseNotice } from "../components/ReleaseNotice";
 
 interface Props {
   title?: string;
@@ -60,5 +61,6 @@ const { title = "Cupola" } = Astro.props;
   </head>
   <body class="bg-background text-foreground antialiased overflow-hidden">
     <slot />
+    <ReleaseNotice client:only="react" />
   </body>
 </html>

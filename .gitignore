@@ -52,3 +52,7 @@ public/sandbox/
 
 # Playwright test artifacts
 test-results/
+
+# Local deployment transaction
+.release-state.json
+__pycache__/

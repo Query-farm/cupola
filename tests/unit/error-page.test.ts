@@ -50,7 +50,7 @@ describe("renderErrorPage — outdated-version", () => {
   });
 
   test("tells the user to update a stale bookmark", () => {
-    expect(html).toContain("update the bookmark to <code>/latest/</code>");
+    expect(html).toContain("update the bookmark to <code>/</code>");
   });
 
   test("drops the current-version line when _latest could not be read", () => {

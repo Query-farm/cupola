@@ -45,7 +45,9 @@ jobs:
 
       - name: Unit tests
         working-directory: cupola
-        run: bun run test
+        run: |
+          bun run test
+          python3 scripts/test_releases.py
 
       - name: Verify vendored VGI contract
         working-directory: cupola
@@ -55,7 +57,7 @@ jobs:
 
       - name: Production build
         working-directory: cupola
-        run: bun run build
+        run: CUPOLA_HOSTED_RELEASES=1 bun run build
 
       - name: Bundle-size budget
         working-directory: cupola
@@ -64,6 +66,12 @@ jobs:
       - name: Install Chromium
         working-directory: cupola
         run: bunx playwright install --with-deps chromium
+
+      - name: Release lifecycle browser tests
+        working-directory: cupola
+        run: |
+          ./scripts/stage-haybarn-assets.sh
+          bunx playwright test --config playwright.release.config.ts
 
       - name: Browser smoke tests
         working-directory: cupola

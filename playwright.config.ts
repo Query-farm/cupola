@@ -13,6 +13,7 @@ const config = {
   testDir: "./tests",
   // Only e2e specs. Bun unit tests live in tests/unit/*.test.ts and must not be picked up here.
   testMatch: "**/*.spec.ts",
+  testIgnore: "**/release-lifecycle.spec.ts",
   // Playwright's 30s default is sized for pure-UI tests. Every test here boots
   // a 44MB DuckDB-WASM engine first (~5s idle, more under load) and the ones
   // that reload boot it twice, so 30s left almost no headroom and surfaced as

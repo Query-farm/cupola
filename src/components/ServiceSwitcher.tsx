@@ -1,3 +1,4 @@
+import { appBase } from "../lib/app-base";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckIcon, ChevronDownIcon, CircleAlertIcon, CopyIcon, ExternalLinkIcon, GlobeIcon, LogOutIcon, PlusIcon, XIcon } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
@@ -290,7 +291,7 @@ export function ServiceSwitcher({ currentUrl, currentCatalogName }: Props) {
   };
 
   const handleSignOut = () => {
-    const dest = new URL(`${import.meta.env.BASE_URL}sign-out`, window.location.origin);
+    const dest = new URL(`${appBase}sign-out`, window.location.origin);
     dest.searchParams.set("service", currentUrl);
     window.location.href = dest.toString();
   };

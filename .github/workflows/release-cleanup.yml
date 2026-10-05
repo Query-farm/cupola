@@ -1,0 +1,28 @@
+name: Release retention
+on:
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+concurrency:
+  group: cupola-production
+  cancel-in-progress: false
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_REGION: auto
+      DELETE_EXPIRED: ${{ vars.CUPOLA_CLEANUP_DELETE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check retention (dry-run until enabled)
+        shell: bash
+        run: |
+          args=(cleanup)
+          if [[ "$DELETE_EXPIRED" == "true" ]]; then args+=(--delete); fi
+          ./scripts/releases.sh "${args[@]}"

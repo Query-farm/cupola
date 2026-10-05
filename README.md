@@ -29,7 +29,7 @@ Designed to be shared across all VGI server implementations (Python, TypeScript,
 - [Perspective](https://perspective.finos.org) — pivot tables and data grids
 - [xterm.js](https://xtermjs.org) — terminal emulator for the SQL shell
 - [Bun](https://bun.sh) — package manager and runtime
-- Hosted on Cloudflare Pages with versioned assets served from R2
+- Hosted on a Cloudflare Worker with versioned assets served from R2
 
 ## Getting Started
 
@@ -81,7 +81,33 @@ Without `?service=`, a welcome / connect page is shown.
 
 ## Deployment
 
-Assets are served from Cloudflare R2 via a Worker with a versioned URL scheme (`/v{version}/...`, with `/latest/` redirecting to the current version).
+The public Worker serves the current app at stable document URLs. `/latest/` and
+historical `/v{version}/` page URLs redirect to those addresses; JavaScript, WASM,
+and other assets stay under immutable `/v{version}/...` paths. Self-hosted builds
+keep their configured base and do not check the public release service.
+
+Publishing reserves a fresh version, uploads assets, verifies every uploaded file's
+size, deploys the backward-compatible Worker, and promotes `_latest` last using a
+conditional write. Never reuse a version after a partial upload; bump it and retry.
+A local publish does not push a tag (which would start a duplicate CI deployment).
+Do not run local publishing/rollback while CI publishing or cleanup is active.
+
+`/release.json` is uncached. Hosted tabs check it every five minutes and when
+returning to the tab; updates require an explicit reload. Existing tabs from before
+this feature need one navigation/reload before they can display update notices.
+
+Rollback: `./scripts/releases.sh rollback <version>` switches the current frontend
+to a retained release; it does not roll back Worker code or browser data. Keep
+Worker routing and saved-data formats compatible with retained frontends.
+
+Retention: `./scripts/releases.sh cleanup` reports candidates; `--delete` applies
+the plan. Keep all releases for 30 days, the current release, and two recent
+rollback candidates. Activation refreshes a release's retention lease. Incomplete
+uploads also expire after 30 days. Root-level legacy files are not deleted.
+The daily Release retention workflow shares CI's production lock and defaults to
+dry-run. Set the production environment variable `CUPOLA_CLEANUP_DELETE=true`
+after reviewing its report to enable deletion. Very old tabs may need a reload
+once their assets expire; historical hosted versions are not a supported product.
 
 **Publish locally:**
 

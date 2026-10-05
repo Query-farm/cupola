@@ -498,15 +498,15 @@ regression.
 ## Publishing & Deployment
 
 Assets are served from Cloudflare R2 via a Worker (`worker/index.ts`, configured in `wrangler.jsonc`). The URL scheme is versioned:
-- `/` → 302 → `/latest/`
-- `/latest/` → 302 → `/v{current}/` (reads `_latest` marker from R2)
+- `/` → current HTML, no-store
+- `/latest/` and versioned document URLs → 302 → stable document URLs (fragments inherit)
 - `/v{version}/*` → immutable versioned assets from R2
 
 **To publish a new version:**
 1. Bump `version` in `package.json`
 2. Run `./publish.sh` (or `./publish.sh --skip-commit` if already committed)
 
-`publish.sh` handles: git commit/push/tag, build, Sentry source-map upload checks, upload all assets to R2 under `v{version}/`, update the `_latest` marker, and deploy the Worker.
+`publish.sh` handles: optional git commit, fresh-version reservation, build, source-map upload, immutable asset upload, verification, Worker deployment, conditional `_latest` promotion last, retention dry-run, and optional git push. It never pushes a tag. See README deployment instructions for rollback and daily retention. Hosted builds use `CUPOLA_HOSTED_RELEASES=1` to keep document URLs stable and enable the update notice; asset URLs remain versioned.
 
 **Key details:**
 - `astro.config.mjs` sets `base: /v{version}/` so all emitted asset paths are versioned (`BASE_PATH=/` overrides for the flat Docker/Azure deployment)
@@ -519,7 +519,7 @@ Assets are served from Cloudflare R2 via a Worker (`worker/index.ts`, configured
 
 Points worth not re-deriving:
 - **HTML only for documents.** `wantsHtml()` gates on `Accept: text/html`; a missing `.js`/`.wasm` keeps its plain-text 404, because handing a `<script>` tag a page of HTML is worse than the bare status.
-- **The redirect is client-side on purpose.** The URL fragment (`#token=`, `#sql=`, `#/schema/...`) never reaches the worker, so only `location.replace("/latest/" + location.search + location.hash)` can carry a user's auth token, shared SQL, and selection route across. `replace`, not `href`, so Back skips the dead URL.
+- **The redirect is client-side on purpose.** The URL fragment (`#token=`, `#sql=`, `#/schema/...`) never reaches the worker, so the error page uses `location.replace("/" + location.search + location.hash)` to carry a user's auth token, shared SQL, and selection route across. `replace`, not `href`, so Back skips the dead URL.
 - **Redirect loop guard.** If `_latest` ever names a version whose `index.html` is missing, `/latest/` → `/v{x}/` → 404 → redirect would spin. A `cupola-error-redirected` sessionStorage sentinel lets the auto-redirect fire once, then falls back to a manual button. The 8s countdown also cancels on any keypress/scroll/pointer event so it can't yank a page away mid-read. `not-deployed` never auto-redirects — `/latest/` is the broken thing.
 - **Styling is bundled, not fetched.** Tailwind is build-time, so the page can't reach the app's CSS; it inlines the `global.css` token hexes with a `prefers-color-scheme` dark block, and replays `Layout.astro`'s pre-paint script (`vgi-theme-cache`) so `?theme=` installs don't flash stock green. Deliberately **not** copied from `public/oauth-callback.html`, whose palette has drifted stale.
 - **The logo is `/cupola-icon.png`** — the illustrated barn cupola `BrandMark` renders, referenced unversioned (the latest-version fallback resolves it) rather than inlined, since base64 would add ~126KB per response. `public/cupola-icon.svg` is a different lineart mark the app never shows. An `onerror` hook hides the image in the one case the fallback can't resolve: the empty-bucket 503.

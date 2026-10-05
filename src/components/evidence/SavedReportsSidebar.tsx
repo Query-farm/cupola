@@ -1,3 +1,4 @@
+import { appBase } from "../../lib/app-base";
 import { useEffect, useState, type MouseEvent } from 'react';
 import { ChevronRight, FileChartColumn, FileText, LayoutList } from 'lucide-react';
 import { EVIDENCE_REPORTS_CHANGED, LEGACY_STORAGE_PREFIX, STORAGE_PREFIX, listEvidenceReports, type EvidenceReport } from '../../lib/evidence/reports';
@@ -30,7 +31,7 @@ export function SavedReportsSidebar({ serviceUrl, search = '' }: { serviceUrl: s
       window.removeEventListener('storage', storageChanged);
     };
   }, [serviceUrl]);
-  const base = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/reports`;
+  const base = `${appBase.replace(/\/$/, '')}/reports`;
   const href = (id?: string) => `${base}${id ? '' : '/saved'}?${new URLSearchParams({ service: serviceUrl, ...(id ? { evidence_report: id } : {}) })}`;
   function openReport(event: MouseEvent<HTMLAnchorElement>, id?: string) {
     // Modified and middle clicks keep the browser's own behavior (new tab, new window).

@@ -1,3 +1,4 @@
+import { appBase } from "../../lib/app-base";
 import { sessionCatalogs } from "@/lib/catalog-store";
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
@@ -278,7 +279,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   }
   function navigate(showLibrary: boolean, id?: string, replace = false) {
     const url = new URL(window.location.href);
-    url.pathname = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/reports${showLibrary ? '/saved' : ''}`;
+    url.pathname = `${appBase.replace(/\/$/, '')}/reports${showLibrary ? '/saved' : ''}`;
     url.searchParams.delete('evidence_view');
     url.searchParams.set('service', serviceUrl);
     if (id !== url.searchParams.get('evidence_report')) for (const key of [...url.searchParams.keys()]) if (key.startsWith(PARAMETER_URL_PREFIX)) url.searchParams.delete(key);
@@ -834,10 +835,10 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
         <td className="px-4 py-3">
           {item.serviceUrl === serviceUrl
             ? <Button variant="link" className="h-auto justify-start whitespace-normal p-0 text-left font-medium" disabled={busy} onClick={() => openReport(item)}>{item.title}</Button>
-            : <a className="font-medium text-primary underline-offset-4 hover:underline" href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/reports?service=${encodeURIComponent(item.serviceUrl)}&evidence_report=${encodeURIComponent(item.id)}`}>{item.title}</a>}
+            : <a className="font-medium text-primary underline-offset-4 hover:underline" href={`${appBase.replace(/\/$/, '')}/reports?service=${encodeURIComponent(item.serviceUrl)}&evidence_report=${encodeURIComponent(item.id)}`}>{item.title}</a>}
           <span className="mt-1 block max-w-sm truncate text-xs text-muted-foreground">{item.serviceUrl}</span>
         </td><td className="px-4 py-3 text-xs text-muted-foreground">{item.parameters.map(p => p.label).join(', ') || 'None'}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">{new Date(item.updatedAt).toLocaleString()}</td>
-        <td className="px-4 py-3"><div className="flex justify-end gap-2">{item.serviceUrl === serviceUrl ? <Button variant="outline" disabled={busy} onClick={() => openReport(item)}>Open report</Button> : <a className="text-xs text-primary underline" href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/evidence?service=${encodeURIComponent(item.serviceUrl)}&evidence_report=${encodeURIComponent(item.id)}`}>Open service</a>}<Button variant="ghost" size="icon" aria-label={`Export ${item.title}`} title="Export report file" onClick={() => exportReports([item])}><Download /></Button><Button variant="ghost" size="icon" aria-label={`Copy ${item.title}`} title="Copy report" onClick={() => copySavedReport(item)}><Copy /></Button><Button variant="ghost" size="icon" aria-label={`Delete ${item.title}`} onClick={() => remove(item)}><Trash2 /></Button></div></td>
+        <td className="px-4 py-3"><div className="flex justify-end gap-2">{item.serviceUrl === serviceUrl ? <Button variant="outline" disabled={busy} onClick={() => openReport(item)}>Open report</Button> : <a className="text-xs text-primary underline" href={`${appBase.replace(/\/$/, '')}/evidence?service=${encodeURIComponent(item.serviceUrl)}&evidence_report=${encodeURIComponent(item.id)}`}>Open service</a>}<Button variant="ghost" size="icon" aria-label={`Export ${item.title}`} title="Export report file" onClick={() => exportReports([item])}><Download /></Button><Button variant="ghost" size="icon" aria-label={`Copy ${item.title}`} title="Copy report" onClick={() => copySavedReport(item)}><Copy /></Button><Button variant="ghost" size="icon" aria-label={`Delete ${item.title}`} onClick={() => remove(item)}><Trash2 /></Button></div></td>
       </tr>)}</tbody></table></div> : <div className="rounded-lg border border-dashed p-12 text-center"><FileText className="mx-auto mb-3 size-7 text-muted-foreground" /><h2 className="text-sm font-semibold">{reports.length ? 'No matching reports' : 'No saved reports yet'}</h2><p className="mt-2 text-xs text-muted-foreground">{reports.length ? 'Try a different search.' : 'Save your current report or create a new one to start your library.'}</p></div>}
       <div className="flex flex-wrap gap-2">
         {isWeatherService(serviceUrl) && <Button variant="outline" disabled={busy} onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName, true), true, true)}>Use weather example</Button>}
