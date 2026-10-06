@@ -23,6 +23,7 @@ import { coerceArrowBufferForPerspective } from "@/lib/perspective-extension-coe
 import { engine, terminal, ui, setBootPhase, setEngineLifecycleError } from "@/lib/shell-bridge";
 import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
 import { ShellBootScreen } from "./ShellBootScreen";
+import { TerminalAiAttachments } from './chat/TerminalAiAttachments';
 import * as Sentry from "@sentry/astro";
 import { resolveThreadCount } from "@/lib/duckdb-worker-boot";
 import { initShell, type ShellCatalog } from "@/lib/shell-init";
@@ -484,7 +485,10 @@ export function DuckDBShell({ serviceUrl, catalogName, catalogs, defaultCatalog,
   }, [activeTab, selectedTable, selectedTableId]);
 
   return (
-    <div ref={rootRef} className="flex flex-col h-full bg-terminal-bg">
+    <div ref={rootRef} className="flex flex-col h-full bg-terminal-bg"
+      onPasteCapture={event => { if (activeTab === 'shell' && event.clipboardData.files.length) { event.preventDefault(); event.stopPropagation(); terminal.addAiAttachmentFiles?.(Array.from(event.clipboardData.files)); } }}
+      onDragOver={event => { if (activeTab === 'shell' && Array.from(event.dataTransfer.types).includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
+      onDrop={event => { if (activeTab === 'shell' && event.dataTransfer.files.length) { event.preventDefault(); terminal.addAiAttachmentFiles?.(Array.from(event.dataTransfer.files)); } }}>
       {/* Terminal container */}
       {bootActive && !displayedError && activeTab === "shell" && (
         <ShellBootScreen />
@@ -503,6 +507,7 @@ export function DuckDBShell({ serviceUrl, catalogName, catalogs, defaultCatalog,
         onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
         onDrop={(e) => {
           e.preventDefault();
+          if (e.dataTransfer.files.length) return;
           const data = e.dataTransfer.getData("text/plain");
           if (data) {
             const [callable] = /::[fm]:/.test(data) ? callablesForSelection(catalogInventory.getSnapshot().catalogs, parseSelection(data)) : [];
@@ -516,6 +521,7 @@ export function DuckDBShell({ serviceUrl, catalogName, catalogs, defaultCatalog,
       >
         <div ref={containerRef} className="h-full w-full overflow-hidden" />
       </div>
+      {!bootActive && !displayedError && <div className={activeTab === 'shell' ? 'shrink-0' : 'hidden'}><TerminalAiAttachments /></div>}
 
       {/* Perspective viewer */}
       <div

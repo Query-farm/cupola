@@ -133,6 +133,8 @@ function messageToGenAi(msg: MessageParam): GenAiMessage {
     return { role: msg.role, parts: [{ type: "text", content: capText(msg.content) }] };
   }
   const parts: GenAiPart[] = msg.content.map((block) => {
+    if (block.type === 'image') return { type: 'text', content: imagePlaceholder(block.source.media_type, block.source.data) };
+    if (block.type === 'document') return { type: 'text', content: `[document ${block.source.media_type}, contents elided]` };
     if (block.type === "tool_result") {
       return {
         type: "tool_result" as const,

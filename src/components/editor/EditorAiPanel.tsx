@@ -26,7 +26,6 @@ import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
 import type { CatalogData } from "@/lib/service";
 import {
   runAgentTurn,
-  queuedUserMessagesText,
   buildSystemPrompt,
   executeListTables,
   executeListCatalogs,
@@ -48,6 +47,7 @@ import { EditorSqlToolCallBlock, SqlApplyBar, type SqlApplyActions } from "./Edi
 import { extractSql } from "@/lib/ai/extract-sql";
 import type { ResultState } from "./EditorResultsPane";
 import type { AgentUsage } from "@/lib/ai-usage";
+import { attachmentSummaries, queuedMessageContent, userMessageContent, type AiAttachment, type AttachmentSummary } from '@/lib/ai/attachments';
 
 const uid = () => crypto.randomUUID();
 
@@ -55,6 +55,7 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content?: string;
+  attachments?: AttachmentSummary[];
   blocks?: ContentBlock[];
   isStreaming?: boolean;
   usage?: AgentUsage;
@@ -78,7 +79,8 @@ interface ConversationState {
   sentContext: string | null;
   /** Follow-ups typed while the agent works. The running turn takes them after its next tool
    *  round; any it ends without taking are sent as the next turn. */
-  queued: { id: string; text: string }[];
+  queued: { id: string; text: string; attachments: AiAttachment[] }[];
+  returnedDraft?: { text: string; attachments: AiAttachment[] };
 }
 
 interface Props {
@@ -172,21 +174,23 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
     return (settings as any)[key];
   };
 
-  const send = useCallback(async (text: string, shown: string[] = []) => {
+  const send = useCallback(async (text: string, attachments: AiAttachment[] = [], shown: string[] = []) => {
+    text = text.trim() || 'Please analyze the attached files.';
     const apiKey = getSetting("anthropicApiKey") || "";
     const workspaceId = getSetting("anthropicWorkspaceId") || "";
     const c = getConvo(docId);
     const myDoc = docId; // capture: stays correct even if the user switches sub-tabs mid-turn
     if (c.abort) {
       const id = uid();
-      c.queued.push({ id, text });
-      c.messages = [...c.messages, { id, role: "user", content: text, queued: true }];
+      c.queued.push({ id, text, attachments });
+      c.messages = [...c.messages, { id, role: "user", content: text, attachments: attachmentSummaries(attachments), queued: true }];
       bump();
       return;
     }
     if (shown.length) c.messages = c.messages.map((m) => (shown.includes(m.id) ? { ...m, queued: false } : m));
 
     if (!apiKey) {
+      queueMicrotask(() => inputRef.current?.restore(text, attachments));
       c.messages = [...c.messages, { id: uid(), role: "assistant", blocks: [{ type: "text", id: uid(), content: "To use Ask AI, add your Anthropic API key in **Settings**." }] }];
       bump();
       return;
@@ -201,8 +205,8 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
       c.sentContext = liveSql;
     }
 
-    if (!shown.length) c.messages = [...c.messages, { id: uid(), role: "user", content: text }];
-    c.agentMessages.push({ role: "user", content: userContent });
+    if (!shown.length) c.messages = [...c.messages, { id: uid(), role: "user", content: text, attachments: attachmentSummaries(attachments) }];
+    c.agentMessages.push({ role: "user", content: userMessageContent(userContent, attachments) });
 
     let assistantId = uid();
     // Seeded into BOTH the message and the local `blocks` array below — they
@@ -238,6 +242,15 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
     const updateAssistant = (patch: Partial<ChatMessage>) => {
       c.messages = c.messages.map((m) => (m.id === assistantId ? { ...m, ...patch } : m));
       bump();
+    };
+    const returnQueued = () => {
+      const items = c.queued.splice(0);
+      if (!items.length) return;
+      const ids = new Set(items.map(item => item.id));
+      c.messages = c.messages.filter(m => !ids.has(m.id));
+      const returned = { text: items.map(item => item.text).join('\n\n'), attachments: items.flatMap(item => item.attachments) };
+      if (docIdRef.current === myDoc) inputRef.current?.restore(returned.text, returned.attachments);
+      else c.returnedDraft = returned;
     };
     const ensureTextBlock = (): number => {
       const last = blocks[blocks.length - 1];
@@ -420,9 +433,10 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
             blocks = [{ type: "thinking", id: uid(), label: "Thinking" }];
             c.messages = [...c.messages.map((m) => (ids.has(m.id) ? { ...m, queued: false } : m)), { id: assistantId, role: "assistant", blocks: [...blocks], isStreaming: true }];
             bump();
-            return queuedUserMessagesText(items.map((item) => item.text));
+            return queuedMessageContent(items);
           },
           onError: (error) => {
+            returnQueued();
             removeThinking();
             const idx = ensureTextBlock();
             const tb = blocks[idx] as { type: "text"; content: string };
@@ -434,6 +448,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
         true, normalizeEffort(getSetting("aiEffort")),
       );
     } catch (err: any) {
+      returnQueued();
       removeThinking();
       blocks = blocks.map((b) => {
         if (b.type === "tool_call" && b.toolCall.isExecuting) return { ...b, toolCall: { ...b.toolCall, isExecuting: false, error: "Cancelled" } };
@@ -450,13 +465,6 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
         Sentry.captureException(err, { tags: { component: "ai-agent", path: "editor-panel" } });
       } else {
         blocks = [...blocks, { type: "text", id: uid(), content: "*(Stopped)*" }];
-        // A stop is not a send: what the agent never took goes back to the composer.
-        const items = c.queued.splice(0);
-        if (items.length) {
-          const ids = new Set(items.map((item) => item.id));
-          c.messages = c.messages.filter((m) => !ids.has(m.id));
-          if (docIdRef.current === myDoc) inputRef.current?.restore(items.map((item) => item.text).join("\n\n"));
-        }
       }
       updateBlocks(blocks);
       updateAssistant({ isStreaming: false });
@@ -472,9 +480,13 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
   // one on screen: the turn's context is the editor's current query, which belongs to that document.
   useEffect(() => {
     const c = convos.current.get(docId);
+    if (c?.returnedDraft) {
+      inputRef.current?.restore(c.returnedDraft.text, c.returnedDraft.attachments);
+      delete c.returnedDraft;
+    }
     if (!c || c.abort || !c.queued.length) return;
     const items = c.queued.splice(0);
-    void send(items.map((item) => item.text).join("\n\n"), items.map((item) => item.id));
+    void send(items.map((item) => item.text).join("\n\n"), items.flatMap(item => item.attachments), items.map((item) => item.id));
   });
 
   const stop = useCallback(() => {
@@ -495,6 +507,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
   }, [docId]);
 
   const handleNew = useCallback(() => {
+    inputRef.current?.clear();
     const c = convos.current.get(docId);
     if (c) { c.abort?.abort(); convos.current.set(docId, { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), resultCache: new QueryResultCache(), sentContext: null, queued: [] }); bump(); }
   }, [docId]);
@@ -508,7 +521,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
   );
 
   return (
-    <div className={`flex flex-col h-full bg-background ${onClose ? "border-l border-border" : ""}`} data-testid="editor-ai-panel">
+    <div data-ai-drop-zone className={`flex flex-col h-full bg-background ${onClose ? "border-l border-border" : ""}`} data-testid="editor-ai-panel">
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border shrink-0">
         {onClose ? (
           <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
@@ -536,7 +549,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
         ) : (
           convo.messages.map((msg) =>
             msg.role === "user" ? (
-              <ChatMessageUser key={msg.id} content={msg.content || ""} queued={msg.queued} />
+              <ChatMessageUser key={msg.id} content={msg.content || ""} queued={msg.queued} attachments={msg.attachments} />
             ) : (
               <AssistantWithApply key={msg.id} msg={msg} model={model} apply={apply}
                 renderSqlToolCall={renderSqlToolCall}
@@ -547,7 +560,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
         )}
       </div>
 
-      <ChatInput ref={inputRef} queueWhileLoading onSend={(text) => void send(text)} onStop={stop} isLoading={convo.isLoading} disabled={!hasApiKey || engineLifecycle.status !== "ready"} focused placeholder="Ask AI about your query…" />
+      <ChatInput ref={inputRef} conversationKey={docId} queueWhileLoading onSend={(text, attachments) => void send(text, attachments)} onStop={stop} isLoading={convo.isLoading} disabled={!hasApiKey || engineLifecycle.status !== "ready"} focused placeholder="Ask AI about your query…" />
     </div>
   );
 }

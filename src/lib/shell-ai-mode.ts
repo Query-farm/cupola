@@ -26,6 +26,7 @@ import { QueryResultCache, executeReadQueryResults } from "@/lib/query-results";
 import type { CatalogData } from "@/lib/service";
 import * as Sentry from "@sentry/astro";
 import { deniedAIQueryToolResult, normalizeAIQueryMode, toolsForAIQueryMode, type AIQueryMode } from "@/lib/ai/query-mode";
+import { userMessageContent, userRequestText, type AiAttachment } from './ai/attachments';
 
 /** Persistent AI conversation state — survives across .ai mode entries. */
 export interface AIConversationState {
@@ -145,7 +146,7 @@ function createToolExecutor(
       .filter((value): value is CatalogData => Boolean(value)));
     if (name === "query_semantic_model") {
       const lastUserMsg = conv.messages.filter(m => m.role === "user").pop();
-      const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
+      const userQuestion = userRequestText(lastUserMsg);
       return executeSemanticQuery(catalogs, input, {
         query,
         queryPrepared: engine.queryPrepared ? (sql, params) => engine.queryPrepared!(sql, params, { signal }) : undefined,
@@ -167,7 +168,7 @@ function createToolExecutor(
     }
     if (name === "run_sql") {
       const lastUserMsg = conv.messages.filter(m => m.role === "user").pop();
-      const userQuestion = typeof lastUserMsg?.content === "string" ? lastUserMsg.content : undefined;
+      const userQuestion = userRequestText(lastUserMsg);
       return executeRunSql(input.sql, { query, resultCache: conv.resultCache }, {
         onStart: () => { spinner.stop(); },
         onEnd: () => { ops.clearProgressBar(); },
@@ -409,12 +410,14 @@ export async function runAIMode(
         continue;
       }
       if (aiTrimmed === "/new") {
+        terminal.clearAiAttachments?.();
         conv.messages = []; conv.conversationId = `ai-${crypto.randomUUID()}`; conv.conversationName = ""; conv.resultCache.clear();
         if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
         term.writeln("Started new conversation.", "33");
         continue;
       }
       if (aiTrimmed === ".clear" || aiTrimmed === "/clear") {
+        terminal.clearAiAttachments?.();
         conv.messages = []; conv.conversationId = `ai-${crypto.randomUUID()}`; conv.conversationName = ""; conv.resultCache.clear();
         if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
         term.writeln("Conversation cleared.", "33");
@@ -432,7 +435,11 @@ export async function runAIMode(
       }
 
       // Send user message to agent
-      conv.messages.push({ role: "user", content: aiTrimmed });
+      let attachments: AiAttachment[];
+      try { attachments = terminal.takeAiAttachments?.() ?? []; }
+      catch (e) { term.writeln((e as Error).message, '31'); term.paste(aiTrimmed); continue; }
+      if (attachments.length) term.writeln(`Attached: ${attachments.map(file => file.name.replace(/[\x00-\x1f\x7f]/g, '')).join(', ')}`, '36');
+      conv.messages.push({ role: "user", content: userMessageContent(aiTrimmed, attachments) });
       if (!conv.conversationName) {
         conv.conversationName = aiTrimmed.length > 50 ? aiTrimmed.slice(0, 50) + "…" : aiTrimmed;
       }

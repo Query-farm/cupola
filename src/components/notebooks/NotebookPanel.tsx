@@ -854,6 +854,7 @@ function NotebookWorkspace({
           >
             <Suspense fallback={<p className="p-3">Loading assistant…</p>}>
               <NotebookAgent
+                key={doc.id}
                 active={showAi}
                 disabled={running}
                 document={doc}

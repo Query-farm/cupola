@@ -19,7 +19,7 @@
 
 import type { MessageParam, ContentBlock, ToolResultBlock } from "./ai-agent";
 
-type AnyBlock = ContentBlock | ToolResultBlock;
+type AnyBlock = Exclude<MessageParam['content'], string>[number];
 
 /** Normalize a message's content to an array of blocks. A string becomes a
  *  single text block; an empty string becomes no blocks. */

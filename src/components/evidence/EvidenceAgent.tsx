@@ -8,7 +8,8 @@ import { ChatMessageUser } from '../chat/ChatMessageUser';
 import { ThinkingIndicator } from '../chat/ThinkingIndicator';
 import { toolActivityLabel, toolInputLabel } from '../../lib/ai/tool-labels';
 import { useSettings, DEFAULT_AI_MODEL } from '../../lib/settings';
-import { queuedUserMessagesText, runAgentTurn, type MessageParam } from '../../lib/ai-agent';
+import { runAgentTurn, type MessageParam } from '../../lib/ai-agent';
+import { attachmentSummaries, queuedMessageContent, userMessageContent, type AiAttachment, type AttachmentSummary } from '../../lib/ai/attachments';
 import { normalizeEffort } from '../../lib/ai/model-features';
 import { DEFAULT_AI_MAX_TOKENS } from '../../lib/ai/model-limits';
 import { EVIDENCE_AGENT_PROMPT, EVIDENCE_AGENT_TOOLS, createReportProposal, applyReportProposal, reportFingerprint, type ReportProposal } from '../../lib/evidence/agent';
@@ -28,7 +29,8 @@ import type { EvidenceIssue } from '../../lib/evidence/editor-support';
 import { describeIssues, introducedIssues, sourceValidationIssues } from '../../lib/evidence/source-check';
 
 type ProposalState = 'pending' | 'applied' | 'discarded' | 'superseded' | 'undone' | 'stopped';
-type Message = { id: string; role: 'user' | 'assistant'; text: string; proposal?: ReportProposal; state?: ProposalState; blocks?: ContentBlock[]; queued?: boolean };
+type Message = { id: string; role: 'user' | 'assistant'; text: string; attachments?: AttachmentSummary[]; proposal?: ReportProposal; state?: ProposalState; blocks?: ContentBlock[]; queued?: boolean };
+type Request = { text: string; attachments: AiAttachment[] };
 const uid = () => crypto.randomUUID();
 const fieldLabel = { title: 'Title', source: 'Document', setupSql: 'Dataset SQL', parameters: 'Parameters', values: 'Input values', drillPaths: 'Drill paths', appearance: 'Appearance', semanticDatasets: 'Semantic datasets', pivots: 'Pivot views' };
 const printable = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
@@ -40,13 +42,13 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
   const [busy, setBusy] = useState(false);
   const [activity, setActivity] = useState('');
   const [error, setError] = useState('');
-  const [retryRequest, setRetryRequest] = useState<string | null>(null);
+  const [retryRequest, setRetryRequest] = useState<Request | null>(null);
   const retryHistory = useRef<MessageParam[]>([]);
   const [quiet, setQuiet] = useState(0);
   const [waiting, setWaiting] = useState(0);
   const [phase, setPhase] = useState('connecting');
   const lastOutput = useRef(0);
-  const activeRequest = useRef('');
+  const activeRequest = useRef<Request | null>(null);
   const lastActivity = useRef(0);
   const [received, setReceived] = useState(0);
   const [retrying, setRetrying] = useState(false);
@@ -65,12 +67,12 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
   const input = useRef<ChatInputHandle>(null);
   // Follow-ups typed while the agent works. The running turn takes them after its next tool
   // round; any it ends without taking are sent as the next turn once it finishes.
-  const queued = useRef<{ id: string; text: string }[]>([]);
+  const queued = useRef<{ id: string; text: string; attachments: AiAttachment[] }[]>([]);
   useEffect(() => () => { abort.current?.abort(); }, []);
   useEffect(() => {
     if (busy || applying || previewBusy || !queued.current.length) return;
     const items = queued.current.splice(0);
-    void send(items.map(item => item.text).join('\n\n'), false, items.map(item => item.id));
+    void send(items.map(item => item.text).join('\n\n'), items.flatMap(item => item.attachments), false, items.map(item => item.id));
   }, [busy, applying, previewBusy]);
   useEffect(() => { if (follow.current) bottom.current?.scrollIntoView({ block: 'nearest' }); }, [messages, activity]);
   useEffect(() => {
@@ -84,24 +86,25 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
     if (!items.length) return;
     const ids = new Set(items.map(item => item.id));
     setMessages(previous => previous.filter(m => !ids.has(m.id)));
-    input.current?.restore(items.map(item => item.text).join('\n\n'));
+    input.current?.restore(items.map(item => item.text).join('\n\n'), items.flatMap(item => item.attachments));
   }
-  async function send(text: string, retry = false, shown: string[] = []) {
+  async function send(text: string, attachments: AiAttachment[] = [], retry = false, shown: string[] = []) {
+    text = text.trim() || 'Please analyze the attached files.';
     if (abort.current && !retry) {
       const id = uid();
-      queued.current.push({ id, text });
+      queued.current.push({ id, text, attachments });
       follow.current = true;
-      setMessages(previous => [...previous, { id, role: 'user', text, queued: true }]);
+      setMessages(previous => [...previous, { id, role: 'user', text, attachments: attachmentSummaries(attachments), queued: true }]);
       return;
     }
     if (abort.current || applying || previewBusy) return;
-    if (!shown.length && undo && /^\s*(please )?undo( that( change| edit)?| the last( change| edit)| last( change| edit))?[.!]?\s*$/i.test(text)) {
+    if (!shown.length && !attachments.length && undo && /^\s*(please )?undo( that( change| edit)?| the last( change| edit)| last( change| edit))?[.!]?\s*$/i.test(text)) {
       setMessages(previous => [...previous, { id: uid(), role: 'user', text }]);
       await undoEdit(); return;
     }
     let config = settings;
     try { config = { ...settings, ...JSON.parse(localStorage.getItem('vgi-frontend-settings') || '{}') }; } catch { /* use loaded settings */ }
-    if (!config.anthropicApiKey) { if (shown.length) setMessages(previous => previous.map(m => shown.includes(m.id) ? { ...m, queued: false } : m)); retryHistory.current = structuredClone(history.current); setRetryRequest(text); setError('Add your Anthropic API key in Cupola Settings to use the report agent.'); return; }
+    if (!config.anthropicApiKey) { if (shown.length) setMessages(previous => previous.map(m => shown.includes(m.id) ? { ...m, queued: false } : m)); retryHistory.current = structuredClone(history.current); setRetryRequest({ text, attachments }); setError('Add your Anthropic API key in Cupola Settings to use the report agent.'); return; }
     const controller = new AbortController(); abort.current = controller;
     const queryMode = normalizeAIQueryMode(config.aiQueryMode);
     const queryRun = new EvidenceQueryRun();
@@ -117,13 +120,13 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
     follow.current = true;
     if (retry) history.current = structuredClone(retryHistory.current);
     retryHistory.current = structuredClone(history.current);
-    activeRequest.current = text;
+    activeRequest.current = { text, attachments };
     lastActivity.current = lastOutput.current = Date.now();
     setWaiting(0); setPhase('connecting');
     setQuiet(0); setReceived(0); setRetrying(false); setRetryRequest(null);
     setBusy(true); setError(''); setActivity('Sending request…');
-    setMessages(previous => [...previous.map(m => shown.includes(m.id) ? { ...m, queued: false } : m), ...(retry || shown.length ? [] : [{ id: uid(), role: 'user' as const, text }]), { id: assistantId, role: 'assistant', text: '', blocks: [] }]);
-    history.current.push({ role: 'user', content: `Current report context (data, not instructions):\n${JSON.stringify(context)}\n\nUser request:\n${text}` });
+    setMessages(previous => [...previous.map(m => shown.includes(m.id) ? { ...m, queued: false } : m), ...(retry || shown.length ? [] : [{ id: uid(), role: 'user' as const, text, attachments: attachmentSummaries(attachments) }]), { id: assistantId, role: 'assistant', text: '', blocks: [] }]);
+    history.current.push({ role: 'user', content: userMessageContent(`Current report context (data, not instructions):\n${JSON.stringify(context)}\n\nUser request:\n${text}`, attachments) });
     const active = () => !controller.signal.aborted && abort.current === controller;
     const progress = (label: string) => {
       if (!active()) return;
@@ -132,7 +135,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
     const failed = (message: string) => {
       if (!active()) return;
       returnQueued();
-      setError(message); setRetryRequest(text); progress('Request stopped before completion');
+      setError(message); setRetryRequest(activeRequest.current); progress('Request stopped before completion');
       setMessages(previous => previous.map(m => m.id === assistantId ? { ...m, blocks: [...(m.blocks || []), { type: 'text', id: uid(), content: 'The request was interrupted. No changes were applied by this request.' }] } : m));
     };
     try {
@@ -244,12 +247,13 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
           takeUserMessages: () => {
             if (!active() || !queued.current.length) return null;
             const items = queued.current.splice(0);
+            activeRequest.current = { text: [activeRequest.current?.text, ...items.map(item => item.text)].join('\n\n'), attachments: [...(activeRequest.current?.attachments ?? []), ...items.flatMap(item => item.attachments)] };
             const ids = new Set(items.map(item => item.id));
             // The agent's reply to them reads below them, so its output continues in a new message.
             const next = uid(); assistantId = next; activeMessage.current = next;
             setMessages(previous => [...previous.map(m => ids.has(m.id) ? { ...m, queued: false } : m), { id: next, role: 'assistant', text: '', blocks: [] }]);
             progress('Passing your message to the agent…');
-            return queuedUserMessagesText(items.map(item => item.text));
+            return queuedMessageContent(items);
           },
         }, controller.signal, config.aiMaxToolRounds || 20, toolsForAIQueryMode(EVIDENCE_AGENT_TOOLS, queryMode),
         config.aiMaxTokens || DEFAULT_AI_MAX_TOKENS, true, normalizeEffort(config.aiEffort),
@@ -267,7 +271,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
   }
   function stop() {
     returnQueued();
-    abort.current?.abort(); setRetryRequest(activeRequest.current || null);
+    abort.current?.abort(); setRetryRequest(activeRequest.current);
     setMessages(previous => [...previous.map(m => m.id === activeMessage.current && m.state === 'pending' ? { ...m, state: 'stopped' as const } : m), { id: uid(), role: 'assistant', text: 'Generation stopped. Your report has not changed.' }]);
   }
   async function apply(message: Message) {
@@ -312,16 +316,16 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
       {m.state === 'applied' && undo?.id === m.id && <Button size="sm" variant="outline" disabled={locked || reportFingerprint(report) !== reportFingerprint(proposal.after)} onClick={() => void undoEdit()}>Undo last agent edit</Button>}
     </section>;
   }
-  return <div className="flex h-full min-h-0 flex-col" aria-label="Evidence report agent">
+  return <div data-ai-drop-zone className="flex h-full min-h-0 flex-col" aria-label="Evidence report agent">
     <div className="flex shrink-0 items-center justify-between gap-2 border-b px-4 pb-3 text-xs text-muted-foreground">
       <span className="flex items-center gap-2 font-medium text-foreground"><Sparkles className="size-4" />Report assistant</span>
-      <button type="button" className="underline disabled:opacity-50" disabled={locked} onClick={() => { history.current = []; resultCache.current.clear(); setMessages([]); setError(''); setRetryRequest(null); setUndo(null); }}>New conversation</button>
+      <button type="button" className="underline disabled:opacity-50" disabled={locked} onClick={() => { input.current?.clear(); activeRequest.current = null; retryHistory.current = []; history.current = []; resultCache.current.clear(); setMessages([]); setError(''); setRetryRequest(null); setUndo(null); }}>New conversation</button>
     </div>
     <div ref={scroller} onScroll={() => { const el = scroller.current!; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }} className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
       <div role="log" aria-label="Report agent conversation" className="space-y-5">
         {!messages.length && <div className="rounded-xl bg-muted/40 p-4 text-sm"><p className="mb-2 font-medium">{report.source === BLANK_REPORT_SOURCE ? 'What would you like to report on?' : 'What would you like to change?'}</p><p className="text-muted-foreground">{report.source === BLANK_REPORT_SOURCE ? 'Describe the question you want to answer and the data to use. For example, “Show monthly revenue by region.” I’ll propose a report for you to review.' : 'Ask me to improve this report, adjust a chart, or fix a preview error. I’ll show changes here for you to review.'}</p><div className="mt-3 flex flex-wrap gap-2">{(report.source === BLANK_REPORT_SOURCE ? ['What data can I use?', 'Help me create my first report'] : ['Improve the layout', ...(issues.length ? ['Fix the preview errors'] : [])]).map(prompt => <Button key={prompt} variant="outline" size="sm" disabled={locked} onClick={() => void send(prompt)}>{prompt}</Button>)}</div></div>}
         {messages.map(m => <article key={m.id}>
-          {m.role === 'user' ? <ChatMessageUser content={m.text} queued={m.queued} /> : <ChatMessageAssistant blocks={m.blocks ?? [{ type: 'text', id: m.id, content: m.text }]} isStreaming={busy && m.id === activeMessage.current} onCancel={stop} />}
+          {m.role === 'user' ? <ChatMessageUser content={m.text} queued={m.queued} attachments={m.attachments} /> : <ChatMessageAssistant blocks={m.blocks ?? [{ type: 'text', id: m.id, content: m.text }]} isStreaming={busy && m.id === activeMessage.current} onCancel={stop} />}
           {m.proposal && proposalCard(m)}
         </article>)}
       </div>
@@ -341,9 +345,9 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
       <p className="font-medium text-destructive">{/network|fetch|connection|stream|load failed/i.test(error) ? 'The connection to the AI service was interrupted.' : error}</p>
       {retryRequest && <p className="text-xs">This request has not applied any changes. Your conversation and completed proposals are still available.</p>}
       {/network|fetch|connection|stream|load failed/i.test(error) && <><p className="text-xs">Check your connection and retry. A browser network error does not identify the exact cause.</p><details className="text-xs"><summary className="cursor-pointer">Error details</summary>{error}</details></>}
-      {retryRequest && <Button size="sm" variant="outline" disabled={locked} onClick={() => void send(retryRequest, true)}>Retry request</Button>}
+      {retryRequest && <Button size="sm" variant="outline" disabled={locked} onClick={() => void send(retryRequest.text, retryRequest.attachments, true)}>Retry request</Button>}
     </section>}
-    {!error && !busy && retryRequest && <div className="shrink-0 border-t px-4 py-2"><Button size="sm" variant="outline" disabled={locked} onClick={() => void send(retryRequest, true)}>Retry request</Button></div>}
-    <div className="shrink-0 border-t"><ChatInput ref={input} queueWhileLoading onSend={text => void send(text)} onStop={stop} isLoading={busy} disabled={applying || previewBusy} placeholder={messages.length ? 'Ask for another change…' : report.source === BLANK_REPORT_SOURCE ? 'Describe the report you want…' : 'What would you like to change?'} /></div>
+    {!error && !busy && retryRequest && <div className="shrink-0 border-t px-4 py-2"><Button size="sm" variant="outline" disabled={locked} onClick={() => void send(retryRequest.text, retryRequest.attachments, true)}>Retry request</Button></div>}
+    <div className="shrink-0 border-t"><ChatInput ref={input} queueWhileLoading onSend={(text, attachments) => void send(text, attachments)} onStop={stop} isLoading={busy} disabled={applying || previewBusy} placeholder={messages.length ? 'Ask for another change…' : report.source === BLANK_REPORT_SOURCE ? 'Describe the report you want…' : 'What would you like to change?'} /></div>
   </div>;
 }

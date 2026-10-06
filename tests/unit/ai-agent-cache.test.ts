@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { runAgentTurn, type AgentCallbacks, type MessageParam, type SystemPrompt } from "../../src/lib/ai-agent";
+import { AI_ATTACHMENT_GUIDANCE } from '../../src/lib/ai/attachments';
 import type { AgentUsage } from "../../src/lib/ai-usage";
 
 const realFetch = globalThis.fetch;
@@ -119,6 +120,7 @@ describe("agent prompt caching and usage", () => {
     expect(requests[0].system).toEqual([
       { type: "text", text: "Stable authoring instructions", cache_control: { type: "ephemeral" } },
       { type: "text", text: "Stable tool conventions", cache_control: { type: "ephemeral" } },
+      { type: 'text', text: AI_ATTACHMENT_GUIDANCE },
     ]);
     expect(requests[1].messages.length).toBeGreaterThan(requests[0].messages.length);
     expect(completed).toEqual({

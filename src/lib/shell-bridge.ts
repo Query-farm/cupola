@@ -24,6 +24,7 @@ import type { QueryExecutionOptions } from './query-execution';
  */
 import type { Selection } from "./tree";
 import type { CatalogData } from "./service";
+import type { AiAttachment } from './ai/attachments';
 import type { QueryPivotMode } from "./pivot-source";
 import type { AttachErrorDetail } from "./attach/error-detail";
 
@@ -192,6 +193,10 @@ export const terminal = {
   /** Insert text at the terminal's cursor without submitting. */
   insertText: null as ((text: string) => void) | null,
   inAiMode: false,
+  /** React owns the attachment draft; AI readline consumes it when a request is sent. */
+  addAiAttachmentFiles: null as ((files: File[]) => void) | null,
+  takeAiAttachments: null as (() => AiAttachment[]) | null,
+  clearAiAttachments: null as (() => void) | null,
   /** Bring the shell tab to the front. */
   activate: null as (() => void) | null,
 };

@@ -34,6 +34,7 @@ import { formatFunctionSignature, getFunctionArgs, getFunctionReturn } from "./f
 import { SEMANTIC_QUERY_TOOL } from "./semantic-tool";
 import { buildSemanticEnvironment } from "./semantic-model";
 import { fetchWithRetry } from "./ai-fetch";
+import { AI_ATTACHMENT_GUIDANCE, serializeAiRequest, type AttachmentContentBlock } from './ai/attachments';
 import {
   AGENT_NAME,
   ATTR,
@@ -64,7 +65,7 @@ interface MessageParam {
    *  the result holds `tool_result` and `text` blocks side by side. The older
    *  `ContentBlock[] | ToolResultBlock[]` couldn't express that and forced a
    *  false cast at the merge site. */
-  content: string | Array<ContentBlock | ToolResultBlock>;
+  content: string | Array<ContentBlock | ToolResultBlock | AttachmentContentBlock>;
 }
 
 interface ContentBlock {
@@ -165,7 +166,7 @@ export interface AgentCallbacks {
    *  as a text block after the tool_result blocks, so the model reads it at its next step
    *  without the turn being interrupted. Not polled when the model ends its turn; the caller
    *  sends anything still queued as a new turn. */
-  takeUserMessages?: () => string | null;
+  takeUserMessages?: () => MessageParam['content'] | null;
 }
 
 /** The text a `takeUserMessages` callback hands the agent: the user's own words, framed so the
@@ -936,7 +937,7 @@ async function streamOneRequestInner(
         "anthropic-dangerous-direct-browser-access": "true",
         "content-type": "application/json",
       },
-      body: JSON.stringify({
+      body: serializeAiRequest({
         model,
         messages,
         // Advance a cache breakpoint with the growing conversation so prior
@@ -958,7 +959,7 @@ async function streamOneRequestInner(
               ),
             }
           : {}),
-        system: systemPromptBlocks(systemPrompt),
+        system: [...systemPromptBlocks(systemPrompt), { type: 'text', text: AI_ATTACHMENT_GUIDANCE }],
         // Adaptive thinking + effort, on the models that accept them. Sending
         // neither on a model that defaults thinking ON would still produce
         // thinking blocks, so this is explicit rather than omitted — see
@@ -1431,7 +1432,7 @@ async function runAgentTurnInner(
     // Skipped on the last round: no request follows it, so a message taken here would sit
     // unanswered in history while the caller believed it delivered.
     const steering = round < MAX_TOOL_ROUNDS - 1 ? callbacks.takeUserMessages?.() : null;
-    messages.push({ role: "user", content: steering ? [...toolResults, { type: "text", text: steering }] : toolResults });
+    messages.push({ role: "user", content: steering ? [...toolResults, ...(typeof steering === 'string' ? [{ type: 'text' as const, text: steering }] : steering)] : toolResults });
   }
 
   recordTurnUsage();

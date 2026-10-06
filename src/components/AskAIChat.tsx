@@ -11,10 +11,10 @@ import { deniedAIQueryToolResult, normalizeAIQueryMode, toolsForAIQueryMode } fr
 import { toolInputLabel } from "@/lib/ai/tool-labels";
 import { memoryContextNote, memoryObjectNames } from "@/lib/ai/memory-context";
 import { normalizeEffort } from "@/lib/ai/model-features";
+import { attachmentSummaries, queuedMessageContent, userMessageContent, type AiAttachment, type AttachmentSummary } from '@/lib/ai/attachments';
 import type { CatalogData } from "@/lib/service";
 import {
   runAgentTurn,
-  queuedUserMessagesText,
   buildSystemPrompt,
   executeListTables,
   executeListCatalogs,
@@ -60,6 +60,7 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content?: string; // user messages only
+  attachments?: AttachmentSummary[];
   blocks?: ContentBlock[]; // assistant messages only
   isStreaming?: boolean;
   usage?: AgentUsage;
@@ -100,7 +101,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   const abortRef = useRef<AbortController | null>(null);
   // Follow-ups typed while the agent works. The running turn takes them after its next tool
   // round; any it ends without taking are sent as the next turn once it finishes.
-  const queuedRef = useRef<{ id: string; text: string }[]>([]);
+  const queuedRef = useRef<{ id: string; text: string; attachments: AiAttachment[] }[]>([]);
   const inputRef = useRef<ChatInputHandle>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Installed by the ask_user tool for the life of one question. Takes the
@@ -252,29 +253,31 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     return (settings as any)[key];
   };
 
-  const handleSend = useCallback(async (text: string, shown: string[] = []) => {
+  const handleSend = useCallback(async (text: string, attachments: AiAttachment[] = [], shown: string[] = []) => {
+    text = text.trim() || 'Please analyze the attached files.';
     if (abortRef.current) {
       const id = crypto.randomUUID();
-      queuedRef.current.push({ id, text });
+      queuedRef.current.push({ id, text, attachments });
       userScrolledUp.current = false;
-      setMessages(prev => [...prev, { id, role: "user", content: text, queued: true }]);
+      setMessages(prev => [...prev, { id, role: "user", content: text, attachments: attachmentSummaries(attachments), queued: true }]);
       return;
     }
     if (shown.length) setMessages(prev => prev.map(m => shown.includes(m.id) ? { ...m, queued: false } : m));
     const apiKey = getSetting("anthropicApiKey") || "";
     const workspaceId = getSetting("anthropicWorkspaceId") || "";
     if (!apiKey) {
+      queueMicrotask(() => inputRef.current?.restore(text, attachments));
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(), role: "assistant",
         blocks: [{ type: "text", id: uid(), content: "To use Ask AI, please add your Anthropic API key in **Settings** (gear icon in the sidebar)." }],
       }]);
       return;
     }
-    if (!catalogData) return;
+    if (!catalogData) { queueMicrotask(() => inputRef.current?.restore(text, attachments)); return; }
 
     // Add user message (queued follow-ups are already on screen)
-    if (!shown.length) setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "user", content: text }]);
-    agentMessages.current.push({ role: "user", content: text });
+    if (!shown.length) setMessages(prev => [...prev, { id: crypto.randomUUID(), role: "user", content: text, attachments: attachmentSummaries(attachments) }]);
+    agentMessages.current.push({ role: "user", content: userMessageContent(text, attachments) });
 
     // Add placeholder assistant message with thinking indicator. The SAME
     // block object seeds the local `blocks` array below — they used to
@@ -319,7 +322,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
       const pendingUserMessage = agentMessages.current[agentMessages.current.length - 1];
       pendingUserMessage.content = [
         { type: "text", text: memoryNote },
-        { type: "text", text },
+        ...(typeof pendingUserMessage.content === 'string' ? [{ type: 'text' as const, text: pendingUserMessage.content }] : pendingUserMessage.content),
       ];
       memoryObjectsRef.current = memoryObjectsNow;
     }
@@ -342,6 +345,13 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
 
     const updateAssistant = (updates: Partial<ChatMessage>) => {
       setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, ...updates } : m));
+    };
+    const returnQueued = () => {
+      const items = queuedRef.current.splice(0);
+      if (!items.length) return;
+      const ids = new Set(items.map(item => item.id));
+      setMessages(prev => prev.filter(m => !ids.has(m.id)));
+      inputRef.current?.restore(items.map(item => item.text).join('\n\n'), items.flatMap(item => item.attachments));
     };
 
     // Ensure there's a text block at the end of blocks to append to
@@ -754,9 +764,10 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
             blocks = [{ type: "thinking", id: uid(), label: "Thinking" }];
             const next: ChatMessage = { id: assistantId, role: "assistant", blocks: [...blocks], isStreaming: true };
             setMessages(prev => [...prev.map(m => ids.has(m.id) ? { ...m, queued: false } : m), next]);
-            return queuedUserMessagesText(items.map((item) => item.text));
+            return queuedMessageContent(items);
           },
           onError: (error) => {
+            returnQueued();
             removeThinking();
             const idx = ensureTextBlock();
             const textBlock = blocks[idx] as { type: "text"; content: string };
@@ -778,6 +789,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
         effort,
       );
     } catch (err: any) {
+      returnQueued();
       removeThinking();
       // Mark any still-executing tool calls as stopped and reveal any
       // pending chart blocks — the agent isn't going to call render_chart
@@ -812,13 +824,6 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
         });
       } else {
         blocks = [...blocks, { type: "text", id: uid(), content: "*(Stopped)*" }];
-        // A stop is not a send: what the agent never took goes back to the composer.
-        const items = queuedRef.current.splice(0);
-        if (items.length) {
-          const ids = new Set(items.map((item) => item.id));
-          setMessages(prev => prev.filter(m => !ids.has(m.id)));
-          inputRef.current?.restore(items.map((item) => item.text).join("\n\n"));
-        }
       }
       updateBlocks(blocks);
       updateAssistant({ isStreaming: false });
@@ -832,7 +837,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   useEffect(() => {
     if (isLoading || !queuedRef.current.length) return;
     const items = queuedRef.current.splice(0);
-    void handleSend(items.map((item) => item.text).join("\n\n"), items.map((item) => item.id));
+    void handleSend(items.map((item) => item.text).join("\n\n"), items.flatMap(item => item.attachments), items.map((item) => item.id));
   }, [isLoading]);
 
   // The resolver (installed by the ask_user tool) owns marking the block
@@ -845,6 +850,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   }, []);
 
   const handleNewConversation = () => {
+    inputRef.current?.clear();
     queuedRef.current = [];
     setMessages([]);
     agentMessages.current = [];
@@ -888,7 +894,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     : null), [catalogData, attachedCatalogs, serviceUrl, settings.aiQueryMode, showSystemPrompt, messages.length]);
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div data-ai-drop-zone className="flex flex-col h-full bg-background">
       {hasMessages && (
         <div className="flex items-center justify-between px-6 py-1.5 border-b border-border shrink-0">
           <span className="text-xs text-muted-foreground font-medium">
@@ -925,7 +931,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
           <div className="max-w-5xl space-y-4">
             {messages.map((msg) => (
               msg.role === "user" ? (
-                <ChatMessageUser key={msg.id} content={msg.content || ""} queued={msg.queued} />
+                <ChatMessageUser key={msg.id} content={msg.content || ""} queued={msg.queued} attachments={msg.attachments} />
               ) : (
                 <ChatMessageAssistant
                   key={msg.id}
@@ -993,7 +999,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
       <ChatInput
         ref={inputRef}
         queueWhileLoading
-        onSend={(text) => void handleSend(text)}
+        onSend={(text, attachments) => void handleSend(text, attachments)}
         onStop={handleStop}
         isLoading={isLoading}
         disabled={!hasApiKey || engineLifecycle.status !== "ready"}

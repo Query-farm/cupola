@@ -40,6 +40,8 @@ async function exercise(panel: Locator, mock: Awaited<ReturnType<typeof mockAnth
   // Mid-turn: the agent is about to run a query, so the follow-up rides with its result.
   await input.fill("How many rows?"); await input.press("Enter");
   await expect.poll(() => requests.length).toBe(1);
+  await panel.getByLabel('Files to attach to AI message').setInputFiles({ name: 'queued.csv', mimeType: 'text/csv', buffer: Buffer.from('unit\nCelsius') });
+  await expect(panel.getByText('Preparing…')).toHaveCount(0);
   await input.fill("Use Celsius"); await input.press("Enter");
   await expect(panel.getByText("Queued · the agent reads this after its current step")).toBeVisible();
   await expect(input).toHaveValue("");
@@ -49,8 +51,9 @@ async function exercise(panel: Locator, mock: Awaited<ReturnType<typeof mockAnth
   expect(delivered[0].type).toBe("tool_result");
   expect(delivered.at(-1).type).toBe("text");
   expect(delivered.at(-1).text).toContain("Use Celsius");
+  expect(delivered).toContainEqual({ type: 'document', title: 'queued.csv', source: { type: 'text', media_type: 'text/plain', data: 'unit\nCelsius' } });
   await expect(panel.getByText("First answer.")).toBeVisible();
-  await expect(panel.getByText("Queued", { exact: false })).toHaveCount(0);
+  await expect(panel.getByText('Queued · the agent reads this after its current step', { exact: true })).toHaveCount(0);
   // The reply to the follow-up reads below it.
   const followUp = await panel.getByText("Use Celsius", { exact: true }).boundingBox();
   const reply = await panel.getByText("First answer.").boundingBox();
@@ -69,11 +72,14 @@ async function exercise(panel: Locator, mock: Awaited<ReturnType<typeof mockAnth
   // Stop hands what the agent never took back to the composer.
   await input.fill("Slow question"); await input.press("Enter");
   await expect.poll(() => requests.length).toBe(5);
+  await panel.getByLabel('Files to attach to AI message').setInputFiles({ name: 'undelivered.txt', mimeType: 'text/plain', buffer: Buffer.from('Use metric units') });
+  await expect(panel.getByText('Preparing…')).toHaveCount(0);
   await input.fill("Use metres"); await input.press("Enter");
   await expect(panel.getByText("Use metres", { exact: true })).toBeVisible();
   await input.fill("please");
   await panel.getByRole("button", { name: "Stop generation" }).click();
   await expect(input).toHaveValue("Use metres\n\nplease");
+  await expect(panel.getByRole('button', { name: 'Remove undelivered.txt' })).toBeVisible();
   await expect(panel.getByText("Use metres", { exact: true })).toHaveCount(0);
   expect(requests).toHaveLength(5);
 }

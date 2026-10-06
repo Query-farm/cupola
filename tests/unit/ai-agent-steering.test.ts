@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { runAgentTurn, type AgentCallbacks, type MessageParam } from "../../src/lib/ai-agent";
+import { prepareAiAttachment, queuedMessageContent, userMessageContent } from '../../src/lib/ai/attachments';
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -46,6 +47,21 @@ function serve(responses: Response[]) {
 }
 
 describe("messages sent while the agent works", () => {
+  test('attachments reach the initial request and queued tool-round follow-up', async () => {
+    const initial = await prepareAiAttachment(new File(['a,b\n1,2'], 'initial.csv'));
+    const followup = await prepareAiAttachment(new File(['Reference text'], 'followup.txt'));
+    const requests = serve([toolTurn('toolu_1'), finalTurn()]);
+    let pending = true;
+    await runAgentTurn(
+      { apiKey: 'key' }, 'claude-sonnet-5', [{ role: 'user', content: userMessageContent('Analyze this', [initial]) }], 'System', async () => 'ok',
+      callbacks({ takeUserMessages: () => { if (!pending) return null; pending = false; return queuedMessageContent([{ text: 'Use this too', attachments: [followup] }]); } }),
+      undefined, 20, TOOLS, 8_192, false,
+    );
+    expect(requests[0].messages[0].content).toContainEqual(initial.block);
+    expect(requests[1].messages.at(-1).content[0].type).toBe('tool_result');
+    expect(requests[1].messages.at(-1).content).toContainEqual(followup.block);
+    expect(requests[1].messages[0].content).toEqual(requests[0].messages[0].content);
+  });
   test("ride after the next round's tool results, without ending the turn", async () => {
     const requests = serve([toolTurn("toolu_1"), toolTurn("toolu_2"), finalTurn()]);
     const pending = ["Also add a chart"];

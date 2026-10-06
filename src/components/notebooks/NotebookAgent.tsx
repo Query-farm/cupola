@@ -9,7 +9,7 @@ import {
 import { NotebookProposalReview } from './NotebookProposalReview';
 import { useEffect, useRef, useState } from 'react';
 import { Sparkles, RotateCcw, X } from 'lucide-react';
-import { ChatInput } from '../chat/ChatInput';
+import { ChatInput, type ChatInputHandle } from '../chat/ChatInput';
 import { ChatMessageUser } from '../chat/ChatMessageUser';
 import { ChatMessageAssistant, type ContentBlock } from '../chat/ChatMessageAssistant';
 import { ThinkingIndicator } from '../chat/ThinkingIndicator';
@@ -36,6 +36,7 @@ import { fingerprint, uid, type Notebook } from '../../lib/notebooks/model';
 import { validateSelectQuery, type CellResult } from '../../lib/notebooks/execution';
 import type { CatalogData } from '../../lib/service';
 import { compileNotebookQuery } from '../../lib/notebooks/parameters';
+import { attachmentSummaries, userMessageContent, type AiAttachment, type AttachmentSummary } from '../../lib/ai/attachments';
 
 export function NotebookAgent({
   active,
@@ -75,6 +76,7 @@ export function NotebookAgent({
       id: string;
       role: 'user' | 'assistant';
       text: string;
+      attachments?: AttachmentSummary[];
       blocks?: ContentBlock[];
       usage?: AgentUsage;
     }[]
@@ -88,6 +90,7 @@ export function NotebookAgent({
   const latest = useRef({ document, results, selectedCell });
   latest.current = { document, results, selectedCell };
   const abort = useRef<AbortController | null>(null);
+  const input = useRef<ChatInputHandle>(null);
   const history = useRef<MessageParam[]>([]);
   const cache = useRef(new QueryResultCache());
   const scroller = useRef<HTMLDivElement>(null);
@@ -102,13 +105,13 @@ export function NotebookAgent({
     },
     [],
   );
-  async function send(request: string) {
-    if (disabled || !request.trim() || abort.current) return;
+  async function send(request: string, attachments: AiAttachment[] = []) {
+    if (disabled || (!request.trim() && !attachments.length) || abort.current) return;
     if (!settings.anthropicApiKey) {
       setError('Add your Anthropic API key in Settings to use the notebook assistant.');
       return;
     }
-    const text = request.trim();
+    const text = request.trim() || 'Please analyze the attached files.';
     // A proposal must be based on what the model actually read, not newer edits
     // which arrived while its response was streaming.
     let readContext = latest.current;
@@ -136,7 +139,7 @@ export function NotebookAgent({
     follow.current = true;
     setMessages((previous) => [
       ...previous,
-      { id: uid(), role: 'user', text },
+      { id: uid(), role: 'user', text, attachments: attachmentSummaries(attachments) },
       { id: assistantId, role: 'assistant', text: '', blocks: [] },
     ]);
     const updateBlocks = (update: (blocks: ContentBlock[]) => ContentBlock[]) => {
@@ -154,7 +157,7 @@ export function NotebookAgent({
           ? [...blocks.slice(0, -1), { ...last, content: last.content + content }]
           : [...blocks, { type, id: uid(), content }];
       });
-    history.current.push({ role: 'user', content: text });
+    history.current.push({ role: 'user', content: userMessageContent(text, attachments) });
     try {
       await runAgentTurn(
         {
@@ -307,6 +310,7 @@ export function NotebookAgent({
   }
   return (
     <aside
+      data-ai-drop-zone
       ref={panel}
       className="border-l border-border bg-background flex flex-col w-full min-w-0 shrink-0 min-h-0 h-full"
       aria-label="Notebook assistant"
@@ -321,6 +325,7 @@ export function NotebookAgent({
             disabled={busy}
             title="New conversation"
             onClick={() => {
+              input.current?.clear();
               history.current = [];
               cache.current.clear();
               setMessages([]);
@@ -363,7 +368,7 @@ export function NotebookAgent({
           )}
           {messages.map((message, index) =>
             message.role === 'user' ? (
-              <ChatMessageUser key={message.id} content={message.text} />
+              <ChatMessageUser key={message.id} content={message.text} attachments={message.attachments} />
             ) : (
               <ChatMessageAssistant
                 key={message.id}
@@ -454,7 +459,8 @@ export function NotebookAgent({
         </div>
       )}
       <ChatInput
-        onSend={(text) => void send(text)}
+        ref={input}
+        onSend={(text, attachments) => void send(text, attachments)}
         onStop={stopGeneration}
         isLoading={busy}
         disabled={disabled || !settings.anthropicApiKey}
