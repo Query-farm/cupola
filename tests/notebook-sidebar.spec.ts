@@ -39,6 +39,26 @@ async function seed(page: Page) {
   await expect(page.getByRole('navigation', { name: 'Saved notebooks' })).toBeVisible({ timeout: 30_000 });
 }
 
+/** Write a notebook as another tab would, under the key the app now reads: the
+ *  workspace the `?service=` link opened (notebooks are kept per workspace).
+ *  The seeded copy under the service URL is only a read-only fallback. */
+async function editInOtherTab(page: Page, id: string, title: string) {
+  await page.evaluate(
+    ({ serviceUrl, id, title }) => {
+      const workspaces = JSON.parse(localStorage.getItem('cupola.workspaces.v1')!).workspaces as {
+        id: string;
+        catalogs: { url: string }[];
+      }[];
+      const workspace = workspaces.find((w) => w.catalogs.some((c) => c.url === serviceUrl))!;
+      const key = `cupola.notebook.v1:${encodeURIComponent(workspace.id)}:${id}`;
+      const legacy = `cupola.notebook.v1:${encodeURIComponent(serviceUrl)}:${id}`;
+      const doc = JSON.parse(localStorage.getItem(key) ?? localStorage.getItem(legacy)!);
+      localStorage.setItem(key, JSON.stringify({ ...doc, workspaceId: workspace.id, title }));
+    },
+    { serviceUrl: SERVICE_URL, id, title },
+  );
+}
+
 test('sidebar notebooks navigate in place, update names, filter, and restore direct links', async ({
   page,
 }) => {
@@ -148,11 +168,7 @@ test('sidebar creates notebooks, reflects deletion and cross-tab changes, and re
   await expect(sidebar.getByRole('link', { name: 'Created from sidebar' })).toHaveCount(0);
   const other = await page.context().newPage();
   await other.goto(`${APP_ORIGIN}${BASE}?service=${encodeURIComponent(SERVICE_URL)}`);
-  await other.evaluate((serviceUrl) => {
-    const key = `cupola.notebook.v1:${encodeURIComponent(serviceUrl)}:first`;
-    const doc = JSON.parse(localStorage.getItem(key)!);
-    localStorage.setItem(key, JSON.stringify({ ...doc, title: 'Changed in another tab' }));
-  }, SERVICE_URL);
+  await editInOtherTab(other, 'first', 'Changed in another tab');
   await expect(sidebar.getByRole('link', { name: 'Changed in another tab' })).toBeVisible();
   await other.close();
   await page.getByTestId('sidebar-notebooks-toggle').click();
@@ -181,11 +197,7 @@ test('sidebar navigation preserves the active notebook while running or unable t
   await sidebar.getByRole('link', { name: 'Second notebook' }).click();
   await expect(page.getByRole('textbox', { name: 'Notebook title' })).toHaveValue('Second notebook');
   await expect(page.getByText('Saved in this browser', { exact: true })).toBeVisible();
-  await page.evaluate((serviceUrl) => {
-    const key = `cupola.notebook.v1:${encodeURIComponent(serviceUrl)}:second`;
-    const doc = JSON.parse(localStorage.getItem(key)!);
-    localStorage.setItem(key, JSON.stringify({ ...doc, title: 'Other tab wins' }));
-  }, SERVICE_URL);
+  await editInOtherTab(page, 'second', 'Other tab wins');
   await sidebar.getByRole('link', { name: 'First notebook' }).click();
   await expect(page.getByText(/Notebook was kept open/)).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Notebook title' })).toHaveValue('Second notebook');
