@@ -351,7 +351,7 @@ test('applied agent proposals are saved as labelled revisions', async ({ page })
   await panel.getByRole('textbox', { name: 'Chat message input' }).press('Enter');
   await panel.getByRole('button', { name: 'Apply and preview', exact: true }).click({ timeout: 30_000 });
   await expect(panel.getByTestId('evidence-document')).toContainText('Data refreshes daily.', { timeout: 30_000 });
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
 
   await panel.getByRole('tab', { name: 'History', exact: true }).click();
   const revisions = panel.getByRole('list', { name: 'Revisions, newest first' }).getByRole('listitem');

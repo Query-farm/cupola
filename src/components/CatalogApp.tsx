@@ -137,7 +137,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem("vgi-sidebar-collapsed") === "1"; } catch { return false; }
   });
-  const isNarrow = useMediaQuery("(max-width: 767px)");
+  const isNarrow = useMediaQuery(activeTab === "reports" ? "(max-width: 1023px)" : "(max-width: 767px)");
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const sidebarVisible = isNarrow ? mobileSidebarOpen : !sidebarCollapsed;
   useEffect(() => {

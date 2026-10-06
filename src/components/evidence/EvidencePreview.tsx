@@ -15,7 +15,7 @@ import type { EvidenceDataContext } from '../../lib/evidence/data-browser';
 import styles from '../../styles/evidence.css?inline';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
 
-export interface ReportRun { execution: EvidenceQueryRun; report: EvidenceReport; values: ParameterValues; semanticQueries: Record<string, string>; semanticStates: SemanticDatasetState[]; revision: number }
+export interface ReportRun { appliedFilters?: string; execution: EvidenceQueryRun; report: EvidenceReport; values: ParameterValues; semanticQueries: Record<string, string>; semanticStates: SemanticDatasetState[]; revision: number }
 /** An Evidence input's current value (see EvidenceDocument.svelte). */
 export interface EvidenceInputState { id: string; component: string; value: unknown; title?: string }
 /** Click-to-drill: `match` says whether a clicked category or cell names the next level; `version`

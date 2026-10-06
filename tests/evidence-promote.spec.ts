@@ -29,5 +29,5 @@ test('a blank new report waits for its first edit, and says so', async ({ page }
   await page.getByTestId('tab-reports').click();
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report' }).click();
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Not saved yet · saves when you edit it');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Not saved yet · saves here when you edit it');
 });

@@ -36,6 +36,8 @@ import { useReportTheme } from './useReportTheme';
 import { EvidenceEditor } from './EvidenceEditor';
 import { EvidencePreview, type EvidenceInputState, type PreviewDrill, type ReportRun } from './EvidencePreview';
 import { useReportPrint } from './useReportPrint';
+import { captureReportPreview, RetainedReportPreview } from './RetainedReportPreview';
+import { ReportSharing } from './ReportSharing';
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 /** A PDF per parameter value re-renders the report once per section; past this, it stops. */
@@ -45,6 +47,7 @@ const RECOVERED_NOTICE = 'Recovered changes that could not be saved when this re
 const AUTOSAVE_DELAY_MS = 1_500;
 /** A report as it compares with its saved JSON: a blank title saves as "Untitled report". */
 const asSaved = (report: EvidenceReport) => JSON.stringify(titled(report));
+const diagnosticSpec = (report: EvidenceReport) => JSON.stringify([report.source, report.setupSql, report.parameters, report.semanticDatasets]);
 const isLibraryUrl = () => (window.location.pathname.endsWith('/evidence/reports') || window.location.pathname.endsWith('/reports/saved')) || new URLSearchParams(window.location.search).get('evidence_view') === 'library';
 
 export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultToLibrary = true }: { catalogName: string; serviceUrl: string; catalogs: readonly CatalogData[]; defaultToLibrary?: boolean }) {
@@ -73,6 +76,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   const [editing, setEditing] = useState(initial.recovered);
   const [focused, setFocused] = useState(false);
   const [editorOnly, setEditorOnly] = useState(false);
+  const [compactView, setCompactView] = useState<'editor' | 'preview'>('editor');
   const [editorWidth, setEditorWidth] = useState(() => {
     try {
       const stored = Number(localStorage.getItem('cupola.evidence.editor-width'));
@@ -88,6 +92,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   }
 
   const [specIssues, setSpecIssues] = useState<EvidenceIssue[]>([]);
+  const checkedSpec = useRef(diagnosticSpec(initial.report));
   const workspace = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(initial.error);
   const [notice, setNotice] = useState('');
@@ -120,6 +125,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   /** Reads the rendered document's Evidence input values (for the PDF's filter summary). */
   const readInputs = useRef<(() => EvidenceInputState[]) | null>(null);
   const [run, setRun] = useState<ReportRun | null>(null);
+  const [retained, setRetained] = useState<{ content: DocumentFragment; run: ReportRun } | null>(null);
   const [updated, setUpdated] = useState('');
   /** When the report's data was last refreshed; the PDF prints it in full (date and time). */
   const updatedAt = useRef<Date | null>(null);
@@ -287,7 +293,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     window.history[replace ? 'replaceState' : 'pushState']({}, '', url);
     setLibrary(showLibrary);
     if (showLibrary) setFocused(false);
-    if (showLibrary) { setRun(null); reloadList(); }
+    if (showLibrary) { setRun(null); setRetained(null); reloadList(); }
   }
   const choices = useParameterChoices(report.parameters, report.values, !library,
     resets => setReport(current => ({ ...current, values: { ...current.values, ...resets } })));
@@ -318,6 +324,11 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
   // React events) has not re-rendered yet, and the render's `report` would refresh the old draft.
   async function refresh(next = reportRef.current, history: 'push' | 'replace' | 'none' = 'push'): Promise<boolean> {
     if (busyRef.current) return false;
+    checkedSpec.current = diagnosticSpec(next);
+    const previousRoot = workspace.current?.querySelector('[data-testid="evidence-preview"]')?.shadowRoot;
+    if (run?.report.id === next.id && previousRoot && pendingRef.current === 0 && !specIssues.some(issue => issue.severity === 'error') && !logs.some(log => log.error)) {
+      setRetained({ content: captureReportPreview(previousRoot), run });
+    }
     execution.current?.stop();
     const current = new EvidenceQueryRun(count => { if (execution.current === current) { pendingRef.current = count; setPendingQueries(count); } });
     execution.current = current;
@@ -350,7 +361,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
       }
       const values = resolveParameters({ ...next, values: fitted.values });
       if (!engine.queryPrepared || engine.bootError) throw new Error(engine.bootError || 'Haybarn is not ready');
-      // Unmount the old document before replacing its temporary datasets.
+      // Keep a static copy before unmounting queries that reference temporary datasets.
       setRun(null);
       setStatus('Refreshing report…');
       for (const name of semanticTables.current) {
@@ -381,7 +392,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
       setSemanticStates(semantic.states);
       // Rendering runs on after this returns: it ends once the document's queries go quiet.
       profile.begin('render');
-      setRun({ execution: current, report: structuredClone(next), values, semanticQueries: semantic.queries, semanticStates: semantic.states, revision: ++revision.current });
+      setRetained(null);
+      setRun({ execution: current, report: structuredClone(next), values, appliedFilters: next.parameters.map(parameter => `${parameter.label}: ${describeParameter(parameter, values, fitted.states)}`).join(' · '), semanticQueries: semantic.queries, semanticStates: semantic.states, revision: ++revision.current });
       updatedAt.current = new Date();
       setUpdated(updatedAt.current.toLocaleTimeString());
       setStatus('Connected');
@@ -627,7 +639,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     const draft = recovered && specOf(recovered) !== specOf(next) ? recovered : null;
     reportRef.current = draft ?? next;
     setReport(draft ?? next); setHasOpenedReport(true); setSaved(fresh ? '' : JSON.stringify(next)); savedRef.current = fresh ? '' : JSON.stringify(next); baseline.current = JSON.stringify(next); setEditing(fresh || Boolean(draft)); setEditorOnly(false);
-    setError(''); setNotice(''); setRecovered(Boolean(draft)); setSaveError(''); setRun(null); setUpdated(''); setLibrary(false);
+    setError(''); setNotice(''); setRecovered(Boolean(draft)); setSaveError(''); setRun(null); setRetained(null); setUpdated(''); setLibrary(false); setCompactView('editor');
     session.current = crypto.randomUUID();
     // A new report is named in the URL too, so a reload finds its draft if it never saved.
     if (updateUrl) navigate(false, next.id);
@@ -734,7 +746,9 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     } catch (e) { setError(`Could not delete report: ${message(e)}`); }
   }
   const visible = reports.filter(item => `${item.title} ${item.serviceUrl}`.toLowerCase().includes(search.toLowerCase()));
-  const pending = run && (run.report.source !== report.source || run.report.setupSql !== report.setupSql || JSON.stringify(run.report.parameters) !== JSON.stringify(report.parameters) || JSON.stringify(run.report.values) !== JSON.stringify(report.values) || JSON.stringify(run.report.semanticDatasets) !== JSON.stringify(report.semanticDatasets));
+  const displayedRun = run ?? retained?.run;
+  const filtersPending = Boolean(displayedRun && report.parameters.some(parameter => JSON.stringify(choices.values[parameter.key] ?? null) !== JSON.stringify(displayedRun.values[parameter.key] ?? null)));
+  const pending = Boolean(displayedRun && (displayedRun.report.source !== report.source || displayedRun.report.setupSql !== report.setupSql || JSON.stringify(displayedRun.report.parameters) !== JSON.stringify(report.parameters) || filtersPending || JSON.stringify(displayedRun.report.semanticDatasets) !== JSON.stringify(report.semanticDatasets)));
 
   const lint = useMemo(() => { try { return parameterLint(report); } catch { return []; } }, [report.parameters, report.setupSql, report.source, report.drillPaths]);
   const issues: EvidenceIssue[] = [...lint, ...specIssues, ...logs.filter(log => log.error).map(log => ({
@@ -766,8 +780,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
           <div className="flex min-w-0 flex-col">
             <span className="max-w-72 truncate text-sm font-semibold">{report.title.trim() || UNTITLED_REPORT}</span>
             <span className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-              <span role="status" aria-label="Save status" className={saveError ? 'text-destructive' : undefined} title={saveError ? 'Your changes are kept in this browser, and saved once the report is valid again.' : 'Changes save automatically'}>
-                {saveError ? `Not saved: ${saveError}` : !dirty ? 'Saved' : saved || asSaved(report) !== baseline.current ? 'Saving…' : 'Not saved yet · saves when you edit it'}
+              <span role="status" aria-label="Save status" className={saveError ? 'text-destructive' : undefined} title={saveError ? 'Your changes are kept in this browser, and saved once the report is valid again.' : 'Saved locally for this data connection. Use Share to download a copy for another browser.'}>
+                {saveError ? `Not saved: ${saveError}` : !dirty ? 'Saved in this browser' : saved || asSaved(report) !== baseline.current ? 'Saving in this browser…' : 'Not saved yet · saves here when you edit it'}
               </span>
               {(updated || !quietStatus) && <span aria-hidden>·</span>}
               <span role="status" aria-label="Report refresh status">
@@ -784,27 +798,28 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
                 {errorCount > 0 && <span className="rounded-full bg-destructive px-1.5 text-[10px] leading-4 font-semibold text-white" data-testid="report-problem-count">{errorCount}</span>}
               </Button>
             </div>
-            {/* One slot: Refresh while idle, Stop while a refresh runs. The dot says
-                edits are waiting to be applied (it replaced a "Changes not applied" banner). */}
+            {/* Refresh and Stop share a slot; unapplied edits are explained above the results. */}
             {offerStop
               ? <Button key="stop" variant="outline" onClick={stopRefresh}><Square />Stop refresh</Button>
               : <Button key="refresh" variant="field" aria-label={editing ? 'Update preview' : 'Refresh report'} title={`${pending ? 'Changes not applied · ' : ''}⌘ / Ctrl + Enter`} onClick={() => void refresh()}>
                   <RefreshCw />{editing ? 'Update preview' : 'Refresh report'}
                   {pending && <span role="status" aria-label="Changes not applied" className="size-2 rounded-full bg-amber-400" />}
                 </Button>}
-            {(!editing || pdfExport.state !== 'idle') && <Button variant="outline" disabled={refreshing || !run || exporting} onClick={() => void exportPdf()} aria-live="polite"
+            {(!editing || pdfExport.state !== 'idle') && <Button variant="outline" disabled={refreshing || !run || exporting || Boolean(pending)} onClick={() => void exportPdf()} aria-live="polite"
               title={pdfExport.state === 'done' && pdfExport.omitted.length ? `Not included: ${pdfExport.omitted.join(', ')}` : 'Download the report as a typeset PDF · The selected tab of each tab group, and every table row'}>
               {pdfExport.state === 'exporting' ? <><Loader2 className="animate-spin" />{pdfExport.progress ? `Preparing PDF ${pdfExport.progress}…` : 'Preparing PDF…'}</>
                 : pdfExport.state === 'done' ? <><Check />PDF exported{pdfExport.omitted.length ? ` · ${pdfExport.omitted.length} not included` : ''}</>
                 : <><FileDown />Export PDF</>}
             </Button>}
+            <ReportSharing canExportPdf={!refreshing && Boolean(run) && !exporting} pending={Boolean(pending)} onPdf={() => void exportPdf()} onFile={() => exportReports([report])} />
+            {!focused && <Button variant="ghost" size="icon" aria-label="Focus report" title="Focus report" onClick={() => setFocused(true)}><Maximize2 /></Button>}
             {saveError && <Button variant="outline" onClick={checkpoint} title={`Not saved: ${saveError}. Your changes are kept in this browser until they can be.`}><Save />Retry save</Button>}
             {focused
               ? <Button variant="ghost" size="icon" aria-label="Exit focus mode" title="Exit focus mode · Esc" onClick={() => { setEditorOnly(false); setFocused(false); }}><Minimize2 /></Button>
               : <DropdownMenu>
                   <DropdownMenuTrigger aria-label="More report actions" className={buttonVariants({ variant: 'ghost', size: 'icon' })}><MoreHorizontal /></DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="min-w-44">
-                    {editing && <DropdownMenuItem disabled={refreshing || !run || exporting} onClick={() => void exportPdf()}><FileDown />Export PDF</DropdownMenuItem>}
+                    {editing && <DropdownMenuItem disabled={refreshing || !run || exporting || Boolean(pending)} onClick={() => void exportPdf()}><FileDown />Export PDF</DropdownMenuItem>}
                     {run?.report.parameters.filter(item => item.type === 'select' || item.type === 'multi_select').map(item => <DropdownMenuItem key={item.key} disabled={refreshing || exporting} onClick={() => void exportPdfPerValue(item.key)}><FileDown />PDF per {item.label.toLowerCase()}</DropdownMenuItem>)}
                     <DropdownMenuItem onClick={saveCopy}><Copy />Save a copy</DropdownMenuItem>
                     <DropdownMenuItem onClick={() => exportReports([report])}><Download />Export report file</DropdownMenuItem>
@@ -819,7 +834,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
     {notice && <p role="status" className="mx-5 mt-3 text-xs text-muted-foreground">{notice}</p>}
     {recovered && !library && <p role="status" className="mx-5 mt-3 text-xs text-muted-foreground">{RECOVERED_NOTICE}</p>}
     <section hidden={!library} className="mx-auto w-full max-w-6xl flex-1 overflow-auto space-y-5 p-5" aria-label="Saved reports list">
-      <p className="text-sm text-muted-foreground">Reports for this worker are saved in this browser, including source, parameter definitions, and selected values. Data is refreshed when you open a report. Export report files to share reports or move them to another browser; an imported report runs its SQL with your connection when you open it, so import only reports you trust.</p>
+      <p className="text-sm text-muted-foreground">Reports are saved in this browser for the current data connection. They do not sync between devices. Use Share in an open report, or Export all, to download copies. Import adds an editable report file; its queries run with your connection when opened, so import only reports you trust.</p>
       <div className="relative max-w-sm"><Search className="absolute left-2.5 top-2 size-4 text-muted-foreground" /><Input className="pl-8" aria-label="Search saved reports" placeholder="Search reports…" value={search} onChange={e => setSearch(e.target.value)} /></div>
       {unsavedDrafts.length > 0 && <section aria-label="Unsaved reports" className="rounded-lg border border-amber-300 bg-amber-50/40 p-4 dark:border-amber-700/60 dark:bg-amber-950/20">
         <h2 className="text-sm font-semibold">Unsaved reports</h2>
@@ -839,17 +854,24 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
           <span className="mt-1 block max-w-sm truncate text-xs text-muted-foreground">{item.serviceUrl}</span>
         </td><td className="px-4 py-3 text-xs text-muted-foreground">{item.parameters.map(p => p.label).join(', ') || 'None'}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">{new Date(item.updatedAt).toLocaleString()}</td>
         <td className="px-4 py-3"><div className="flex justify-end gap-2">{item.serviceUrl === serviceUrl ? <Button variant="outline" disabled={busy} onClick={() => openReport(item)}>Open report</Button> : <a className="text-xs text-primary underline" href={`${appBase.replace(/\/$/, '')}/evidence?service=${encodeURIComponent(item.serviceUrl)}&evidence_report=${encodeURIComponent(item.id)}`}>Open service</a>}<Button variant="ghost" size="icon" aria-label={`Export ${item.title}`} title="Export report file" onClick={() => exportReports([item])}><Download /></Button><Button variant="ghost" size="icon" aria-label={`Copy ${item.title}`} title="Copy report" onClick={() => copySavedReport(item)}><Copy /></Button><Button variant="ghost" size="icon" aria-label={`Delete ${item.title}`} onClick={() => remove(item)}><Trash2 /></Button></div></td>
-      </tr>)}</tbody></table></div> : <div className="rounded-lg border border-dashed p-12 text-center"><FileText className="mx-auto mb-3 size-7 text-muted-foreground" /><h2 className="text-sm font-semibold">{reports.length ? 'No matching reports' : 'No saved reports yet'}</h2><p className="mt-2 text-xs text-muted-foreground">{reports.length ? 'Try a different search.' : 'Save your current report or create a new one to start your library.'}</p></div>}
+      </tr>)}</tbody></table></div> : <div className="rounded-lg border border-dashed p-12 text-center"><FileText className="mx-auto mb-3 size-7 text-muted-foreground" /><h2 className="text-sm font-semibold">{reports.length ? 'No matching reports' : 'No saved reports yet'}</h2><p className="mt-2 text-xs text-muted-foreground">{reports.length ? 'Try a different search.' : 'Create a report and choose a sample layout, or describe what you want to the report assistant. Your edits save automatically in this browser.'}</p></div>}
       <div className="flex flex-wrap gap-2">
         {isWeatherService(serviceUrl) && <Button variant="outline" disabled={busy} onClick={() => openReport(newEvidenceReport(serviceUrl, catalogName, true), true, true)}>Use weather example</Button>}
         {serviceUrl === WEATHER_TEST_SERVICE && <Button variant="outline" disabled={busy} onClick={() => openReport(newDrillExampleReport(serviceUrl), true, true)}>Use drilldown example</Button>}
       </div>
     </section>
     <main hidden={library} className="min-h-0 flex-1 flex-col" style={{ display: library ? 'none' : 'flex' }}>
-      <div ref={split} style={{ '--evidence-editor-width': `clamp(280px, ${editorWidth}%, calc(100% - 288px))` } as CSSProperties} className={`grid min-h-0 flex-1 ${editing && !editorOnly ? 'grid-rows-[minmax(360px,1fr)_minmax(360px,1fr)] overflow-auto lg:grid-rows-1 lg:grid-cols-[minmax(0,1fr)_8px_var(--evidence-editor-width)] lg:overflow-hidden' : 'grid-rows-1'}`}>
-        <section style={{ display: editing && editorOnly ? 'none' : undefined }} aria-label={editing ? 'Report preview' : 'Report viewer'} className="flex min-h-0 min-w-0 flex-col">
+      {editing && !editorOnly && <div className="flex shrink-0 gap-2 border-b p-2 lg:hidden" role="group" aria-label="Report workspace view">
+        <Button size="sm" variant={compactView === 'editor' ? 'secondary' : 'ghost'} aria-pressed={compactView === 'editor'} onClick={() => setCompactView('editor')}>Editor</Button>
+        <Button size="sm" variant={compactView === 'preview' ? 'secondary' : 'ghost'} aria-pressed={compactView === 'preview'} onClick={() => setCompactView('preview')}>Preview</Button>
+      </div>}
+      <div ref={split} style={{ '--evidence-editor-width': `clamp(280px, ${editorWidth}%, calc(100% - 288px))` } as CSSProperties} className={`grid min-h-0 flex-1 ${editing && !editorOnly ? 'grid-rows-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_8px_var(--evidence-editor-width)]' : 'grid-rows-1'}`}>
+        <section style={{ display: editing && editorOnly ? 'none' : undefined }} aria-label={editing ? 'Report preview' : 'Report viewer'} className={`${editing && compactView === 'editor' ? 'hidden lg:flex' : 'flex'} min-h-0 min-w-0 flex-col`}>
           <div data-testid="evidence-viewer-scroll" className="min-h-0 flex-1 overflow-auto bg-muted/20 p-3 md:p-6">
             <article data-testid="evidence-report-surface" data-print-title={report.title} data-report-mode={reportTheme.mode} style={reportTheme.style} aria-busy={busy} className="mx-auto min-w-0 max-w-6xl rounded-lg border bg-card p-5 md:p-8">
+              {pending && !busy && <p role="status" aria-label="Unapplied report changes" className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                {filtersPending ? 'Filters have changed. Results below still use the applied filters.' : 'Your edits have not been applied. The preview still shows the previous version.'} {editing ? 'Update preview to apply changes.' : 'Refresh the report to apply changes.'}
+              </p>}
               {run && <div className="evidence-print-heading">
                 <h1>{report.title}</h1>
                 <p>Current report view{updated ? ` · Updated ${updated}` : ''}</p>
@@ -858,7 +880,11 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
               </div>}
               {report.parameters.length > 0 && <form className="mb-6 flex flex-wrap items-end gap-4 border-b pb-5" onSubmit={event => { event.preventDefault(); void refresh(); }} aria-label="Report inputs">
                 {report.parameters.map(parameter => <label key={parameter.id} className={`min-w-32 ${parameter.type === 'date_range' ? 'max-w-80' : 'max-w-56'} space-y-1 text-xs font-medium`}>{parameter.label}{parameter.required && <span className="text-muted-foreground"> *</span>}<ParameterInput parameter={parameter} value={choices.values[parameter.key] ?? null} choices={choices.states[parameter.key]} label={parameter.label} disabled={busy} onChange={value => { choices.clearNotes(); change({ ...report, values: { ...report.values, [parameter.key]: value } }); }} /></label>)}
-                <button type="submit" className="sr-only" tabIndex={-1}>Run with parameters</button>
+                <div className="flex gap-2">
+                  <Button type="submit" size="sm" disabled={refreshing || exporting || !filtersPending}>Apply filters</Button>
+                  <Button type="button" size="sm" variant="ghost" disabled={refreshing || exporting} onClick={() => { const next = { ...report, values: {} }; change(next); void refresh(next); }}>Reset filters</Button>
+                </div>
+                {displayedRun && <p aria-label="Applied filters" className="basis-full text-xs text-muted-foreground">Results use: {displayedRun.appliedFilters}</p>}
                 {choices.notes.length > 0 && <p role="status" aria-label="Parameter changes" className="basis-full text-xs text-amber-700 dark:text-amber-400">{choices.notes.join(' ')}</p>}
               </form>}
               {drills.map(drill => <nav key={drill.path.id} aria-label={drill.path.label ? `Drill path: ${drill.path.label}` : 'Drill path'} className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -872,7 +898,13 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
                 </ol>
                 {drill.next && <span className="text-xs text-muted-foreground print:hidden">Click a chart bar or underlined value to drill into {drill.next.label.toLowerCase()}.</span>}
               </nav>)}
-              {run ? <EvidencePreview reportTheme={reportTheme} run={run} drill={previewDrill} onInputs={read => { readInputs.current = read; }} onData={context => { setDataContext(context); setMountedRevision(run.revision); }} onIssues={setSpecIssues} onQuery={entry => { setLogs(current => [...current.slice(-99), entry]); profiler.current?.query({ ...entry, phase: 'render' }); }} onError={message => { setError(message); setSpecIssues(current => [...current, { message, severity: 'error', target: 'document' }]); }} /> : busy ? <EvidenceRefreshProgress profile={profile} phases={refreshPhases} fallback={status} /> : <p className="py-8 text-sm text-muted-foreground" role="status">Refresh to render this report.</p>}
+              {run ? <EvidencePreview reportTheme={reportTheme} run={run} drill={previewDrill} onInputs={read => { readInputs.current = read; }} onData={context => { setDataContext(context); setMountedRevision(run.revision); }} onIssues={setSpecIssues} onQuery={entry => { setLogs(current => [...current.slice(-99), entry]); profiler.current?.query({ ...entry, phase: 'render' }); }} onError={message => { setError(message); setSpecIssues(current => [...current, { message, severity: 'error', target: 'document' }]); }} /> : <>
+                {busy && <EvidenceRefreshProgress profile={profile} phases={refreshPhases} fallback={status} />}
+                {retained ? <section aria-label="Last successful preview">
+                  <p role="status" className="mb-3 rounded-md border bg-muted p-3 text-sm">{busy ? 'Refreshing. Showing the previous results until the new data is ready.' : 'Refresh did not complete. Showing the previous results.'} This preview is read-only.</p>
+                  <RetainedReportPreview content={retained.content} />
+                </section> : !busy && <p className="py-8 text-sm text-muted-foreground" role="status">Refresh to render this report.</p>}
+              </>}
               {dataContext && (report.pivots ?? []).map(pivot => <section key={pivot.id} className="mt-8 space-y-3" aria-label={pivot.title}>
                 <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg font-semibold">{pivot.title}</h2>{editing && <Button variant="ghost" size="sm" onClick={() => change({ ...report, pivots: report.pivots?.filter(item => item.id !== pivot.id) })}>Remove pivot</Button>}</div>
                 <EvidencePivot mode={reportTheme.mode} context={dataContext} datasetId={pivot.datasetId} config={pivot.config} onConfig={config => { if (editing) change({ ...reportRef.current, pivots: reportRef.current.pivots?.map(item => item.id === pivot.id ? { ...item, config } : item) }); }} />
@@ -901,10 +933,10 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, catalogs, defaultTo
             resizeEditor(event.key === 'Home' ? 25 : event.key === 'End' ? 70 : editorWidth + (event.key === 'ArrowLeft' ? 2 : -2));
           }}
         ><span className="h-10 w-0.5 rounded-full bg-muted-foreground/40" /></div>}
-        <div style={{ display: editing ? 'contents' : 'none' }}><EvidenceEditor history={{ history, dirty, onRestore: restoreRevision, onDelete: deleteRevision }} onProposal={proposalEvent} performance={{ profile, namedQueries: dataContext?.queries ?? [], runnable: sql => {
+        <div style={{ display: editing ? undefined : 'none' }} className={`${!editorOnly && compactView === 'preview' ? 'hidden lg:flex' : 'flex'} min-h-0 min-w-0 flex-col [&>aside]:flex-1`}><EvidenceEditor history={{ history, dirty, onRestore: restoreRevision, onDelete: deleteRevision }} onProposal={proposalEvent} performance={{ profile, namedQueries: dataContext?.queries ?? [], runnable: sql => {
           if (!run) return sql;
           try { return materializeReportQuery(sql, compilerParameters(run.report, run.values), run.values); } catch { return sql; }
-        } }} parameterChoices={{ states: choices.states, values: choices.values, loader: choices.loader }} fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={async () => { await refresh(); }} key={report.id} report={report} onChange={change} issues={issues} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => setEditorOnly(!editorOnly)} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); await refresh(next); }} /></div>
+        } }} parameterChoices={{ states: choices.states, values: choices.values, loader: choices.loader }} fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={async () => { await refresh(); }} key={report.id} report={report} onChange={change} issues={issues} issuesStale={checkedSpec.current !== diagnosticSpec(report)} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => { setEditorOnly(!editorOnly); setCompactView(editorOnly ? 'preview' : 'editor'); }} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); setCompactView('preview'); await refresh(next); }} /></div>
       </div>
     </main>
   </div>;
