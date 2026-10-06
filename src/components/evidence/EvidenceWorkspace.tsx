@@ -68,16 +68,18 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   const [initial] = useState(() => {
     let reports: EvidenceReport[] = [], error = '';
     try { reports = listEvidenceReports(scope); } catch (e) { error = `Could not read saved reports: ${message(e)}`; }
-    const id = new URLSearchParams(window.location.search).get('evidence_report');
+    const search = new URLSearchParams(window.location.search);
+    const create = search.get('evidence_new') === '1';
+    const id = create ? null : search.get('evidence_report');
     const stored = reports.find(report => report.id === id);
     // A shared link's `p.<key>` values are the view it names; they win over the saved ones.
     const found = stored && { ...stored, values: { ...stored.values, ...valuesFromUrl(stored.parameters, new URLSearchParams(window.location.search)) } };
-    const report = found ?? stamp(newEvidenceReport(serviceUrl, catalogName, isWeatherService(serviceUrl)));
+    const report = found ?? stamp(newEvidenceReport(serviceUrl, catalogName, !create && isWeatherService(serviceUrl)));
     // Edits that could not be saved when this report was last open come back, and so does a new
     // report that was never saved (its URL names it from the start).
     const recovered = id ? loadRecoveryDraft(scope, id) : null;
     const draft = recovered && (!found || specOf(recovered) !== specOf(found)) ? recovered : null;
-    return { reports, report: draft ?? report, savedReport: report, recovered: Boolean(draft), error, saved: found ? JSON.stringify(found) : '', library: isLibraryUrl() || (!found && !draft && (defaultToLibrary || Boolean(id))) };
+    return { reports, report: draft ?? report, savedReport: report, recovered: Boolean(draft), create, error, saved: found ? JSON.stringify(found) : '', library: !create && (isLibraryUrl() || (!found && !draft && (defaultToLibrary || Boolean(id)))) };
   });
   const [promotion, setPromotion] = useState(consumeReportPromotion);
   const [report, setReport] = useState(initial.report);
@@ -87,7 +89,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   const [library, setLibrary] = useState(initial.library);
   const [hasOpenedReport, setHasOpenedReport] = useState(!initial.library);
   const [search, setSearch] = useState('');
-  const [editing, setEditing] = useState(initial.recovered);
+  const [editing, setEditing] = useState(initial.recovered || initial.create);
   const [focused, setFocused] = useState(false);
   const [editorOnly, setEditorOnly] = useState(false);
   const [compactView, setCompactView] = useState<'editor' | 'preview'>('editor');
@@ -307,6 +309,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     const url = new URL(window.location.href);
     url.pathname = `${appBase.replace(/\/$/, '')}/reports${showLibrary ? '/saved' : ''}`;
     url.searchParams.delete('evidence_view');
+    url.searchParams.delete('evidence_new');
     // A workspace tab names its catalogs with `?local_ws=`, which wins over `?service=`.
     if (!url.searchParams.has('local_ws')) url.searchParams.set('service', serviceUrl);
     if (id !== url.searchParams.get('evidence_report')) for (const key of [...url.searchParams.keys()]) if (key.startsWith(PARAMETER_URL_PREFIX)) url.searchParams.delete(key);
@@ -433,6 +436,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   useEffect(() => {
     if (!booted.current) {
       booted.current = true;
+      if (initial.create) navigate(false, initial.report.id, true);
       if (initial.library) navigate(true, undefined, true);
       else if (!initial.library && !initial.error) void refresh(initial.report, 'replace');
     }
@@ -466,7 +470,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   const openFromSidebar = useRef<(detail: OpenReportDetail) => Promise<void>>(async () => {});
   openFromSidebar.current = async detail => {
     if ((detail.workspaceId ?? detail.serviceUrl) !== scope) return;
-    if (!detail.id) { if (!library) navigate(true); return; }
+    if (!detail.id && !detail.create) { if (!library || !isLibraryUrl()) navigate(true); return; }
     if (detail.id === reportRef.current.id && savedRef.current) {
       if (library) { navigate(false, detail.id); if (!run) void refresh(reportRef.current, 'replace'); }
       return;
@@ -477,6 +481,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       for (let waited = 0; busyRef.current && waited < 5_000; waited += 50) await new Promise(resolve => setTimeout(resolve, 50));
     }
     try {
+      if (detail.create) { openReport(stamp(newEvidenceReport(serviceUrl, catalogName)), true, true); return; }
       const found = listEvidenceReports(scope).find(item => item.id === detail.id);
       if (found) openReport(found);
       else setError('That report is no longer saved in this browser.');

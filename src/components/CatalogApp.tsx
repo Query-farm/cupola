@@ -481,6 +481,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       const { href } = (event as CustomEvent<OpenReportDetail>).detail;
       if (!reportsMountedRef.current) window.history.pushState(window.history.state, "", href + window.location.hash);
       setActiveTab("reports");
+      setMobileSidebarOpen(false);
     };
     window.addEventListener(OPEN_REPORT_EVENT, openReport);
     return () => window.removeEventListener(OPEN_REPORT_EVENT, openReport);

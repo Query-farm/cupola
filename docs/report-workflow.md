@@ -2,7 +2,7 @@
 
 Reports are saved automatically in the current browser, separately for each data connection. The header says **Saved in this browser** when the definition is stored; this does not mean the preview has been refreshed. Reports do not sync across browsers or devices.
 
-In the sidebar, right-click a saved report or use its **⋯** button to rename, duplicate, export its editable report file, or delete it. Shift+F10 opens the same menu from a focused report link. Deletion requires confirmation; stop a refresh or wait for PDF export to finish before deleting the open report. Actions on an open report use its current edits, and report files retain revision history.
+The sidebar lists browser-saved reports for the current workspace under **On this device → Reports**. Click **Reports** to open the library, its arrow to expand or collapse the list, or **+** to create a local report. Right-click a saved report or use its **⋯** button to rename, duplicate, export its editable report file, or delete it. Shift+F10 opens the same menu from a focused report link. Deletion requires confirmation; stop a refresh or wait for PDF export to finish before deleting the open report. Actions on an open report use its current edits, and report files retain revision history.
 
 ## Creating and editing
 

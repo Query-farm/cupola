@@ -2,7 +2,7 @@
 
 Open **Notebooks** in the workspace tab bar, or visit `/notebooks?service=…` under the application's versioned base URL. A notebook belongs to the current connection and combines SQL cells, Markdown, and charts attached to SQL results.
 
-In the sidebar, right-click a saved notebook or use its **⋯** button to rename, duplicate, export, or delete it. Shift+F10 opens the same menu from a focused notebook link. Deletion requires confirmation; stop running queries or an AI response before deleting the open notebook. Actions on an open notebook use its current edits.
+The sidebar lists browser-saved notebooks for the current workspace under **On this device → Notebooks**. Click **Notebooks** to open the library, its arrow to expand or collapse the list, or **+** to create a local notebook. Right-click a saved notebook or use its **⋯** button to rename, duplicate, export, or delete it. Shift+F10 opens the same menu from a focused notebook link. Deletion requires confirmation; stop running queries or an AI response before deleting the open notebook. Actions on an open notebook use its current edits.
 
 ## Authoring and execution
 

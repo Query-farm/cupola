@@ -113,7 +113,7 @@ test('sidebar report links open reports without reloading the page', async ({ pa
   await expect(page).toHaveURL(/evidence_report=first/);
 
   // The list, and Back to the report it left.
-  await sidebar.getByRole('link', { name: 'All reports' }).click();
+  await sidebar.getByRole('link', { name: 'Reports' }).click();
   await expect(page).toHaveURL(/reports\/saved/);
   await expect(panel.getByRole('row').filter({ hasText: 'Second report' })).toBeVisible();
   await page.goBack();
@@ -124,4 +124,18 @@ test('sidebar report links open reports without reloading the page', async ({ pa
   const [popup] = await Promise.all([page.context().waitForEvent('page'), sidebar.getByRole('link', { name: 'Second report' }).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })]);
   await expect(popup).toHaveURL(/evidence_report=second/);
   await expect(page).toHaveURL(/evidence_report=first/);
+  await popup.close();
+
+  // Headings open the libraries even when their lists are collapsed or already mounted.
+  await sidebar.getByRole('button', { name: 'Collapse reports', exact: true }).click();
+  await expect(sidebar.getByRole('link', { name: 'First report', exact: true })).toBeHidden();
+  await sidebar.getByRole('link', { name: 'Reports', exact: true }).click();
+  await expect(panel.getByRole('region', { name: 'Saved reports list' })).toBeVisible();
+  await expect(sidebar.getByRole('button', { name: 'Expand reports', exact: true })).toBeVisible();
+  await page.getByRole('navigation', { name: 'Saved notebooks' }).getByRole('link', { name: 'Notebooks', exact: true }).click();
+  await expect(page.getByTestId('notebook-library')).toBeVisible();
+  await sidebar.getByRole('link', { name: 'Reports', exact: true }).click();
+  await expect(page).toHaveURL(/reports\/saved/);
+  await page.reload();
+  await expect(panel.getByRole('region', { name: 'Saved reports list' })).toBeVisible();
 });

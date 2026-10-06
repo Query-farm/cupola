@@ -74,8 +74,12 @@ export function SavedReportsSidebar({ serviceUrl, workspaceId, search = '' }: { 
       search={search}
       libraryHref={href()}
       onNavigate={openReport}
+      onCreate={() => window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, {
+        detail: { serviceUrl, workspaceId, create: true, href: reportHref(serviceUrl, undefined, true) },
+      }))}
+      createLabel="New report"
       error={error ? 'Could not load saved reports.' : undefined}
-      emptyMessage="No saved reports for this worker."
+      emptyMessage="No reports saved on this device for this workspace."
     />
   );
 }

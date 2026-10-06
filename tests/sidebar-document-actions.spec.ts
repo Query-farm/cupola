@@ -130,7 +130,7 @@ for (const kind of ['notebook', 'report'] as const) {
     const original = kind === 'notebook' ? 'Notebook one' : 'Report one';
     const renamed = `Renamed ${kind}`;
     const sidebar = page.getByRole('navigation', { name: `Saved ${collection}` });
-    if (kind === 'report') await sidebar.getByRole('link', { name: 'All reports' }).click();
+    if (kind === 'report') await sidebar.getByRole('link', { name: 'Reports' }).click();
     await (await contextMenu(page, collection, original))
       .getByRole('menuitem', { name: 'Rename…' })
       .click();
@@ -178,6 +178,7 @@ for (const kind of ['notebook', 'report'] as const) {
     await deletion.getByRole('button', { name: 'Confirm delete' }).click();
     await expect(sidebar.getByRole('link', { name: renamed, exact: true })).toHaveCount(0);
     expect(await saved(page, kind, 'one')).toBeNull();
+    await expect(sidebar.getByRole('link', { name: kind === 'notebook' ? 'Notebooks' : 'Reports', exact: true })).toBeFocused();
     expect(await saved(page, kind, 'one', 'https://other.example')).not.toBeNull();
   });
 }

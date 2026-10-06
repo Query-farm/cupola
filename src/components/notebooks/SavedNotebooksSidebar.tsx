@@ -86,7 +86,7 @@ export function SavedNotebooksSidebar({
       activeId={activeId}
       libraryActive={libraryActive}
       error={error}
-      emptyMessage="No saved notebooks for this connection."
+      emptyMessage="No notebooks saved on this device for this workspace."
     />
   );
 }

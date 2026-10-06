@@ -104,9 +104,9 @@ test('sidebar notebooks navigate in place, update names, filter, and restore dir
   await expect(sidebar.getByRole('link', { name: 'Second notebook' })).toHaveCount(0);
   await expect(sidebar.getByRole('link', { name: 'Renamed notebook' })).toBeVisible();
   await filter.fill('');
-  await sidebar.getByRole('link', { name: 'All notebooks', exact: true }).click();
+  await sidebar.getByRole('link', { name: 'Notebooks', exact: true }).click();
   await expect(page.getByTestId('notebook-library')).toBeVisible();
-  await expect(sidebar.getByRole('link', { name: 'All notebooks' })).toHaveAttribute('aria-current', 'page');
+  await expect(sidebar.getByRole('link', { name: 'Notebooks' })).toHaveAttribute('aria-current', 'page');
   await page.goBack();
   await expect(title).toHaveValue('Renamed notebook');
   const popupPromise = page.context().waitForEvent('page');
@@ -125,7 +125,7 @@ test('notebook links restore the URL when the requested workspace is already mou
   await seed(page);
   const sidebar = page.getByRole('navigation', { name: 'Saved notebooks' });
   const library = page.getByTestId('notebook-library');
-  await sidebar.getByRole('link', { name: 'All notebooks', exact: true }).click();
+  await sidebar.getByRole('link', { name: 'Notebooks', exact: true }).click();
   await expect(library).toBeVisible();
   await expect(page).toHaveURL(/\/notebooks\?service=/);
   await page.reload();
@@ -136,7 +136,7 @@ test('notebook links restore the URL when the requested workspace is already mou
   await expect(title).toHaveValue('First notebook');
   await title.fill('Edits kept while switching surfaces');
   await page.getByRole('navigation', { name: 'Saved reports' })
-    .getByRole('link', { name: 'All reports', exact: true }).click();
+    .getByRole('link', { name: 'Reports', exact: true }).click();
   await expect(page).toHaveURL(/\/reports\/saved\?/);
   await sidebar.getByRole('link', { name: 'Edits kept while switching surfaces', exact: true }).click();
   await expect(title).toHaveValue('Edits kept while switching surfaces');
@@ -157,10 +157,14 @@ test('sidebar creates notebooks, reflects deletion and cross-tab changes, and re
   await seed(page);
   const root = page.getByTestId('catalog-sidebar');
   const sidebar = page.getByRole('navigation', { name: 'Saved notebooks' });
+  const local = root.getByRole('region', { name: 'On this device', exact: true });
+  await expect(local.getByRole('navigation', { name: 'Saved notebooks' })).toBeVisible();
+  await expect(local.getByRole('navigation', { name: 'Saved reports' })).toBeVisible();
+  await expect(root.getByRole('link', { name: /^All (notebooks|reports)$/ })).toHaveCount(0);
   await root.getByRole('button', { name: 'New notebook', exact: true }).click();
   await page.getByRole('textbox', { name: 'Notebook title' }).fill('Created from sidebar');
   await expect(sidebar.getByRole('link', { name: 'Created from sidebar' })).toBeVisible();
-  await sidebar.getByRole('link', { name: 'All notebooks' }).click();
+  await sidebar.getByRole('link', { name: 'Notebooks' }).click();
   const library = page.getByTestId('notebook-library');
   await library.getByRole('textbox', { name: 'Search notebooks' }).fill('Created from sidebar');
   await library.getByRole('button', { name: 'Delete', exact: true }).click();
@@ -172,8 +176,12 @@ test('sidebar creates notebooks, reflects deletion and cross-tab changes, and re
   await expect(sidebar.getByRole('link', { name: 'Changed in another tab' })).toBeVisible();
   await other.close();
   await page.getByTestId('sidebar-notebooks-toggle').click();
-  await expect(sidebar).toHaveCount(0);
+  await expect(sidebar.getByRole('link', { name: 'Notebooks', exact: true })).toBeVisible();
+  await expect(sidebar.getByRole('link', { name: 'Changed in another tab', exact: true })).toBeHidden();
   await page.reload();
+  await expect(page.getByTestId('sidebar-notebooks-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await sidebar.getByRole('link', { name: 'Notebooks', exact: true }).click();
+  await expect(library).toBeVisible();
   await expect(page.getByTestId('sidebar-notebooks-toggle')).toHaveAttribute('aria-expanded', 'false');
   await page.getByRole('textbox', { name: 'Filter catalog' }).fill('Changed in another');
   await expect(sidebar.getByRole('link', { name: 'Changed in another tab' })).toBeVisible();

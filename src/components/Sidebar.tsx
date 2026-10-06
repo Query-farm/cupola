@@ -103,8 +103,13 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
   const [dismissedAttention, setDismissedAttention] = useState<string | null>(null);
   const [attentionOpen, setAttentionOpen] = useState(false);
   const catalogAliases = useMemo(() => new Set(catalogs.map((c) => c.catalogName)), [catalogs]);
-  const handleExpanded = useCallback((ids: ReadonlySet<string>) => {
-    onExpandedChange?.([...ids].filter((id) => catalogAliases.has(id)));
+  const expandedRoots = useRef(new Set(initialExpanded));
+  const handleExpanded = useCallback((ids: ReadonlySet<string>, local = false) => {
+    // Both trees share the workspace's saved expansion, so toggling one keeps the other.
+    const roots = new Set([...expandedRoots.current].filter((id) => (id === 'memory') !== local));
+    for (const id of ids) if (catalogAliases.has(id) && (id === 'memory') === local) roots.add(id);
+    expandedRoots.current = roots;
+    onExpandedChange?.([...roots]);
   }, [onExpandedChange, catalogAliases]);
   const { settings } = useSettings();
   // The parent passes fresh callbacks every render; read them through refs so
@@ -141,10 +146,9 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
           showDuckDBTypes: settings.showDuckDBTypes,
           hideTableBackingFunctions: settings.hideTableBackingFunctions,
           hideDollarTables: settings.hideDollarTables,
-          // `memory` is pinned below a divider: it is this browser's, not the workspace's.
+          // `memory` belongs with browser-local documents in the On this device section.
           rootIcon: isMemory ? Cpu : meta ? chipIcon(catalog.catalogName, meta.color) : undefined,
           rootTitle: isMemory ? "Local: in this browser only" : meta ? hostOf(meta.url) : catalog.sourceUrl ? hostOf(catalog.sourceUrl) : undefined,
-          dividerBefore: isMemory ? "local" : undefined,
           rootActions: statusMark(statusByAlias.get(catalog.catalogName), meta),
           insertTarget,
           onTableAction: canInsert ? (schema, table) => insertRelation(catalog.catalogName, schema, table) : undefined,
@@ -158,6 +162,8 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
   const inventoryNames = useMemo(() => new Set(catalogs.map((c) => c.catalogName)), [catalogs]);
   const pendingRoots = catalogStatuses.filter((s) => !inventoryNames.has(s.alias) || s.state === "failed" || s.state === "sign-in-required");
   const filteredData = useMemo(() => filterTree(combinedData, search), [combinedData, search]);
+  const workerData = useMemo(() => filteredData.filter((item) => item.id !== 'memory'), [filteredData]);
+  const localData = useMemo(() => filteredData.filter((item) => item.id === 'memory'), [filteredData]);
 
   const selectedTreeId = useMemo(
     () => selection ? selectionToTreeId(selection, defaultCatalogName) : defaultCatalogName,
@@ -315,7 +321,7 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
           </div>
         )}
         <TreeView
-          data={filteredData}
+          data={workerData}
           expandAll={!!search}
           onSelectChange={handleSelectChange}
           renderHover={renderHover}
@@ -324,9 +330,23 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
           onExpandedChange={handleExpanded}
           trailingDropZone={false}
         />
-        {serviceUrl && <SavedNotebooksSidebar key={`notebooks:${workspaceId ?? serviceUrl}`} serviceUrl={serviceUrl} workspaceId={workspaceId} search={search} activeId={notebooksActive ? activeNotebookId : undefined} libraryActive={notebooksActive && !activeNotebookId} />}
-        {/* Reports follow the catalogs, drawn as one more root of the same tree. */}
-        {serviceUrl && <SavedReportsSidebar key={`reports:${workspaceId ?? serviceUrl}`} serviceUrl={serviceUrl} workspaceId={workspaceId} search={search} />}
+        {(serviceUrl || localData.length > 0) && (
+          <section aria-label="On this device" className="mt-2 border-t border-border pt-2">
+            <h2 className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">On this device</h2>
+            <TreeView
+              data={localData}
+              expandAll={!!search}
+              onSelectChange={handleSelectChange}
+              renderHover={renderHover}
+              initialSelectedItemId={selectedTreeId}
+              initialExpandedIds={initialExpanded}
+              onExpandedChange={(ids) => handleExpanded(ids, true)}
+              trailingDropZone={false}
+            />
+            {serviceUrl && <SavedNotebooksSidebar key={`notebooks:${workspaceId ?? serviceUrl}`} serviceUrl={serviceUrl} workspaceId={workspaceId} search={search} activeId={notebooksActive ? activeNotebookId : undefined} libraryActive={notebooksActive && !activeNotebookId} />}
+            {serviceUrl && <SavedReportsSidebar key={`reports:${workspaceId ?? serviceUrl}`} serviceUrl={serviceUrl} workspaceId={workspaceId} search={search} />}
+          </section>
+        )}
       </div>
 
       {/* Settings + Copyright. The SQL Shell has its own tab in the top bar. */}
