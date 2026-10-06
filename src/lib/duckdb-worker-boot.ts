@@ -6,7 +6,7 @@ import { createQueryExecutor, type QueryExecutionOptions } from './query-executi
 //
 // AsyncDuckDB runs its own sub-worker (COI/EH/MVP variant selected by
 // selectBundle). This module owns the lifecycle of that sub-worker and adapts
-// it to the project's existing `engine.query` / `engine.cancelQuery` contract
+// it to the project's existing `engine.query` contract
 // — no second worker layer, no custom wire protocol. The dependency surface
 // for the rest of the app is unchanged: consumers keep calling
 // `engine.query(sql)` and get back `{ ok, arrowBuffers, error }`.
@@ -122,8 +122,9 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
 
   const cancelSAB = typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;
   const cancelInt32 = cancelSAB ? new Int32Array(cancelSAB) : null;
-  engine.cancelInt32 = cancelInt32;
-  engine.cancelQuery = () => {
+  // Asks haybarn's worker to cancel the pending query between polls. The only
+  // way to cancel on builds without the interrupt flag; only the executor calls it.
+  let cancelPending = () => {
     if (cancelInt32) Atomics.store(cancelInt32, 0, 1);
   };
 
@@ -198,6 +199,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // `src/lib/format.ts` keys its hugeint/timetz/bit/uuid handlers off the
   // `ARROW:extension:metadata` this produces; without it they silently never
   // fire. `.test_formats` is the guard.
+  await db.open({ arrowLosslessConversion: true });
 
   setBootPhase("Opening the database");
   const conn = await db.connect();
@@ -209,7 +211,7 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // crossOriginIsolated has no SharedArrayBuffer at all; non-SAB contexts can
   // still cancel via the message-based connection.cancelSent() path.
   if (cancelSAB) db.registerCancelSAB(cancelSAB);
-  else engine.cancelQuery = () => { void conn.cancelSent().catch(error => console.warn('Query cancellation failed', error)); };
+  else cancelPending = () => { void conn.cancelSent().catch(error => console.warn('Query cancellation failed', error)); };
 
   // Preserve the existing { ok, arrowBuffers, error } contract. AsyncDuckDB's
   // runQuery returns a single Uint8Array of File-format Arrow IPC bytes —
@@ -250,15 +252,15 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // mid-poll, on every engine thread, and it then fails with an interrupt error.
   //
   // Only the executor sets it, and only while its own query holds the
-  // connection: the flag interrupts whatever runs on the connection, while
-  // `engine.cancelQuery` is also called by surfaces that don't know what's running.
+  // connection: the flag interrupts whatever runs on the connection. Every
+  // surface cancels by aborting the signal it passed to engine.query.
   const handleSource = db as unknown as { getInterruptHandle?: (conn: number) => Promise<{ memory: SharedArrayBuffer; offset: number } | null> };
   const interruptHandle = handleSource.getInterruptHandle ? await handleSource.getInterruptHandle(connId) : null;
   const interruptFlag = interruptHandle ? new Uint8Array(interruptHandle.memory, interruptHandle.offset, 1) : null;
   engine.interruptsRunningQueries = interruptFlag !== null;
   const execute = createQueryExecutor(() => {
     if (interruptFlag) Atomics.store(interruptFlag, 0, 1);
-    engine.cancelQuery?.();
+    cancelPending();
   });
   // With the flag, interruptible work runs on every engine thread. The flag
   // arrived in haybarn-wasm 1.5.5-rc7 together with the engine fix that made

@@ -15,6 +15,8 @@
 /** Label for the "model is composing this call" phase. */
 export function toolInputLabel(name: string): string {
   switch (name) {
+    case "get_notebook": return "Reading notebook";
+    case "propose_notebook_edit": return "Preparing notebook changes";
     case "get_report": return "Reading report";
     case "list_components": return "Exploring Evidence components";
     case "get_component": return "Checking Evidence component options";
@@ -65,6 +67,8 @@ export function toolInputLabel(name: string): string {
 /** Label for the "tool is running" phase, used by the compact status row. */
 export function toolActivityLabel(name: string, input?: any): string {
   switch (name) {
+    case "get_notebook": return "Reading notebook";
+    case "propose_notebook_edit": return "Preparing notebook changes";
     case "get_report": return "Reading report";
     case "list_components": return "Exploring Evidence components";
     case "get_component": return "Checking Evidence component options";

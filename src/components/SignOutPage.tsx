@@ -1,3 +1,4 @@
+import { appBase } from "../lib/app-base";
 import { useEffect, useState } from "react";
 import { LogOutIcon } from "lucide-react";
 import { clearAllAuth } from "@/lib/auth";
@@ -38,7 +39,7 @@ export function SignOutPage() {
     setCleared(true);
   }, []);
 
-  const welcomeHref = import.meta.env.BASE_URL;
+  const welcomeHref = appBase;
 
   return (
     <div className="flex items-center justify-center min-h-screen">

@@ -17,9 +17,10 @@ interface Props {
    *  maximize dialog where the toolbar buttons are larger. */
   size?: "sm" | "md";
   testId?: string;
+  disabled?: boolean;
 }
 
-export function ChartDownloadMenu({ onDownload, size = "sm", testId }: Props) {
+export function ChartDownloadMenu({ onDownload, size = "sm", testId, disabled }: Props) {
   const iconClass = size === "md" ? "h-4 w-4" : "h-3.5 w-3.5";
   const buttonClass =
     size === "md"
@@ -31,6 +32,8 @@ export function ChartDownloadMenu({ onDownload, size = "sm", testId }: Props) {
       <PopoverTrigger
         className={buttonClass}
         title="Download"
+        aria-label="Download chart"
+        disabled={disabled}
         data-testid={testId}
       >
         <Download className={iconClass} />

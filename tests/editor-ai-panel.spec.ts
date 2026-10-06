@@ -69,3 +69,15 @@ test.describe("Editor Ask AI panel", () => {
     await expect(page.getByTestId("editor-ai-panel")).toContainText("marker-in-tab-A");
   });
 });
+
+
+test('shared dock resizing preserves the editor width key', async ({ page }) => {
+  await page.getByTestId('editor-ask-ai').click();
+  const handle = page.getByRole('separator', { name: 'Resize editor side panel' });
+  await expect(handle).toHaveAttribute('aria-valuenow', '400');
+  await handle.press('ArrowLeft');
+  await expect(page.getByTestId('editor-dock')).toHaveCSS('width', '416px');
+  expect(await page.evaluate(() => localStorage.getItem('vgi-editor-ai-width'))).toBe('416');
+  await page.reload();
+  await expect(page.getByTestId('editor-dock')).toHaveCSS('width', '416px');
+});

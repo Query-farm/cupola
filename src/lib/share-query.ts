@@ -100,7 +100,7 @@ export interface ShareQueryLinkOptions {
    *  the plain encoding exceeds AUTO_COMPRESS_THRESHOLD. */
   compress?: boolean;
   /** Link base (origin + path). Defaults to the current page minus its query
-   *  string and fragment, with a `/v{version}/` base repointed at `/latest/`.
+   *  string and fragment, with a `/v{version}/` base repointed at `/`.
    *  An explicit value is used verbatim. */
   baseUrl?: string;
 }
@@ -111,19 +111,11 @@ export interface ShareQueryLinkOptions {
  *  alone. Tolerates a prerelease/build suffix (`0.5.0-rc.1`). */
 const VERSIONED_BASE_PATH = /^\/v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?(?=\/|$)/;
 
-/** Repoint a versioned base path at `/latest/`.
- *
- *  A share link outlives the release that produced it. Pinning it to
- *  `/v0.4.96/` means the recipient — possibly months later — runs that exact
- *  build, missing every fix since, and keeps an old version alive in R2 long
- *  after it should have aged out. `/latest/` 302s to the current version, and
- *  the worker preserves the query string across the hop.
- *
- *  Leaves a flat base (`/`, the Docker/Azure `BASE_PATH=/` deployment) alone. */
+/** Public share links use stable URLs; custom self-hosted bases stay intact. */
 export function toLatestBaseUrl(baseUrl: string): string {
   try {
     const u = new URL(baseUrl);
-    u.pathname = u.pathname.replace(VERSIONED_BASE_PATH, "/latest");
+    u.pathname = u.pathname.replace(VERSIONED_BASE_PATH, "");
     return u.toString();
   } catch {
     return baseUrl;

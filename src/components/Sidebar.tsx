@@ -1,3 +1,4 @@
+import { SavedNotebooksSidebar } from './notebooks/SavedNotebooksSidebar';
 import { SavedReportsSidebar } from "./evidence/SavedReportsSidebar";
 import { useState, useMemo, useRef, useCallback } from "react";
 import { Search, Cpu, RefreshCw, Loader2, CheckCircle2, AlertTriangle, LogIn, Database, Star, Plus, X } from "lucide-react";
@@ -43,6 +44,8 @@ interface Props {
   defaultCatalogName: string;
   inventoryError?: string | null;
   serviceUrl?: string;
+  activeNotebookId?: string | null;
+  notebooksActive?: boolean;
   selection: Selection | null;
   onSelect: (selection: Selection | null) => void;
   /** Insert text into the DuckDB shell (or the editor, per `insertTarget`). */
@@ -50,7 +53,7 @@ interface Props {
   /** Insert a call to a function or macro. */
   onInsertCallable?: (callable: Callable) => void;
   /** Where inserts land. In the editor, a modifier-click inserts instead of selecting. */
-  insertTarget?: "shell" | "editor";
+  insertTarget?: "shell" | "editor" | "notebook";
   onRefresh?: () => void;
   refreshing?: boolean;
   /** Each configured catalog's attach status. Empty for a single catalog,
@@ -90,7 +93,7 @@ function statusMark(status: SidebarCatalogStatus | undefined, meta: SidebarCatal
   );
 }
 
-export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onInsertCallable, insertTarget = "shell", onRefresh, refreshing, catalogStatuses = [], onRetryCatalog, onSignInCatalog, onCatalogDetails, signInNotice, onDismissSignInNotice, workspaceId, catalogMeta, initialExpanded, onExpandedChange, emptyWorkspace, onAttachCatalog, onEnableCatalog }: Props) {
+export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onInsertCallable, insertTarget = "shell", onRefresh, refreshing, catalogStatuses = [], onRetryCatalog, onSignInCatalog, onCatalogDetails, signInNotice, onDismissSignInNotice, workspaceId, catalogMeta, initialExpanded, onExpandedChange, emptyWorkspace, onAttachCatalog, onEnableCatalog }: Props) {
   const [search, setSearch] = useState("");
   // One dismissible strip for every catalog that needs attention. Dismissing
   // it hides it until that set changes.
@@ -146,6 +149,7 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
           insertTarget,
           onTableAction: canInsert ? (schema, table) => insertRelation(catalog.catalogName, schema, table) : undefined,
           onCallableAction: canInsertCallable ? (schema, name, kind) => insertCallable(catalog.catalogName, schema, name, kind) : undefined,
+          onColumnAction: canInsert && insertTarget === 'notebook' ? (_schema, _table, column) => insertRef.current?.(quoteIdent(column)) : undefined,
         });
       });
   }, [catalogs, order, statusByAlias, catalogMeta, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, canInsert, canInsertCallable, insertTarget, insertRelation, insertCallable]);
@@ -167,7 +171,11 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
     }
     const sel = parseSelection(item.id);
     // In the editor, a modifier-click writes the object into the query.
-    if (insertTarget === "editor" && event && (event.metaKey || event.ctrlKey) && sel?.catalog && sel.schema && !item.id.includes("::c:")) {
+    if (insertTarget !== "shell" && event && (event.metaKey || event.ctrlKey) && sel?.catalog && sel.schema) {
+      if (item.id.includes('::c:')) {
+        insertRef.current?.(quoteIdent(item.id.split('::c:')[1].split('/').slice(1).join('/')));
+        return;
+      }
       if (sel.type === "function" || sel.type === "macro") {
         event.preventDefault();
         insertCallable(sel.catalog, sel.schema, sel.name, sel.type);
@@ -187,7 +195,7 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
     if (item.id.includes("::c:")) return null;
     const sel = parseSelection(item.id);
     if (!sel) return null;
-    const editor = insertTarget === "editor";
+    const editor = insertTarget !== "shell";
     const callables = callablesForSelection(catalogsRef.current, sel);
     if (callables.length) return <CallableHoverCard callables={callables} editor={editor} />;
     const relation = findRelation(catalogsRef.current, sel);
@@ -316,6 +324,7 @@ export function Sidebar({ serviceUrl, catalogs, defaultCatalogName, inventoryErr
           onExpandedChange={handleExpanded}
           trailingDropZone={false}
         />
+        {serviceUrl && <SavedNotebooksSidebar key={`notebooks-${serviceUrl}`} serviceUrl={serviceUrl} search={search} activeId={notebooksActive ? activeNotebookId : undefined} libraryActive={notebooksActive && !activeNotebookId} />}
         {/* Reports follow the catalogs, drawn as one more root of the same tree. */}
         {serviceUrl && <SavedReportsSidebar key={`reports:${workspaceId ?? serviceUrl}`} serviceUrl={serviceUrl} workspaceId={workspaceId} search={search} />}
       </div>

@@ -155,7 +155,6 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
         c.abort?.abort();
         c.askUserResolve?.("__cancelled__", -1);
       }
-      engine.cancelQuery?.();
     };
   }, []);
 
@@ -255,17 +254,6 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
       updateBlocks(blocks);
     };
 
-    function withAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
-      if (!signal) return p;
-      return new Promise<T>((resolve, reject) => {
-        if (signal.aborted) { engine.cancelQuery?.(); reject(new DOMException("Aborted", "AbortError")); return; }
-        const onAbort = () => { engine.cancelQuery?.(); reject(new DOMException("Aborted", "AbortError")); };
-        signal.addEventListener("abort", onAbort, { once: true });
-        p.then((v) => { signal.removeEventListener("abort", onAbort); resolve(v); },
-               (e) => { signal.removeEventListener("abort", onAbort); reject(e); });
-      });
-    }
-
     const executeTool = async (name: string, input: any, signal?: AbortSignal): Promise<any> => {
       const denied = deniedAIQueryToolResult(name, queryMode);
       if (denied) return denied;
@@ -281,8 +269,8 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
           updateBlocks(blocks);
         };
         const output = await executeSemanticQuery(catalogs, input, {
-          query: (sql) => withAbort(queryFn(sql), signal),
-          queryPrepared: engine.queryPrepared ? (sql, params) => withAbort(engine.queryPrepared!(sql, params), signal) : undefined,
+          query: (sql) => queryFn(sql, signal && { signal }),
+          queryPrepared: engine.queryPrepared ? (sql, params) => engine.queryPrepared!(sql, params, signal && { signal }) : undefined,
           resultCache: c.resultCache,
         }, {
           onStart: () => { engine.progress = updateProgress; setGrid({ running: true, ran: true, error: null }); },
@@ -322,7 +310,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
         };
         return executeRunSql(
           input.sql,
-          { query: (sql) => withAbort(queryFn(sql), signal), resultCache: c.resultCache },
+          { query: (sql) => queryFn(sql, signal && { signal }), resultCache: c.resultCache },
           {
             onStart: () => { engine.progress = updateProgress; },
             onEnd: () => { engine.progress = prevProgress; },
@@ -357,7 +345,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
       if (name === "describe_table") {
         const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB engine not ready");
-        return describeTableWithFallback(catalogs, { query: queryFn }, input);
+        return describeTableWithFallback(catalogs, { query: (sql) => queryFn(sql, signal && { signal }) }, input);
       }
       if (name === "describe_function") return executeDescribeFunction(catalogs, input);
       if (name === "ask_user") {
@@ -493,7 +481,6 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
     const c = convos.current.get(docId);
     if (c?.askUserResolve) { c.askUserResolve("__cancelled__", -1); c.askUserResolve = null; }
     c?.abort?.abort();
-    engine.cancelQuery?.();
   }, [docId]);
 
   // The resolver (installed by the ask_user tool) owns marking the block

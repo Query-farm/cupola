@@ -110,8 +110,9 @@ export interface BuildTreeOptions {
   onTableAction?: (schema: string, table: string) => void;
   /** When provided, adds an insert-call button to function and macro nodes. */
   onCallableAction?: (schema: string, name: string, kind: "function" | "macro") => void;
+  onColumnAction?: (schema: string, table: string, column: string) => void;
   /** Where the paste buttons send text, for their labels. */
-  insertTarget?: "shell" | "editor";
+  insertTarget?: "shell" | "editor" | "notebook";
   /** When provided, adds a refresh button to the catalog root node. */
   onRefresh?: () => void;
   refreshing?: boolean;
@@ -128,7 +129,7 @@ export interface BuildTreeOptions {
 
 /** Build the full tree from catalog data. Root node is the catalog. */
 export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = {}): TreeDataItem[] {
-  const { showDuckDBTypes = true, hideTableBackingFunctions = true, hideDollarTables = true, onTableAction, onCallableAction, insertTarget = "shell", onRefresh, refreshing, rootIcon, rootActions, rootTitle, dividerBefore } = options;
+  const { showDuckDBTypes = true, hideTableBackingFunctions = true, hideDollarTables = true, onTableAction, onCallableAction, onColumnAction, insertTarget = "shell", onRefresh, refreshing, rootIcon, rootActions, rootTitle, dividerBefore } = options;
   const sortedSchemas = [...catalog.schemas].sort((a, b) =>
     a.info.name.localeCompare(b.info.name)
   );
@@ -142,7 +143,7 @@ export function buildTreeData(catalog: CatalogData, options: BuildTreeOptions = 
     ...(rootTitle ? { title: rootTitle } : {}),
     ...(dividerBefore ? { dividerBefore } : {}),
     children: sortedSchemas.map((s) =>
-      buildSchemaNode(catalog.catalogName, s, showDuckDBTypes, hideTableBackingFunctions, hideDollarTables, s.info.name === catalog.defaultSchema, { onTableAction, onCallableAction, insertTarget })
+      buildSchemaNode(catalog.catalogName, s, showDuckDBTypes, hideTableBackingFunctions, hideDollarTables, s.info.name === catalog.defaultSchema, { onTableAction, onCallableAction, onColumnAction, insertTarget })
     ),
     actions: onRefresh
       ? React.createElement("div", {
@@ -178,12 +179,13 @@ function insertButton(label: string, run: () => void): React.ReactNode {
 interface InsertActions {
   onTableAction?: (schema: string, table: string) => void;
   onCallableAction?: (schema: string, name: string, kind: "function" | "macro") => void;
-  insertTarget: "shell" | "editor";
+  onColumnAction?: (schema: string, table: string, column: string) => void;
+  insertTarget: "shell" | "editor" | "notebook";
 }
 
-function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDBTypes: boolean, hideTableBackingFunctions: boolean, hideDollarTables: boolean, isDefault: boolean, { onTableAction, onCallableAction, insertTarget }: InsertActions): TreeDataItem {
+function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDBTypes: boolean, hideTableBackingFunctions: boolean, hideDollarTables: boolean, isDefault: boolean, { onTableAction, onCallableAction, onColumnAction, insertTarget }: InsertActions): TreeDataItem {
   const schemaId = `${catalogName}::${schema.info.name}`;
-  const into = insertTarget === "editor" ? "query editor" : "shell";
+  const into = insertTarget === "notebook" ? "notebook cell" : insertTarget === "editor" ? "query editor" : "shell";
   const children: TreeDataItem[] = [];
 
   const visibleTables = hideDollarTables ? schema.tables.filter((t) => !t.name.includes("$")) : schema.tables;
@@ -211,10 +213,10 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
         // Column comment as a hover tooltip — fall back to the type so the
         // row always has something useful on hover.
         title: col.comment ? `${col.name} — ${col.comment}` : undefined,
-        actions: React.createElement("span", {
+        actions: React.createElement("span", { className: 'flex items-center gap-1' }, React.createElement("span", {
           className: `tree-col-type text-[10px] font-mono ml-1 truncate px-1 py-0.5 rounded ${typeColorClass(typeLabel)}`,
           title: displayType !== typeLabel ? typeLabel : undefined,
-        }, displayType),
+        }, displayType), onColumnAction ? insertButton(`Paste ${col.name} into ${into}`, () => onColumnAction(schema.info.name, table.name, col.name)) : null),
       };
     });
 

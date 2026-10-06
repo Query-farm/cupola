@@ -152,7 +152,6 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
           pendingAsk("__cancelled__", -1);
         }
         abortRef.current.abort();
-        engine.cancelQuery?.();
       }
     };
     document.addEventListener("keydown", handler);
@@ -367,32 +366,6 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
       updateBlocks(blocks);
     };
 
-    /**
-     * Race a promise against an AbortSignal. When the signal aborts we
-     * fire engine.cancelQuery to interrupt the haybarn worker (best-effort)
-     * and reject with AbortError so the agent loop bails out — even if the
-     * underlying engine.query promise hasn't settled yet.
-     */
-    function withAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
-      if (!signal) return p;
-      return new Promise<T>((resolve, reject) => {
-        if (signal.aborted) {
-          engine.cancelQuery?.();
-          reject(new DOMException("Aborted", "AbortError"));
-          return;
-        }
-        const onAbort = () => {
-          engine.cancelQuery?.();
-          reject(new DOMException("Aborted", "AbortError"));
-        };
-        signal.addEventListener("abort", onAbort, { once: true });
-        p.then(
-          (v) => { signal.removeEventListener("abort", onAbort); resolve(v); },
-          (e) => { signal.removeEventListener("abort", onAbort); reject(e); },
-        );
-      });
-    }
-
     // Tool executor. Heavy lifting (error classification, DDL detection,
     // describe_table SQL fallback) lives in ai-tool-executor.ts; this file
     // wires the UI-specific callbacks (progress, history entry, navigation).
@@ -417,8 +390,8 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
           updateBlocks(blocks);
         };
         const output = await executeSemanticQuery(catalogs, input, {
-          query: (sql) => withAbort(queryFn(sql), signal),
-          queryPrepared: engine.queryPrepared ? (sql, params) => withAbort(engine.queryPrepared!(sql, params), signal) : undefined,
+          query: (sql) => queryFn(sql, signal && { signal }),
+          queryPrepared: engine.queryPrepared ? (sql, params) => engine.queryPrepared!(sql, params, signal && { signal }) : undefined,
           resultCache: resultCacheRef.current,
         }, {
           onStart: () => { engine.progress = updateProgress; },
@@ -463,7 +436,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
         };
         return executeRunSql(
           input.sql,
-          { query: (sql) => withAbort(queryFn(sql), signal), resultCache: resultCacheRef.current },
+          { query: (sql) => queryFn(sql, signal && { signal }), resultCache: resultCacheRef.current },
           {
             onStart: () => { engine.progress = updateProgress; },
             onEnd: () => { engine.progress = prevProgress; },
@@ -541,7 +514,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
       if (name === "describe_table") {
         const queryFn = engine.query;
         if (!queryFn) throw new Error("DuckDB shell not initialized");
-        return describeTableWithFallback(catalogs, { query: queryFn }, input);
+        return describeTableWithFallback(catalogs, { query: (sql) => queryFn(sql, signal && { signal }) }, input);
       }
       if (name === "describe_function") {
         return executeDescribeFunction(catalogs, input);
@@ -592,9 +565,9 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
         if (!engine.query) {
           return JSON.stringify({ ok: false, error: "DuckDB not ready — open the SQL Shell first." });
         }
-        const rows = await readRows(input.sql);
+        const rows = await readRows(input.sql, signal && { signal });
         if (rows === null) {
-          const raw = await engine.query(input.sql);
+          const raw = await engine.query(input.sql, signal && { signal });
           if (!raw.ok) {
             return JSON.stringify({ ok: false, error: raw.error || "Query failed" });
           }
@@ -609,9 +582,9 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
         const extraRowsByName: Record<string, Record<string, any>[]> = {};
         const extraMeta: Array<{ name: string; sql: string; rowCount: number; columns: string[] }> = [];
         for (const ex of cleanedExtras) {
-          const exRows = await readRows(ex.sql);
+          const exRows = await readRows(ex.sql, signal && { signal });
           if (exRows === null) {
-            const raw = await engine.query(ex.sql);
+            const raw = await engine.query(ex.sql, signal && { signal });
             const msg = !raw.ok ? raw.error : "Query returned no rows";
             return JSON.stringify({ ok: false, error: `extraData "${ex.name}" failed: ${msg || "Query failed"}` });
           }
@@ -895,8 +868,6 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     askUserResolve.current = null;
     pendingAsk?.("__cancelled__", -1);
     abortRef.current?.abort();
-    // Also cancel any running DuckDB query
-    engine.cancelQuery?.();
   };
 
   // Starter questions

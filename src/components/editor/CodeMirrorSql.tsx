@@ -1,7 +1,9 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useLayoutEffect, useImperativeHandle, useRef } from "react";
+import { Prec, StateEffect, type Extension } from "@codemirror/state";
+import { keymap } from "@codemirror/view";
 import { isolateHistory } from "@codemirror/commands";
 import { buildSqlExtensions, EditorState, EditorView } from "@/lib/editor/cm-sql-setup";
-import { snippet, type CompletionSource } from "@codemirror/autocomplete";
+import { closeCompletion, snippet, type CompletionSource } from "@codemirror/autocomplete";
 import type { CatalogIndex } from "@/lib/catalog-index";
 import { refreshCatalogHelp } from "@/lib/editor/cm-catalog-help";
 import { statementAtCursor, type SqlStatement } from "@/lib/editor/sql-statements";
@@ -25,14 +27,23 @@ export interface CodeMirrorSqlHandle {
   focus: () => void;
 }
 
+/** In-memory editing state retained by the owning query tab. */
+export interface SqlEditorSession {
+  state?: EditorState;
+  scroll?: ReturnType<EditorView["scrollSnapshot"]>;
+}
+
 interface Props {
   /** Initial document — only read on mount. Parent should key the component
-   *  by the active document id so switching tabs creates a fresh editor. */
+   *  by the active document id. A supplied session restores its editing state. */
   initialDoc: string;
+  session?: SqlEditorSession;
   /** Fires (debounced upstream) with the full document on every change. */
   onChange?: (doc: string) => void;
-  /** Run the statement at the cursor — bound to Cmd/Ctrl+Enter. */
+  /** Run SQL (selection or statement at the cursor) — bound to Cmd/Ctrl+Enter. */
   onRunStatement?: () => void;
+  /** Notebook-only Shift+Enter command. Consumes the key without inserting a newline. */
+  onRunCell?: () => void;
   /** Fires when the selection emptiness changes (true = non-empty selection). */
   onSelectionChange?: (hasSelection: boolean) => void;
   /** Handle a drop of `text/plain` (e.g. a sidebar tree id) — the cursor is
@@ -53,13 +64,15 @@ interface Props {
  * recreating the editor.
  */
 export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function CodeMirrorSql(
-  { initialDoc, onChange, onRunStatement, onSelectionChange, onDropText, completionSource, fontSize, getCatalogIndex },
+  { initialDoc, session, onChange, onRunStatement, onRunCell, onSelectionChange, onDropText, completionSource, fontSize, getCatalogIndex },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onRunRef = useRef(onRunStatement);
+  const onRunCellRef = useRef(onRunCell);
+  onRunCellRef.current = onRunCell;
   const onSelRef = useRef(onSelectionChange);
   const onDropRef = useRef(onDropText);
   onChangeRef.current = onChange;
@@ -69,53 +82,74 @@ export const CodeMirrorSql = forwardRef<CodeMirrorSqlHandle, Props>(function Cod
   const indexRef = useRef(getCatalogIndex);
   indexRef.current = getCatalogIndex;
 
-  useEffect(() => {
+  // Layout cleanup runs before React detaches the DOM, while the saved scroll
+  // position still reflects the visible editor.
+  useLayoutEffect(() => {
     if (!hostRef.current) return;
-    const state = EditorState.create({
-      doc: initialDoc,
-      extensions: [
-        ...buildSqlExtensions({
-          onRunStatement: () => {
-            onRunRef.current?.();
-            return true;
-          },
-          completionSource: completionSource ?? null,
-          fontSize,
-          getCatalogIndex: () => indexRef.current?.() ?? null,
-        }),
-        EditorView.updateListener.of((u) => {
-          if (u.docChanged) onChangeRef.current?.(u.state.doc.toString());
-          if (u.selectionSet || u.docChanged) {
-            onSelRef.current?.(!u.state.selection.main.empty);
-          }
-        }),
-        EditorView.contentAttributes.of({ "aria-label": "SQL query editor" }),
-        // Intercept drops (sidebar tree ids) so CodeMirror doesn't insert the
-        // raw payload — move the cursor to the drop point, then delegate.
-        EditorView.domEventHandlers({
-          dragover(e) {
-            if (!onDropRef.current) return false;
-            e.preventDefault();
-            if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-            return true;
-          },
-          drop(e, view) {
-            if (!onDropRef.current) return false;
-            const raw = e.dataTransfer?.getData("text/plain");
-            if (!raw) return false;
-            e.preventDefault();
-            const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
-            if (pos != null) view.dispatch({ selection: { anchor: pos } });
-            view.focus();
-            onDropRef.current(raw);
-            return true;
-          },
-        }),
-      ],
-    });
-    const view = new EditorView({ state, parent: hostRef.current });
+    const extensions: Extension[] = [
+      Prec.highest(keymap.of([{
+        key: "Shift-Enter",
+        run: () => {
+          if (!onRunCellRef.current) return false;
+          onRunCellRef.current();
+          return true;
+        },
+      }])),
+      ...buildSqlExtensions({
+        onRunStatement: () => {
+          onRunRef.current?.();
+          return true;
+        },
+        completionSource: completionSource ?? null,
+        fontSize,
+        getCatalogIndex: () => indexRef.current?.() ?? null,
+      }),
+      EditorView.updateListener.of((u) => {
+        if (u.docChanged) onChangeRef.current?.(u.state.doc.toString());
+        if (u.selectionSet || u.docChanged) {
+          onSelRef.current?.(!u.state.selection.main.empty);
+        }
+      }),
+      EditorView.contentAttributes.of({ "aria-label": "SQL query editor" }),
+      // Intercept drops (sidebar tree ids) so CodeMirror doesn't insert the
+      // raw payload — move the cursor to the drop point, then delegate.
+      EditorView.domEventHandlers({
+        blur(_event, view) {
+          closeCompletion(view);
+          return false;
+        },
+        dragover(e) {
+          if (!onDropRef.current) return false;
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+          return true;
+        },
+        drop(e, view) {
+          if (!onDropRef.current) return false;
+          const raw = e.dataTransfer?.getData("text/plain");
+          if (!raw) return false;
+          e.preventDefault();
+          const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+          if (pos != null) view.dispatch({ selection: { anchor: pos } });
+          view.focus();
+          onDropRef.current(raw);
+          return true;
+        },
+      }),
+    ];
+    // Retain history and selection, but replace extensions so callbacks belong
+    // to this mounted wrapper rather than the one that saved the session.
+    const state = session?.state
+      ? session.state.update({ effects: StateEffect.reconfigure.of(extensions) }).state
+      : EditorState.create({ doc: initialDoc, extensions });
+    const view = new EditorView({ state, parent: hostRef.current, scrollTo: session?.scroll });
     viewRef.current = view;
+    onSelRef.current?.(!state.selection.main.empty);
     return () => {
+      if (session) {
+        session.state = view.state;
+        session.scroll = view.scrollSnapshot();
+      }
       view.destroy();
       viewRef.current = null;
     };

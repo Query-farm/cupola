@@ -1,3 +1,4 @@
+import { OPEN_NOTEBOOK_EVENT, type OpenNotebookDetail, type NotebookNavigation, type NotebookInsertion } from '../lib/notebooks/navigation';
 import { useEffect, useState, useMemo, useCallback, useRef, useSyncExternalStore, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
 import { buildCallText } from "@/lib/editor/call-snippet";
 import { fetchCatalogSpecs, type CatalogData } from "@/lib/service";
@@ -134,6 +135,7 @@ import {
 } from "./ui/dialog";
 const DuckDBShell = lazy(() => import("./DuckDBShell").then(m => ({ default: m.DuckDBShell })));
 const SqlEditorView = lazy(() => import("./editor/SqlEditorView").then(m => ({ default: m.SqlEditorView })));
+const NotebookPanel = lazy(() => import("./notebooks/NotebookPanel").then(m => ({ default: m.NotebookPanel })));
 const EvidencePanel = lazy(() => import("./evidence/EvidencePanel").then(m => ({ default: m.EvidencePanel })));
 const CatalogRelationships = lazy(() => import("./content/CatalogRelationships").then(m => ({ default: m.CatalogRelationships })));
 import { AppTabBar, type TabId } from "./AppTabBar";
@@ -397,7 +399,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       if (stored === "perspective") return "catalog";
       // Query History was a tab until it moved into the editor's History menu.
       if ((stored as string) === "queries") return "editor";
-      if (stored && ["catalog", "editor", "shell", "askai", "reports", "evidence"].includes(stored)) return stored;
+      if (stored && ["catalog", "editor", "shell", "askai", "reports", "notebooks", "evidence"].includes(stored)) return stored;
       if (localStorage.getItem("vgi-app-view") === "editor") return "editor";
     } catch {}
     return "catalog";
@@ -406,7 +408,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem("vgi-sidebar-collapsed") === "1"; } catch { return false; }
   });
-  const isNarrow = useMediaQuery("(max-width: 767px)");
+  const isNarrow = useMediaQuery(activeTab === "reports" ? "(max-width: 1023px)" : "(max-width: 767px)");
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const sidebarVisible = isNarrow ? mobileSidebarOpen : !sidebarCollapsed;
   useEffect(() => {
@@ -427,7 +429,8 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // (a) DuckDB boots + ATTACHes once (column stats, previews work on the
   // catalog tab), and (b) terminal / chat / perspective state survives tab
   // switches. It's visible only on an engine-backed tab.
-  const engineVisible = activeTab !== "catalog" && activeTab !== "editor" && activeTab !== "reports" && activeTab !== "evidence";
+  const [notebookBusy, setNotebookBusy] = useState(false);
+  const engineVisible = activeTab !== "notebooks" && activeTab !== "catalog" && activeTab !== "editor" && activeTab !== "reports" && activeTab !== "evidence";
   // The editor mounts on its first visit and then stays mounted (hidden the
   // same way as the engine host) for the rest of the session. Its result grid
   // holds a decoded Arrow table in component state, so unmounting on every tab
@@ -435,10 +438,12 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // and column widths. Mounting lazily rather than always keeps the CodeMirror
   // chunk off the critical path for someone who only browses the catalog.
   const [editorMounted, setEditorMounted] = useState(activeTab === "editor");
+  const [notebooksMounted, setNotebooksMounted] = useState(activeTab === "notebooks");
   const [reportsMounted, setReportsMounted] = useState(activeTab === "reports");
   useEffect(() => {
     if (activeTab === "editor") setEditorMounted(true);
     if (activeTab === "reports") setReportsMounted(true);
+    if (activeTab === "notebooks") setNotebooksMounted(true);
   }, [activeTab]);
   // The Perspective tab is shown only while it holds something: every way in
   // (a table's Pivot button, the editor's Pivot menu, `.perspective`) switches
@@ -631,6 +636,31 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     });
   }, [activeTab]);
 
+  const [notebookNavigation, setNotebookNavigation] = useState<NotebookNavigation | null>(null);
+  const [notebookInsertion, setNotebookInsertion] = useState<NotebookInsertion | null>(null);
+  const [activeNotebookId, setActiveNotebookId] = useState<string | null>(null);
+  const notebookNavigationToken = useRef(0);
+  useEffect(() => {
+    const request = (detail: OpenNotebookDetail, fromHistory = false) => {
+      if (detail.serviceUrl !== serviceUrl) return;
+      setNotebookNavigation({ ...detail, token: ++notebookNavigationToken.current, fromHistory });
+      setActiveTab("notebooks");
+      setMobileSidebarOpen(false);
+    };
+    const open = (event: Event) => request((event as CustomEvent<OpenNotebookDetail>).detail);
+    const fromUrl = () => {
+      const path = window.location.pathname.replace(/\/$/, "");
+      if (!path.endsWith("/notebooks")) {
+        if (lastTabRef.current === "notebooks") setActiveTab(path.includes("/reports") ? "reports" : path.endsWith("/editor") ? "editor" : path.endsWith("/shell") ? "shell" : "catalog");
+        return;
+      }
+      request({ serviceUrl, id: new URLSearchParams(window.location.search).get("notebook") || undefined }, true);
+    };
+    fromUrl();
+    window.addEventListener(OPEN_NOTEBOOK_EVENT, open);
+    window.addEventListener("popstate", fromUrl);
+    return () => { window.removeEventListener(OPEN_NOTEBOOK_EVENT, open); window.removeEventListener("popstate", fromUrl); };
+  }, [serviceUrl]);
   // Every surface records its queries through this slot; they are kept per
   // workspace and read in the editor's History panel.
   useEffect(() => {
@@ -1588,7 +1618,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       <AppTabBar
         activeTab={activeTab}
         onSelect={setActiveTab}
-        busyTabs={{ askai: askAiBusy, editor: editorAiBusy }}
+        busyTabs={{ notebooks: notebookBusy, askai: askAiBusy, editor: editorAiBusy }}
         sidebarCollapsed={!sidebarVisible}
         onToggleSidebar={() => isNarrow ? setMobileSidebarOpen((open) => !open) : setSidebarCollapsed((c) => !c)}
         openTabs={{ perspective: perspectiveOpen }}
@@ -1632,6 +1662,8 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
             >
               <Sidebar
                 serviceUrl={serviceUrl}
+                activeNotebookId={activeNotebookId}
+                notebooksActive={activeTab === "notebooks"}
                 catalogs={catalogs}
                 defaultCatalogName={defaultAlias ?? data.catalogName}
                 inventoryError={inventory.error}
@@ -1647,9 +1679,12 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                   }
                   if (isNarrow) setMobileSidebarOpen(false);
                 }}
-                insertTarget={activeTab === "editor" ? "editor" : "shell"}
+                insertTarget={activeTab === "notebooks" ? "notebook" : activeTab === "editor" ? "editor" : "shell"}
                 onInsertCallable={(callable) => {
-                  if (activeTab === "editor" && ui.insertCallableIntoEditor) {
+                  if (activeTab === "notebooks") {
+                    setNotebookInsertion({ callable, serviceUrl, token: ++notebookNavigationToken.current });
+                    setMobileSidebarOpen(false);
+                  } else if (activeTab === "editor" && ui.insertCallableIntoEditor) {
                     ui.insertCallableIntoEditor(callable);
                   } else {
                     shellInsertRef.current?.(buildCallText(callable, { emptyDoc: false }));
@@ -1658,7 +1693,10 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                 onShellInsert={(text) => {
                   // In editor mode, route table/column clicks into the SQL
                   // editor at the cursor; otherwise into the xterm shell.
-                  if (activeTab === "editor" && ui.insertIntoEditor) {
+                  if (activeTab === "notebooks") {
+                    setNotebookInsertion({ text, serviceUrl, token: ++notebookNavigationToken.current });
+                    setMobileSidebarOpen(false);
+                  } else if (activeTab === "editor" && ui.insertIntoEditor) {
                     ui.insertIntoEditor(text);
                   } else {
                     shellInsertRef.current?.(text);
@@ -1743,6 +1781,13 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                   />
                 </Suspense>
               </ErrorBoundary>
+            </div>
+          )}
+          {notebooksMounted && (
+            <div className="absolute inset-0 overflow-hidden" style={activeTab === "notebooks" ? undefined : { visibility: "hidden", zIndex: -1 }}>
+              <ErrorBoundary><Suspense fallback={<div className="p-6">Loading notebooks…</div>}>
+                <NotebookPanel key={serviceUrl} serviceUrl={serviceUrl} catalogs={catalogs} onBusyChange={setNotebookBusy} navigation={notebookNavigation} insertion={notebookInsertion} onActiveChange={setActiveNotebookId} />
+              </Suspense></ErrorBoundary>
             </div>
           )}
           {reportsMounted && (

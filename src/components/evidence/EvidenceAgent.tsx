@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { BLANK_REPORT_SOURCE } from '../../lib/evidence/starters';
 import { Sparkles } from 'lucide-react';
 import { Button } from '../ui/button';
 import { ChatInput, type ChatInputHandle } from '../chat/ChatInput';
@@ -318,7 +319,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
     </div>
     <div ref={scroller} onScroll={() => { const el = scroller.current!; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }} className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
       <div role="log" aria-label="Report agent conversation" className="space-y-5">
-        {!messages.length && <div className="rounded-xl bg-muted/40 p-4 text-sm"><p className="mb-2 font-medium">What would you like to change?</p><p className="text-muted-foreground">Ask me to improve this report, adjust a chart, or fix a preview error. I’ll show changes here for you to review.</p><div className="mt-3 flex flex-wrap gap-2">{['Improve the layout', 'Fix the preview errors'].map(prompt => <Button key={prompt} variant="outline" size="sm" disabled={locked} onClick={() => void send(prompt)}>{prompt}</Button>)}</div></div>}
+        {!messages.length && <div className="rounded-xl bg-muted/40 p-4 text-sm"><p className="mb-2 font-medium">{report.source === BLANK_REPORT_SOURCE ? 'What would you like to report on?' : 'What would you like to change?'}</p><p className="text-muted-foreground">{report.source === BLANK_REPORT_SOURCE ? 'Describe the question you want to answer and the data to use. For example, “Show monthly revenue by region.” I’ll propose a report for you to review.' : 'Ask me to improve this report, adjust a chart, or fix a preview error. I’ll show changes here for you to review.'}</p><div className="mt-3 flex flex-wrap gap-2">{(report.source === BLANK_REPORT_SOURCE ? ['What data can I use?', 'Help me create my first report'] : ['Improve the layout', ...(issues.length ? ['Fix the preview errors'] : [])]).map(prompt => <Button key={prompt} variant="outline" size="sm" disabled={locked} onClick={() => void send(prompt)}>{prompt}</Button>)}</div></div>}
         {messages.map(m => <article key={m.id}>
           {m.role === 'user' ? <ChatMessageUser content={m.text} queued={m.queued} /> : <ChatMessageAssistant blocks={m.blocks ?? [{ type: 'text', id: m.id, content: m.text }]} isStreaming={busy && m.id === activeMessage.current} onCancel={stop} />}
           {m.proposal && proposalCard(m)}
@@ -343,6 +344,6 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
       {retryRequest && <Button size="sm" variant="outline" disabled={locked} onClick={() => void send(retryRequest, true)}>Retry request</Button>}
     </section>}
     {!error && !busy && retryRequest && <div className="shrink-0 border-t px-4 py-2"><Button size="sm" variant="outline" disabled={locked} onClick={() => void send(retryRequest, true)}>Retry request</Button></div>}
-    <div className="shrink-0 border-t"><ChatInput ref={input} queueWhileLoading onSend={text => void send(text)} onStop={stop} isLoading={busy} disabled={applying || previewBusy} placeholder={messages.length ? 'Ask for another change…' : 'What would you like to change?'} /></div>
+    <div className="shrink-0 border-t"><ChatInput ref={input} queueWhileLoading onSend={text => void send(text)} onStop={stop} isLoading={busy} disabled={applying || previewBusy} placeholder={messages.length ? 'Ask for another change…' : report.source === BLANK_REPORT_SOURCE ? 'Describe the report you want…' : 'What would you like to change?'} /></div>
   </div>;
 }

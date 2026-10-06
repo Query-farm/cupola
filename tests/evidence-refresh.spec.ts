@@ -27,7 +27,7 @@ test('report setup and renderer queries can be stopped, time out, and recover on
   });
   expect(preparedTimeout).toContain('time limit');
 
-  await panel.getByRole('tab', { name: 'Data', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Setup SQL', exact: true }).click();
   const setup = panel.getByRole('textbox', { name: 'Dataset SQL', exact: true });
   const slow = 'SELECT sum(i) FROM range(1000000000000) t(i)';
   await setup.fill(slow);
@@ -56,7 +56,7 @@ test('report setup and renderer queries can be stopped, time out, and recover on
   await expect(panel.getByTestId('evidence-document')).toContainText('42', { timeout: 15_000 });
   await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled();
 
-  await panel.getByRole('tab', { name: 'Data', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Setup SQL', exact: true }).click();
   await setup.fill(slow);
   await page.clock.install();
   await panel.getByRole('button', { name: 'Update preview', exact: true }).click();

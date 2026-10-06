@@ -14,13 +14,13 @@ test('data browser previews setup tables and dependent parameterized queries usi
   await panel.getByRole('tab', { name: 'Parameters', exact: true }).click();
   await panel.getByRole('button', { name: 'Add parameter' }).click();
   await panel.getByLabel('Parameter 1 default', { exact: true }).fill('hello');
-  await panel.getByRole('tab', { name: 'Data', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Setup SQL', exact: true }).click();
   await panel.getByRole('textbox', { name: 'Dataset SQL', exact: true }).fill('CREATE OR REPLACE TEMP TABLE browser_test AS SELECT range AS value FROM range(150)');
   await panel.getByRole('tab', { name: 'Code', exact: true }).click();
   const source = panel.getByRole('textbox', { name: 'Evidence source', exact: true });
   const definition = '# Browser test\n\n```sql base\nSELECT *, $parameter_1 AS greeting FROM browser_test\n```\n\n```sql dependent\nSELECT * FROM {{base}} WHERE value < 2\n```\n\n```sql empty\nSELECT * FROM browser_test WHERE false\n```\n\n```sql broken\nSELECT * FROM nonexistent_browser_table\n```';
   await source.fill(definition);
-  await panel.getByRole('tab', { name: 'Browse data', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Results', exact: true }).click();
   const browser = panel.getByRole('region', { name: 'Data browser', exact: true });
   await browser.getByRole('button', { name: 'Update data', exact: true }).click();
   const select = browser.getByLabel('Browse dataset', { exact: true });
@@ -46,7 +46,7 @@ test('data browser previews setup tables and dependent parameterized queries usi
   await expect(browser.getByRole('alert')).toContainText('nonexistent_browser_table');
   await panel.getByRole('tab', { name: 'Code', exact: true }).click();
   await source.fill(definition.replace('value < 2', 'value < 3'));
-  await panel.getByRole('tab', { name: 'Browse data', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Results', exact: true }).click();
   await select.selectOption('query:dependent');
   await expect(browser.getByRole('button', { name: 'Preview rows' })).toBeDisabled();
   await browser.getByRole('button', { name: 'Update data', exact: true }).click();

@@ -502,10 +502,12 @@ export function initShell(
   // Query execution. Both async (streaming-shape) and sync (single-buffer for
   // Perspective) collapse to AsyncDuckDB.runQuery, which always returns a
   // single File-format Arrow IPC buffer.
-  function runQueryAsync(sql: string): Promise<{ ok: boolean; arrowBuffers?: ArrayBuffer[]; error?: string }> {
+  // With a signal, aborting it cancels the query in the engine and rejects at once
+  // with an AbortError (see engine.query).
+  function runQueryAsync(sql: string, signal?: AbortSignal): Promise<{ ok: boolean; arrowBuffers?: ArrayBuffer[]; error?: string }> {
     const q = engine.query;
     if (!q) return Promise.resolve({ ok: false, error: "duckdb not ready" });
-    return q(sql);
+    return q(sql, signal ? { signal } : undefined);
   }
 
   // Current catalog/schema for prompt
@@ -616,7 +618,6 @@ export function initShell(
           tableFromIPC,
           printTable,
           clearProgressBar,
-          resetCancelFlag: () => { if (engine.cancelInt32) Atomics.store(engine.cancelInt32, 0, 0); },
         };
         await runAIMode(trimmed, aiConv, aiTerm, aiOps, {
           apiKey: config.aiApiKey || "",
@@ -627,10 +628,25 @@ export function initShell(
       }
 
       const t0 = performance.now();
-      const result = await runQueryAsync(trimmed);
+      // Ctrl+C while the query runs cancels it. The readline isn't reading here, so
+      // the keystroke reaches only this listener.
+      const abort = new AbortController();
+      const ctrlC = term.onData((data: string) => {
+        if (data === "\x03") abort.abort();
+      });
+      let result: Awaited<ReturnType<typeof runQueryAsync>>;
+      try {
+        result = await runQueryAsync(trimmed, abort.signal);
+      } catch (e) {
+        if (!abort.signal.aborted) throw e;
+        clearProgressBar();
+        writeln("Query cancelled.", "33");
+        continue;
+      } finally {
+        ctrlC.dispose();
+      }
       const elapsed = performance.now() - t0;
       clearProgressBar();
-      if (engine.cancelInt32) Atomics.store(engine.cancelInt32, 0, 0); // reset cancel flag for next query
 
       if (!result.ok) {
         const errStr = result.error || "unknown";

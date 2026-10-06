@@ -6,7 +6,7 @@ on:
       - "v*.*.*"
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: cupola-production
   cancel-in-progress: false
 
 env:
@@ -52,16 +52,23 @@ jobs:
         run: bun run check
 
       - name: Unit tests
-        run: bun run test
+        run: |
+          bun run test
+          python3 scripts/test_releases.py
 
       - name: Production build
-        run: bun run build
+        run: CUPOLA_HOSTED_RELEASES=1 bun run build
 
       - name: Bundle-size budget
         run: bun run check:bundle
 
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
+
+      - name: Release lifecycle browser tests
+        run: |
+          ./scripts/stage-haybarn-assets.sh
+          bunx playwright test --config playwright.release.config.ts
 
       - name: Browser smoke and accessibility tests
         run: bun run test:e2e:smoke

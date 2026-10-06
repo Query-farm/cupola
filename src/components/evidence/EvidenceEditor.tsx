@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { EvidenceEditorNavigation } from './EvidenceEditorNavigation';
 import { EvidenceCodeEditor, type EvidenceCodeHandle } from './EvidenceCodeEditor';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
+import { BLANK_REPORT_SOURCE, REPORT_STARTERS } from '../../lib/evidence/starters';
+import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Tabs, TabsContent } from '../ui/tabs';
 import { EvidenceSemanticDatasets } from './EvidenceSemanticDatasets';
@@ -30,7 +32,7 @@ const snippets: Record<string, string> = {
   'Two columns': '\n\n{% row %}\n\nAdd components here.\n\n{% /row %}\n',
 };
 
-export function EvidenceEditor({ history, onProposal, performance, parameterChoices, fullScreen, onToggleFullScreen, report, onChange, issues, stale, editorOnly, onTogglePreview, onApplyPreview, previewBusy, dataContext, onRefreshData, reportTheme, catalogs, semanticStates }: { history?: { history: ReportHistory; dirty: boolean; onRestore: (revision: Revision) => void; onDelete: (revision: Revision) => void }; onProposal?: (event: ProposalEvent) => void; performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[]; runnable: (sql: string) => string }; parameterChoices?: ParameterChoicesContext; fullScreen: boolean; onToggleFullScreen: () => void; catalogs: readonly CatalogData[]; semanticStates: SemanticDatasetState[]; reportTheme: ReportTheme; dataContext: EvidenceDataContext | null; onRefreshData: () => Promise<void>; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; editorOnly: boolean; onTogglePreview: () => void; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
+export function EvidenceEditor({ history, onProposal, performance, parameterChoices, fullScreen, onToggleFullScreen, report, onChange, issues, stale, issuesStale, editorOnly, onTogglePreview, onApplyPreview, previewBusy, dataContext, onRefreshData, reportTheme, catalogs, semanticStates }: { history?: { history: ReportHistory; dirty: boolean; onRestore: (revision: Revision) => void; onDelete: (revision: Revision) => void }; onProposal?: (event: ProposalEvent) => void; performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[]; runnable: (sql: string) => string }; parameterChoices?: ParameterChoicesContext; fullScreen: boolean; onToggleFullScreen: () => void; catalogs: readonly CatalogData[]; semanticStates: SemanticDatasetState[]; reportTheme: ReportTheme; dataContext: EvidenceDataContext | null; onRefreshData: () => Promise<void>; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; issuesStale: boolean; editorOnly: boolean; onTogglePreview: () => void; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
   const [tab, setTab] = useState('agent');
   const [agentOpened, setAgentOpened] = useState(true);
   const source = useRef<EvidenceCodeHandle>(null);
@@ -49,7 +51,7 @@ export function EvidenceEditor({ history, onProposal, performance, parameterChoi
   const errors = issues.filter(issue => issue.severity === 'error');
   const warnings = issues.filter(issue => issue.severity === 'warning');
   const renderIssue = (issue: EvidenceIssue, index: number) => <div key={index} className="mt-2 rounded border p-2">
-    <button type="button" disabled={stale} className={`text-left disabled:opacity-60 ${issue.severity === 'error' ? 'text-destructive' : 'text-muted-foreground'}`} onClick={() => { setTab(issue.target); setJump({ target: issue.target, line: issue.line ?? 1 }); }}>
+    <button type="button" disabled={issuesStale} className={`text-left disabled:opacity-60 ${issue.severity === 'error' ? 'text-destructive' : 'text-muted-foreground'}`} onClick={() => { setTab(issue.target); setJump({ target: issue.target, line: issue.line ?? 1 }); }}>
       {issue.target === 'data' ? 'Data' : 'Document'}{issue.line ? ` · line ${issue.line}` : ''} · {issue.severity}: {issue.message}
     </button>
     {issue.sql && <details className="mt-1"><summary className="cursor-pointer">Failed SQL</summary><pre className="overflow-auto whitespace-pre-wrap p-2">{issue.sql}</pre></details>}
@@ -67,7 +69,15 @@ export function EvidenceEditor({ history, onProposal, performance, parameterChoi
       <label className="block space-y-2 text-xs font-medium">Report title<Input aria-label="Report title" value={report.title} onChange={e => onChange({ ...report, title: e.target.value })} /></label>
     </div>
     <Tabs value={tab} onValueChange={value => { setTab(String(value)); if (value === 'agent') setAgentOpened(true); }} className="min-h-0 flex-1 gap-0">
-      <EvidenceEditorNavigation selected={tab} />
+      <EvidenceEditorNavigation selected={tab} onSelect={value => { setTab(value); if (value === 'agent') setAgentOpened(true); }} />
+      {report.source === BLANK_REPORT_SOURCE && !report.setupSql && !report.semanticDatasets?.length && <section aria-label="Report starters" className="mx-4 mb-3 space-y-2 rounded-lg border bg-muted/30 p-3 text-xs">
+        <p className="font-medium">Start with a sample layout</p>
+        <div className="flex flex-wrap gap-2">{REPORT_STARTERS.map(starter => <Button key={starter.name} variant="outline" size="sm" disabled={previewBusy} onClick={() => {
+          const next = { ...report, source: starter.source, title: report.title === 'Untitled report' ? starter.title : report.title };
+          onChange(next); setTab('document'); void onApplyPreview(next);
+        }}>{starter.name}</Button>)}</div>
+        <p className="text-muted-foreground">These use sample data. Replace the query in Code, or ask Chat to connect your data.</p>
+      </section>}
       <TabsContent value="agent" keepMounted style={{ display: tab === 'agent' ? undefined : 'none' }} className="min-h-0 overflow-hidden"><Suspense fallback={<p className="p-4 text-sm" role="status">Loading report agent…</p>}>{agentOpened && <EvidenceAgent onProposal={onProposal} catalogs={catalogs} report={report} onChange={onChange} issues={issues} stale={stale} onApplyPreview={onApplyPreview} previewBusy={previewBusy} performance={performance} />}</Suspense></TabsContent>
       <TabsContent value="document" className="min-h-0 overflow-auto px-4 pb-4">
         <div className="flex h-full min-h-80 flex-col gap-3">
@@ -78,7 +88,7 @@ export function EvidenceEditor({ history, onProposal, performance, parameterChoi
             </select>
           </div>
           <p className="text-xs text-muted-foreground">Write with Markdown, SQL queries, and Evidence components. Inserted examples use placeholder dataset and column names.</p>
-          <EvidenceCodeEditor ref={source} language="document" value={report.source} onChange={value => onChange({ ...report, source: value })} parameters={report.parameters.map(p => p.key)} issues={stale ? [] : issues} />
+          <EvidenceCodeEditor ref={source} language="document" value={report.source} onChange={value => onChange({ ...report, source: value })} parameters={report.parameters.map(p => p.key)} issues={issuesStale ? [] : issues} />
           <span className="text-xs text-muted-foreground">{report.source.split('\n').length} lines · Ctrl + Space for suggestions · ⌘ / Ctrl + Enter to update</span>
         </div>
       </TabsContent>
@@ -86,7 +96,7 @@ export function EvidenceEditor({ history, onProposal, performance, parameterChoi
         <div className="flex h-full min-h-80 flex-col gap-3">
           <label  className="text-sm font-medium">Dataset SQL</label>
           <p className="text-xs leading-relaxed text-muted-foreground">Optional setup query, run before the report on each refresh. Prepare temporary tables here, then reference them from SQL queries in your document. Bind inputs with <code>$name</code>.</p>
-          <EvidenceCodeEditor ref={dataset} language="data" value={report.setupSql} onChange={value => onChange({ ...report, setupSql: value })} parameters={report.parameters.map(p => p.key)} issues={stale ? [] : issues} />
+          <EvidenceCodeEditor ref={dataset} language="data" value={report.setupSql} onChange={value => onChange({ ...report, setupSql: value })} parameters={report.parameters.map(p => p.key)} issues={issuesStale ? [] : issues} />
         </div>
       </TabsContent>
       <TabsContent value="model" className="min-h-0 overflow-auto px-4 pb-4"><EvidenceSemanticDatasets report={report} catalogs={catalogs} states={semanticStates} onChange={onChange} /></TabsContent>
@@ -96,12 +106,12 @@ export function EvidenceEditor({ history, onProposal, performance, parameterChoi
       <TabsContent value="performance" className="min-h-0 overflow-auto px-4 pb-4"><EvidencePerformance profile={performance?.profile ?? null} namedQueries={performance?.namedQueries ?? []} runnable={performance?.runnable} /></TabsContent>
       <TabsContent value="history" className="min-h-0 overflow-auto px-4 pb-4">{history ? <EvidenceHistory history={history.history} dirty={history.dirty} onRestore={history.onRestore} onDelete={history.onDelete} /> : null}</TabsContent>
     </Tabs>
-    <section aria-label="Report problems" className="max-h-48 shrink-0 overflow-auto border-t bg-background p-3 text-xs">
-      <h3 className="font-semibold">Problems · {errors.length} errors{stale ? ' · previous preview' : ''}</h3>
-      {!issues.length && <p className="mt-1 text-muted-foreground">{stale ? 'Update preview to check this draft.' : 'No issues reported by the last run. Update preview to check edits.'}</p>}
-      {issues.length > 0 && <p className="mt-1 text-muted-foreground">{stale ? 'Source changed. Update preview to refresh locations.' : 'Select a problem to open its source. Query failures include the executed SQL.'}</p>}
+    <details role="region" open={errors.length > 0 || undefined} aria-label="Report problems" className="max-h-48 shrink-0 overflow-auto border-t bg-background p-3 text-xs">
+      <summary className="cursor-pointer font-semibold">Problems · {errors.length} errors{warnings.length > 0 ? ` · ${warnings.length} warnings` : ''}{issuesStale ? ' · previous preview' : ''}</summary>
+      {!issues.length && <p className="mt-1 text-muted-foreground">{issuesStale ? 'Update preview to check this draft.' : 'No issues reported by the last run. Update preview to check edits.'}</p>}
+      {issues.length > 0 && <p className="mt-1 text-muted-foreground">{issuesStale ? 'Source changed. Update preview to refresh locations.' : 'Select a problem to open its source. Query failures include the executed SQL.'}</p>}
       {errors.map(renderIssue)}
       {warnings.length > 0 && <details className="mt-2"><summary className="cursor-pointer text-muted-foreground">{warnings.length} warnings · advisory</summary>{warnings.map(renderIssue)}</details>}
-    </section>
+    </details>
   </aside>;
 }

@@ -77,7 +77,7 @@ test.describe("Query history", () => {
     await expect(page.getByTestId("editor-history-panel")).toContainText("No queries yet");
   });
 
-  test("This tab lists the tab's runs as a diff stack, and Restore brings a version back", async ({ page }) => {
+  test("This tab lists the tab's versions as a diff stack, and Restore brings one back", async ({ page }) => {
     await page.getByTestId("editor-add-tab").click();
     await typeInEditor(page, "SELECT 1 AS first_version");
     await page.getByTestId("editor-run").click();
@@ -88,7 +88,7 @@ test.describe("Query history", () => {
 
     await page.getByTestId("editor-history").click();
     await page.getByTestId("editor-history-view-tab").click();
-    const runs = page.getByTestId("editor-history-run-entry");
+    const runs = page.getByTestId("editor-history-revision");
     await expect(runs).toHaveCount(2);
     // The newest run shows what changed since the one before it.
     const diff = runs.first().getByTestId("editor-history-diff");
@@ -105,5 +105,38 @@ test.describe("Query history", () => {
     // Another tab has its own runs.
     await page.getByTestId("editor-add-tab").click();
     await expect(runs).toHaveCount(0);
+  });
+
+  test("a Format and an Ask AI apply are versions too, and closing the tab deletes them", async ({ page }) => {
+    await page.getByTestId("editor-add-tab").click();
+    await typeInEditor(page, "select 'mine' as never_ran");
+    await page.getByTestId("editor-format").click();
+    await expect(page.locator(".cm-content")).toContainText("SELECT", { timeout: T_NORMAL });
+    await page.getByTestId("editor-ask-ai").click();
+    await page.evaluate(() =>
+      (window as any).__cupolaEditorAiTest.pushAssistantSql({ sql: "SELECT 'from ai' AS proposal", columns: ["proposal"], rows: [{ proposal: "from ai" }] }),
+    );
+    await page.getByTestId("ai-apply-menu").click();
+    await page.getByTestId("ai-apply-replace-document").click();
+    await expect(page.locator(".cm-content")).toContainText("from ai", { timeout: T_NORMAL });
+
+    await page.getByTestId("editor-history").click();
+    await page.getByTestId("editor-history-view-tab").click();
+    const versions = page.getByTestId("editor-history-revision");
+    // Newest first: the AI's SQL, the formatted text it replaced, and the text
+    // as typed (none of which ever ran).
+    await expect(versions).toHaveCount(3);
+    await expect(versions.nth(0)).toHaveAttribute("data-kind", "ai");
+    await expect(versions.nth(1)).toHaveAttribute("data-kind", "format");
+    await expect(versions.nth(2)).toHaveAttribute("data-kind", "edit");
+    await expect(versions.nth(2)).toContainText("select 'mine' as never_ran");
+
+    const key = await page.evaluate(() => Object.keys(localStorage).find((k) => k.startsWith("cupola.editor-revisions.v1::")) ?? null);
+    expect(key).not.toBeNull();
+    const tab = page.getByTestId("editor-tab").last();
+    await tab.hover();
+    await tab.getByRole("button", { name: /^Close / }).click();
+    await page.getByTestId("editor-close-delete").click();
+    await expect.poll(() => page.evaluate((k) => localStorage.getItem(k!), key)).toBeNull();
   });
 });

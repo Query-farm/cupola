@@ -4,12 +4,12 @@ set -euo pipefail
 # Publish: commit, push, build, upload versioned assets to R2, deploy Worker.
 #
 # URL scheme (all served by the Worker from R2):
-#   /                → 302 → /latest/
-#   /latest/         → 302 → /v{current}/
-#   /v0.1.0/*        → versioned install from R2
+#   /                → current release HTML
+#   /latest/         → 302 → /
+#   /v0.1.0/*        → immutable assets (documents redirect to stable URLs)
 #
 # Usage:
-#   ./publish.sh                  # prompt for commit message
+#   ./publish.sh                  # use a default release commit message
 #   ./publish.sh "fix: whatever"  # use provided message
 #   ./publish.sh --skip-commit    # deploy only, no git
 
@@ -38,35 +38,14 @@ export SENTRY_AUTH_TOKEN
 export SENTRY_ORG="${SENTRY_ORG:-query-farm-llc}"
 export SENTRY_PROJECT="${SENTRY_PROJECT:-cupola}"
 
-# ---- Git: commit and push ----
-if [ "${1:-}" != "--skip-commit" ]; then
-  if [ -n "$(git status --porcelain)" ]; then
-    echo "==> Staging changes..."
-    git add -A
-    git status --short
-
-    MSG="${1:-}"
-    if [ -z "$MSG" ]; then
-      DEFAULT=$(git log -1 --pretty=%B | head -1)
-      read -r -p "Commit message [${DEFAULT}]: " INPUT
-      MSG="${INPUT:-$DEFAULT}"
-    fi
-
-    git commit -m "$MSG"
-    echo "==> Pushing to origin..."
-    git push
-  else
-    echo "==> Working tree clean, skipping commit."
-  fi
-
-  # Tag this version if not already tagged
-  TAG="v${VERSION}"
-  if ! git tag -l "$TAG" | grep -q "$TAG"; then
-    echo "==> Tagging ${TAG}..."
-    git tag "$TAG"
-    git push origin "$TAG"
-  fi
+# Publishing does not push a release tag: that would launch a second CI deploy.
+# Commit locally before building so Sentry uses the deployed source revision.
+COMMIT_MESSAGE="${1:-Publish Cupola ${VERSION}}"
+if [ "${1:-}" != "--skip-commit" ] && [ -n "$(git status --porcelain)" ]; then
+  git add -A
+  git commit -m "$COMMIT_MESSAGE"
 fi
+python3 scripts/releases.py prepare "$VERSION"
 
 # Capture the git hash AFTER any commit above. Browser and Worker source maps
 # must land under the exact release/dist values reported by their runtime SDKs;
@@ -84,6 +63,7 @@ if [ "${SKIP_CHECKS:-0}" != "1" ]; then
 
   echo "==> Running unit tests..."
   bun run test
+  python3 scripts/test_releases.py
 else
   echo "==> SKIP_CHECKS=1 — skipping typecheck + unit tests."
 fi
@@ -93,7 +73,7 @@ echo "==> Building..."
 # 8 GiB of old-space heap. With source maps enabled, the perspective +
 # duckdb-wasm chunks push past Node's 4 GiB default and crash with
 # "Ineffective mark-compacts near heap limit".
-NODE_OPTIONS="--max-old-space-size=8192" bun run build
+CUPOLA_HOSTED_RELEASES=1 NODE_OPTIONS="--max-old-space-size=8192" bun run build
 
 echo "==> dist/ size: $(du -sh dist/ | cut -f1)"
 echo "==> Checking JavaScript bundle budget..."
@@ -183,12 +163,8 @@ aws s3 sync dist/ "s3://${R2_BUCKET}/${R2_PREFIX}/" \
   --size-only --no-progress
 echo "==> Synced files to R2 prefix ${R2_PREFIX}/"
 
-# Write _latest marker. Read on every request by the Worker — must reflect the
-# new version immediately. `aws s3 cp -` streams stdin so no temp file needed.
-echo -n "${VERSION}" | aws s3 cp - "s3://${R2_BUCKET}/_latest" \
-  --endpoint-url "$R2_ENDPOINT" \
-  --content-type "text/plain" --no-progress
-echo "==> Updated _latest marker to ${VERSION}"
+# Verify every local asset exists remotely with the expected size before promotion.
+python3 scripts/releases.py verify "$VERSION"
 
 # ---- Deploy Worker (R2 binding routes all content) ----
 # All static content lives in R2; the Worker (worker/index.ts) handles
@@ -228,7 +204,21 @@ else
   echo "==> SENTRY_AUTH_TOKEN not set — skipping worker source map upload."
 fi
 
-echo ""
+# Verify the newly deployed Worker can serve the current app and new assets
+# before switching users to the new release.
+curl --fail --silent --show-error https://cupola.query-farm.services/ -o /dev/null
+curl --fail --silent --show-error https://cupola.query-farm.services/release.json -o /dev/null
+curl --fail --silent --show-error "https://cupola.query-farm.services/v${VERSION}/favicon.svg" -o /dev/null
+
+# Promotion is the last release mutation. A failed Worker/source-map deploy
+# leaves the previous frontend current. Conditional writes reject racing deploys.
+python3 scripts/releases.py promote "$VERSION"
+# Report retention candidates without deleting files during the initial rollout.
+python3 scripts/releases.py cleanup || echo "WARNING: cleanup dry-run failed; release is live."
+
+if [ "${1:-}" != "--skip-commit" ]; then
+  git push origin HEAD
+fi
+
 echo "==> Published v${VERSION}"
-echo "    latest:  https://cupola.query-farm.services/latest/"
-echo "    pinned:  https://cupola.query-farm.services/v${VERSION}/"
+echo "    current: https://cupola.query-farm.services/"

@@ -22,7 +22,7 @@ test('Reports starts at the list and preserves an opened report across tab switc
   await page.getByTestId('tab-catalog').click();
   await page.getByTestId('tab-reports').click();
   await expect(title).toHaveValue('Session report');
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
   await expect(page).toHaveURL(/evidence_report=/);
   await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
   await expect(list).toBeVisible();

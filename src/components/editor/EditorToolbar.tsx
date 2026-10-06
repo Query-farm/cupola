@@ -9,6 +9,8 @@ interface Props {
   running: boolean;
   /** DuckDB booted, required extensions loaded, and the catalog attached. */
   queryReady: boolean;
+  /** Another query tab owns the shared connection. */
+  runBlocked?: boolean;
   /** True when text is selected in the editor (Run targets the selection). */
   hasSelection: boolean;
   onRun: () => void;
@@ -68,6 +70,7 @@ const panelToggle = (active?: boolean) => `h-7 gap-1.5 ${active ? "bg-muted text
 export function EditorToolbar({
   running,
   queryReady,
+  runBlocked,
   hasSelection,
   onRun,
   onRunAll,
@@ -89,7 +92,7 @@ export function EditorToolbar({
   shareCopied,
   onShowShortcuts,
 }: Props) {
-  const canRun = queryReady && !running;
+  const canRun = queryReady && !running && !runBlocked;
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0">
       {running ? (
@@ -104,22 +107,26 @@ export function EditorToolbar({
           </span>
         </>
       ) : (
-        <div className="flex items-center rounded-lg shadow-sm">
-          <Button
-            size="sm"
+        // One shape: the container owns the colour and the rounding, and the two
+        // halves are borderless. The shared Button paints inside a transparent
+        // border, which left a ring of toolbar showing around each half.
+        <div className={`inline-flex h-7 items-stretch overflow-hidden rounded-lg bg-accent text-white shadow-sm ${canRun ? "" : "opacity-50"}`}>
+          <button
+            type="button"
             onClick={onRun}
-            disabled={!queryReady}
-            className="h-7 gap-1.5 rounded-r-none bg-accent text-white hover:bg-accent/90"
-            title={withShortcut(hasSelection ? "Run the selected SQL" : "Run the statement at the cursor", RUN_KEY)}
+            disabled={!canRun}
+            className="inline-flex items-center gap-1.5 px-3 text-sm font-medium hover:bg-black/10 focus-visible:bg-black/10 focus-visible:outline-none disabled:pointer-events-none"
+            title={runBlocked ? "Another query tab is running" : withShortcut(hasSelection ? "Run the selected SQL" : "Run the statement at the cursor", RUN_KEY)}
             data-testid="editor-run"
           >
             <Play className="h-3.5 w-3.5" />
             {hasSelection ? "Run selection" : "Run"}
-          </Button>
+          </button>
+          <span className="my-1.5 w-px bg-white/35" aria-hidden="true" />
           <Popover>
             <PopoverTrigger
               disabled={!canRun}
-              className="inline-flex h-7 items-center rounded-r-lg border-l border-white/25 bg-accent px-1.5 text-white hover:bg-accent/90 disabled:opacity-50 disabled:pointer-events-none"
+              className="inline-flex items-center px-1.5 hover:bg-black/10 focus-visible:bg-black/10 focus-visible:outline-none disabled:pointer-events-none"
               title={perspectiveBusy ? "Preparing Perspective…" : "More ways to run"}
               aria-label="More ways to run"
               data-testid="editor-run-menu"

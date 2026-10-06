@@ -13,13 +13,13 @@ test('semantic datasets feed Evidence and live pivots preserve configuration', a
   const panel = page.locator('#evidence-semantic-host').getByTestId('evidence-panel');
   await expect(panel.getByTestId('evidence-document')).toContainText('120', { timeout: 30000 });
   await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
-  await panel.getByRole('tab', { name: 'Model', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Datasets', exact: true }).click();
   await expect(panel.getByTestId('report-semantic-builder')).toBeVisible();
   await expect(panel.getByRole('region', { name: 'Semantic datasets' })).toContainText('Net revenue');
   await expect(panel.getByRole('region', { name: 'Semantic datasets' })).toContainText('USD');
   await panel.getByRole('button', { name: 'Accept current model' }).click();
   await panel.getByRole('button', { name: 'Update preview', exact: true }).click();
-  await panel.getByRole('tab', { name: 'Browse data', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Results', exact: true }).click();
   const browser = panel.getByRole('region', { name: 'Data browser', exact: true });
   await browser.getByLabel('Browse dataset').selectOption('query:revenue');
   await browser.getByRole('button', { name: 'Preview rows', exact: true }).click();
@@ -34,7 +34,7 @@ test('semantic datasets feed Evidence and live pivots preserve configuration', a
   const savedPivot = panel.getByRole('region', { name: 'revenue · exploration' }).locator('perspective-viewer');
   await expect(savedPivot).toBeVisible({ timeout: 60000 });
   await expect.poll(() => savedPivot.evaluate(async (viewer: any) => (await viewer.save()).group_by)).toEqual(['revenue']);
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('cupola.evidence.report.v2:' + encodeURIComponent('https://semantic-test.example') + ':semantic-test')!));
   expect(stored.pivots[0].config.group_by).toEqual(['revenue']);
   expect(stored.semanticDatasets[0].acceptedModelFingerprint).toMatch(/^sha256:/);

@@ -73,7 +73,7 @@ test('full-screen authoring completes Core syntax and reports recoverable source
   await source.press('Control+Enter');
   await expect(panel.getByTestId('evidence-document')).toContainText('12');
   await expect(problems).toContainText('Problems · 0');
-  await panel.getByRole('tab', { name: 'Data', exact: true }).click();
+  await panel.getByRole('tab', { name: 'Setup SQL', exact: true }).click();
   const data = panel.getByRole('textbox', { name: 'Dataset SQL', exact: true });
   await data.fill('SELECT * FROM missing_setup_table');
   await data.press('Control+Enter');

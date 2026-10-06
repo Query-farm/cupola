@@ -2,11 +2,12 @@
  * History, in the editor's side panel. Two views of the same per-workspace
  * store (`query-history.ts`; per service URL outside a workspace):
  *
- * - **This tab**: the runs of the current query, newest first, each shown as
- *   a diff against the run before it. Restore puts that version back in the
- *   tab (undoable in the editor). This is the recovery path: the editor's own
- *   undo is gone after a reload, and one Ask AI "Replace document" can
- *   overwrite a query that worked.
+ * - **This tab**: the tab's revisions (`tab-revisions.ts`), newest first:
+ *   snapshots of the whole buffer taken at each run and around each Ask AI
+ *   apply, Restore and Format, each shown as a diff against the one before.
+ *   Restore puts a version back (undoable in the editor). This is the
+ *   recovery path: the editor's own undo is gone after a reload, and one Ask
+ *   AI "Replace document" can overwrite a query that worked.
  * - **All**: every query run in this workspace, from the editor, the shell
  *   and the AI panels, with a filter. It replaced a dropdown, which could not
  *   hold hundreds of entries. **All workspaces** widens it to every
@@ -15,10 +16,16 @@
  */
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { Check, Copy, ExternalLink, Play, RotateCcw, Trash2, X } from "lucide-react";
+import { loadTabRevisions, revisionText, subscribeTabRevisions, type RevisionKind, type TabRevision, type TabRevisions } from "@/lib/editor/tab-revisions";
 import { Input } from "@/components/ui/input";
 import type { QueryHistoryEntry, QuerySource } from "@/lib/shell-bridge";
 import { listWorkspaces, workspaceLabel } from "@/lib/workspace/store";
 import { clearQueryHistory, loadAllQueryHistories, loadQueryHistory, removeQueryHistoryEntry, runSnapshot, subscribeQueryHistory } from "@/lib/editor/query-history";
+
+const NO_REVISIONS: TabRevisions = { revisions: [], blobs: {} };
+const KIND_LABELS: Record<RevisionKind, string> = {
+  run: "Ran", ai: "Ask AI applied", restore: "Restored", format: "Formatted", edit: "Your edits",
+};
 import { diffWithContext, lineDiff } from "@/lib/line-diff";
 import { keyLabel } from "@/lib/keys";
 
@@ -98,8 +105,12 @@ export function HistoryPanel({ serviceUrl, activeDocId, onOpen, onRestore }: Pro
     }));
   }, [view, allWorkspaces, entries, serviceUrl]);
 
-  const tabRuns = useMemo(() => entries.filter((e) => activeDocId && e.docId === activeDocId), [entries, activeDocId]);
-  const shownTab = useMemo(() => (q ? tabRuns.filter((e) => matches(e, q)) : tabRuns), [tabRuns, q]);
+  const getRevisions = () => (activeDocId ? loadTabRevisions(serviceUrl, activeDocId) : NO_REVISIONS);
+  const revisions = useSyncExternalStore(subscribeTabRevisions, getRevisions, getRevisions);
+  const shownTab = useMemo(
+    () => (q ? revisions.revisions.filter((r) => revisionText(revisions, r).toLowerCase().includes(q)) : revisions.revisions),
+    [revisions, q],
+  );
   const shownAll = useMemo(() => (q ? rows.filter((r) => matches(r.entry, q) || !!r.label?.toLowerCase().includes(q)) : rows), [rows, q]);
 
   const segment = (v: View, label: string, count: number) => (
@@ -119,7 +130,7 @@ export function HistoryPanel({ serviceUrl, activeDocId, onOpen, onRestore }: Pro
       <div className="flex flex-col gap-2 border-b border-border p-2">
         <div className="flex items-center gap-2">
           <div role="tablist" aria-label="History view" className="flex rounded-md bg-muted p-0.5">
-            {segment("tab", "This tab", tabRuns.length)}
+            {segment("tab", "This tab", revisions.revisions.length)}
             {segment("all", "All", entries.length)}
           </div>
           {view === "all" && (
@@ -143,33 +154,42 @@ export function HistoryPanel({ serviceUrl, activeDocId, onOpen, onRestore }: Pro
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {view === "tab"
-          ? <TabRuns runs={shownTab} all={tabRuns} filtered={!!q} onOpen={onOpen} onRestore={onRestore} />
+          ? <TabRevisionList shown={shownTab} value={revisions} filtered={!!q} onOpen={onOpen} onRestore={onRestore} />
           : <AllRuns rows={shownAll} total={rows.length} onOpen={onOpen} />}
       </div>
     </div>
   );
 }
 
-/** Each run of this tab, compared with the run before it. */
-function TabRuns({ runs, all, filtered, onOpen, onRestore }: {
-  runs: QueryHistoryEntry[];
-  all: QueryHistoryEntry[];
+/** This tab's revisions, each compared with the one before it. */
+function TabRevisionList({ shown, value, filtered, onOpen, onRestore }: {
+  shown: TabRevision[];
+  value: TabRevisions;
   filtered: boolean;
   onOpen: (sql: string, run: boolean) => void;
   onRestore: (sql: string) => void;
 }) {
-  if (runs.length === 0) {
+  if (shown.length === 0) {
     return (
       <p className="px-4 py-8 text-center text-xs text-muted-foreground">
-        {filtered ? "No runs match." : "Each time you run this tab's query, the version that ran is kept here, compared with the one before."}
+        {filtered ? "No versions match." : "Versions of this tab's query are kept here: each time it runs, and before and after Ask AI, Restore or Format changes it. Each is compared with the one before."}
       </p>
     );
   }
   return (
-    <ol className="divide-y divide-border" aria-label="Runs of this tab">
-      {runs.map((entry) => {
-        const previous = all[all.indexOf(entry) + 1];
-        return <TabRun key={entry.id} entry={entry} previous={previous} onOpen={onOpen} onRestore={onRestore} />;
+    <ol className="divide-y divide-border" aria-label="Versions of this tab">
+      {shown.map((revision) => {
+        const previous = value.revisions[value.revisions.indexOf(revision) + 1];
+        return (
+          <TabRevisionItem
+            key={revision.id}
+            revision={revision}
+            text={revisionText(value, revision)}
+            before={previous ? revisionText(value, previous) : null}
+            onOpen={onOpen}
+            onRestore={onRestore}
+          />
+        );
       })}
     </ol>
   );
@@ -177,24 +197,40 @@ function TabRuns({ runs, all, filtered, onOpen, onRestore }: {
 
 const PREVIEW_LINES = 12;
 
-function TabRun({ entry, previous, onOpen, onRestore }: {
-  entry: QueryHistoryEntry;
-  previous?: QueryHistoryEntry;
+function RevisionOutcome({ revision }: { revision: TabRevision }) {
+  const o = revision.outcome;
+  if (!o) return null;
+  return (
+    <span className="flex min-w-0 items-center gap-2 text-[11px] tabular-nums">
+      {o.success
+        ? <span className="text-accent">{o.rowCount != null ? `${o.rowCount.toLocaleString()} row${o.rowCount === 1 ? "" : "s"}` : "OK"}</span>
+        : <span className="truncate text-destructive">{o.error || "Failed"}</span>}
+      <span className="shrink-0 text-muted-foreground">{formatDuration(o.ms)}</span>
+      {(o.runs ?? 1) > 1 && <span className="shrink-0 text-muted-foreground">· ran {o.runs} times</span>}
+    </span>
+  );
+}
+
+function TabRevisionItem({ revision, text, before, onOpen, onRestore }: {
+  revision: TabRevision;
+  text: string;
+  before: string | null;
   onOpen: (sql: string, run: boolean) => void;
   onRestore: (sql: string) => void;
 }) {
-  const text = runSnapshot(entry);
-  const before = previous ? runSnapshot(previous) : null;
   const diff = useMemo(() => (before === null || before === text ? null : lineDiff(before, text)), [before, text]);
   const [expanded, setExpanded] = useState(false);
   const lines = text.split("\n");
-  const ranPart = entry.docSql !== undefined && entry.sql.trim() !== text.trim() ? entry.sql.trim().split("\n")[0] : null;
+  const ranPart = revision.statement?.trim().split("\n")[0];
 
   return (
-    <li className="group px-3 py-2.5" data-testid="editor-history-run-entry">
+    <li className="group px-3 py-2.5" data-testid="editor-history-revision" data-kind={revision.kind}>
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="tabular-nums" title={new Date(entry.timestamp).toLocaleString()}>{formatWhen(entry.timestamp)}</span>
-        <Outcome entry={entry} />
+        <span className={`shrink-0 rounded px-1.5 py-px font-medium ${revision.kind === "ai" ? "bg-violet-500/10 text-violet-700 dark:text-violet-300" : revision.kind === "run" ? "bg-accent/10 text-accent" : "bg-foreground/5 text-foreground/70"}`}>
+          {KIND_LABELS[revision.kind]}
+        </span>
+        <span className="tabular-nums" title={new Date(revision.at).toLocaleString()}>{formatWhen(revision.at)}</span>
+        <RevisionOutcome revision={revision} />
         <span className="ml-auto flex items-center gap-0.5">
           <button
             className={`${iconButton} hover:text-foreground`}
@@ -211,10 +247,8 @@ function TabRun({ entry, previous, onOpen, onRestore }: {
         </span>
       </div>
       {ranPart && <div className="mt-1 truncate text-[11px] text-muted-foreground">Ran <code className="font-mono">{ranPart}</code></div>}
-      {before !== null && before === text ? (
-        <p className="mt-1 text-[11px] italic text-muted-foreground">Same text as the run before.</p>
-      ) : diff ? (
-        <pre className="mt-1.5 max-h-60 overflow-auto rounded bg-muted/60 p-2 font-mono text-[11px] leading-snug whitespace-pre-wrap break-words" aria-label="Changes since the run before" data-testid="editor-history-diff">
+      {diff ? (
+        <pre className="mt-1.5 max-h-60 overflow-auto rounded bg-muted/60 p-2 font-mono text-[11px] leading-snug whitespace-pre-wrap break-words" aria-label="Changes since the version before" data-testid="editor-history-diff">
           {diffWithContext(diff, 1).map((line, i) => line === null
             ? <div key={i} className="text-muted-foreground">⋯</div>
             : <div key={i} className={line.kind === "added" ? "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300" : line.kind === "removed" ? "bg-red-500/15 text-red-800 dark:text-red-300 line-through decoration-red-500/40" : ""}>

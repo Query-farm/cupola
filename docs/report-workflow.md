@@ -1,17 +1,29 @@
 # Report authoring and sharing
 
-The report header contains run, save, preview, and publish actions. The canvas toolbar contains undo/redo, AI editing, reflow, and adding blocks. Conditional appearance JSON is under **Advanced appearance** in the block editor.
+Reports are saved automatically in the current browser, separately for each data connection. The header says **Saved in this browser** when the definition is stored; this does not mean the preview has been refreshed. Reports do not sync across browsers or devices.
 
-- **Undo/redo:** up to 100 report changes, including applied block edits, deletion, layout changes, datasets, and AI changes. Use the toolbar or Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (Ctrl+Y also works). Text inputs keep their native undo behavior. Opening another report starts a new history. Saving does not remove history; saved revision history remains available under More.
-- **Draft recovery:** report changes and unapplied block/dataset edits are kept in browser storage, separately for each data service. The report library offers **Continue an unsaved draft** after navigation or reload. Temporarily blank titles remain recoverable as **Untitled report**, with the original blank title preserved for editing. Saving or publishing clears that recovery copy. Recovery does not change the published report, and is limited to the current browser. A storage failure is shown explicitly.
-- **Preview:** view the current draft with reader controls before its first publication or before publishing changes. **Back to editing** retains the draft and applied filters. Viewing **Published** continues to show the published definition.
-- **Starters:** blank reports offer Executive summary, Trends and comparisons, and Detailed analysis layouts. These run self-contained, clearly labeled sample SQL. Replace the sample dataset through Datasets to use your own data.
-- **Filters:** applied values remain visible as chips. Reset filters reapplies the defaults. Date ranges offer the last 7 or 30 calendar days (including today), this month, and the previous calendar month, using the browser's local date. Presets are staged until Apply and use normal parameter validation.
-- **Chart filtering:** in a chart's **Chart interaction** settings, select a report parameter and a result column present in the rendered chart marks. Clicking a mark applies its value through parameter validation and refreshes affected datasets. Multi-select parameters receive one selected value. Reset filters returns to the defaults. Chart transforms that remove the chosen field cannot supply a filter value.
-- **Freshness:** the overall timestamp describes the oldest loaded report dataset. Partial refreshes identify older, failed, or unavailable datasets, and blocks show individual timestamps. Successful datasets from the same run are considered current even if they finish at different times.
+## Creating and editing
+
+- **New report** opens the report assistant with a prompt to describe the report and data to use. Summary, Trend, and Table starters provide working layouts using clearly labeled sample data. Replace their SQL in Code or ask the assistant to use your data.
+- **Code** contains Markdown, report SQL, and Evidence components. **Setup SQL** prepares tables before a refresh. **Datasets** builds semantic queries from governed measures and dimensions. **Results** inspects results and explores pivots.
+- **All editing tools** lists every tool with a description, including Appearance, Parameters, Performance, and History. It is available even when some tabs are outside the visible tab strip.
+- **Focus report** is available directly in the header. On screens below 1024px, Editor and Preview use separate panes, and the catalog sidebar opens as a drawer. Desktop editing retains the resizable split view.
+- The Problems panel expands for errors and can be opened for details when there are no errors.
+- **Update preview** (Cmd/Ctrl+Enter) applies definition changes and refreshes data. A visible message explains when the preview still represents an earlier definition.
+- **History** records saved revisions and applied assistant changes. Restore brings an earlier definition back into the current report. Edits save automatically; Cmd/Ctrl+S saves immediately and starts a new revision session.
+- Draft recovery keeps changes that could not be saved. It is local to the current browser and data connection.
+
+## Filters and refresh
+
+Filter controls stage selected values. **Apply filters** refreshes the report with them; **Reset filters** restores defaults and refreshes. The **Results use** summary always describes the values from the displayed run, including when newer selections have already been saved locally. PDF export is unavailable while definition or filter changes remain unapplied.
+
+Before replacing temporary datasets, refresh retains a static copy of the previous rendered report. If setup fails or is stopped, that read-only preview remains with an explicit notice. Interactive embeds are represented by a placeholder; separate pivot explorations are not captured. A successful setup replaces the retained preview with the new renderer. Errors during rendering still appear in the report and Problems panel.
 
 ## Sharing
 
-**Live data link** embeds the current definition and applied filters. Reader links rerun data when opened; draft review links allow recipients to inspect the definition before running it. Recipients need access to the underlying service. These are portable definition links, not centrally hosted report addresses: later author edits do not update an already-copied link.
+**Share** offers two download choices:
 
-**Frozen snapshot** downloads a standalone HTML document containing the captured results, timestamps, chart PNGs, and up to 10,000 loaded rows per table. It works offline without scripts or data credentials. Maps and pivot views are represented as data tables. Row counts disclose truncation, and failed refreshes retain their earlier-data status. The report tab must be open so rendered charts can be captured. Apply or discard pending block and dataset edits before exporting; captions and sources use the applied parameter values. Print / Save as PDF and JSON definition downloads remain available under More.
+- **PDF** contains the displayed report and applied filters for recipients to read without a data connection. The selected tab of each report tab group and all table rows are exported. The existing Export PDF action remains available in View mode and under More when editing.
+- **Editable report** contains the latest definition, selected filter values, and saved revision history. Recipients use **Reports → Import** and need access to the same data service to refresh it. Queries execute with their connection.
+
+Downloaded copies do not receive later edits. The report address only resolves for a browser that already stores that report. **Export all** in the library downloads all reports for the current connection.

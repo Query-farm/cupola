@@ -1,21 +1,4 @@
-/**
- * Cloudflare Worker — versioned asset serving from R2.
- *
- * Replaces the previous Pages Function (functions/[[path]].ts). Routing
- * semantics, caching behavior, and headers are unchanged. The only
- * differences from the Pages handler are mechanical:
- *
- *   - Exports a `{ fetch }` default object instead of `onRequest`.
- *   - `context.env`         → `env`
- *   - `context.request`     → `request`
- *   - `context.waitUntil()` → `ctx.waitUntil()`
- *
- * URL scheme:
- *   /                     → 302 → /latest/
- *   /latest/              → 302 → /v{latest_version}/
- *   /v0.1.0/*             → serve from R2 prefix "v0.1.0/"
- *   /oauth-callback.html  → latest-version fallback (stable Entra SPA URI)
- */
+/** Stable document URLs backed by immutable release assets in R2. */
 
 import * as Sentry from "@sentry/cloudflare";
 
@@ -45,6 +28,7 @@ interface Env {
 declare global {
   interface R2ObjectBody {
     body: ReadableStream;
+    httpEtag?: string;
     text(): Promise<string>;
   }
   interface R2Bucket {
@@ -67,7 +51,7 @@ declare global {
 }
 
 /** Matches /v1.2.3/ or /v1.2.3/some/path */
-const VERSION_RE = /^\/v([\d]+\.[\d]+\.[\d]+)(\/.*)?$/;
+const VERSION_RE = /^\/v(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)(\/.*)?$/;
 
 const CONTENT_TYPES: Record<string, string> = {
   html: "text/html; charset=utf-8",
@@ -118,7 +102,7 @@ async function fetchWithFallback(
 
 function cacheControl(key: string, isVersioned: boolean): string {
   if (key.endsWith(".html") || key.endsWith("/index.html")) {
-    return "public, max-age=60, s-maxage=300";
+    return "no-store";
   }
   if (key.includes("_astro/") || isVersioned) {
     return "public, max-age=31536000, immutable";
@@ -126,7 +110,27 @@ function cacheControl(key: string, isVersioned: boolean): string {
   return "public, max-age=3600";
 }
 
-function respond(obj: R2ObjectBody, key: string, extraHeaders?: Record<string, string>): Response {
+function conditionalResponse(request: Request, response: Response): Response {
+  if (request.method !== "GET" && request.method !== "HEAD") return response;
+  const condition = request.headers.get("If-None-Match");
+  const etag = response.headers.get("ETag");
+  // GET/HEAD use weak comparison; a list may contain quoted tags with commas.
+  const tags: string[] = condition?.match(/(?:W\/)?"[^"]*"|\*/g) ?? [];
+  const matches = tags.includes("*") || (etag && tags.some(tag => tag.replace(/^W\//, "") === etag.replace(/^W\//, "")));
+  if (response.status === 200 && matches) {
+    void response.body?.cancel().catch(() => {});
+    const headers = new Headers(response.headers);
+    headers.delete("Content-Length");
+    return new Response(null, { status: 304, headers });
+  }
+  if (request.method === "HEAD") {
+    void response.body?.cancel().catch(() => {});
+    return new Response(null, { status: response.status, headers: response.headers });
+  }
+  return response;
+}
+
+function respond(request: Request, obj: R2ObjectBody, key: string, extraHeaders?: Record<string, string>): Response {
   const headers = new Headers({
     "Content-Type": contentType(key),
     "Cache-Control": cacheControl(key, false),
@@ -134,10 +138,11 @@ function respond(obj: R2ObjectBody, key: string, extraHeaders?: Record<string, s
     "Cross-Origin-Embedder-Policy": "require-corp",
     "Cross-Origin-Resource-Policy": "cross-origin",
   });
+  if (obj.httpEtag) headers.set("ETag", obj.httpEtag);
   if (extraHeaders) {
     for (const [k, v] of Object.entries(extraHeaders)) headers.set(k, v);
   }
-  return new Response(obj.body, { headers });
+  return conditionalResponse(request, new Response(obj.body, { headers }));
 }
 
 async function readLatest(env: Env): Promise<string | null> {
@@ -178,38 +183,60 @@ function errorResponse(
   return new Response(renderErrorPage(opts), { status, headers });
 }
 
-const handler = {
+export const handler = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    if (path === "/" || path === "") {
-      const qs = url.search ? url.search : "";
-      return Response.redirect(`${url.origin}/latest/${qs}`, 302);
+    // Route documents before consulting the old edge cache. Previously cached
+    // versioned HTML must never bypass migration to the stable address.
+    const versionMatch = path.match(VERSION_RE);
+    const remainder = versionMatch?.[2] ?? "/";
+    const isDocument = (pathname: string) =>
+      !pathname.startsWith("/sandbox/") && pathname !== "/oauth-callback.html" &&
+      (pathname.endsWith("/") || !pathname.split("/").pop()!.includes(".") || pathname.endsWith(".html"));
+    const redirect = (target: string) => new Response(null, {
+      status: 302,
+      // No fragment in Location: browsers inherit the original fragment.
+      headers: { Location: `${url.origin}${target}${url.search}`, "Cache-Control": "no-store" },
+    });
+    if (path === "/latest" || path.startsWith("/latest/")) {
+      return redirect(path.replace(/^\/latest(?=\/|$)/, "") || "/");
     }
-
-    const cache = (caches as unknown as { default: Cache }).default;
-    const isLatestMarkerPath = path === "/_latest" || path.endsWith("/_latest");
-
-    if (request.method === "GET" && !isLatestMarkerPath) {
+    if (versionMatch && isDocument(remainder)) {
+      return redirect(remainder.replace(/(?:^|\/)index\.html$/, "/"));
+    }
+    if (path === "/release.json") {
+      const version = await readLatest(env);
+      if (!version) return new Response(null, { status: 503, headers: { "Cache-Control": "no-store" } });
+      const metadata = await env.ASSETS_BUCKET.get(`v${version}/_release.json`);
+      let publishedAt: string | null = null;
+      if (metadata) {
+        try { publishedAt = JSON.parse(await metadata.text()).publishedAt ?? null; } catch { /* legacy release */ }
+      }
+      return Response.json({ version, publishedAt }, { headers: { "Cache-Control": "no-store" } });
+    }
+    if (path === "/_latest" || path.endsWith("/_latest")) {
+      return new Response(await readLatest(env), { headers: { "Cache-Control": "no-store" } });
+    }
+    // New namespace retires cached responses missing ETags or using the old
+    // unconditional npm TTL. Browser caches already issued cannot be revoked.
+    const cache = await caches.open("cupola-assets-v2");
+    // Stable paths always resolve against the live pointer, including HTML,
+    // OAuth callbacks and unversioned compatibility assets.
+    const cacheable = Boolean(versionMatch) || path.startsWith("/npm/");
+    if (request.method === "GET" && cacheable) {
       const cached = await cache.match(request);
       if (cached) {
         const hit = new Response(cached.body, cached);
         hit.headers.set("x-cupola-cache", "HIT");
-        return hit;
+        return conditionalResponse(request, hit);
       }
-    }
-    if (isLatestMarkerPath && request.method === "GET") {
-      try { ctx.waitUntil(cache.delete(request)); } catch { /* ignore */ }
     }
 
     const cacheAndReturn = async (res: Response): Promise<Response> => {
-      const isLatestMarker = path === "/_latest" || path.endsWith("/_latest");
-      if (request.method !== "GET" || res.status !== 200 || !res.body || isLatestMarker) {
+      if (request.method !== "GET" || res.status !== 200 || !res.body || !cacheable || /\b(?:no-store|private|no-cache)\b/i.test(res.headers.get("Cache-Control") ?? "")) {
         res.headers.set("x-cupola-cache", "SKIP");
-        if (isLatestMarker) {
-          res.headers.set("Cache-Control", "no-store, max-age=0");
-        }
         return res;
       }
       const [forClient, forCache] = res.body.tee();
@@ -238,33 +265,25 @@ const handler = {
 
     // ---- /npm/* → proxy to cdn.jsdelivr.net ----
     if (path.startsWith("/npm/")) {
-      const cdnUrl = `https://cdn.jsdelivr.net${path}`;
-      const cdnResp = await fetch(cdnUrl, { headers: { "User-Agent": "cupola" } });
+      const cdnUrl = `https://cdn.jsdelivr.net${path}${url.search}`;
+      const cdnResp = await fetch(cdnUrl, { method: request.method === "HEAD" ? "HEAD" : "GET", headers: { "User-Agent": "cupola" } });
       const headers = new Headers(cdnResp.headers);
       headers.set("Access-Control-Allow-Origin", "*");
-      headers.set("Cache-Control", "public, max-age=31536000, immutable");
-      return cacheAndReturn(new Response(cdnResp.body, { status: cdnResp.status, headers }));
-    }
-
-    // ---- /latest/ → /v{latest_version}/ ----
-    if (path === "/latest" || path === "/latest/" || path.startsWith("/latest/")) {
-      const latestVersion = await readLatest(env);
-      if (!latestVersion) {
-        return errorResponse(request, { variant: "not-deployed", path });
+      if (!cdnResp.ok) {
+        headers.set("Cache-Control", "no-store");
+        headers.delete("Age");
+      } else if (!headers.has("Cache-Control")) {
+        headers.set("Cache-Control", "no-cache");
       }
-      const remainder = path.replace(/^\/latest\/?/, "");
-      const target = `/v${latestVersion}/${remainder}`;
-      const qs = url.search ? url.search : "";
-      return Response.redirect(`${url.origin}${target}${qs}`, 302);
+      return conditionalResponse(request, await cacheAndReturn(new Response(cdnResp.body, { status: cdnResp.status, headers })));
     }
 
-    // ---- /v{semver}/* ----
-    const versionMatch = path.match(VERSION_RE);
+    // Immutable assets never fall back to another release or root files.
     if (versionMatch) {
       const version = versionMatch[1];
       const remainder = (versionMatch[2] ?? "/").replace(/^\//, "");
       const r2Key = `v${version}/${remainder}`;
-      const obj = await fetchWithFallback(env.ASSETS_BUCKET, r2Key, remainder);
+      const obj = await fetchFromR2(env.ASSETS_BUCKET, r2Key);
       if (!obj) {
         // Distinguish "the whole release is gone" from "that page doesn't
         // exist inside a release that is still live". One extra R2 get, and
@@ -284,7 +303,7 @@ const handler = {
       const resolvedKey =
         remainder === "" || remainder.endsWith("/") || !hasExtension ? "index.html" : r2Key;
       return cacheAndReturn(
-        respond(obj, resolvedKey, {
+        respond(request, obj, resolvedKey, {
           "Cache-Control": cacheControl(resolvedKey, true),
         }),
       );
@@ -298,7 +317,7 @@ const handler = {
       const obj = await fetchWithFallback(env.ASSETS_BUCKET, r2Key, stripped);
       if (obj) {
         const contentKey = stripped.includes(".") ? stripped : "index.html";
-        return cacheAndReturn(respond(obj, contentKey));
+        return cacheAndReturn(respond(request, obj, contentKey, { "Cache-Control": "no-store" }));
       }
     }
 

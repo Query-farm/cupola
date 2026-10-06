@@ -21,13 +21,14 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("Unified tab bar", () => {
-  test("all five tabs are present and switch; Perspective is not one until it is opened", async ({ page }) => {
-    for (const id of ["catalog", "editor", "askai", "reports", "shell"]) {
+  test("all six tabs are present and switch; Perspective is not one until it is opened", async ({ page }) => {
+    for (const id of ["catalog", "editor", "askai", "notebooks", "reports", "shell"]) {
       await expect(page.getByTestId(`tab-${id}`)).toBeVisible();
     }
     await expect(page.getByRole("tablist", { name: "Workspace" }).getByRole("tab")).toHaveText([
       "Query Editor",
       "Ask AI",
+      "Notebooks",
       "Reports",
       "SQL Shell",
       "Catalog",

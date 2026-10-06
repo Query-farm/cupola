@@ -104,13 +104,13 @@ describe("buildShareQueryUrl", () => {
 });
 
 describe("toLatestBaseUrl", () => {
-  test("repoints a versioned base at /latest/ so links don't pin a stale build", () => {
+  test("repoints a versioned base at / so links don't pin a stale build", () => {
     expect(toLatestBaseUrl("https://cupola.query-farm.services/v0.4.96/"))
-      .toBe("https://cupola.query-farm.services/latest/");
+      .toBe("https://cupola.query-farm.services/");
   });
 
   test("handles a prerelease version", () => {
-    expect(toLatestBaseUrl("https://c.example/v1.2.3-rc.1/")).toBe("https://c.example/latest/");
+    expect(toLatestBaseUrl("https://c.example/v1.2.3-rc.1/")).toBe("https://c.example/");
   });
 
   test("leaves a flat base (BASE_PATH=/ self-hosted deploy) alone", () => {
@@ -131,7 +131,7 @@ describe("toLatestBaseUrl", () => {
   });
 
   test("preserves the origin, including a nonstandard port", () => {
-    expect(toLatestBaseUrl("http://localhost:4322/v0.4.96/")).toBe("http://localhost:4322/latest/");
+    expect(toLatestBaseUrl("http://localhost:4322/v0.4.96/")).toBe("http://localhost:4322/");
   });
 
   test("returns a malformed input unchanged rather than throwing", () => {

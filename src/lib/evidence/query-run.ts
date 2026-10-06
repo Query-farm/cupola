@@ -28,14 +28,14 @@ export class EvidenceQueryRun {
     }
   }
 
-  async query(sql: string, params: unknown[] = [], signal?: AbortSignal) {
+  async query(sql: string, params: unknown[] = [], signal?: AbortSignal, onStart?: () => void) {
     const combined = signal ? AbortSignal.any([this.signal, signal]) : this.signal;
     combined.throwIfAborted();
     if (!engine.query) throw new Error('Haybarn is not ready');
     if (params.length && !engine.queryPrepared) throw new Error('Prepared queries are unavailable');
     this.onActivity(++this.pending);
     try {
-      const options = { signal: combined, timeoutMs: REPORT_QUERY_TIMEOUT_MS };
+      const options = { signal: combined, timeoutMs: REPORT_QUERY_TIMEOUT_MS, onStart };
       const result = params.length
         ? await engine.queryPrepared!(sql, params, options)
         : await engine.query(sql, options);

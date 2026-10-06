@@ -1,6 +1,8 @@
 export interface QueryExecutionOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Fired only when this query owns the shared connection, after queueing. */
+  onStart?: () => void;
 }
 
 /** Keep ownership of the shared connection until an interrupted query settles.
@@ -34,6 +36,8 @@ export function createQueryExecutor(interrupt: () => void) {
         const timeoutMs = options.timeoutMs;
         if (timeoutMs !== undefined) timer = setTimeout(() => stop(new Error(`Query exceeded the ${timeoutMs / 1000}-second time limit.`)), timeoutMs);
         try {
+          options.onStart?.();
+          controller.signal.throwIfAborted();
           const result = await work(controller.signal);
           if (!finished) resolve(result);
         } catch (error) {

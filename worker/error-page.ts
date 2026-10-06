@@ -26,13 +26,13 @@ export interface ErrorPageOptions {
   latestVersion?: string;
 }
 
-/** Seconds before the page navigates itself to `/latest/`. */
+/** Seconds before the page navigates itself to `/`. */
 const REDIRECT_SECONDS = 8;
 
 /**
  * sessionStorage key guarding against a redirect loop. If `_latest` ever names
- * a version whose index.html is missing, `/latest/` → `/v{x}/` → 404 → redirect
- * → `/latest/` spins forever; the sentinel lets it happen exactly once.
+ * a version whose index.html is missing, `/` → `/v{x}/` → 404 → redirect
+ * → `/` spins forever; the sentinel lets it happen exactly once.
  */
 const REDIRECT_SENTINEL = "cupola-error-redirected";
 
@@ -86,7 +86,7 @@ function copyFor(opts: ErrorPageOptions): Copy {
         heading: "This version is no longer available",
         body,
         detail:
-          "Your connection settings and current view carry over. If you bookmarked this page, update the bookmark to <code>/latest/</code> — it always follows the current release.",
+          "Your connection settings and current view carry over. If you bookmarked this page, update the bookmark to <code>/</code> — it always follows the current release.",
         cta: "Go to the latest version",
       };
     }
@@ -132,14 +132,14 @@ for(var k in colors){if(ALLOWED[k]&&typeof colors[k]==='string'){root.style.setP
 /**
  * Countdown + navigation. Client-side on purpose: the URL fragment
  * (`#token=`, `#sql=`, `#/schema/...`) never reaches the worker, so only the
- * browser can carry it across to `/latest/`. `location.replace` keeps the dead
+ * browser can carry it across to `/`. `location.replace` keeps the dead
  * URL out of history — with `href`, Back would land right back on this page.
  */
 const REDIRECT_SCRIPT = `(function(){
 var btn=document.getElementById('cta');if(!btn)return;
 var label=btn.textContent;
 function go(){try{sessionStorage.setItem(${JSON.stringify(REDIRECT_SENTINEL)},'1');}catch(e){}
-location.replace('/latest/'+location.search+location.hash);}
+location.replace('/'+location.search+location.hash);}
 btn.addEventListener('click',function(e){e.preventDefault();stop();go();});
 var left=${REDIRECT_SECONDS},timer=null;
 function stop(){if(timer!==null){clearInterval(timer);timer=null;btn.textContent=label;}}
@@ -295,7 +295,7 @@ footer a:hover{color:var(--foreground)}
     <h1>${escapeHtml(copy.heading)}</h1>
     <p class="body">${copy.body}</p>
     ${copy.detail ? `<p class="detail">${copy.detail}</p>` : ""}
-    ${copy.cta ? `<a class="cta" id="cta" href="/latest/">${escapeHtml(copy.cta)}</a>` : ""}
+    ${copy.cta ? `<a class="cta" id="cta" href="/">${escapeHtml(copy.cta)}</a>` : ""}
   </div>
 </main>
 <footer>
