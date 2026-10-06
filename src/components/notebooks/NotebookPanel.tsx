@@ -49,15 +49,10 @@ import {
 import { NotebookRunner, isStale, validateSelectQuery, type CellResult } from '../../lib/notebooks/execution';
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { waitForEngineReady, engine } from '../../lib/shell-bridge';
-import { safeFileStem, triggerDownload } from '../../lib/editor/result-export';
+import { copyNotebook, exportNotebook as download } from '../../lib/notebooks/actions';
+import { useSavedDocumentActions } from '../../lib/saved-document-actions';
 import type { CatalogData } from '../../lib/service';
 
-function download(doc: Notebook) {
-  triggerDownload(
-    new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }),
-    `${safeFileStem(doc.title)}.notebook.json`,
-  );
-}
 export function NotebookPanel({
   serviceUrl,
   workspaceId,
@@ -373,6 +368,7 @@ function NotebookWorkspace({
   const undo = useRef<Notebook[]>([]),
     redo = useRef<Notebook[]>([]);
   const alive = useRef(true);
+  const deleted = useRef(false);
   const baseline = useRef<string | null | undefined>(undefined);
   if (baseline.current === undefined) {
     try {
@@ -435,6 +431,7 @@ function NotebookWorkspace({
     );
   }, [doc.cells]);
   function persist(): boolean {
+    if (deleted.current) return true;
     try {
       const current = localStorage.getItem(storageKey(notebookScope(doc), doc.id));
       if (baseline.current !== undefined && current !== baseline.current)
@@ -535,6 +532,25 @@ function NotebookWorkspace({
     }
   }
   const busy = running || aiBusy;
+  useSavedDocumentActions('notebook', notebookScope(initial), initial.id, action => {
+    const current = latest.current;
+    switch (action.type) {
+      case 'rename':
+        change({ ...current, title: action.title });
+        if (!persist()) throw new Error('The notebook could not be saved. Resolve its save error before renaming it.');
+        break;
+      case 'duplicate': copyNotebook(current); break;
+      case 'export': download(current); break;
+      case 'delete':
+        if (runner.current?.running || aiBusy)
+          throw new Error('Stop the running query or AI response before deleting this notebook.');
+        deleteNotebook(notebookScope(current), current.id);
+        deleted.current = true;
+        runner.current?.stop();
+        onClose();
+        break;
+    }
+  });
   useEffect(() => {
     beforeLeave.current = () => !busy && persist();
     return () => {

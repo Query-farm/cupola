@@ -8,7 +8,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Input } from '../ui/input';
 import { engine, waitForEngineReady } from '../../lib/shell-bridge';
 import { hasSqlStatements, materializeReportQuery } from '../../lib/reports/parameters';
-import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveParameters, saveEvidenceReport, validateEvidenceReport, describeReportError, saveRecoveryDraft, clearRecoveryDraft, loadRecoveryDraft, listUnsavedDrafts, titled, isQuotaError, UNTITLED_REPORT, STORAGE_FULL_MESSAGE, STORAGE_PREFIX, LEGACY_STORAGE_PREFIX, type EvidenceReport, type ParameterValues } from '../../lib/evidence/reports';
+import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveParameters, saveEvidenceReport, validateEvidenceReport, describeReportError, saveRecoveryDraft, clearRecoveryDraft, loadRecoveryDraft, listUnsavedDrafts, titled, isQuotaError, UNTITLED_REPORT, STORAGE_FULL_MESSAGE, STORAGE_PREFIX, LEGACY_STORAGE_PREFIX, EVIDENCE_REPORTS_CHANGED, type EvidenceReport, type ParameterValues } from '../../lib/evidence/reports';
 import { newDrillExampleReport, newEvidenceReport } from '../../lib/evidence/templates';
 import { reportScope } from '../../lib/evidence/reports';
 import { getWorkspace, hostOf, listWorkspaces, subscribeWorkspaces, workspaceLabel, type Workspace } from '../../lib/workspace/store';
@@ -43,6 +43,8 @@ import { EvidencePreview, type EvidenceInputState, type PreviewDrill, type Repor
 import { useReportPrint } from './useReportPrint';
 import { captureReportPreview, RetainedReportPreview } from './RetainedReportPreview';
 import { ReportSharing } from './ReportSharing';
+import { copyReport, exportSavedReport } from '../../lib/evidence/report-actions';
+import { useSavedDocumentActions } from '../../lib/saved-document-actions';
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 /** A PDF per parameter value re-renders the report once per section; past this, it stops. */
@@ -264,6 +266,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   const revision = useRef(0);
   const dirty = asSaved(report) !== saved;
   const reportRef = useRef(report); reportRef.current = report;
+  const deletedReportId = useRef<string | null>(null);
   const baseline = useRef(JSON.stringify(initial.savedReport));
   const dirtyRef = useRef(false); dirtyRef.current = asSaved(report) !== baseline.current;
 
@@ -295,6 +298,11 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     }
     catch (e) { setError(`Could not read saved reports: ${message(e)}`); }
   }
+  useEffect(() => {
+    const reload = () => reloadList();
+    window.addEventListener(EVIDENCE_REPORTS_CHANGED, reload);
+    return () => window.removeEventListener(EVIDENCE_REPORTS_CHANGED, reload);
+  }, [scope]);
   function navigate(showLibrary: boolean, id?: string, replace = false) {
     const url = new URL(window.location.href);
     url.pathname = `${appBase.replace(/\/$/, '')}/reports${showLibrary ? '/saved' : ''}`;
@@ -497,7 +505,10 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     openReport(next, true, true, 'replace', true);
   }, [promotion, busy]);
 
-  function change(next: EvidenceReport) { reportRef.current = next; setReport(next); setNotice(''); }
+  function change(next: EvidenceReport) {
+    if (deletedReportId.current === next.id) return;
+    reportRef.current = next; setReport(next); setNotice('');
+  }
 
   // Revision history: every save keeps the saved version, labelled with who changed what.
   const [history, setHistory] = useState<ReportHistory>(emptyHistory);
@@ -528,6 +539,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   const [saveError, setSaveError] = useState('');
   /** Save the report, recording a revision. Null when it can't be saved; the draft is kept for recovery. */
   function persist(next: EvidenceReport, meta: RevisionMeta): EvidenceReport | null {
+    if (deletedReportId.current === next.id) return null;
     const before = savedRef.current ? JSON.parse(savedRef.current) as EvidenceReport : null;
     let stored: EvidenceReport;
     // A blank title (being retyped) saves as "Untitled report"; the field stays as typed.
@@ -567,7 +579,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     }
   }
   /** Whether the draft differs from what is saved (a new report: from the template it started as). */
-  const unsaved = () => asSaved(reportRef.current) !== (savedRef.current || baseline.current);
+  const unsaved = () => deletedReportId.current !== reportRef.current.id && asSaved(reportRef.current) !== (savedRef.current || baseline.current);
   function autosave() {
     if (unsaved()) persist(reportRef.current, { kind: 'edit', session: session.current });
   }
@@ -689,6 +701,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     // Edits that could not be saved when this report was last open come back.
     const recovered = fresh ? null : loadRecoveryDraft(scope, next.id);
     const draft = recovered && specOf(recovered) !== specOf(next) ? recovered : null;
+    // Import can restore a deliberately deleted report with its original identity.
+    if (next.id === deletedReportId.current) deletedReportId.current = null;
     reportRef.current = draft ?? next;
     setReport(draft ?? next); setHasOpenedReport(true); setSaved(fresh ? '' : JSON.stringify(next)); savedRef.current = fresh ? '' : JSON.stringify(next); baseline.current = JSON.stringify(next); setEditing(fresh || Boolean(draft)); setEditorOnly(false);
     setError(''); setNotice(''); setRecovered(Boolean(draft)); setSaveError(''); setRun(null); setRetained(null); setUpdated(''); setLibrary(false); setCompactView('editor');
@@ -818,6 +832,34 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       setError(''); setNotice('Report deleted.');
     } catch (e) { setError(`Could not delete report: ${message(e)}`); }
   }
+  useSavedDocumentActions('report', scope, report.id, action => {
+    const current = reportRef.current;
+    switch (action.type) {
+      case 'rename': {
+        const next = { ...current, title: action.title };
+        change(next);
+        if (!persist(next, { kind: 'edit', label: 'Renamed report' }))
+          throw new Error('The report could not be saved. Resolve its save error before renaming it.');
+        break;
+      }
+      case 'duplicate': copyReport(current); reloadList(); break;
+      case 'export': exportSavedReport(current); break;
+      case 'delete':
+        if (busyRef.current || exportingRef.current)
+          throw new Error('Stop the report refresh or wait for its export before deleting this report.');
+        deleteEvidenceReport(scope, current.id);
+        deletedReportId.current = current.id;
+        execution.current?.stop();
+        savedRef.current = '';
+        setSaved('');
+        setHasOpenedReport(false);
+        setEditing(false);
+        setSaveError('');
+        setRecovered(false);
+        navigate(true);
+        break;
+    }
+  });
   const visible = reports.filter(item => `${item.title} ${item.serviceUrl}`.toLowerCase().includes(search.toLowerCase()));
   const displayedRun = run ?? retained?.run;
   const filtersPending = Boolean(displayedRun && report.parameters.some(parameter => JSON.stringify(choices.values[parameter.key] ?? null) !== JSON.stringify(displayedRun.values[parameter.key] ?? null)));
@@ -1019,10 +1061,10 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
             resizeEditor(event.key === 'Home' ? 25 : event.key === 'End' ? 70 : editorWidth + (event.key === 'ArrowLeft' ? 2 : -2));
           }}
         ><span className="h-10 w-0.5 rounded-full bg-muted-foreground/40" /></div>}
-        <div style={{ display: editing ? undefined : 'none' }} className={`${!editorOnly && compactView === 'preview' ? 'hidden lg:flex' : 'flex'} min-h-0 min-w-0 flex-col [&>aside]:flex-1`}><EvidenceEditor history={{ history, dirty, onRestore: restoreRevision, onDelete: deleteRevision }} onProposal={proposalEvent} performance={{ profile, namedQueries: dataContext?.queries ?? [], runnable: sql => {
+        <div style={{ display: editing ? undefined : 'none' }} className={`${!editorOnly && compactView === 'preview' ? 'hidden lg:flex' : 'flex'} min-h-0 min-w-0 flex-col [&>aside]:flex-1`}>{deletedReportId.current !== report.id && <EvidenceEditor history={{ history, dirty, onRestore: restoreRevision, onDelete: deleteRevision }} onProposal={proposalEvent} performance={{ profile, namedQueries: dataContext?.queries ?? [], runnable: sql => {
           if (!run) return sql;
           try { return materializeReportQuery(sql, compilerParameters(run.report, run.values), run.values); } catch { return sql; }
-        } }} parameterChoices={{ states: choices.states, values: choices.values, loader: choices.loader }} fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={async () => { await refresh(); }} key={report.id} report={report} onChange={change} issues={issues} issuesStale={checkedSpec.current !== diagnosticSpec(report)} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => { setEditorOnly(!editorOnly); setCompactView(editorOnly ? 'preview' : 'editor'); }} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); setCompactView('preview'); await refresh(next); }} /></div>
+        } }} parameterChoices={{ states: choices.states, values: choices.values, loader: choices.loader }} fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={async () => { await refresh(); }} key={report.id} report={report} onChange={change} issues={issues} issuesStale={checkedSpec.current !== diagnosticSpec(report)} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => { setEditorOnly(!editorOnly); setCompactView(editorOnly ? 'preview' : 'editor'); }} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); setCompactView('preview'); await refresh(next); }} />}</div>
       </div>
     </main>
   </div>;

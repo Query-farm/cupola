@@ -1,5 +1,7 @@
 import { useState, type MouseEvent } from 'react';
 import { ChevronRight, LayoutList, Plus, type LucideIcon } from 'lucide-react';
+import { SavedDocumentRow } from './SavedDocumentRow';
+import type { SavedDocumentAction } from '../../lib/saved-document-actions';
 
 const ROW = 'flex items-center rounded-md px-2 py-2 text-sm transition-colors hover:bg-muted/60';
 /** Shared saved-document roots, matching the catalog tree while preserving real links. */
@@ -19,6 +21,8 @@ export function SavedDocumentsSidebar({
   libraryActive,
   error,
   emptyMessage,
+  documentKind,
+  onAction,
 }: {
   title: string;
   icon: LucideIcon;
@@ -35,6 +39,8 @@ export function SavedDocumentsSidebar({
   libraryActive?: boolean;
   error?: string;
   emptyMessage: string;
+  documentKind: 'notebook' | 'report';
+  onAction: (id: string, action: SavedDocumentAction) => Promise<void>;
 }) {
   const [open, setOpen] = useState(() => {
     try {
@@ -97,17 +103,15 @@ export function SavedDocumentsSidebar({
             All {title.toLocaleLowerCase()}
           </a>
           {visible.map((item) => (
-            <a
+            <SavedDocumentRow
               key={item.id}
-              href={item.href}
-              onClick={(event) => onNavigate(event, item.id)}
-              aria-current={activeId === item.id ? 'page' : undefined}
-              title={item.title}
-              className={`${ROW} ml-5 ${activeId === item.id ? 'bg-muted font-medium' : ''}`}
-            >
-              <ItemIcon aria-hidden className="mr-2 h-4 w-4 shrink-0" />
-              <span className="truncate">{item.title}</span>
-            </a>
+              item={item}
+              icon={ItemIcon}
+              active={activeId === item.id}
+              documentKind={documentKind}
+              onNavigate={onNavigate}
+              onAction={onAction}
+            />
           ))}
           {error ? (
             <p className="ml-5 px-2 py-1 text-xs text-destructive">{error}</p>

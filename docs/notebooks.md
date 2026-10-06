@@ -2,6 +2,8 @@
 
 Open **Notebooks** in the workspace tab bar, or visit `/notebooks?service=…` under the application's versioned base URL. A notebook belongs to the current connection and combines SQL cells, Markdown, and charts attached to SQL results.
 
+In the sidebar, right-click a saved notebook or use its **⋯** button to rename, duplicate, export, or delete it. Shift+F10 opens the same menu from a focused notebook link. Deletion requires confirmation; stop running queries or an AI response before deleting the open notebook. Actions on an open notebook use its current edits.
+
 ## Authoring and execution
 
 - Add SQL or Markdown cells, rename them, collapse them, duplicate them, or move them up and down. Delete is reversible with Undo. The document history keeps up to 100 edits; text editors retain their own keyboard undo.

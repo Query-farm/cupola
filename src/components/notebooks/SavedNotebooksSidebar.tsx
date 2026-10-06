@@ -3,6 +3,8 @@ import { NotebookPen, FileText } from 'lucide-react';
 import { SavedDocumentsSidebar } from '../shared/SavedDocumentsSidebar';
 import { listNotebooks, NOTEBOOKS_CHANGED, STORAGE_PREFIX, type Notebook } from '../../lib/notebooks/model';
 import { OPEN_NOTEBOOK_EVENT, notebookHref, type OpenNotebookDetail } from '../../lib/notebooks/navigation';
+import { requestSavedDocumentAction } from '../../lib/saved-document-actions';
+import { actOnSavedNotebook } from '../../lib/notebooks/actions';
 
 export function SavedNotebooksSidebar({
   serviceUrl,
@@ -65,6 +67,8 @@ export function SavedNotebooksSidebar({
   return (
     <SavedDocumentsSidebar
       title="Notebooks"
+      documentKind="notebook"
+      onAction={(id, action) => requestSavedDocumentAction({ kind: 'notebook', scope, id, action }, () => actOnSavedNotebook(scope, id, action))}
       icon={NotebookPen}
       itemIcon={FileText}
       openKey="cupola.sidebar.notebooks-open"

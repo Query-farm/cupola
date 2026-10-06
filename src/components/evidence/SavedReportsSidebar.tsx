@@ -9,6 +9,8 @@ import {
   type EvidenceReport,
 } from '../../lib/evidence/reports';
 import { OPEN_REPORT_EVENT, reportHref, type OpenReportDetail } from '../../lib/evidence/open-report';
+import { requestSavedDocumentAction } from '../../lib/saved-document-actions';
+import { actOnSavedReport } from '../../lib/evidence/report-actions';
 
 export function SavedReportsSidebar({ serviceUrl, workspaceId, search = '' }: { serviceUrl: string; workspaceId?: string; search?: string }) {
   // Reports are kept per workspace (multi-catalog phase 2); without one, per service.
@@ -62,6 +64,8 @@ export function SavedReportsSidebar({ serviceUrl, workspaceId, search = '' }: { 
   return (
     <SavedDocumentsSidebar
       title="Reports"
+      documentKind="report"
+      onAction={(id, action) => requestSavedDocumentAction({ kind: 'report', scope, id, action }, () => actOnSavedReport(scope, id, action))}
       icon={FileChartColumn}
       itemIcon={FileText}
       openKey="cupola.sidebar.reports-open"
