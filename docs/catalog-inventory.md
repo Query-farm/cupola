@@ -7,7 +7,12 @@ second connection or assume that the service in the page URL is the only source.
 
 Startup still uses `fetchCatalog(serviceUrl)` over VGI RPC to obtain the initial
 catalog name and connection metadata before DuckDB is available. That catalog is
-provisional. After engine initialization, `duckdb_databases()` determines catalog
+provisional. The HTTP fetch and shared worker landing page use the VGI client's
+`loadCatalog`: catalogs advertising `supports_catalog_contents` supply all schema
+contents in one RPC. The client falls back to per-schema discovery when that
+capability is absent or the bulk response fails, and Cupola retains tolerant
+per-schema discovery for older services that omit optional metadata endpoints.
+After engine initialization, `duckdb_databases()` determines catalog
 membership. All database types are included, including `memory`, VGI, and native
 DuckDB attachments; DuckDB's internal `system` and `temp` catalogs are excluded.
 The metadata loader reads DuckDB's schema, table, view, column, function, and

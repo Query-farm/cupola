@@ -234,50 +234,75 @@ export async function fetchCatalog(
     const catalogComment = attach.comment ?? null;
     const catalogTags = attach.tags ?? {};
 
-    // Fetch all schemas
-    const schemaInfos = await client.schemas(attachId);
+    try {
+      const schemas = await loadCatalogSchemas(client, attach);
 
-    // Fetch contents for each schema in parallel. The RPC calls take the wire
-    // path — flattening is for Cupola's own model, not for the server.
-    const schemas = await Promise.all(
-      schemaInfos.map(async (wireInfo) => {
-        const path = wireInfo.path;
-        const [tables, views, functions, scalarMacros, tableMacros] = await Promise.all([
-          client.schemaContentsTables(attachId, path).catch(() => []),
-          client.schemaContentsViews(attachId, path).catch(() => []),
-          client
-            .schemaContentsFunctions(attachId, path, "TABLE_FUNCTION")
-            .catch(() => []),
-          client.schemaContentsMacros(attachId, path, "SCALAR_MACRO").catch(() => []),
-          client.schemaContentsMacros(attachId, path, "TABLE_MACRO").catch(() => []),
-        ]);
-        return {
-          info: flattenSchemaInfo(wireInfo),
-          tables: tables.map(flattenTableInfo),
-          views: views.map(flattenViewInfo),
-          functions: functions.map(flattenFunctionInfo),
-          macros: [...scalarMacros, ...tableMacros].map(flattenMacroInfo),
-        } satisfies ResolvedSchema;
-      })
-    );
+      // Sort: default schema first, then alphabetical
+      schemas.sort((a, b) => {
+        if (a.info.name === defaultSchema) return -1;
+        if (b.info.name === defaultSchema) return 1;
+        return a.info.name.localeCompare(b.info.name);
+      });
 
-    // Sort: default schema first, then alphabetical
-    schemas.sort((a, b) => {
-      if (a.info.name === defaultSchema) return -1;
-      if (b.info.name === defaultSchema) return 1;
-      return a.info.name.localeCompare(b.info.name);
-    });
-
-    await client.catalogDetach(attachId);
-    return {
-      catalog: { catalogName, catalogComment, catalogTags, defaultSchema, schemas },
-      specs,
-      implementationVersion,
-      treeFromEngine: false,
-      availableCatalogs,
-    };
+      return {
+        catalog: { catalogName, catalogComment, catalogTags, defaultSchema, schemas },
+        specs,
+        implementationVersion,
+        treeFromEngine: false,
+        availableCatalogs,
+      };
+    } finally {
+      await client.catalogDetach(attachId);
+    }
   } finally {
     client.close();
+  }
+}
+
+async function loadCatalogSchemas(
+  client: VgiClient,
+  attach: Awaited<ReturnType<VgiClient["catalogAttach"]>>,
+): Promise<ResolvedSchema[]> {
+  try {
+    // The SDK checks supports_catalog_contents and falls back to per-schema
+    // RPCs if the capability is absent or the bulk response fails validation.
+    const snapshot = await client.loadCatalog(attach);
+    return snapshot.schemas.map(contents => ({
+      info: flattenSchemaInfo(contents.schema),
+      tables: contents.tables.map(flattenTableInfo),
+      views: contents.views.map(flattenViewInfo),
+      functions: [
+        ...contents.scalar_functions,
+        ...contents.aggregate_functions,
+        ...contents.table_functions,
+      ].map(flattenFunctionInfo),
+      macros: [...contents.scalar_macros, ...contents.table_macros].map(flattenMacroInfo),
+    }));
+  } catch {
+    // Some older services omit optional listing endpoints. The SDK's complete
+    // loader is strict; preserve Cupola's tolerant discovery for those services.
+    const schemaInfos = await client.schemas(attach.attach_opaque_data);
+    const attachId = attach.attach_opaque_data;
+    // RPCs take the wire path; only Cupola's own model uses flattened names.
+    return Promise.all(schemaInfos.map(async (wireInfo) => {
+      const path = wireInfo.path;
+      const [tables, views, scalarFunctions, aggregateFunctions, tableFunctions, scalarMacros, tableMacros] = await Promise.all([
+        client.schemaContentsTables(attachId, path).catch(() => []),
+        client.schemaContentsViews(attachId, path).catch(() => []),
+        client.schemaContentsFunctions(attachId, path, "SCALAR_FUNCTION").catch(() => []),
+        client.schemaContentsFunctions(attachId, path, "AGGREGATE_FUNCTION").catch(() => []),
+        client.schemaContentsFunctions(attachId, path, "TABLE_FUNCTION").catch(() => []),
+        client.schemaContentsMacros(attachId, path, "SCALAR_MACRO").catch(() => []),
+        client.schemaContentsMacros(attachId, path, "TABLE_MACRO").catch(() => []),
+      ]);
+      return {
+        info: flattenSchemaInfo(wireInfo),
+        tables: tables.map(flattenTableInfo),
+        views: views.map(flattenViewInfo),
+        functions: [...scalarFunctions, ...aggregateFunctions, ...tableFunctions].map(flattenFunctionInfo),
+        macros: [...scalarMacros, ...tableMacros].map(flattenMacroInfo),
+      } satisfies ResolvedSchema;
+    }));
   }
 }
 

@@ -477,11 +477,15 @@ function fnArgs(f){
     });
 }
 
-async function schemaEntry(aod, si){
+async function schemaEntry(aod, si, contents){
   // A VGI worker commonly exposes its callable surface as declarative macros,
   // so they fold into the same scalar/table buckets as functions.
   const macros = (kind)=> client.schemaContentsMacros(aod, si.path, kind).catch(()=>[]);
-  const [tablesRaw, viewsRaw, scalarFns, tableFns, aggFns, scalarMacros, tableMacros] = await Promise.all([
+  const [tablesRaw, viewsRaw, scalarFns, tableFns, aggFns, scalarMacros, tableMacros] = contents ? [
+    contents.tables, contents.views, contents.scalar_functions,
+    contents.table_functions, contents.aggregate_functions,
+    contents.scalar_macros, contents.table_macros
+  ] : await Promise.all([
     client.schemaContentsTables(aod, si.path),
     client.schemaContentsViews(aod, si.path),
     client.schemaContentsFunctions(aod, si.path, 'SCALAR_FUNCTION'),
@@ -562,9 +566,16 @@ async function buildCatalog(info){
   if (attach.resolved_data_version) cat.data_version_spec = attach.resolved_data_version;
   cat.tags = mapTags(attach.tags || {});
 
-  const schemaInfos = (await client.schemas(cat._aod)).slice()
-    .sort((a,b)=>a.path.join('.').localeCompare(b.path.join('.')));
-  cat.schemas = await Promise.all(schemaInfos.map(si=>schemaEntry(cat._aod, si)));
+  let snapshot;
+  try {
+    // The SDK uses catalog_contents only when advertised and falls back when
+    // the bulk RPC fails. Keep tolerant discovery for missing optional RPCs.
+    snapshot = await client.loadCatalog(attach);
+  } catch (e) { /* older services may omit optional listing endpoints */ }
+  cat.schemas = snapshot
+    ? await Promise.all(snapshot.schemas.map(s=>schemaEntry(cat._aod, s.schema, s)))
+    : await Promise.all((await client.schemas(cat._aod)).map(si=>schemaEntry(cat._aod, si)));
+  cat.schemas.sort((a,b)=>a.name.localeCompare(b.name));
   // `s.functions` holds both, so macros are counted apart rather than inflating
   // the function count — vgi-open-meteo reads "13 functions · 6 macros", not
   // "19 functions" when it has no scalar functions at all.

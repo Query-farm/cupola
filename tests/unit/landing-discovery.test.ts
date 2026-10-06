@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Window } from "happy-dom";
 
-test("shared landing page renders v2 schema paths and preserves them for lazy columns", async () => {
+test.each(["legacy", "bulk", "failed"] as const)("shared landing page preserves schema paths and lazy columns with %s discovery", async (mode) => {
   const html = await Bun.file(new URL("../../public/landing.html", import.meta.url)).text();
   const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)![1]!;
   const window = new Window({ url: "https://worker.test/" });
@@ -10,14 +10,29 @@ test("shared landing page renders v2 schema paths and preserves them for lazy co
   window.document.write(html.replace(/<script type="module">[\s\S]*?<\/script>/, ""));
   const paths = [["main"], ["region.with.dot", "public"], ["region", "with.dot.public"]];
   const requests: string[][] = [];
+  let loads = 0;
+  let schemaLists = 0;
   const checkPath = (path: string[]) => {
     expect(paths).toContainEqual(path);
     requests.push(path);
   };
   class Client {
     async catalogsInfo() { return [{ name: "demo", attach_option_specs: [], releases: [] }]; }
-    async catalogAttach() { return { attach_opaque_data: new Uint8Array([1]), tags: {} }; }
-    async schemas() { return paths.map(path => ({ path, tags: {} })); }
+    async catalogAttach() { return { attach_opaque_data: new Uint8Array([1]), tags: {}, supports_catalog_contents: mode !== "legacy" }; }
+    async loadCatalog(attach: { supports_catalog_contents: boolean }) {
+      loads++;
+      expect(attach.supports_catalog_contents).toBe(mode !== "legacy");
+      if (mode !== "bulk") throw new Error("Optional listing unavailable");
+      return { schemas: paths.map(path => ({
+        schema: { path, tags: {} }, tables: [{ name: "prices", columns: new Uint8Array([1]) }],
+        views: [], scalar_functions: [], aggregate_functions: [], table_functions: [],
+        scalar_macros: [], table_macros: [], indexes: [],
+      })) };
+    }
+    async schemas() {
+      schemaLists++;
+      return paths.map(path => ({ path, tags: {} }));
+    }
     async schemaContentsTables(_aod: unknown, path: string[]) {
       checkPath(path);
       return [{ name: "prices", columns: new Uint8Array([1]) }];
@@ -42,6 +57,9 @@ test("shared landing page renders v2 schema paths and preserves them for lazy co
   );
   try {
     await page.boot();
+    expect(loads).toBe(1);
+    expect(schemaLists).toBe(mode === "bulk" ? 0 : 1);
+    if (mode === "bulk") expect(requests).toHaveLength(0);
     expect(window.document.querySelector(".noresults")).toBeNull();
     expect(window.document.querySelectorAll("details.schema")).toHaveLength(3);
     expect(window.document.querySelector("#cat-sub")!.textContent).toContain("3 tables");

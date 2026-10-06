@@ -54,7 +54,7 @@
         "vega": "^5.30.0",
         "vega-embed": "^6.26.0",
         "vega-lite": "^5.21.0",
-        "vgi": "npm:@query-farm/vgi@0.38.0",
+        "vgi": "npm:@query-farm/vgi@0.39.0",
         "xlsx": "^0.18.5",
       },
       "devDependencies": {
@@ -2342,7 +2342,7 @@
 
     "vfile-message": ["vfile-message@4.0.3", "", { "dependencies": { "@types/unist": "^3.0.0", "unist-util-stringify-position": "^4.0.0" } }, "sha512-QTHzsGd1EhbZs4AsQ20JX1rC3cOlt/IWJruk893DfLRr57lcnOeMaWG4K0JrRta4mIJZKth2Au3mM3u03/JWKw=="],
 
-    "vgi": ["@query-farm/vgi@0.38.0", "", { "dependencies": { "@noble/ciphers": "^2.3.0", "@query-farm/flechette": "^2.4.1" }, "peerDependencies": { "@query-farm/apache-arrow": "^21.1.1", "@query-farm/vgi-rpc": "^0.26.0" } }, "sha512-KF9cn3bjklKvCGKHkWBwxE66bmxwJIgf/gCYoD59Ea9PTq00aoEH0bHYEcwo2oVLnkNHM4SYU/SdLGTt6tXQ+A=="],
+    "vgi": ["@query-farm/vgi@0.39.0", "", { "dependencies": { "@noble/ciphers": "^2.3.0", "@query-farm/flechette": "^2.4.1" }, "peerDependencies": { "@query-farm/apache-arrow": "^21.1.1", "@query-farm/vgi-rpc": "^0.26.0" } }, "sha512-Y46AGmj+OFZl/JJaujKHTYgIPGbeFP8n2kcp6hvw76vZ4dR6hmEVf1JOK6Lxc2xjLRZt1TDS/49tpxfMlIoleg=="],
 
     "virtua": ["virtua@0.45.3", "", { "peerDependencies": { "react": ">=16.14.0", "react-dom": ">=16.14.0", "solid-js": ">=1.0", "svelte": ">=5.0", "vue": ">=3.2" }, "optionalPeers": ["react", "react-dom", "solid-js", "svelte", "vue"] }, "sha512-+nW3VOwXhlte3m4jbS9gVMked/cZo95IKChH0qol+XUApQVZpPaLDGee1BC/rVng0tsMfxs0vJPEPEUAAfKpkw=="],
 
