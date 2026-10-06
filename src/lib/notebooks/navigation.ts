@@ -1,4 +1,8 @@
 import { appBase } from '../app-base';
+import type { Callable } from '../callable';
+export type NotebookInsertion = { token: number; serviceUrl: string } & (
+  { text: string; callable?: never } | { callable: Callable; text?: never }
+);
 export const OPEN_NOTEBOOK_EVENT = 'cupola:open-notebook';
 export interface OpenNotebookDetail {
   serviceUrl: string;

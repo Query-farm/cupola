@@ -28,7 +28,7 @@ interface Props {
   /** Insert a call to a function or macro. */
   onInsertCallable?: (callable: Callable) => void;
   /** Where inserts land. In the editor, a modifier-click inserts instead of selecting. */
-  insertTarget?: "shell" | "editor";
+  insertTarget?: "shell" | "editor" | "notebook";
   onRefresh?: () => void;
   refreshing?: boolean;
 }
@@ -63,6 +63,7 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
     insertTarget,
     onTableAction: canInsert ? (schema, table) => insertRelation(catalog.catalogName, schema, table) : undefined,
     onCallableAction: canInsertCallable ? (schema, name, kind) => insertCallable(catalog.catalogName, schema, name, kind) : undefined,
+    onColumnAction: canInsert && insertTarget === 'notebook' ? (_schema, _table, column) => insertRef.current?.(quoteIdent(column)) : undefined,
   })).sort((a, b) => a.name.localeCompare(b.name)), [catalogs, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, canInsert, canInsertCallable, insertTarget, insertRelation, insertCallable]);
   const filteredData = useMemo(() => filterTree(combinedData, search), [combinedData, search]);
 
@@ -78,7 +79,11 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
     }
     const sel = parseSelection(item.id);
     // In the editor, a modifier-click writes the object into the query.
-    if (insertTarget === "editor" && event && (event.metaKey || event.ctrlKey) && sel?.catalog && sel.schema && !item.id.includes("::c:")) {
+    if (insertTarget !== "shell" && event && (event.metaKey || event.ctrlKey) && sel?.catalog && sel.schema) {
+      if (item.id.includes('::c:')) {
+        insertRef.current?.(quoteIdent(item.id.split('::c:')[1].split('/').slice(1).join('/')));
+        return;
+      }
       if (sel.type === "function" || sel.type === "macro") {
         event.preventDefault();
         insertCallable(sel.catalog, sel.schema, sel.name, sel.type);
@@ -98,7 +103,7 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
     if (item.id.includes("::c:")) return null;
     const sel = parseSelection(item.id);
     if (!sel) return null;
-    const editor = insertTarget === "editor";
+    const editor = insertTarget !== "shell";
     const callables = callablesForSelection(catalogsRef.current, sel);
     if (callables.length) return <CallableHoverCard callables={callables} editor={editor} />;
     const relation = findRelation(catalogsRef.current, sel);

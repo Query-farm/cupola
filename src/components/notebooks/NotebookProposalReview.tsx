@@ -110,6 +110,28 @@ export function NotebookProposalReview({ before, after }: { before: Notebook; af
       <p className="text-muted-foreground">
         {changes.length} changed {changes.length === 1 ? 'cell' : 'cells'}. Unchanged cells are omitted.
       </p>
+      {JSON.stringify([before.parameters ?? [], before.values ?? {}]) !==
+        JSON.stringify([after.parameters ?? [], after.values ?? {}]) && (
+        <details open className="rounded-md border p-2">
+          <summary className="cursor-pointer font-medium">Parameter changes</summary>
+          <div className="grid gap-2 sm:grid-cols-2 mt-2">
+            {[
+              ['Before', before],
+              ['After', after],
+            ].map(([label, value]) => {
+              const doc = value as Notebook;
+              return (
+                <div key={String(label)}>
+                  <p className="font-medium">{String(label)}</p>
+                  <pre className="whitespace-pre-wrap break-words bg-muted/20 p-2 text-xs">
+                    {JSON.stringify({ parameters: doc.parameters ?? [], values: doc.values ?? {} }, null, 2)}
+                  </pre>
+                </div>
+              );
+            })}
+          </div>
+        </details>
+      )}
       <div className="space-y-2">
         {changes.map(({ cell, old, next, moved }) => (
           <details key={cell.id} open className="rounded-md border p-2">

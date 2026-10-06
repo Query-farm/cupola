@@ -30,16 +30,34 @@ import { isStale, type CellResult } from '../../lib/notebooks/execution';
 import { chartData, chartSpec } from '../../lib/notebooks/charts';
 import { NotebookChartView } from './NotebookChartView';
 import { NotebookOutputResize } from './NotebookOutputResize';
+import type { NotebookInsertion } from '../../lib/notebooks/navigation';
+import type { CatalogData } from '../../lib/service';
+import { buildCallSnippet } from '../../lib/editor/call-snippet';
+import { buildTableSelect, isTableRef } from '../../lib/sql/table-select';
+import { callablesForSelection } from '../../lib/callable';
+import { parseSelection, treeIdToShellText } from '../../lib/tree';
+import { quoteIdent } from '../../lib/duckdb-query';
+import { type ParameterScope } from '../../lib/notebooks/parameters';
+import { NotebookRunDetails, RunningStatus } from './NotebookRunDetails';
+import { ExplainView } from '../editor/ExplainView';
+import { buildCatalogIndex } from '../../lib/catalog-index';
+import type { CompletionContext } from '@codemirror/autocomplete';
 
 const markdownExtensions = markdownSupport();
 export function NotebookCellView({
   cell,
+  catalogs,
+  parameterScope,
+  insertion,
   result,
   busy,
   first,
   last,
   onChange,
   onRun,
+  onExplain,
+  onPin,
+  onUnpin,
   onRunAbove,
   onRunBelow,
   onStop,
@@ -50,12 +68,18 @@ export function NotebookCellView({
   onAskAi,
 }: {
   cell: NotebookCell;
+  catalogs: readonly CatalogData[];
+  parameterScope: ParameterScope;
+  insertion?: NotebookInsertion | null;
   result?: CellResult;
   busy: boolean;
   first: boolean;
   last: boolean;
   onChange: (cell: NotebookCell) => void;
   onRun: () => void;
+  onExplain: () => void;
+  onPin: () => void;
+  onUnpin: () => void;
   onRunAbove: () => void;
   onRunBelow: () => void;
   onStop: () => void;
@@ -67,30 +91,73 @@ export function NotebookCellView({
 }) {
   const { settings } = useSettings();
   const sql = useRef<CodeMirrorSqlHandle>(null);
+  const scope = useRef(parameterScope);
+  scope.current = parameterScope;
+  const complete = (context: CompletionContext) => {
+    const word = context.matchBefore(/\$[A-Za-z0-9_]*/);
+    if (word)
+      return {
+        from: word.from,
+        options: (scope.current.parameters ?? []).map((parameter) => ({
+          label: `$${parameter.key}`,
+          type: 'variable',
+          detail: parameter.label,
+        })),
+      };
+    return sqlAutoCompleteSource(context);
+  };
+  const handledInsertion = useRef<number | null>(null);
+  function insert(request: Pick<NotebookInsertion, 'text' | 'callable'>) {
+    const editor = sql.current;
+    if (!editor) return;
+    if (request.callable)
+      editor.insertSnippet(buildCallSnippet(request.callable, { emptyDoc: !editor.getDoc().trim() }));
+    else if (request.text)
+      editor.insertAtCursor(
+        isTableRef(request.text) && !editor.getDoc().trim()
+          ? buildTableSelect(request.text, [...catalogs])
+          : request.text,
+      );
+    editor.focus();
+    window.document.getElementById(`notebook-${cell.id}`)?.scrollIntoView({ block: 'nearest' });
+  }
   const [editingMarkdown, setEditingMarkdown] = useState(!cell.source);
   const [output, setOutput] = useState('table');
   const [draft, setDraft] = useState<NotebookChart | null>(null);
   const [draftError, setDraftError] = useState('');
   const [exportError, setExportError] = useState('');
+  const [showDetails, setShowDetails] = useState(false);
+  const [showPlan, setShowPlan] = useState(false);
   useEffect(() => {
     if (cell.type === 'sql' && sql.current && sql.current.getDoc() !== cell.source)
       sql.current.setDoc(cell.source);
   }, [cell.source, cell.collapsed, cell.codeHidden]);
+  useEffect(() => {
+    if (!insertion || handledInsertion.current === insertion.token || !sql.current) return;
+    handledInsertion.current = insertion.token;
+    insert(insertion);
+  }, [insertion, cell.collapsed, cell.codeHidden]);
   const chart = cell.type === 'sql' ? cell.charts.find((item) => item.id === output) : undefined;
-  const stale = cell.type === 'sql' && isStale(cell, result);
+  const pinned = output === 'pinned' ? result?.pinned : undefined;
+  const outputValue = pinned ? 'pinned' : (chart?.id ?? 'table');
+  const displayedTable = pinned?.table ?? result?.table;
+  const displayedRun = pinned?.provenance ?? result?.provenance;
+  const stale = cell.type === 'sql' && isStale(cell, result, parameterScope);
   const editChart = (value: NotebookChart) => {
     setDraft({ ...value });
     setDraftError('');
   };
-  const status = result?.running
-    ? 'Running…'
-    : result?.cancelled
-      ? 'Cancelled'
-      : result?.error
-        ? 'Query failed'
-        : result?.table
-          ? `${result.table.numRows.toLocaleString()} returned rows · ${result.elapsedMs} ms`
-          : 'Not run';
+  const status = result?.running ? (
+    <RunningStatus record={result.attempt} />
+  ) : result?.cancelled ? (
+    'Cancelled'
+  ) : result?.error ? (
+    'Query failed'
+  ) : result?.table ? (
+    `${result.table.numRows.toLocaleString()} returned rows · ${result.elapsedMs} ms`
+  ) : (
+    'Not run'
+  );
   return (
     <section
       className={`group/cell min-w-0 rounded-lg border bg-background focus-within:border-primary/40 ${cell.type === 'markdown' && !editingMarkdown ? 'border-transparent hover:border-border/60' : 'border-border/60'}`}
@@ -119,6 +186,15 @@ export function NotebookCellView({
               <DropdownMenuContent className="w-44">
                 <DropdownMenuItem disabled={busy} onClick={onRun}>
                   Run cell
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={busy || !cell.source.trim()}
+                  onClick={() => {
+                    setShowPlan(true);
+                    onExplain();
+                  }}
+                >
+                  Explain query
                 </DropdownMenuItem>
                 <DropdownMenuItem disabled={busy || first} onClick={onRunAbove}>
                   Run above
@@ -202,6 +278,36 @@ export function NotebookCellView({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {cell.type === 'sql' && result?.attempt && (
+        <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-xs text-muted-foreground">
+          {result.provenance && (
+            <span>
+              Result from run #{result.provenance.number} ·{' '}
+              {new Date(result.provenance.startedAt).toLocaleString()}
+            </span>
+          )}
+          <Button size="sm" variant="ghost" onClick={() => setShowDetails(true)}>
+            Run details
+          </Button>
+          {result.table && (
+            <Button size="sm" variant="ghost" disabled={result.running} onClick={onPin}>
+              {result.pinned ? 'Replace pinned result' : 'Pin result'}
+            </Button>
+          )}
+          {result.pinned && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                onUnpin();
+                if (output === 'pinned') setOutput('table');
+              }}
+            >
+              Unpin result
+            </Button>
+          )}
+        </div>
+      )}
       {stale && (
         <p className="px-4 py-1 text-xs text-amber-700 dark:text-amber-400" role="status">
           Stale output — run to update
@@ -218,6 +324,7 @@ export function NotebookCellView({
         <div className="px-4 pb-4">
           {editingMarkdown ? (
             <div
+              className="min-h-48"
               style={{
                 height: Math.min(480, Math.max(120, cell.source.split('\n').length * 22 + 40)),
               }}
@@ -257,9 +364,19 @@ export function NotebookCellView({
               }}
             >
               <CodeMirrorSql
-                completionSource={settings.editorAutocomplete === false ? null : sqlAutoCompleteSource}
+                completionSource={settings.editorAutocomplete === false ? null : complete}
+                getCatalogIndex={() => buildCatalogIndex(catalogs)}
                 ref={sql}
                 initialDoc={cell.source}
+                onDropText={(raw) => {
+                  const [callable] = /::[fm]:/.test(raw)
+                    ? callablesForSelection([...catalogs], parseSelection(raw))
+                    : [];
+                  const text = raw.includes('::c:')
+                    ? quoteIdent(raw.split('::c:')[1].split('/').slice(1).join('/'))
+                    : (treeIdToShellText(raw) ?? (raw.includes('::') ? undefined : raw));
+                  insert(callable ? { callable } : { text });
+                }}
                 onChange={(source) => onChange({ ...cell, source })}
                 onRunCell={() => {
                   if (!busy) onRun();
@@ -292,16 +409,15 @@ export function NotebookCellView({
             </Button>
           ) : (
             (result?.table || result?.running || cell.charts.length > 0) && (
-              <Tabs
-                value={chart?.id ?? 'table'}
-                onValueChange={(value) => setOutput(String(value))}
-                className="gap-0"
-              >
+              <Tabs value={outputValue} onValueChange={(value) => setOutput(String(value))} className="gap-0">
                 <div className="flex items-center gap-1 overflow-x-auto border-y border-border/50 px-3">
                   <TabsList aria-label="Cell outputs" variant="line" activateOnFocus>
                     <TabsTrigger className="text-muted-foreground" value="table">
                       Table
                     </TabsTrigger>
+                    {result?.pinned && (
+                      <TabsTrigger value="pinned">Pinned #{result.pinned.provenance.number}</TabsTrigger>
+                    )}
                     {cell.charts.map((item) => (
                       <TabsTrigger className="text-muted-foreground" key={item.id} value={item.id}>
                         {item.title || 'Chart'}
@@ -370,9 +486,16 @@ export function NotebookCellView({
                   </Button>
                 </div>
                 <TabsContent
-                  value={chart?.id ?? 'table'}
-                  aria-label={chart ? 'Chart output' : 'Table output'}
+                  value={outputValue}
+                  aria-label={pinned ? 'Pinned output' : chart ? 'Chart output' : 'Table output'}
                 >
+                  {pinned && (
+                    <p className="px-3 py-2 text-xs text-muted-foreground">
+                      Pinned run #{pinned.provenance.number} ·{' '}
+                      {new Date(pinned.provenance.startedAt).toLocaleString()} ·{' '}
+                      {JSON.stringify(pinned.provenance.values)} · Kept until you close this notebook.
+                    </p>
+                  )}
                   <NotebookOutputResize
                     height={cell.outputHeight ?? (chart ? 420 : 320)}
                     label="cell output"
@@ -390,18 +513,18 @@ export function NotebookCellView({
                         <EditorResultsPane
                           state={{
                             ...emptyResult,
-                            table: result?.table ?? null,
-                            rowCount: result?.table?.numRows ?? 0,
-                            ran: !!result?.completedAt,
-                            running: !!result?.running,
-                            ok: !!result?.table,
-                            elapsedMs: result?.elapsedMs ?? 0,
+                            table: displayedTable ?? null,
+                            rowCount: displayedTable?.numRows ?? 0,
+                            ran: !!displayedRun,
+                            running: !pinned && !!result?.running && result.attempt?.mode !== 'explain',
+                            ok: !!displayedTable,
+                            elapsedMs: displayedRun?.elapsedMs ?? 0,
                           }}
                           onExport={
-                            result?.table
+                            displayedTable
                               ? async (format) => {
                                   try {
-                                    await exportResult(result.table!, format, cell.title);
+                                    await exportResult(displayedTable, format, cell.title);
                                     setExportError('');
                                   } catch (e) {
                                     setExportError(String(e));
@@ -486,6 +609,42 @@ export function NotebookCellView({
               Save chart
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <NotebookRunDetails result={result} open={showDetails} onOpenChange={setShowDetails} />
+      <Dialog open={showPlan} onOpenChange={setShowPlan}>
+        <DialogContent className="sm:max-w-4xl max-h-[90dvh] flex flex-col overflow-hidden">
+          <DialogHeader>
+            <DialogTitle>Query plan</DialogTitle>
+            <DialogDescription>
+              EXPLAIN plans this cell with the current parameter values without executing its query.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 overflow-auto">
+            {result?.running && result.attempt?.mode === 'explain' ? (
+              <p role="status">
+                <RunningStatus record={result.attempt} />
+              </p>
+            ) : result?.attempt?.mode === 'explain' && result.error ? (
+              <p role="alert" className="text-destructive whitespace-pre-wrap">
+                {result.error}
+              </p>
+            ) : result?.plan ? (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Plan from run #{result.planProvenance?.number}
+                </p>
+                <ExplainView table={result.plan} />
+              </>
+            ) : (
+              <p>No plan available.</p>
+            )}
+          </div>
+          {result?.running && (
+            <Button variant="outline" onClick={onStop}>
+              Stop explanation
+            </Button>
+          )}
         </DialogContent>
       </Dialog>
     </section>

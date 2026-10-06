@@ -35,6 +35,7 @@ import {
 import { fingerprint, uid, type Notebook } from '../../lib/notebooks/model';
 import { validateSelectQuery, type CellResult } from '../../lib/notebooks/execution';
 import type { CatalogData } from '../../lib/service';
+import { compileNotebookQuery } from '../../lib/notebooks/parameters';
 
 export function NotebookAgent({
   active,
@@ -120,7 +121,9 @@ export function NotebookAgent({
     const query = async (sql: string, params: unknown[] = []) => {
       if (!isReadOnlySql(sql)) throw new Error('Notebook exploration accepts read queries only.');
       await run.wait(waitForEngineReady());
-      return run.query(sql, params);
+      if (params.length) return run.query(sql, params);
+      const bound = compileNotebookQuery(sql, readContext.document);
+      return run.query(bound.sql, bound.params);
     };
     setBusy(true);
     onBusy(true);
@@ -176,6 +179,8 @@ export function NotebookAgent({
                       completedAt: result.completedAt,
                       error: result.error,
                       cancelled: result.cancelled,
+                      provenance: result.provenance,
+                      attempt: result.attempt,
                       rows: result.table?.numRows,
                       columns: result.table?.schema.fields.map((field) => ({
                         name: field.name,

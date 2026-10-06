@@ -2,12 +2,15 @@ import { z } from 'zod';
 import { TOOLS, type Tool } from '../ai-agent';
 import { cellSchema, notebookSchema, fingerprint, type Notebook } from './model';
 import type { AIQueryMode } from '../ai/query-mode';
+import { notebookParameterSchema, parameterValueSchema } from './parameters';
 
 const editSchema = z
   .object({
     summary: z.string().trim().min(1).max(300),
     title: z.string().max(200),
     cells: z.array(cellSchema).max(200),
+    parameters: z.array(notebookParameterSchema).max(50).optional(),
+    values: z.record(z.string(), parameterValueSchema).optional(),
   })
   .strict();
 export interface NotebookProposal {
@@ -33,6 +36,8 @@ export function notebookProposal(current: Notebook, input: unknown, mode: AIQuer
     ...current,
     title: edit.title,
     cells: edit.cells,
+    ...(edit.parameters !== undefined ? { parameters: edit.parameters } : {}),
+    ...(edit.values !== undefined ? { values: edit.values } : {}),
     updatedAt: Date.now(),
   });
   if (fingerprint(current) === fingerprint(document))
@@ -77,7 +82,7 @@ export const NOTEBOOK_TOOLS: Tool[] = [
   {
     name: 'propose_notebook_edit',
     description:
-      'Propose a complete replacement title and cells for review, without executing or applying it. Supply edit_json as JSON containing summary, title, cells; use the cell schema described in the system prompt. Preserve IDs and content of unchanged cells.',
+      'Propose a complete replacement title and cells for review, without executing or applying it. Supply edit_json as JSON containing summary, title, cells, and optional parameters and values; use the schemas described in the system prompt. Preserve IDs and content of unchanged cells. Omit parameters and values to preserve them.',
     input_schema: {
       type: 'object',
       properties: { edit_json: { type: 'string' } },
@@ -88,6 +93,7 @@ export const NOTEBOOK_TOOLS: Tool[] = [
 ];
 export const NOTEBOOK_PROMPT = `You help users author Cupola SQL notebooks. Read get_notebook before proposing edits; discover actual schemas with the data tools before writing SQL. Never invent tables or columns. Query tools are for read-only exploration. Notebook SQL cells are independent, each with one read query; they do not create named relations for other cells. Use fully qualified table names.
 Use propose_notebook_edit to stage changes; the user must apply them. Never claim a proposal was applied, saved, or executed. Preserve unchanged cells and their IDs, ordering and chart definitions. Explain changes briefly. Do not put secrets or credentials in notebook content.
+Notebook parameters are optional: parameters:[{id,key,label,type:"text"|"number"|"date"|"select"|"boolean",defaultValue:string|number|boolean|null,required:boolean,choices?:string[]}], values:{[key]:string|number|boolean|null}. Use an unquoted $key in SQL to bind a value safely. A select needs distinct choices; dates use YYYY-MM-DD. Preserve parameter definitions and values unless asked to change them. Proposals may include parameters and values alongside title and cells; omit both to preserve them. When removing or renaming a parameter, update its SQL references and remove the old saved value. Parameter changes do not run SQL.
 Cell JSON schema:
 Markdown: {id:string,type:"markdown",title:string,source:string,collapsed:boolean}
 SQL: {id:string,type:"sql",title:string,source:string,collapsed:boolean,charts:Chart[],outputHeight?:number,codeHidden?:boolean,outputHidden?:boolean}

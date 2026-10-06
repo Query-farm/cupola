@@ -126,17 +126,28 @@ export function MarkdownContent({ content, copyTables = false, document = false 
             if (lang === 'sql') {
               return <SqlCodeBlock query={codeStr} />;
             }
-            // Inline code (no language class)
-            if (!className) {
-              return <code className="bg-muted px-1 py-0.5 rounded text-xs font-mono">{children}</code>;
-            }
             return (
-              <pre className="bg-muted/60 rounded-md p-3 text-xs font-mono overflow-x-auto">
-                <code>{children}</code>
+              <code className={`bg-muted px-1 py-0.5 rounded text-xs font-mono ${className ?? ''}`}>
+                {children}
+              </code>
+            );
+          },
+          pre: ({ node, children }) => {
+            const code = node?.children[0];
+            // SQL supplies its own <pre>; every other block needs this wrapper,
+            // including fences without a language and indented code blocks.
+            if (
+              code?.type === 'element' &&
+              Array.isArray(code.properties.className) &&
+              code.properties.className.join(' ').match(/language-(\w+)/)?.[1] === 'sql'
+            )
+              return <>{children}</>;
+            return (
+              <pre className="bg-muted/60 rounded-md p-3 text-xs font-mono overflow-x-auto [&>code]:bg-transparent [&>code]:p-0">
+                {children}
               </pre>
             );
           },
-          pre: ({ children }) => <>{children}</>,
           table: ({ children }) =>
             copyTables ? (
               <CopyableMarkdownTable>{children}</CopyableMarkdownTable>

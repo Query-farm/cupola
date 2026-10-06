@@ -101,6 +101,36 @@ test('sidebar notebooks navigate in place, update names, filter, and restore dir
   await expect(title).toHaveValue('Renamed notebook');
 });
 
+test('notebook links restore the URL when the requested workspace is already mounted', async ({ page }) => {
+  await seed(page);
+  const sidebar = page.getByRole('navigation', { name: 'Saved notebooks' });
+  const library = page.getByTestId('notebook-library');
+  await sidebar.getByRole('link', { name: 'All notebooks', exact: true }).click();
+  await expect(library).toBeVisible();
+  await expect(page).toHaveURL(/\/notebooks\?service=/);
+  await page.reload();
+  await expect(library).toBeVisible();
+
+  await sidebar.getByRole('link', { name: 'First notebook', exact: true }).click();
+  const title = page.getByRole('textbox', { name: 'Notebook title', exact: true });
+  await expect(title).toHaveValue('First notebook');
+  await title.fill('Edits kept while switching surfaces');
+  await page.getByRole('navigation', { name: 'Saved reports' })
+    .getByRole('link', { name: 'All reports', exact: true }).click();
+  await expect(page).toHaveURL(/\/reports\/saved\?/);
+  await sidebar.getByRole('link', { name: 'Edits kept while switching surfaces', exact: true }).click();
+  await expect(title).toHaveValue('Edits kept while switching surfaces');
+  await expect(page).toHaveURL(/\/notebooks\?.*notebook=first/);
+  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeEnabled();
+
+  await page.goBack();
+  await expect(page.getByTestId('tab-reports')).toHaveAttribute('aria-selected', 'true');
+  await page.goForward();
+  await expect(title).toHaveValue('Edits kept while switching surfaces');
+  await page.reload();
+  await expect(title).toHaveValue('Edits kept while switching surfaces');
+});
+
 test('sidebar creates notebooks, reflects deletion and cross-tab changes, and remembers collapse', async ({
   page,
 }) => {

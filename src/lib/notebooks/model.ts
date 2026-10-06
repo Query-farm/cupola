@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { notebookParameterSchema, parameterValueSchema, validateParameterValue } from './parameters';
 
 const id = z.string().min(1).max(200);
 export const chartSchema = z
@@ -42,12 +43,37 @@ export const notebookSchema = z
     serviceUrl: z.string(),
     title: z.string().max(200),
     cells: z.array(cellSchema).max(200),
+    parameters: z.array(notebookParameterSchema).max(50).optional(),
+    values: z.record(z.string(), parameterValueSchema).optional(),
     createdAt: z.number().finite(),
     updatedAt: z.number().finite(),
   })
   .strict()
   .superRefine((doc, ctx) => {
     const ids = new Set<string>();
+    const keys = new Set<string>();
+    for (const parameter of doc.parameters ?? []) {
+      if (keys.has(parameter.key) || ids.has(parameter.id))
+        ctx.addIssue({ code: 'custom', message: 'Parameter names and IDs must be unique.' });
+      keys.add(parameter.key);
+      ids.add(parameter.id);
+      try {
+        validateParameterValue(parameter, parameter.defaultValue, false);
+        if (doc.values && Object.hasOwn(doc.values, parameter.key))
+          validateParameterValue(parameter, doc.values[parameter.key], false);
+      } catch (error) {
+        ctx.addIssue({ code: 'custom', message: String(error) });
+      }
+      if (
+        parameter.type === 'select' &&
+        (!parameter.choices?.length || new Set(parameter.choices).size !== parameter.choices.length)
+      )
+        ctx.addIssue({ code: 'custom', message: `${parameter.label} needs distinct choices.` });
+      if (parameter.type !== 'select' && parameter.choices?.length)
+        ctx.addIssue({ code: 'custom', message: 'Only dropdown parameters have choices.' });
+    }
+    for (const key of Object.keys(doc.values ?? {}))
+      if (!keys.has(key)) ctx.addIssue({ code: 'custom', message: `Unknown parameter value: ${key}` });
     for (const cell of doc.cells) {
       for (const value of [cell.id, ...(cell.type === 'sql' ? cell.charts.map((chart) => chart.id) : [])]) {
         if (ids.has(value))
@@ -87,14 +113,16 @@ export function newNotebook(serviceUrl: string): Notebook {
 export function fingerprint(doc: Notebook): string {
   // Compare content, not the key order produced by imports or model responses.
   // Do not validate here: an in-progress editor value may exceed save limits.
-  return JSON.stringify([doc.id, doc.serviceUrl, doc.title, doc.cells], (_key, value) =>
-    value && typeof value === 'object' && !Array.isArray(value)
-      ? Object.fromEntries(
-          Object.keys(value)
-            .sort()
-            .map((key) => [key, value[key]]),
-        )
-      : value,
+  return JSON.stringify(
+    [doc.id, doc.serviceUrl, doc.title, doc.cells, doc.parameters ?? [], doc.values ?? {}],
+    (_key, value) =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.keys(value)
+              .sort()
+              .map((key) => [key, value[key]]),
+          )
+        : value,
   );
 }
 export function duplicateCell(cell: NotebookCell): NotebookCell {
@@ -135,7 +163,8 @@ export function saveNotebook(doc: Notebook, storage: Storage = localStorage): vo
   const value = JSON.stringify(notebookSchema.parse(doc));
   const changed = storage.getItem?.(key) !== value;
   storage.setItem(key, value);
-  if (changed && typeof window !== 'undefined' && storage === window.localStorage) window.dispatchEvent(new Event(NOTEBOOKS_CHANGED));
+  if (changed && typeof window !== 'undefined' && storage === window.localStorage)
+    window.dispatchEvent(new Event(NOTEBOOKS_CHANGED));
 }
 export function listNotebooks(
   serviceUrl: string,
@@ -176,5 +205,6 @@ export function importNotebook(text: string, serviceUrl: string): Notebook {
 
 export function deleteNotebook(serviceUrl: string, id: string, storage: Storage = localStorage): void {
   storage.removeItem(storageKey(serviceUrl, id));
-  if (typeof window !== 'undefined' && storage === window.localStorage) window.dispatchEvent(new Event(NOTEBOOKS_CHANGED));
+  if (typeof window !== 'undefined' && storage === window.localStorage)
+    window.dispatchEvent(new Event(NOTEBOOKS_CHANGED));
 }

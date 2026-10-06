@@ -1,4 +1,8 @@
-import { notebookHref, type NotebookNavigation } from '../../lib/notebooks/navigation';
+import {
+  notebookHref,
+  type NotebookNavigation,
+  type NotebookInsertion,
+} from '../../lib/notebooks/navigation';
 import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { Button } from '../ui/button';
 import { PanelResizeHandle, usePanelWidth } from '../shared/PanelResizeHandle';
@@ -20,6 +24,7 @@ import {
   DropdownMenuSeparator,
 } from '../ui/dropdown-menu';
 import { NotebookCellView } from './NotebookCellView';
+import { NotebookParameters } from './NotebookParameters';
 const NotebookAgent = lazy(() =>
   import('./NotebookAgent').then((module) => ({
     default: module.NotebookAgent,
@@ -27,6 +32,7 @@ const NotebookAgent = lazy(() =>
 );
 import {
   newNotebook,
+  uid,
   newCell,
   duplicateCell,
   fingerprint,
@@ -41,7 +47,7 @@ import {
 } from '../../lib/notebooks/model';
 import { NotebookRunner, isStale, validateSelectQuery, type CellResult } from '../../lib/notebooks/execution';
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
-import { waitForEngineReady } from '../../lib/shell-bridge';
+import { waitForEngineReady, engine } from '../../lib/shell-bridge';
 import { safeFileStem, triggerDownload } from '../../lib/editor/result-export';
 import type { CatalogData } from '../../lib/service';
 
@@ -56,9 +62,11 @@ export function NotebookPanel({
   catalogs,
   onBusyChange,
   navigation,
+  insertion,
   onActiveChange,
 }: {
   navigation?: NotebookNavigation | null;
+  insertion?: NotebookInsertion | null;
   onActiveChange?: (id: string | null) => void;
   serviceUrl: string;
   catalogs: readonly CatalogData[];
@@ -68,6 +76,10 @@ export function NotebookPanel({
   const [navigationError, setNavigationError] = useState('');
   const beforeLeave = useRef<(() => boolean) | null>(null);
   const handledNavigation = useRef<number | null>(null);
+  const handledInsertion = useRef<number | null>(null);
+  const [cellInsertion, setCellInsertion] = useState<(NotebookInsertion & { notebookId: string }) | null>(
+    null,
+  );
   function openDocument(doc: Notebook | null, fromHistory = false) {
     setNavigationError('');
     setActive(doc);
@@ -80,7 +92,11 @@ export function NotebookPanel({
     if (!navigation || navigation.serviceUrl !== serviceUrl || handledNavigation.current === navigation.token)
       return;
     handledNavigation.current = navigation.token;
-    if (!navigation.create && navigation.id === active?.id) return;
+    if (!navigation.create && navigation.id === active?.id) {
+      // The workspace stays mounted while other surfaces can change the URL.
+      openDocument(active, navigation.fromHistory);
+      return;
+    }
     if (beforeLeave.current && !beforeLeave.current()) {
       setNavigationError(
         'Notebook was kept open. Stop the running query or AI response, or resolve the save error, before switching notebooks.',
@@ -110,6 +126,14 @@ export function NotebookPanel({
       setNavigationError(`Could not open notebook: ${String(e)}`);
     }
   }, [navigation, serviceUrl]);
+  useEffect(() => {
+    if (!insertion || insertion.serviceUrl !== serviceUrl || handledInsertion.current === insertion.token)
+      return;
+    handledInsertion.current = insertion.token;
+    const target = active ?? newNotebook(serviceUrl);
+    if (!active) openDocument(target);
+    setCellInsertion({ ...insertion, notebookId: target.id });
+  }, [insertion, serviceUrl]);
   const [documents, setDocuments] = useState<Notebook[]>([]);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -152,6 +176,8 @@ export function NotebookPanel({
             key={active.id}
             beforeLeave={beforeLeave}
             initial={active}
+            insertion={cellInsertion?.notebookId === active.id ? cellInsertion : null}
+            onInsertionHandled={() => setCellInsertion(null)}
             catalogs={catalogs}
             onBusyChange={onBusyChange}
             onClose={() => {
@@ -290,12 +316,16 @@ export function NotebookPanel({
 function NotebookWorkspace({
   beforeLeave,
   initial,
+  insertion,
+  onInsertionHandled,
   catalogs,
   onClose,
   onBusyChange,
 }: {
   beforeLeave: RefObject<(() => boolean) | null>;
   initial: Notebook;
+  insertion?: NotebookInsertion | null;
+  onInsertionHandled: () => void;
   catalogs: readonly CatalogData[];
   onClose: () => void;
   onBusyChange?: (busy: boolean) => void;
@@ -305,6 +335,8 @@ function NotebookWorkspace({
   latest.current = doc;
   const [results, setResults] = useState<Record<string, CellResult>>({});
   const [running, setRunning] = useState(false);
+  const [batch, setBatch] = useState<string[]>([]);
+  const sessionId = useRef(uid());
   const [aiBusy, setAiBusy] = useState(false);
   const [showAi, setShowAi] = useState(false);
   const aiReturnFocus = useRef<HTMLElement | null>(null);
@@ -323,8 +355,13 @@ function NotebookWorkspace({
   const keepEditing = useRef<HTMLButtonElement>(null);
   const [aiMounted, setAiMounted] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [pendingInsertion, setPendingInsertion] = useState<(NotebookInsertion & { cellId: string }) | null>(
+    null,
+  );
+  const handledInsertion = useRef<number | null>(null);
   const [saved, setSaved] = useState('');
   const [storageError, setStorageError] = useState('');
+  const [insertionError, setInsertionError] = useState('');
   const [discardRequested, setDiscardRequested] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
@@ -342,15 +379,24 @@ function NotebookWorkspace({
   const runner = useRef<NotebookRunner | null>(null);
   if (!runner.current)
     runner.current = new NotebookRunner(
-      async (sql, signal) => {
+      async (sql, signal, context) => {
         const run = new EvidenceQueryRun();
         const stop = () => run.stop();
         signal.addEventListener('abort', stop, { once: true });
         try {
           signal.throwIfAborted();
           await run.wait(waitForEngineReady());
-          await validateSelectQuery(sql, (text, params) => run.query(text, params, signal));
-          return await run.query(sql, [], signal);
+          context.phase('queued');
+          await validateSelectQuery(sql, (text, params) =>
+            run.query(text, params, signal, () => context.phase('validating')),
+          );
+          context.phase('queued');
+          return await run.query(
+            context.mode === 'explain' ? `EXPLAIN ${sql}` : sql,
+            context.params,
+            signal,
+            () => context.phase('executing'),
+          );
         } finally {
           signal.removeEventListener('abort', stop);
           run.stop();
@@ -437,14 +483,48 @@ function NotebookWorkspace({
       ...latest.current,
       cells: latest.current.cells.map((item) => (item.id === cell.id ? cell : item)),
     });
-  async function run(ids?: string[]) {
+  useEffect(() => {
+    if (!insertion || handledInsertion.current === insertion.token) return;
+    handledInsertion.current = insertion.token;
+    onInsertionHandled();
+    setInsertionError('');
+    const current = latest.current;
+    const target =
+      current.cells.find((cell) => cell.id === selected && cell.type === 'sql') ??
+      current.cells.find((cell) => cell.type === 'sql');
+    if (!target && current.cells.length >= 200) {
+      setInsertionError('This notebook has 200 cells. Remove a cell before inserting SQL from the catalog.');
+      return;
+    }
+    const cell = target ?? newCell('sql');
+    change({
+      ...current,
+      cells: target
+        ? current.cells.map((item) =>
+            item.id === cell.id ? { ...item, collapsed: false, codeHidden: false } : item,
+          )
+        : [...current.cells, cell],
+    });
+    setSelected(cell.id);
+    setShowAi(false);
+    setPendingInsertion({ ...insertion, cellId: cell.id });
+  }, [insertion]);
+  async function run(ids?: string[], mode: 'query' | 'explain' = 'query') {
     if (runner.current!.running || aiBusy) return;
     const cells = latest.current.cells.filter(
       (cell) => cell.type === 'sql' && (!ids || ids.includes(cell.id)),
     );
     setRunning(true);
+    setBatch(cells.map((cell) => cell.id));
     try {
-      await runner.current!.run(cells as Extract<NotebookCell, { type: 'sql' }>[]);
+      await runner.current!.run(cells as Extract<NotebookCell, { type: 'sql' }>[], {
+        parameters: latest.current.parameters,
+        values: latest.current.values,
+        serviceUrl: latest.current.serviceUrl,
+        sessionId: sessionId.current,
+        engineVersion: engine.workerReadyData?.wasmVersion,
+        mode,
+      });
     } finally {
       if (alive.current) setRunning(false);
     }
@@ -457,7 +537,9 @@ function NotebookWorkspace({
     };
   }, [busy, doc]);
   const changed = doc.cells
-    .filter((cell) => cell.type === 'sql' && (!results[cell.id]?.table || isStale(cell, results[cell.id])))
+    .filter(
+      (cell) => cell.type === 'sql' && (!results[cell.id]?.table || isStale(cell, results[cell.id], doc)),
+    )
     .map((cell) => cell.id);
   function focusCell(id?: string, editor = true) {
     requestAnimationFrame(() =>
@@ -593,6 +675,7 @@ function NotebookWorkspace({
           size="sm"
           variant="outline"
           disabled={busy || !changed.length}
+          title="Run cells whose SQL or referenced parameter values changed. Changes in source data are not monitored."
           onClick={() => void run(changed)}
         >
           Run changed
@@ -608,6 +691,17 @@ function NotebookWorkspace({
           Ask AI
         </Button>
       </header>
+      {insertionError && (
+        <p role="alert" className="border-b px-4 py-2 text-sm text-destructive">
+          {insertionError}
+        </p>
+      )}
+      {running && (
+        <p role="status" className="border-b px-4 py-1 text-xs text-muted-foreground">
+          Running cell {Math.max(1, batch.findIndex((id) => results[id]?.running) + 1)} of {batch.length}.
+          Stop all cancels this run and skips remaining cells.
+        </p>
+      )}
       {storageError && (
         <div className="p-2 text-sm border-b space-y-2">
           <p role="alert" className="text-destructive">
@@ -641,10 +735,14 @@ function NotebookWorkspace({
           className={`flex-1 min-w-0 min-h-0 overflow-auto px-3 py-5 md:px-8 ${showAi ? 'hidden lg:block' : ''}`}
         >
           <div className="mx-auto max-w-5xl">
+            <NotebookParameters document={doc} onChange={change} />
             <InsertCell index={0} disabled={busy || doc.cells.length >= 200} onAdd={add} />
             {doc.cells.map((cell, index) => (
               <div key={cell.id} id={`notebook-${cell.id}`} onFocusCapture={() => setSelected(cell.id)}>
                 <NotebookCellView
+                  catalogs={catalogs}
+                  parameterScope={doc}
+                  insertion={pendingInsertion?.cellId === cell.id ? pendingInsertion : null}
                   cell={cell}
                   result={results[cell.id]}
                   busy={busy}
@@ -652,6 +750,23 @@ function NotebookWorkspace({
                   last={index === doc.cells.length - 1}
                   onChange={updateCell}
                   onRun={() => void run([cell.id])}
+                  onExplain={() => void run([cell.id], 'explain')}
+                  onPin={() =>
+                    setResults((previous) => {
+                      const value = previous[cell.id];
+                      if (!value?.table || !value.provenance) return previous;
+                      return {
+                        ...previous,
+                        [cell.id]: { ...value, pinned: { table: value.table, provenance: value.provenance } },
+                      };
+                    })
+                  }
+                  onUnpin={() =>
+                    setResults((previous) => ({
+                      ...previous,
+                      [cell.id]: { ...previous[cell.id], pinned: undefined },
+                    }))
+                  }
                   onRunAbove={() => void run(doc.cells.slice(0, index).map((item) => item.id))}
                   onRunBelow={() => void run(doc.cells.slice(index).map((item) => item.id))}
                   onClearOutput={() =>

@@ -70,3 +70,21 @@ test('completed work removes cancellation listeners and deadlines', async () => 
   await new Promise(resolve => setTimeout(resolve, 10));
   expect(interrupts).toBe(0);
 });
+
+test('start notifications reflect connection ownership and skip cancelled queued work', async () => {
+  const execute = createQueryExecutor(() => {});
+  const hold = deferred<number>();
+  const started: string[] = [];
+  const first = execute(() => hold.promise, { onStart: () => started.push('first') });
+  await Promise.resolve();
+  const controller = new AbortController();
+  const cancelled = execute(async () => 2, { signal: controller.signal, onStart: () => started.push('cancelled') });
+  const next = execute(async () => 3, { onStart: () => started.push('next') });
+  expect(started).toEqual(['first']);
+  controller.abort();
+  await expect(cancelled).rejects.toThrow();
+  hold.resolve(1);
+  await first;
+  expect(await next).toBe(3);
+  expect(started).toEqual(['first', 'next']);
+});

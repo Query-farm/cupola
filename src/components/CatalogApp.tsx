@@ -1,4 +1,4 @@
-import { OPEN_NOTEBOOK_EVENT, type OpenNotebookDetail, type NotebookNavigation } from '../lib/notebooks/navigation';
+import { OPEN_NOTEBOOK_EVENT, type OpenNotebookDetail, type NotebookNavigation, type NotebookInsertion } from '../lib/notebooks/navigation';
 import { useEffect, useState, useMemo, useCallback, useRef, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
 import { buildCallText } from "@/lib/editor/call-snippet";
 import { fetchCatalog, type CatalogData } from "@/lib/service";
@@ -296,6 +296,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
 
   const serviceUrl = useMemo(() => hasExplicitService() ? getServiceUrl() : defaultServiceUrl || getServiceUrl(), [defaultServiceUrl]);
   const [notebookNavigation, setNotebookNavigation] = useState<NotebookNavigation | null>(null);
+  const [notebookInsertion, setNotebookInsertion] = useState<NotebookInsertion | null>(null);
   const [activeNotebookId, setActiveNotebookId] = useState<string | null>(null);
   const notebookNavigationToken = useRef(0);
   useEffect(() => {
@@ -761,9 +762,12 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                   }
                   if (isNarrow) setMobileSidebarOpen(false);
                 }}
-                insertTarget={activeTab === "editor" ? "editor" : "shell"}
+                insertTarget={activeTab === "notebooks" ? "notebook" : activeTab === "editor" ? "editor" : "shell"}
                 onInsertCallable={(callable) => {
-                  if (activeTab === "editor" && ui.insertCallableIntoEditor) {
+                  if (activeTab === "notebooks") {
+                    setNotebookInsertion({ callable, serviceUrl, token: ++notebookNavigationToken.current });
+                    setMobileSidebarOpen(false);
+                  } else if (activeTab === "editor" && ui.insertCallableIntoEditor) {
                     ui.insertCallableIntoEditor(callable);
                   } else {
                     shellInsertRef.current?.(buildCallText(callable, { emptyDoc: false }));
@@ -772,7 +776,10 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                 onShellInsert={(text) => {
                   // In editor mode, route table/column clicks into the SQL
                   // editor at the cursor; otherwise into the xterm shell.
-                  if (activeTab === "editor" && ui.insertIntoEditor) {
+                  if (activeTab === "notebooks") {
+                    setNotebookInsertion({ text, serviceUrl, token: ++notebookNavigationToken.current });
+                    setMobileSidebarOpen(false);
+                  } else if (activeTab === "editor" && ui.insertIntoEditor) {
                     ui.insertIntoEditor(text);
                   } else {
                     shellInsertRef.current?.(text);
@@ -833,7 +840,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
           {notebooksMounted && (
             <div className="absolute inset-0 overflow-hidden" style={activeTab === "notebooks" ? undefined : { visibility: "hidden", zIndex: -1 }}>
               <ErrorBoundary><Suspense fallback={<div className="p-6">Loading notebooks…</div>}>
-                <NotebookPanel key={serviceUrl} serviceUrl={serviceUrl} catalogs={catalogs} onBusyChange={setNotebookBusy} navigation={notebookNavigation} onActiveChange={setActiveNotebookId} />
+                <NotebookPanel key={serviceUrl} serviceUrl={serviceUrl} catalogs={catalogs} onBusyChange={setNotebookBusy} navigation={notebookNavigation} insertion={notebookInsertion} onActiveChange={setActiveNotebookId} />
               </Suspense></ErrorBoundary>
             </div>
           )}

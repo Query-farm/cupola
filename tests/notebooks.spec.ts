@@ -40,6 +40,39 @@ async function chartAction(page: Page, cell: Locator, name: string, action: stri
 
 const SAMPLE = "SELECT * FROM (VALUES ('Jan', 10), ('Feb', 20)) AS sales(month, revenue)";
 
+test('short Markdown editors fit inside their cells', async ({ page }) => {
+  await openNotebook(page);
+  await insertCell(page, 'Markdown');
+  const cell = page.getByTestId('notebook-cell').last();
+  const editor = cell.locator('.cm-editor');
+  for (const source of ['', 'Short note']) {
+    await cell.getByRole('textbox', { name: 'Markdown source' }).fill(source);
+    await expect.poll(async () => {
+      const editorBounds = await editor.boundingBox();
+      const cellBounds = await cell.boundingBox();
+      return editorBounds!.y + editorBounds!.height <= cellBounds!.y + cellBounds!.height;
+    }).toBe(true);
+  }
+});
+
+test('Markdown previews preserve plain code blocks and distinguish inline and SQL code', async ({ page }) => {
+  await openNotebook(page);
+  await insertCell(page, 'Markdown');
+  const cell = page.getByTestId('notebook-cell').last();
+  const plain = 'first line\n    indented line\nthird line\n';
+  await cell.getByRole('textbox', { name: 'Markdown source' }).fill(
+    `Inline \`value\`.\n\n\`\`\`\n${plain}\`\`\`\n\n\`\`\`sql\nSELECT 42;\n\`\`\``,
+  );
+  await cell.getByRole('button', { name: 'Preview Markdown', exact: true }).click();
+  const block = cell.locator('pre').first();
+  await expect(block).toHaveText(plain);
+  expect(await block.textContent()).toBe(plain);
+  await expect(block).toHaveCSS('white-space', 'pre');
+  await expect(cell.locator('p code')).toHaveText('value');
+  await expect(cell.locator('pre code.language-sql .hljs-keyword')).toContainText('SELECT');
+  await expect(cell.locator('pre pre')).toHaveCount(0);
+});
+
 test('chart drafts, resizing, stale results and saved presentation survive reopening', async ({ page }) => {
   await openNotebook(page);
   await page.getByRole('textbox', { name: 'Notebook title', exact: true }).fill('Revenue investigation');
