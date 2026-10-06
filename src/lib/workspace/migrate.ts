@@ -10,8 +10,11 @@
  *   it), with its non-secret options and pending raw text;
  * - its editor tabs (`vgi-sql-editor-docs::<url>`), query history
  *   (`cupola.query-history.v1::<url>`), Evidence reports, report histories and
- *   recovery drafts (`cupola.evidence.{report.v2,history.v1,draft.v1}:<url>:<id>`)
- *   are copied under the workspace id; a report's copy also records it;
+ *   recovery drafts
+ *   (`cupola.evidence.{report.v2,history.v1,draft.v1}:<url>:<id>`), notebooks
+ *   (`cupola.notebook.v1:<url>:<id>`) and editor tab revisions
+ *   (`cupola.editor-revisions.v1::<url>::<docId>`) are copied under the
+ *   workspace id; a report's or notebook's copy also records it;
  * - its secrets (`cupola.catalog-secrets.v1`, keyed by URL + catalog name +
  *   option) are copied under `workspaceId:catalogId:option`.
  *
@@ -33,6 +36,10 @@ const EDITOR_PREFIX = "vgi-sql-editor-docs::";
 const HISTORY_PREFIX = "cupola.query-history.v1::";
 /** Evidence keys are `<prefix><encodeURIComponent(scope)>:<encodeURIComponent(id)>`. */
 const EVIDENCE_PREFIXES = ["cupola.evidence.report.v2:", "cupola.evidence.history.v1:", "cupola.evidence.draft.v1:"];
+/** Notebooks use the same `<prefix><encoded scope>:<encoded id>` shape. */
+const NOTEBOOK_PREFIX = "cupola.notebook.v1:";
+/** Tab revisions are `<prefix><scope>::<docId>`, unencoded like the editor's own key. */
+const TAB_REVISIONS_PREFIX = "cupola.editor-revisions.v1::";
 
 export interface MigrationReport {
   ran: boolean;
@@ -115,6 +122,12 @@ export function rekeyService(s: Storage, keys: readonly string[], url: string, w
       const rest = key.slice((prefix + fromScope).length);
       copy(key, prefix + toScope + rest, prefix === "cupola.evidence.history.v1:" ? undefined : (text) => stampWorkspace(text, workspaceId));
     }
+  }
+  for (const key of keys) {
+    if (key.startsWith(NOTEBOOK_PREFIX + fromScope))
+      copy(key, NOTEBOOK_PREFIX + toScope + key.slice((NOTEBOOK_PREFIX + fromScope).length), (text) => stampWorkspace(text, workspaceId));
+    else if (key.startsWith(`${TAB_REVISIONS_PREFIX}${url}::`))
+      copy(key, `${TAB_REVISIONS_PREFIX}${workspaceId}::${key.slice(`${TAB_REVISIONS_PREFIX}${url}::`.length)}`);
   }
 }
 

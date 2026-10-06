@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { legacyScopeFor } from '../workspace/legacy-scope';
 import { notebookParameterSchema, parameterValueSchema, validateParameterValue } from './parameters';
 
 const id = z.string().min(1).max(200);
@@ -41,6 +42,9 @@ export const notebookSchema = z
     version: z.literal(1),
     id,
     serviceUrl: z.string(),
+    /** The workspace it is stored in (multi-catalog). Absent on a notebook saved
+     *  before workspaces, which is stored under its service URL. */
+    workspaceId: z.string().optional(),
     title: z.string().max(200),
     cells: z.array(cellSchema).max(200),
     parameters: z.array(notebookParameterSchema).max(50).optional(),
@@ -99,12 +103,13 @@ export function newCell(type: NotebookCell['type']): NotebookCell {
   };
   return type === 'sql' ? { ...base, type, charts: [] } : { ...base, type };
 }
-export function newNotebook(serviceUrl: string): Notebook {
+export function newNotebook(serviceUrl: string, workspaceId?: string): Notebook {
   return {
     version: 1,
     id: uid(),
     title: 'Untitled notebook',
     serviceUrl,
+    ...(workspaceId ? { workspaceId } : {}),
     cells: [newCell('sql')],
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -155,11 +160,19 @@ export function defaultChart(
 
 export const STORAGE_PREFIX = 'cupola.notebook.v1:';
 export const NOTEBOOKS_CHANGED = 'cupola:notebooks-changed';
-export function storageKey(serviceUrl: string, id: string) {
-  return `${STORAGE_PREFIX}${encodeURIComponent(serviceUrl)}:${encodeURIComponent(id)}`;
+/** Notebooks are stored per scope, like Evidence reports: the workspace id, or
+ *  for a notebook saved before workspaces, its service URL. A workspace scope
+ *  also reads its legacy URL's notebooks, read-only (`legacy-scope.ts`); one is
+ *  copied under the workspace the first time it is saved again. */
+export function storageKey(scope: string, id: string) {
+  return `${STORAGE_PREFIX}${encodeURIComponent(scope)}:${encodeURIComponent(id)}`;
+}
+/** Where a notebook is stored. */
+export function notebookScope(doc: Pick<Notebook, 'workspaceId' | 'serviceUrl'>): string {
+  return doc.workspaceId || doc.serviceUrl;
 }
 export function saveNotebook(doc: Notebook, storage: Storage = localStorage): void {
-  const key = storageKey(doc.serviceUrl, doc.id);
+  const key = storageKey(notebookScope(doc), doc.id);
   const value = JSON.stringify(notebookSchema.parse(doc));
   const changed = storage.getItem?.(key) !== value;
   storage.setItem(key, value);
@@ -167,44 +180,54 @@ export function saveNotebook(doc: Notebook, storage: Storage = localStorage): vo
     window.dispatchEvent(new Event(NOTEBOOKS_CHANGED));
 }
 export function listNotebooks(
-  serviceUrl: string,
+  scope: string,
   storage: Storage = localStorage,
 ): { documents: Notebook[]; unreadable: number } {
-  const documents: Notebook[] = [];
+  const documents = new Map<string, Notebook>();
   let unreadable = 0;
-  const prefix = storageKey(serviceUrl, '');
-  for (let i = 0; i < storage.length; i++) {
-    const key = storage.key(i)!;
-    if (!key.startsWith(prefix)) continue;
-    try {
-      const doc = notebookSchema.parse(JSON.parse(storage.getItem(key)!));
-      if (doc.serviceUrl !== serviceUrl || storageKey(serviceUrl, doc.id) !== key)
-        throw new Error('Notebook identity mismatch');
-      documents.push(doc);
-    } catch {
-      unreadable++;
+  const read = (from: string, adopt: (doc: Notebook) => Notebook) => {
+    const prefix = storageKey(from, '');
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i)!;
+      if (!key.startsWith(prefix)) continue;
+      try {
+        const doc = notebookSchema.parse(JSON.parse(storage.getItem(key)!));
+        if (notebookScope(doc) !== from || storageKey(from, doc.id) !== key)
+          throw new Error('Notebook identity mismatch');
+        documents.set(doc.id, adopt(doc));
+      } catch {
+        unreadable++;
+      }
     }
-  }
+  };
+  // The pre-workspace copies first, so the workspace's own wins.
+  const legacy = legacyScopeFor(scope);
+  if (legacy) read(legacy, (doc) => ({ ...doc, workspaceId: scope }));
+  read(scope, (doc) => doc);
   return {
-    documents: documents.sort((a, b) => b.updatedAt - a.updatedAt),
+    documents: [...documents.values()].sort((a, b) => b.updatedAt - a.updatedAt),
     unreadable,
   };
 }
 /** Import into the current connection as a new document; never overwrite the source. */
-export function importNotebook(text: string, serviceUrl: string): Notebook {
+export function importNotebook(text: string, serviceUrl: string, workspaceId?: string): Notebook {
   if (text.length > 5_000_000) throw new Error('Notebook files must be smaller than 5 MB.');
-  const doc = notebookSchema.parse(JSON.parse(text));
+  const { workspaceId: _from, ...doc } = notebookSchema.parse(JSON.parse(text));
   return {
     ...doc,
     id: uid(),
     serviceUrl,
+    ...(workspaceId ? { workspaceId } : {}),
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
 }
 
-export function deleteNotebook(serviceUrl: string, id: string, storage: Storage = localStorage): void {
-  storage.removeItem(storageKey(serviceUrl, id));
+export function deleteNotebook(scope: string, id: string, storage: Storage = localStorage): void {
+  // Deleting is the reader's choice, so the pre-workspace copy goes too;
+  // otherwise the fallback would bring the notebook back.
+  const legacy = legacyScopeFor(scope);
+  for (const s of legacy ? [scope, legacy] : [scope]) storage.removeItem(storageKey(s, id));
   if (typeof window !== 'undefined' && storage === window.localStorage)
     window.dispatchEvent(new Event(NOTEBOOKS_CHANGED));
 }

@@ -1789,7 +1789,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
           {notebooksMounted && (
             <div className="absolute inset-0 overflow-hidden" style={activeTab === "notebooks" ? undefined : { visibility: "hidden", zIndex: -1 }}>
               <ErrorBoundary><Suspense fallback={<div className="p-6">Loading notebooks…</div>}>
-                <NotebookPanel key={serviceUrl} serviceUrl={serviceUrl} catalogs={catalogs} onBusyChange={setNotebookBusy} navigation={notebookNavigation} insertion={notebookInsertion} onActiveChange={setActiveNotebookId} />
+                <NotebookPanel key={workspaceId || serviceUrl} serviceUrl={serviceUrl} workspaceId={workspaceId || undefined} catalogs={catalogs} onBusyChange={setNotebookBusy} navigation={notebookNavigation} insertion={notebookInsertion} onActiveChange={setActiveNotebookId} />
               </Suspense></ErrorBoundary>
             </div>
           )}

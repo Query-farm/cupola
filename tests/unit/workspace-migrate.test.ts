@@ -7,6 +7,8 @@ import { listEvidenceReports, saveEvidenceReport } from "../../src/lib/evidence/
 import { loadReportHistory } from "../../src/lib/evidence/revisions";
 import { loadQueryHistory } from "../../src/lib/editor/query-history";
 import { loadEditorState } from "../../src/lib/editor/editor-store";
+import { deleteNotebook, importNotebook, listNotebooks, newNotebook, saveNotebook, storageKey as notebookKey } from "../../src/lib/notebooks/model";
+import { deleteTabRevisions, loadTabRevisions } from "../../src/lib/editor/tab-revisions";
 
 // Stubbed storage, restored afterwards: Bun runs every unit test file in one
 // global scope (CLAUDE.md, "Testing").
@@ -66,6 +68,9 @@ function seedLegacy() {
   mem.setItem(SECRET_STORE_KEY, JSON.stringify({ [JSON.stringify([A, "sales", "token"])]: "a-secret" }));
 }
 
+const notebook = (id: string, serviceUrl: string, title = id) => ({ ...newNotebook(serviceUrl), id, title, createdAt: 1, updatedAt: 1 });
+const tabRevisions = (text: string) => JSON.stringify({ revisions: [{ id: 1, at: 1, kind: "run", hash: "h1" }], blobs: { h1: text } });
+
 describe("workspace migration", () => {
   test("turns each recent server into an untitled single-catalog workspace", () => {
     seedLegacy();
@@ -108,6 +113,44 @@ describe("workspace migration", () => {
     expect(loadQueryHistory(a.id).map((e) => e.sql)).toEqual(["SELECT 'from history'"]);
     expect(loadEditorState(a.id).docs.map((d) => d.sql)).toEqual(["SELECT 42"]);
     expect(catalogSecrets({ workspaceId: b.id, catalogId: b.catalogs[0].id, url: B, catalogName: "ops" })).toEqual({ api_key: "b-secret" });
+  });
+
+  test("re-keys notebooks and editor tab revisions", () => {
+    seedLegacy();
+    mem.setItem(notebookKey(A, "n1"), JSON.stringify(notebook("n1", A, "Sales notebook")));
+    mem.setItem(`cupola.editor-revisions.v1::${A}::d1`, tabRevisions("SELECT 42"));
+    migrateToWorkspaces();
+    const [a] = listWorkspaces();
+    expect(JSON.parse(mem.getItem(notebookKey(a.id, "n1"))!).workspaceId).toBe(a.id);
+    expect(listNotebooks(a.id).documents.map((d) => [d.id, d.workspaceId])).toEqual([["n1", a.id]]);
+    expect(mem.getItem(`cupola.editor-revisions.v1::${a.id}::d1`)).toContain("SELECT 42");
+    // Old keys stay, read-only.
+    expect(mem.getItem(notebookKey(A, "n1"))).not.toBeNull();
+    expect(mem.getItem(`cupola.editor-revisions.v1::${A}::d1`)).not.toBeNull();
+  });
+
+  test("notebooks and tab revisions fall back to the legacy URL until the workspace has its own", () => {
+    migrateToWorkspaces();
+    mem.setItem(notebookKey(A, "late"), JSON.stringify(notebook("late", A, "Late notebook")));
+    mem.setItem(`cupola.editor-revisions.v1::${A}::d9`, tabRevisions("SELECT 'late'"));
+    setLegacyScope("ws-1", A);
+    const [listed] = listNotebooks("ws-1").documents;
+    expect([listed.id, listed.workspaceId]).toEqual(["late", "ws-1"]);
+    saveNotebook({ ...listed, title: "Saved under the workspace" });
+    expect(JSON.parse(mem.getItem(notebookKey("ws-1", "late"))!).title).toBe("Saved under the workspace");
+    expect(JSON.parse(mem.getItem(notebookKey(A, "late"))!).title).toBe("Late notebook");
+    expect(listNotebooks("ws-1").documents.map((d) => d.title)).toEqual(["Saved under the workspace"]);
+    // An import lands in the workspace it is imported into.
+    expect(importNotebook(JSON.stringify(listed), B, "ws-2").workspaceId).toBe("ws-2");
+    // Deleting removes the legacy copy too, so the fallback can't bring it back.
+    deleteNotebook("ws-1", "late");
+    expect(listNotebooks("ws-1").documents).toEqual([]);
+    expect(mem.getItem(notebookKey(A, "late"))).toBeNull();
+
+    expect(loadTabRevisions("ws-1", "d9").blobs.h1).toBe("SELECT 'late'");
+    deleteTabRevisions("ws-1", "d9");
+    expect(mem.getItem(`cupola.editor-revisions.v1::${A}::d9`)).toBeNull();
+    expect(loadTabRevisions("ws-1", "d9").revisions).toEqual([]);
   });
 
   test("is idempotent: a second run changes nothing", () => {

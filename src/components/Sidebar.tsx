@@ -324,7 +324,7 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
           onExpandedChange={handleExpanded}
           trailingDropZone={false}
         />
-        {serviceUrl && <SavedNotebooksSidebar key={`notebooks-${serviceUrl}`} serviceUrl={serviceUrl} search={search} activeId={notebooksActive ? activeNotebookId : undefined} libraryActive={notebooksActive && !activeNotebookId} />}
+        {serviceUrl && <SavedNotebooksSidebar key={`notebooks:${workspaceId ?? serviceUrl}`} serviceUrl={serviceUrl} workspaceId={workspaceId} search={search} activeId={notebooksActive ? activeNotebookId : undefined} libraryActive={notebooksActive && !activeNotebookId} />}
         {/* Reports follow the catalogs, drawn as one more root of the same tree. */}
         {serviceUrl && <SavedReportsSidebar key={`reports:${workspaceId ?? serviceUrl}`} serviceUrl={serviceUrl} workspaceId={workspaceId} search={search} />}
       </div>

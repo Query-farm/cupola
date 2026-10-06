@@ -6,21 +6,25 @@ import { OPEN_NOTEBOOK_EVENT, notebookHref, type OpenNotebookDetail } from '../.
 
 export function SavedNotebooksSidebar({
   serviceUrl,
+  workspaceId,
   search = '',
   activeId,
   libraryActive,
 }: {
   serviceUrl: string;
+  /** Notebooks are kept per workspace; without one, per service. */
+  workspaceId?: string;
   search?: string;
   activeId?: string | null;
   libraryActive?: boolean;
 }) {
+  const scope = workspaceId ?? serviceUrl;
   const [documents, setDocuments] = useState<Notebook[]>([]);
   const [error, setError] = useState('');
   useEffect(() => {
     const reload = () => {
       try {
-        const { documents, unreadable } = listNotebooks(serviceUrl);
+        const { documents, unreadable } = listNotebooks(scope);
         setDocuments(documents);
         setError(
           unreadable ? `${unreadable} saved notebook(s) could not be read. Their data is preserved.` : '',
@@ -40,7 +44,7 @@ export function SavedNotebooksSidebar({
       window.removeEventListener(NOTEBOOKS_CHANGED, reload);
       window.removeEventListener('storage', onStorage);
     };
-  }, [serviceUrl]);
+  }, [scope]);
   const open = (detail: Omit<OpenNotebookDetail, 'serviceUrl'>) =>
     window.dispatchEvent(
       new CustomEvent<OpenNotebookDetail>(OPEN_NOTEBOOK_EVENT, { detail: { serviceUrl, ...detail } }),

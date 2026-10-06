@@ -39,6 +39,7 @@ import {
   listNotebooks,
   saveNotebook,
   storageKey,
+  notebookScope,
   deleteNotebook,
   NOTEBOOKS_CHANGED,
   importNotebook,
@@ -59,6 +60,7 @@ function download(doc: Notebook) {
 }
 export function NotebookPanel({
   serviceUrl,
+  workspaceId,
   catalogs,
   onBusyChange,
   navigation,
@@ -69,9 +71,12 @@ export function NotebookPanel({
   insertion?: NotebookInsertion | null;
   onActiveChange?: (id: string | null) => void;
   serviceUrl: string;
+  /** Notebooks are kept per workspace; without one, per service. */
+  workspaceId?: string;
   catalogs: readonly CatalogData[];
   onBusyChange?: (busy: boolean) => void;
 }) {
+  const scope = workspaceId ?? serviceUrl;
   const [active, setActive] = useState<Notebook | null>(null);
   const [navigationError, setNavigationError] = useState('');
   const beforeLeave = useRef<(() => boolean) | null>(null);
@@ -111,9 +116,9 @@ export function NotebookPanel({
     }
     try {
       const target = navigation.create
-        ? newNotebook(serviceUrl)
+        ? newNotebook(serviceUrl, workspaceId)
         : navigation.id
-          ? listNotebooks(serviceUrl).documents.find((doc) => doc.id === navigation.id)
+          ? listNotebooks(scope).documents.find((doc) => doc.id === navigation.id)
           : null;
       if (navigation.id && !target) {
         setNavigationError(
@@ -125,12 +130,12 @@ export function NotebookPanel({
     } catch (e) {
       setNavigationError(`Could not open notebook: ${String(e)}`);
     }
-  }, [navigation, serviceUrl]);
+  }, [navigation, serviceUrl, scope]);
   useEffect(() => {
     if (!insertion || insertion.serviceUrl !== serviceUrl || handledInsertion.current === insertion.token)
       return;
     handledInsertion.current = insertion.token;
-    const target = active ?? newNotebook(serviceUrl);
+    const target = active ?? newNotebook(serviceUrl, workspaceId);
     if (!active) openDocument(target);
     setCellInsertion({ ...insertion, notebookId: target.id });
   }, [insertion, serviceUrl]);
@@ -142,7 +147,7 @@ export function NotebookPanel({
   const keepNotebook = useRef<HTMLButtonElement>(null);
   function refresh() {
     try {
-      const result = listNotebooks(serviceUrl);
+      const result = listNotebooks(scope);
       setDocuments(result.documents);
       setError(
         result.unreadable
@@ -162,7 +167,7 @@ export function NotebookPanel({
       window.removeEventListener('storage', handler);
       window.removeEventListener(NOTEBOOKS_CHANGED, handler);
     };
-  }, [serviceUrl]);
+  }, [scope]);
   if (active)
     return (
       <div className="h-full flex flex-col min-h-0">
@@ -203,7 +208,7 @@ export function NotebookPanel({
               Explore with SQL, charts, and notes in one document.
             </p>
           </div>
-          <Button onClick={() => openDocument(newNotebook(serviceUrl))}>New notebook</Button>
+          <Button onClick={() => openDocument(newNotebook(serviceUrl, workspaceId))}>New notebook</Button>
           <Button variant="outline" onClick={() => file.current?.click()}>
             Import notebook
           </Button>
@@ -220,7 +225,7 @@ export function NotebookPanel({
             if (!selected) return;
             try {
               if (selected.size > 5_000_000) throw new Error('Notebook files must be smaller than 5 MB.');
-              const doc = importNotebook(await selected.text(), serviceUrl);
+              const doc = importNotebook(await selected.text(), serviceUrl, workspaceId);
               saveNotebook(doc);
               openDocument(doc);
             } catch (e) {
@@ -294,7 +299,7 @@ export function NotebookPanel({
                 onClick={() => {
                   if (!deleteId) return;
                   try {
-                    deleteNotebook(serviceUrl, deleteId);
+                    deleteNotebook(scope, deleteId);
                     setDeleteId(null);
                     refresh();
                   } catch (e) {
@@ -371,7 +376,7 @@ function NotebookWorkspace({
   const baseline = useRef<string | null | undefined>(undefined);
   if (baseline.current === undefined) {
     try {
-      baseline.current = localStorage.getItem(storageKey(initial.serviceUrl, initial.id));
+      baseline.current = localStorage.getItem(storageKey(notebookScope(initial), initial.id));
     } catch {
       /* persist will report the failure */
     }
@@ -431,13 +436,13 @@ function NotebookWorkspace({
   }, [doc.cells]);
   function persist(): boolean {
     try {
-      const current = localStorage.getItem(storageKey(doc.serviceUrl, doc.id));
+      const current = localStorage.getItem(storageKey(notebookScope(doc), doc.id));
       if (baseline.current !== undefined && current !== baseline.current)
         throw new Error(
           'This notebook was changed or deleted in another tab. Export your edits, then reopen it to avoid overwriting the other version.',
         );
       saveNotebook(latest.current);
-      baseline.current = localStorage.getItem(storageKey(doc.serviceUrl, doc.id));
+      baseline.current = localStorage.getItem(storageKey(notebookScope(doc), doc.id));
       setSaved(fingerprint(latest.current));
       setStorageError('');
       return true;

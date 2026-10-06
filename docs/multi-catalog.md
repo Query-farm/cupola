@@ -188,7 +188,8 @@ Rules:
 
 | Item | Scope |
 |---|---|
-| Editor tabs (`editor-store.ts`) | Per workspace |
+| Editor tabs (`editor-store.ts`) and their revisions (`tab-revisions.ts`) | Per workspace |
+| SQL notebooks (`notebooks/model.ts`) | Per workspace (added with the 0.4.217 merge; no `requires` or alias rename yet) |
 | Evidence reports, report history and drafts | Per workspace, with "Copy to workspace…" |
 | AI chats | Per workspace |
 | Query history | **Stored per workspace**, plus an "All workspaces" toggle in the History panel's All view that reads every store and labels each entry with its workspace |

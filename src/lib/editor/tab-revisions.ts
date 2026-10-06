@@ -11,7 +11,12 @@
  *
  * Each distinct text is stored once (`blobs`, by content hash), so re-running
  * a long query costs one revision entry, not another copy.
+ *
+ * Keyed by the editor tabs' own scope: the workspace id (a service URL outside
+ * a workspace). A workspace with no revisions of its own for a tab reads its
+ * legacy service URL's (`legacy-scope.ts`), read-only, until it records one.
  */
+import { legacyScopeFor } from "@/lib/workspace/legacy-scope";
 
 /** How a revision came about. `edit`: the text as you left it, captured just
  *  before something replaced it. */
@@ -71,7 +76,9 @@ export function loadTabRevisions(serviceUrl: string, docId: string): TabRevision
   if (hit) return hit;
   let value = EMPTY;
   try {
-    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(k);
+    let raw = typeof localStorage === "undefined" ? null : localStorage.getItem(k);
+    const legacy = legacyScopeFor(serviceUrl);
+    if (raw === null && legacy) raw = localStorage.getItem(key(legacy, docId));
     const parsed: unknown = raw ? JSON.parse(raw) : null;
     if (isRevisions(parsed)) value = parsed;
   } catch { /* Corrupt or blocked storage: start empty. */ }
@@ -151,6 +158,9 @@ export function revisionText(value: TabRevisions, revision: TabRevision): string
 /** Forget a tab's revisions (the tab was deleted). */
 export function deleteTabRevisions(serviceUrl: string, docId: string): void {
   save(serviceUrl, docId, EMPTY);
+  // The reader deleted the tab, so the pre-workspace copy goes too.
+  const legacy = legacyScopeFor(serviceUrl);
+  if (legacy) save(legacy, docId, EMPTY);
 }
 
 export function subscribeTabRevisions(listener: () => void): () => void {
