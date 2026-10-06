@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { IROH_SECRET_KEY_STORAGE, generateIrohSecretKey, getOrCreateIrohSecretKey } from "../../src/lib/iroh";
+import { IROH_SECRET_KEY_STORAGE, generateIrohSecretKey, getOrCreateIrohSecretKey, irohEndpointIdFromSecretKey } from "../../src/lib/iroh";
 
 function memoryStorage(initial: Record<string, string> = {}) {
   const data = new Map(Object.entries(initial));
@@ -34,5 +34,11 @@ describe("Iroh identity", () => {
     expect(getOrCreateIrohSecretKey(undefined)).toBeUndefined();
     const throwing = { getItem: () => { throw new Error("blocked"); }, setItem: () => {} };
     expect(getOrCreateIrohSecretKey(throwing)).toBeUndefined();
+  });
+
+  test("the endpoint ID is derived from the key without starting a node", async () => {
+    // RFC 8032 section 7.1, TEST 1. Checked against a real node's endpointId.
+    expect(await irohEndpointIdFromSecretKey("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"))
+      .toBe("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
   });
 });

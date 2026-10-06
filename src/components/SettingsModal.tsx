@@ -33,9 +33,9 @@ function IrohIdentityRow() {
   const iroh = useSyncExternalStore(subscribeIroh, getIrohState, getIrohState);
   const [copied, setCopied] = useState(false);
   const description =
-    iroh.status === "ready" ? (
+    iroh.endpointId && iroh.status !== "error" ? (
       <span className="font-mono break-all select-all" data-testid="iroh-endpoint-id">{iroh.endpointId}</span>
-    ) : iroh.status === "starting" ? "Starting…"
+    ) : iroh.status === "idle" || iroh.status === "starting" ? "Shown once this browser first connects over Iroh."
       : iroh.status === "error" ? `Unavailable: ${iroh.error}`
         : "Unavailable (needs a cross-origin isolated page).";
   return (
@@ -47,7 +47,7 @@ function IrohIdentityRow() {
         </span>
         <span className="text-xs">{description}</span>
       </div>
-      {iroh.status === "ready" && (
+      {iroh.endpointId && iroh.status !== "error" && (
         <Button
           variant="outline"
           size="sm"
