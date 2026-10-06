@@ -30,7 +30,7 @@ import { useMediaQuery } from "@/lib/use-media-query";
 import { treeIdToShellText } from "@/lib/tree";
 import { exportResult, triggerDownload, safeFileStem, type ExportFormat } from "@/lib/editor/result-export";
 import type { PerspectivePivotMode, QueryPivotMode } from "@/lib/pivot-source";
-import { CodeMirrorSql, type CodeMirrorSqlHandle } from "./CodeMirrorSql";
+import { CodeMirrorSql, type CodeMirrorSqlHandle, type SqlEditorSession } from "./CodeMirrorSql";
 import { SqlEditorTabs } from "./SqlEditorTabs";
 import { EditorToolbar } from "./EditorToolbar";
 import { EditorResultsPane, emptyResult, type ResultState } from "./EditorResultsPane";
@@ -132,11 +132,11 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   const queryReady = engineLifecycle.status === "ready";
 
   const editorRef = useRef<CodeMirrorSqlHandle | null>(null);
+  const editorSessions = useRef(new Map<string, SqlEditorSession>());
   const runIdRef = useRef(0);
-  // The run in flight, if any. Stop aborts it, and so does a newer run: the
-  // engine has one connection, so a superseded query would only hold the next
-  // one up while producing a result nobody shows.
+  // One manual run owns the connection until completion or an explicit Stop.
   const activeRunRef = useRef<{ controller: AbortController; docId: string } | null>(null);
+  const [runningDocId, setRunningDocId] = useState<string | null>(null);
   // Persist edits (debounced) without re-rendering on every keystroke.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Latest doc state, so the flush-on-hide/unmount handler writes current text
@@ -151,6 +151,14 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     [docState, activeId],
   );
   const activeResult = (activeId && results[activeId]) || emptyResult;
+  const activeSession = useMemo(() => {
+    if (!activeId) return undefined;
+    let session = editorSessions.current.get(activeId);
+    if (!session) editorSessions.current.set(activeId, session = {});
+    return session;
+  }, [activeId]);
+  const backgroundRun = runningDocId && runningDocId !== activeId
+    ? docState.docs.find((doc) => doc.id === runningDocId) : null;
 
   const persist = useCallback((next: EditorDocState) => {
     setDocState(next);
@@ -191,6 +199,13 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   }, [docState, persist]);
 
   const closeTab = useCallback((id: string) => {
+    if (activeRunRef.current?.docId === id) {
+      activeRunRef.current.controller.abort();
+      activeRunRef.current = null;
+      ++runIdRef.current;
+      setRunningDocId(null);
+    }
+    editorSessions.current.delete(id);
     deleteTabRevisions(serviceUrl, id);
     persist(removeDoc(docStateRef.current, id));
     setResults((prev) => { const { [id]: _drop, ...rest } = prev; return rest; });
@@ -222,7 +237,9 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
 
   const runSql = useCallback(async (sql: string, docId: string) => {
     const trimmed = sql.trim();
-    if (!trimmed) return;
+    // Also guard keyboard shortcuts and externally requested runs, including
+    // repeated key presses before React has rendered the disabled controls.
+    if (!trimmed || activeRunRef.current) return;
     // The tab's whole text as it ran: a revision of the tab once the run ends.
     const docText = (docId === docStateRef.current.activeId ? editorRef.current?.getDoc() : undefined)
       ?? docStateRef.current.docs.find((d) => d.id === docId)?.sql ?? trimmed;
@@ -230,25 +247,28 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     const statement = docText.trim() !== trimmed ? trimmed : undefined;
     const ran = (outcome: RunOutcome) => recordRevision(serviceUrl, docId, docText, "run", { statement, outcome });
     const myRun = ++runIdRef.current;
-    const previous = activeRunRef.current;
-    if (previous) {
-      previous.controller.abort();
-      if (previous.docId !== docId) setActiveResult(previous.docId, { running: false, cancelled: true, error: null, table: null });
-    }
     const controller = new AbortController();
     activeRunRef.current = { controller, docId };
+    setRunningDocId(docId);
     setActiveResult(docId, { running: true, ran: true, error: null, cancelled: false });
 
     // Only the latest run owns the slot; a superseded one leaves it alone.
-    const release = () => { if (activeRunRef.current?.controller === controller) activeRunRef.current = null; };
+    const release = () => {
+      if (activeRunRef.current?.controller === controller) {
+        activeRunRef.current = null;
+        setRunningDocId(null);
+      }
+    };
 
     try {
       await waitForEngineReady();
     } catch (error) {
       release();
+      if (myRun !== runIdRef.current) return;
       setActiveResult(docId, { running: false, error: error instanceof Error ? error.message : "The query engine couldn't start." });
       return;
     }
+    if (myRun !== runIdRef.current) { release(); return; }
     const q = engine.query;
     if (!q) {
       release();
@@ -350,12 +370,6 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   }, [activeId, runSql, sqlToRun]);
 
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-
-  const handleRunStatementAtCursor = useCallback(() => {
-    if (!editorRef.current || !activeId) return;
-    const stmt = editorRef.current.getStatementAtCursor();
-    if (stmt) runSql(stmt.text, activeId);
-  }, [activeId, runSql]);
 
   const handleStop = useCallback(() => {
     activeRunRef.current?.controller.abort();
@@ -662,6 +676,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       <EditorToolbar
         running={activeResult.running}
         queryReady={queryReady}
+        runBlocked={!!backgroundRun}
         hasSelection={hasSelection}
         onRun={handleRun}
         onRunAll={handleRunAll}
@@ -684,6 +699,12 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
         shareCopied={shareCopied}
       />
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      {backgroundRun && (
+        <div role="status" className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2 text-xs" data-testid="editor-background-run">
+          <span>“{backgroundRun.name}” is running. Wait for it to finish or return to that tab to stop it.</span>
+          <button type="button" className="shrink-0 underline" onClick={() => handleSelectTab(backgroundRun.id)}>Show running query</button>
+        </div>
+      )}
       {/* Horizontal split: editor+results on the left, Ask AI panel on the
           right. The panel stays mounted (display:none when closed) so its
           per-tab conversations survive open/close toggles. */}
@@ -694,8 +715,9 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
               key={activeDoc?.id ?? "none"}
               ref={editorRef}
               initialDoc={activeDoc?.sql ?? ""}
+              session={activeSession}
               onChange={handleDocChange}
-              onRunStatement={handleRunStatementAtCursor}
+              onRunStatement={handleRun}
               onSelectionChange={setHasSelection}
               onDropText={handleDropText}
               completionSource={completionSource}
