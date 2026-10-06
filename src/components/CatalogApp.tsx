@@ -3,6 +3,8 @@ import { useEffect, useState, useMemo, useCallback, useRef, useSyncExternalStore
 import { buildCallText } from "@/lib/editor/call-snippet";
 import { fetchCatalogSpecs, type CatalogData } from "@/lib/service";
 import { quoteIdent } from "@/lib/duckdb-query";
+import { appBase } from "@/lib/app-base";
+import { toLatestBaseUrl } from "@/lib/share-query";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { OPEN_REPORT_EVENT, reportHref, type OpenReportDetail } from "@/lib/evidence/open-report";
 import {
@@ -357,9 +359,9 @@ function portableFileOf(ws: Workspace): PortableWorkspaceFile {
   };
 }
 
-/** The app's own URL with only `params` set. */
+/** The app's own URL (its root, `appBase`) with only `params` set. */
 function appUrl(params: Record<string, string> = {}): string {
-  const dest = new URL(window.location.pathname, window.location.origin);
+  const dest = new URL(appBase, window.location.origin);
   for (const [k, v] of Object.entries(params)) dest.searchParams.set(k, v);
   return dest.toString();
 }
@@ -1178,7 +1180,8 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       ]);
       for (const name of names) omitted.push(`${name} (${c.alias || c.catalogName})`);
     }
-    return { url: await buildWorkspaceUrl(appUrl(), portableFileOf(stored)), omitted };
+    // Stable like a shared query's link: a `/v{version}/` base is dropped.
+    return { url: await buildWorkspaceUrl(toLatestBaseUrl(appUrl()), portableFileOf(stored)), omitted };
   }, [workspace]);
 
   /** The manager saved a catalog's connection (URL, alias, server catalog,
@@ -1249,7 +1252,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     attach: attachRequests,
     shareLink,
     signOutAll: () => {
-      const dest = new URL(`${import.meta.env.BASE_URL}sign-out`, window.location.origin);
+      const dest = new URL(`${appBase}sign-out`, window.location.origin);
       if (serviceUrl) dest.searchParams.set("service", serviceUrl);
       window.location.href = dest.toString();
     },

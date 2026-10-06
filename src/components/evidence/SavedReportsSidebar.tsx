@@ -1,5 +1,4 @@
 import { SavedDocumentsSidebar } from '../shared/SavedDocumentsSidebar';
-import { appBase } from '../../lib/app-base';
 import { useEffect, useState, type MouseEvent } from 'react';
 import { FileChartColumn, FileText } from 'lucide-react';
 import {
@@ -9,7 +8,7 @@ import {
   listEvidenceReports,
   type EvidenceReport,
 } from '../../lib/evidence/reports';
-import { OPEN_REPORT_EVENT, type OpenReportDetail } from '../../lib/evidence/open-report';
+import { OPEN_REPORT_EVENT, reportHref, type OpenReportDetail } from '../../lib/evidence/open-report';
 
 export function SavedReportsSidebar({ serviceUrl, workspaceId, search = '' }: { serviceUrl: string; workspaceId?: string; search?: string }) {
   // Reports are kept per workspace (multi-catalog phase 2); without one, per service.
@@ -42,11 +41,8 @@ export function SavedReportsSidebar({ serviceUrl, workspaceId, search = '' }: { 
       window.removeEventListener('storage', storageChanged);
     };
   }, [scope]);
-  const base = `${appBase.replace(/\/$/, '')}/reports`;
-  // A workspace tab names its catalogs with `?local_ws=`; a `?service=` tab by the service.
-  const localWs = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('local_ws');
-  const href = (id?: string) =>
-    `${base}${id ? '' : '/saved'}?${new URLSearchParams({ ...(localWs ? { local_ws: localWs } : { service: serviceUrl }), ...(id ? { evidence_report: id } : {}) })}`;
+  // `?local_ws=` when this tab names a workspace, else `?service=`.
+  const href = (id?: string) => reportHref(serviceUrl, id);
   function openReport(event: MouseEvent<HTMLAnchorElement>, id?: string) {
     // Modified and middle clicks keep the browser's own behavior (new tab, new window).
     if (
