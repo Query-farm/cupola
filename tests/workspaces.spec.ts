@@ -300,8 +300,12 @@ test.describe("workspaces", () => {
     expect(link).not.toContain("never-in-a-link");
     await expect(panel(page).getByTestId("workspace-share-omitted")).toContainText("api_key");
 
+    // The link is stable: no `/v{version}/` base, so it outlives this release
+    // (hosted, `/` serves the current one). `astro dev` serves only the
+    // versioned base, so follow the link's fragment there.
+    expect(new URL(link).pathname).toBe("/");
     const other = await context.newPage();
-    await other.goto(link);
+    await other.goto(`${APP_ORIGIN}${BASE}${new URL(link).hash}`);
     const consent = other.getByTestId("workspace-consent");
     await expect(consent).toBeVisible({ timeout: T_SHELL_BOOT });
     await consent.getByRole("button", { name: "Attach 2 catalogs" }).click();

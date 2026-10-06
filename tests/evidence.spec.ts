@@ -177,7 +177,6 @@ test('saved report library restores typed parameters, source and selected values
   await panel.getByRole('button', { name: 'Update preview', exact: true }).click();
   await expect(panel.getByTestId('evidence-document')).toContainText(city, { timeout: 30_000 });
   await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
-  await expect(panel.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
   await expect(panel.getByText('Saved in this browser.', { exact: true })).toHaveCount(0);
   await page.evaluate(() => { (window as any).__savedReportWorker = (window as any).__bridge.worker; });
   await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();

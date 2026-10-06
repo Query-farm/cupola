@@ -100,13 +100,19 @@ export async function validateOptionValues(
     if (!spec?.castType || !isCastableType(spec.castType)) continue;
     let ok: unknown;
     try {
-      ok = await engine.scalarPrepared(`SELECT TRY_CAST(? AS ${spec.castType}) IS NOT NULL`, [value]);
-    } catch {
+      // `?::VARCHAR`: the value is always text. A bare `?` lets the engine infer
+      // the parameter's type from the cast target, and binding 'abc' to an
+      // INTEGER parameter then throws, which skipped the check entirely.
+      ok = await engine.scalarPrepared(`SELECT TRY_CAST(?::VARCHAR AS ${spec.castType}) IS NOT NULL`, [value]);
+    } catch (e) {
       // A type name DuckDB does not take (a display-only mapping) is not the
       // value's fault; the extension's own cast is the final word.
+      console.warn(`[attach] could not type-check option ${name} as ${spec.castType}:`, e instanceof Error ? e.message : e);
       continue;
     }
-    if (ok === false) {
+    // BOOLEAN arrives as 0/1 with arrowLosslessConversion (engine open), not
+    // false/true; Number() reads both. Null means no answer: not the value's fault.
+    if (ok != null && Number(ok) === 0) {
       problems.push({ name, text: name, reason: `Not a valid ${spec.duckdbType}.` });
     }
   }

@@ -291,7 +291,21 @@ describe("validateOptionValues", () => {
       ["api_key", "Required, but no value was given."],
       ["max_rows", "Not a valid INTEGER."],
     ]);
-    expect(calls).toEqual(["SELECT TRY_CAST(? AS VARCHAR) IS NOT NULL", "SELECT TRY_CAST(? AS INTEGER) IS NOT NULL"]);
+    expect(calls).toEqual(["SELECT TRY_CAST(?::VARCHAR AS VARCHAR) IS NOT NULL", "SELECT TRY_CAST(?::VARCHAR AS INTEGER) IS NOT NULL"]);
+  });
+
+  test("reads BOOLEAN as 0/1, as the engine returns it with arrowLosslessConversion", async () => {
+    const problems = await validateOptionValues({ api_key: "k", region: "eu", max_rows: "abc" }, SPECS, {
+      scalarPrepared: async (sql, params) => (sql.includes("INTEGER") && params[0] === "abc" ? 0 : 1),
+    });
+    expect(problems.map((p) => [p.name, p.reason])).toEqual([["max_rows", "Not a valid INTEGER."]]);
+  });
+
+  test("no answer from the engine is not blamed on the value", async () => {
+    const problems = await validateOptionValues({ api_key: "k", max_rows: "abc" }, SPECS, {
+      scalarPrepared: async () => null,
+    });
+    expect(problems).toEqual([]);
   });
 
   test("a type the engine refuses is skipped, not blamed on the value", async () => {
