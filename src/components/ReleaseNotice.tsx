@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { X } from "lucide-react";
 import { hostedReleases } from "../lib/app-base";
 
 declare const __APP_VERSION__: string;
 
 export function ReleaseNotice() {
-  const [available, setAvailable] = useState(false);
+  const [availableVersion, setAvailableVersion] = useState<string | null>(null);
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   useEffect(() => {
     if (!hostedReleases) return;
@@ -19,7 +21,9 @@ export function ReleaseNotice() {
         const response = await fetch("/release.json", { cache: "no-store", signal: AbortSignal.timeout(10_000) });
         if (!response.ok) return;
         const release = await response.json();
-        if (!stopped && typeof release.version === "string") setAvailable(release.version !== __APP_VERSION__);
+        if (!stopped && typeof release.version === "string") {
+          setAvailableVersion(release.version !== __APP_VERSION__ ? release.version : null);
+        }
       } catch { /* Offline/update checks never interrupt the app. */ }
       finally { pending = false; }
     };
@@ -34,9 +38,22 @@ export function ReleaseNotice() {
       window.removeEventListener("pageshow", check);
     };
   }, []);
-  if (!available) return null;
+  if (!availableVersion || availableVersion === dismissedVersion) return null;
   return <aside aria-label="Cupola update" className="fixed bottom-4 right-4 z-[100] max-w-sm rounded-lg border bg-background p-4 text-sm text-foreground shadow-lg">
-    <p role="status">A new version of Cupola is available.</p>
+    <div className="flex items-start gap-3">
+      <p role="status">A new version of Cupola is available.</p>
+      <button
+        type="button"
+        aria-label="Dismiss update notification"
+        className="-m-1 ml-auto shrink-0 rounded p-1 text-muted-foreground hover:text-foreground"
+        onClick={() => {
+          setDismissedVersion(availableVersion);
+          setConfirming(false);
+        }}
+      >
+        <X className="h-4 w-4" aria-hidden="true" />
+      </button>
+    </div>
     {confirming ? <>
       <p className="mt-2 text-muted-foreground">Save your work and wait for running queries to finish. Reloading closes this session and clears in-memory results.</p>
       <div className="mt-3 flex gap-4">
