@@ -20,7 +20,6 @@ export function SavedDocumentsSidebar({
   activeId,
   libraryActive,
   error,
-  emptyMessage,
   documentKind,
   onAction,
 }: {
@@ -38,7 +37,6 @@ export function SavedDocumentsSidebar({
   activeId?: string | null;
   libraryActive?: boolean;
   error?: string;
-  emptyMessage: string;
   documentKind: 'notebook' | 'report';
   onAction: (id: string, action: SavedDocumentAction) => Promise<void>;
 }) {
@@ -52,11 +50,12 @@ export function SavedDocumentsSidebar({
   });
   const visible = items.filter((item) => item.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
   if (search && !visible.length && !error) return null;
-  const expanded = open || Boolean(search);
+  const hasItems = items.length > 0;
+  const expanded = hasItems && (open || Boolean(search));
   return (
     <nav aria-label={`Saved ${title.toLocaleLowerCase()}`} className="text-sm">
       <div className="flex items-center">
-        <button
+        {hasItems ? <button
           type="button"
           aria-expanded={expanded}
           aria-controls={itemsId}
@@ -78,7 +77,7 @@ export function SavedDocumentsSidebar({
             aria-hidden
             className={`h-4 w-4 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
           />
-        </button>
+        </button> : <span aria-hidden className="size-8 shrink-0" />}
         <a
           href={libraryHref}
           onClick={(event) => onNavigate(event)}
@@ -101,7 +100,7 @@ export function SavedDocumentsSidebar({
           </button>
         )}
       </div>
-      <div id={itemsId} hidden={!expanded} className="ml-4 border-l pb-1 pl-1">
+      {hasItems && <div id={itemsId} hidden={!expanded} className="ml-4 border-l pb-1 pl-1">
         {visible.map((item) => (
           <SavedDocumentRow
             key={item.id}
@@ -113,12 +112,11 @@ export function SavedDocumentsSidebar({
             onAction={onAction}
           />
         ))}
-        {error ? (
+        {error && (
           <p className="ml-5 px-2 py-1 text-xs text-destructive">{error}</p>
-        ) : (
-          !visible.length && <p className="ml-5 px-2 py-1 text-xs text-muted-foreground">{emptyMessage}</p>
         )}
-      </div>
+      </div>}
+      {!hasItems && error && <p className="ml-9 px-2 py-1 text-xs text-destructive">{error}</p>}
     </nav>
   );
 }

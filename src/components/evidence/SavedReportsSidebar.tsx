@@ -79,7 +79,6 @@ export function SavedReportsSidebar({ serviceUrl, workspaceId, search = '' }: { 
       }))}
       createLabel="New report"
       error={error ? 'Could not load saved reports.' : undefined}
-      emptyMessage="No reports saved on this device for this workspace."
     />
   );
 }

@@ -66,7 +66,7 @@ type TreeProps = React.HTMLAttributes<HTMLDivElement> & {
     renderItem?: (params: TreeRenderItemParams) => React.ReactNode
     /** Space below the last row for dropping onto the root. Off when something follows the tree. */
     trailingDropZone?: boolean
-    /** Ids expanded at first render (before any reveal of the selection). */
+    /** Initial expansion, applied once when defined (metadata may arrive after mount). */
     initialExpandedIds?: readonly string[]
     /** Called with the expanded ids after the reader expands or collapses a node. */
     onExpandedChange?: (expanded: ReadonlySet<string>) => void
@@ -291,6 +291,12 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeProps>(
         const [expanded, setExpanded] = React.useState<Set<string>>(() =>
             revealPath(new Set(initialExpandedIds ?? []), dataArray, initialSelectedItemId)
         )
+        const initialExpansionApplied = React.useRef(initialExpandedIds !== undefined)
+        React.useEffect(() => {
+            if (initialExpansionApplied.current || initialExpandedIds === undefined) return
+            initialExpansionApplied.current = true
+            setExpanded((prev) => new Set([...prev, ...initialExpandedIds]))
+        }, [initialExpandedIds])
         const onExpandedChangeRef = React.useRef(onExpandedChange)
         onExpandedChangeRef.current = onExpandedChange
 

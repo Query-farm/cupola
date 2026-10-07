@@ -42,6 +42,31 @@ function isExpanded(getByText: (t: string) => HTMLElement, label: string): boole
 }
 
 describe("TreeView expand/collapse", () => {
+  test("the initial schema is expanded and can stay collapsed after a metadata refresh", () => {
+    const { getByText, rerender } = render(
+      <TreeView data={data} initialSelectedItemId="schemaA" initialExpandedIds={["schemaA"]} />
+    );
+    expect(isExpanded(getByText, "Schema A")).toBe(true);
+    expect(isExpanded(getByText, "Schema B")).toBe(false);
+
+    fireEvent.click(getByText("Schema A"));
+    rerender(<TreeView data={[...data]} initialSelectedItemId="schemaA" initialExpandedIds={["schemaA"]} />);
+    expect(isExpanded(getByText, "Schema A")).toBe(false);
+  });
+
+  test("initial expansion can arrive with metadata after mount, without resetting manual expansion", () => {
+    const { getByText, rerender } = render(<TreeView data={data} />);
+    fireEvent.click(getByText("Schema B"));
+
+    rerender(<TreeView data={data} initialSelectedItemId="schemaA" initialExpandedIds={["schemaA"]} />);
+    expect(isExpanded(getByText, "Schema A")).toBe(true);
+    expect(isExpanded(getByText, "Schema B")).toBe(true);
+
+    fireEvent.click(getByText("Schema A"));
+    rerender(<TreeView data={[...data]} initialSelectedItemId="schemaA" initialExpandedIds={["schemaA"]} />);
+    expect(isExpanded(getByText, "Schema A")).toBe(false);
+  });
+
   test("clicking a collapsed node's chevron expands it and reveals its children", () => {
     const { queryByText, getByText } = render(<TreeView data={data} />);
     expect(isExpanded(getByText, "Schema A")).toBe(false);

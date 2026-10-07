@@ -1261,12 +1261,24 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     manage: () => setManagerOpen(true),
   };
 
-  // Expansion of the sidebar's catalog roots, remembered per workspace: with
-  // one catalog it is open, with several only the default.
+  // Options-dependent catalogs discover their schemas after the app mounts.
+  const initialCatalog = catalogs.find((c) => c.catalogName === data?.catalogName) ?? data;
+  const requestedInitialSchema = data?.catalogName === requestedDefaultAlias ? workspace?.defaultSchema : null;
+  const initialSchema = (initialCatalog?.schemas.some((s) => s.info.name === requestedInitialSchema) ? requestedInitialSchema : null)
+    || initialCatalog?.defaultSchema || initialCatalog?.schemas[0]?.info.name;
+  const initialCatalogReady = Boolean(initialSchema || inventory.ready);
+
+  // Restore catalog roots and reveal the default schema on a fresh visit.
+  // A schema/object link keeps its own path; expansion is seeded only once.
   const initialExpandedRef = useRef<string[] | null>(null);
-  if (!initialExpandedRef.current && storedWorkspace && data) {
-    const remembered = getOverlay(storedWorkspace.id).expanded;
-    initialExpandedRef.current = remembered ?? (defaultAlias ? [defaultAlias] : []);
+  if (!initialExpandedRef.current && data && initialCatalogReady) {
+    const remembered = storedWorkspace ? getOverlay(storedWorkspace.id).expanded : undefined;
+    const expanded = new Set(remembered ?? (defaultAlias ? [defaultAlias] : []));
+    if (initialSchema && !hashToSelection(window.location.hash)?.schema) {
+      expanded.add(data.catalogName);
+      expanded.add(`${data.catalogName}::${initialSchema}`);
+    }
+    initialExpandedRef.current = [...expanded];
   }
 
   // Chip colours for surfaces far from the workspace (the breadcrumb).
@@ -1318,10 +1330,12 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
 
   // Navigate: update selection, URL hash, and page title. Every selection
   // carries its catalog, so the hash names it (`#/catalog/<alias>/…`).
+  const initialSelectionDoneRef = useRef(false);
   const defaultAliasRef = useRef(defaultAlias);
   defaultAliasRef.current = defaultAlias;
   const navigate = useCallback(
     (sel: Selection | null, opts?: { replace?: boolean }) => {
+      initialSelectionDoneRef.current = true;
       const resolved = resolveSelection(sel, defaultAliasRef.current ?? "");
       setSelection(resolved);
       pushSelectionToUrl(resolved, opts);
@@ -1342,23 +1356,23 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // The initial selection, once the default catalog is known: the hash (a
   // legacy `#/schema/…` link resolves against the default catalog), else the
   // default catalog's default schema.
-  const initialSelectionDoneRef = useRef(false);
   useEffect(() => {
     if (!data || initialSelectionDoneRef.current) return;
-    initialSelectionDoneRef.current = true;
     const alias = data.catalogName;
     const hashSel = resolveSelection(hashToSelection(window.location.hash), alias);
-    const defaultSchema = data.defaultSchema || data.schemas[0]?.info.name;
-    const initialSel = hashSel ?? (defaultSchema
-      ? { type: "schema" as const, name: defaultSchema, schema: defaultSchema, catalog: alias }
+    if (!hashSel && !initialCatalogReady) return;
+    initialSelectionDoneRef.current = true;
+    const initialSel = hashSel ?? (initialSchema
+      ? { type: "schema" as const, name: initialSchema, schema: initialSchema, catalog: alias }
       : { type: "catalog" as const, name: alias, catalog: alias });
     setSelection(initialSel);
     updatePageTitle(initialSel, alias);
-  }, [data]);
+  }, [data, initialSchema, initialCatalogReady]);
 
   // Listen for browser back/forward
   useEffect(() => {
     function onPopState() {
+      initialSelectionDoneRef.current = true;
       const alias = defaultAliasRef.current ?? "";
       const sel = resolveSelection(hashToSelection(window.location.hash), alias);
       setSelection(sel);

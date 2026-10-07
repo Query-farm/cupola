@@ -69,7 +69,7 @@ interface Props {
   /** Reports and expansion are kept per workspace. */
   workspaceId?: string;
   catalogMeta?: ReadonlyMap<string, SidebarCatalogMeta>;
-  /** Catalog roots expanded at first render (aliases). */
+  /** Initially expanded tree ids, including the startup schema when present. */
   initialExpanded?: readonly string[];
   /** The reader expanded or collapsed catalog roots (aliases now expanded). */
   onExpandedChange?: (aliases: string[]) => void;
@@ -103,10 +103,13 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
   const [dismissedAttention, setDismissedAttention] = useState<string | null>(null);
   const [attentionOpen, setAttentionOpen] = useState(false);
   const catalogAliases = useMemo(() => new Set(catalogs.map((c) => c.catalogName)), [catalogs]);
-  const expandedRoots = useRef(new Set(initialExpanded));
+  const expandedRoots = useRef<Set<string> | null>(null);
+  if (!expandedRoots.current && initialExpanded !== undefined) {
+    expandedRoots.current = new Set(initialExpanded.filter((id) => !id.includes("::")));
+  }
   const handleExpanded = useCallback((ids: ReadonlySet<string>, local = false) => {
     // Both trees share the workspace's saved expansion, so toggling one keeps the other.
-    const roots = new Set([...expandedRoots.current].filter((id) => (id === 'memory') !== local));
+    const roots = new Set([...(expandedRoots.current ?? [])].filter((id) => (id === 'memory') !== local));
     for (const id of ids) if (catalogAliases.has(id) && (id === 'memory') === local) roots.add(id);
     expandedRoots.current = roots;
     onExpandedChange?.([...roots]);
