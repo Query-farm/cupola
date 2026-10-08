@@ -130,7 +130,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 }
 
 export function Inspector({ target, pinned, onTogglePin, onOpenFullPage, onInsertText, onInsertCallable, onInsertRelation }: InspectorProps) {
-  const { catalogs } = useCatalogInventory();
+  const catalogs = useCatalogInventory(s => s.catalogs);
   const callables = useMemo(() => callablesForSelection(catalogs, target), [catalogs, target]);
   const relation = useMemo(() => findRelation(catalogs, target), [catalogs, target]);
   const found = callables.length > 0 || relation;

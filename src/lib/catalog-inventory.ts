@@ -133,8 +133,10 @@ export class CatalogInventory {
     if (!this.active) return;
     clearTimeout(this.timer);
     this.timer = undefined;
-    if (this.pending) return this.pending;
+    // Mark dirty first, so a refresh asked for mid-read (Retry) runs another
+    // pass rather than just waiting for the one already in flight.
     this.dirty = true;
+    if (this.pending) return this.pending;
     this.pending = this.drain().finally(() => { this.pending = null; });
     return this.pending;
   };
@@ -155,8 +157,10 @@ export class CatalogInventory {
   }
   private async drain() {
     this.publish({ refreshing: true });
+    let failed = false;
     try {
       while (this.dirty) {
+        failed = false;
         this.dirty = false;
         const generation = this.generation;
         try {
@@ -169,30 +173,112 @@ export class CatalogInventory {
             try {
               catalog = await this.source.load(db);
             } catch (error) {
-              catalog = { ...(base ?? { catalogName: db.name, catalogComment: null, catalogTags: {}, defaultSchema: null, schemas: [] }), metadataError: error instanceof Error ? error.message : String(error) };
+              catalog = { catalogName: db.name, catalogComment: null, catalogTags: {}, defaultSchema: null, schemas: [], metadataError: error instanceof Error ? error.message : String(error) };
             }
-            return this.decorate({ ...catalog, catalogName: db.name, databaseType: db.type }, db.name, this.isBound(db));
+            // The real loader reports failures on the catalog rather than
+            // throwing. Either way, a failed read of the same attachment keeps
+            // the metadata it last had, marked with the error.
+            if (catalog.metadataError && base) catalog = { ...base, metadataError: catalog.metadataError };
+            const next = this.decorate({ ...catalog, catalogName: db.name, databaseType: db.type }, db.name, this.isBound(db));
+            const prior = previous.get(db.name);
+            return prior && sameCatalog(prior, next) ? prior : next;
           }));
           // A mutation during metadata loading makes the entire read stale.
           if (generation !== this.generation) continue;
           this.identities = new Map(databases.map(db => [db.name, db.id]));
           for (const db of databases) if (this.isBound(db)) this.bound.set(db.name, db.id);
-          this.publish({ catalogs: this.sortCatalogs(catalogs), ready: true, error: null, revision: this.state.revision + 1 });
+          const sorted = this.sortCatalogs(catalogs);
+          const unchanged = this.state.ready && sorted.length === this.state.catalogs.length && sorted.every((c, i) => c === this.state.catalogs[i]);
+          // Unchanged catalogs keep their objects, so a refresh that found
+          // nothing new re-renders nothing that reads them.
+          if (!unchanged) this.publish({ catalogs: sorted, ready: true, error: null, revision: this.state.revision + 1 });
+          else if (this.state.error !== null) this.publish({ error: null });
         } catch (error) {
           if (generation !== this.generation) continue;
+          failed = true;
           this.publish({ error: error instanceof Error ? error.message : String(error) });
         }
       }
     } finally {
+      // A failed read leaves the inventory dirty, so the next current() (a
+      // discovery tool) tries again instead of rethrowing a stale error.
+      if (failed) this.dirty = true;
       this.publish({ refreshing: false });
     }
   }
 }
 
+const fingerprints = new WeakMap<CatalogData, string>();
+function fingerprint(catalog: CatalogData): string {
+  let value = fingerprints.get(catalog);
+  if (value === undefined) {
+    value = JSON.stringify(catalog, (_key, v) => typeof v === 'bigint' ? `${v}n` : v);
+    fingerprints.set(catalog, value);
+  }
+  return value;
+}
+function sameCatalog(a: CatalogData, b: CatalogData): boolean {
+  return a === b || fingerprint(a) === fingerprint(b);
+}
+
 /** Inspect statement starts, not literals/comments or the shape of results.
- * Run after failures too: earlier statements in a SQL batch may have succeeded. */
+ * Run after failures too: earlier statements in a SQL batch may have succeeded.
+ *
+ * Session-temporary objects are not catalog changes: the inventory never lists
+ * `temp`, and Perspective's live views, report setup SQL and query pivots
+ * create them constantly. */
 export function changesCatalog(sql: string): boolean {
   return splitStatements(sql).some(({ text }) =>
-    /^(?:ATTACH|DETACH|CREATE|DROP|ALTER|COMMENT|LOAD|IMPORT|COMMIT|END|ROLLBACK|ABORT)$/.test(statementKeyword(text)),
+    /^(?:ATTACH|DETACH|CREATE|DROP|ALTER|COMMENT|LOAD|IMPORT|COMMIT|END|ROLLBACK|ABORT)$/.test(statementKeyword(text))
+      && !targetsTemp(text),
   );
+}
+
+/** `CREATE [OR REPLACE] TEMP|TEMPORARY …`, or a CREATE/DROP/ALTER whose
+ *  object is qualified with the `temp` catalog. */
+function targetsTemp(statement: string): boolean {
+  const words = codeWords(statement, 8);
+  const verb = words[0];
+  if (verb !== 'CREATE' && verb !== 'DROP' && verb !== 'ALTER') return false;
+  let i = 1;
+  if (verb === 'CREATE' && words[1] === 'OR' && words[2] === 'REPLACE') i = 3;
+  if (verb === 'CREATE' && (words[i] === 'TEMP' || words[i] === 'TEMPORARY')) return true;
+  // Object kind (TABLE, VIEW, MACRO, TABLE MACRO, SEQUENCE…), optional
+  // IF [NOT] EXISTS, then the name.
+  while (i < words.length && /^(?:TABLE|VIEW|MACRO|FUNCTION|SEQUENCE|TYPE|INDEX|UNIQUE|IF|NOT|EXISTS)$/.test(words[i])) i++;
+  return /^(?:"temp"|temp)\./i.test(words[i] ?? '');
+}
+
+/** The first `limit` words of a statement, comments skipped and keywords
+ *  upper-cased (a name such as `temp.t` is left as written). */
+function codeWords(statement: string, limit: number): string[] {
+  const words: string[] = [];
+  let rest = statement;
+  while (words.length < limit) {
+    rest = skipComments(rest);
+    const match = /^[^\s(]+/.exec(rest);
+    if (!match) break;
+    words.push(/^[A-Za-z]+$/.test(match[0]) ? match[0].toUpperCase() : match[0]);
+    rest = rest.slice(match[0].length);
+  }
+  return words;
+}
+
+function skipComments(sql: string): string {
+  let i = 0;
+  while (i < sql.length) {
+    if (/\s/.test(sql[i])) { i++; continue; }
+    if (sql.startsWith('--', i)) {
+      const end = sql.indexOf('\n', i + 2);
+      i = end < 0 ? sql.length : end + 1;
+    } else if (sql.startsWith('/*', i)) {
+      let depth = 0;
+      while (i < sql.length) {
+        if (sql.startsWith('/*', i)) { depth++; i += 2; }
+        else if (sql.startsWith('*/', i)) { depth--; i += 2; if (depth === 0) break; }
+        else i++;
+      }
+    } else break;
+  }
+  return sql.slice(i);
 }

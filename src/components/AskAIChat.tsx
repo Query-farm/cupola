@@ -9,7 +9,8 @@ import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import { deniedAIQueryToolResult, normalizeAIQueryMode, toolsForAIQueryMode } from "@/lib/ai/query-mode";
 import { toolInputLabel } from "@/lib/ai/tool-labels";
-import { memoryContextNote, memoryObjectNames } from "@/lib/ai/memory-context";
+import { selectionAfterDdl } from "@/lib/ddl-navigation";
+import { promptForTurn, promptKey, withNote, type FrozenPrompt } from "@/lib/ai/frozen-prompt";
 import { normalizeEffort } from "@/lib/ai/model-features";
 import { attachmentSummaries, queuedMessageContent, userMessageContent, type AiAttachment, type AttachmentSummary } from '@/lib/ai/attachments';
 import type { CatalogData } from "@/lib/service";
@@ -85,19 +86,8 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const agentMessages = useRef<MessageParam[]>([]);
-  // The system prompt is FROZEN for the life of a conversation. It renders
-  // ahead of every message, so rebuilding it per turn dropped the system cache
-  // and the whole accumulated history with it — and `ui.memoryCatalog` made
-  // that happen on exactly the turns where the agent had just succeeded at
-  // what the prompt told it to do (CREATE TABLE memory.main.…). Memory drift
-  // now rides in the user turn instead, after the cached prefix.
-  const systemPromptRef = useRef<string | null>(null);
-  // Rebuild key for the two inputs that legitimately invalidate everything
-  // anyway: a different catalog, and a query-mode change (which also swaps the
-  // tool set, and tools render at position 0). Deliberately NOT keyed on
-  // ui.memoryCatalog or getEngineInfo() — those are the churn this fixes.
-  const systemPromptKeyRef = useRef<{ catalog: CatalogData; key: string } | null>(null);
-  const memoryObjectsRef = useRef<string[]>([]);
+  // The system prompt is frozen for the life of a conversation (lib/ai/frozen-prompt).
+  const frozenPromptRef = useRef<FrozenPrompt | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Follow-ups typed while the agent works. The running turn takes them after its next tool
   // round; any it ends without taking are sent as the next turn once it finishes.
@@ -300,31 +290,15 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     const catalogs = catalogInventory.getSnapshot().catalogs;
     const queryMode = normalizeAIQueryMode(getSetting("aiQueryMode"));
 
-    // Build the system prompt once per conversation and reuse the exact bytes.
-    // Refresh the cached prompt when catalog metadata changes, including
-    // changes under an existing alias. Memory changes still travel in the
-    // user turn so temporary analysis tables do not invalidate the prefix.
-    const promptKey = `${queryMode}\u0000${JSON.stringify(catalogs.filter(c => c.catalogName !== "memory"))}`;
-    const cachedPrompt = systemPromptKeyRef.current;
-    if (!systemPromptRef.current || cachedPrompt?.catalog !== catalogData || cachedPrompt.key !== promptKey) {
-      systemPromptRef.current = buildSystemPrompt(catalogs[0] ?? catalogData, getEngineInfo(), catalogs.slice(1), true, queryMode);
-      systemPromptKeyRef.current = { catalog: catalogData, key: promptKey };
-      memoryObjectsRef.current = memoryObjectNames(ui.memoryCatalog);
-    }
-    const systemPrompt = systemPromptRef.current;
-
-    // Memory tables the agent created on an earlier turn are announced here —
-    // in the user turn, after the cached prefix — instead of by re-rendering
-    // the inventory at the front of the prompt.
-    const memoryObjectsNow = memoryObjectNames(ui.memoryCatalog);
-    const memoryNote = memoryContextNote(memoryObjectsRef.current, memoryObjectsNow);
-    if (memoryNote) {
+    // One prompt per conversation, reused byte for byte; memory tables the
+    // agent created ride in the user turn instead (lib/ai/frozen-prompt).
+    const turn = promptForTurn(frozenPromptRef.current, catalogs, promptKey(catalogs, queryMode, catalogData?.catalogName ?? ""),
+      () => buildSystemPrompt(catalogs[0] ?? catalogData, getEngineInfo(), catalogs.slice(1), true, queryMode));
+    frozenPromptRef.current = turn.prompt;
+    const systemPrompt = turn.prompt.system;
+    if (turn.memoryNote) {
       const pendingUserMessage = agentMessages.current[agentMessages.current.length - 1];
-      pendingUserMessage.content = [
-        { type: "text", text: memoryNote },
-        ...(typeof pendingUserMessage.content === 'string' ? [{ type: 'text' as const, text: pendingUserMessage.content }] : pendingUserMessage.content),
-      ];
-      memoryObjectsRef.current = memoryObjectsNow;
+      pendingUserMessage.content = withNote(pendingUserMessage.content, turn.memoryNote) as typeof pendingUserMessage.content;
     }
     const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
@@ -474,23 +448,10 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
                   executionTimeMs: out.elapsedMs, success: true, rowCount: 0, userQuestion,
                 });
                 pendingDisplayResult = { columns: [], rows: [], rowCount: 0, showing: 0, message: "Query executed successfully" };
-                await catalogInventory.current().catch(() => { /* Sidebar displays metadata errors; SQL already succeeded. */ });
-                const createMatch = input.sql.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
-                if (createMatch) {
-                  const schema = createMatch[1] || "main";
-                  const name = createMatch[2];
-                  ui.navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
-                }
-                const dropMatch = input.sql.match(/DROP\s+(?:TABLE|VIEW|SCHEMA)\s+(?:IF\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
-                if (dropMatch) {
-                  const isSchemaLevel = /DROP\s+SCHEMA/i.test(input.sql);
-                  if (isSchemaLevel) {
-                    ui.navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
-                  } else {
-                    const schema = dropMatch[1] || "main";
-                    ui.navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
-                  }
-                }
+                const before = catalogInventory.getSnapshot().catalogs;
+                const after = await catalogInventory.current().catch(() => null); // Sidebar displays metadata errors; SQL already succeeded.
+                const next = after && selectionAfterDdl(before, after);
+                if (next) ui.navigateToSelection?.(next);
                 return;
               }
               // out.kind === "table"
@@ -856,9 +817,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
     agentMessages.current = [];
     // Drop the frozen prompt so the next conversation picks up whatever the
     // catalog, engine and memory catalog look like now.
-    systemPromptRef.current = null;
-    systemPromptKeyRef.current = null;
-    memoryObjectsRef.current = [];
+    frozenPromptRef.current = null;
     conversationIdRef.current = crypto.randomUUID();
     // New conversation → the old result_ids are unreachable; free the rows.
     resultCacheRef.current.clear();
@@ -885,11 +844,11 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   // Pass hasChartTool=true so the preview shown to the user matches what
   // the agent actually sees at runtime (see line 128).
   // Preview of the prompt the agent is ACTUALLY using. Once a conversation has
-  // started that is the frozen copy in systemPromptRef — rebuilding it here
+  // started that is the frozen copy in frozenPromptRef — rebuilding it here
   // would show the user a prompt that differs from the one on the wire, which
   // is exactly the drift the freeze exists to prevent. Reading a ref during
   // render is safe because opening the dialog is itself a state change.
-  const systemPrompt = useMemo(() => systemPromptRef.current ?? (catalogData
+  const systemPrompt = useMemo(() => frozenPromptRef.current?.system ?? (catalogData
     ? buildSystemPrompt(catalogInventory.getSnapshot().catalogs[0] ?? catalogData, getEngineInfo(), catalogInventory.getSnapshot().catalogs.slice(1), true, normalizeAIQueryMode(settings.aiQueryMode))
     : null), [catalogData, attachedCatalogs, serviceUrl, settings.aiQueryMode, showSystemPrompt, messages.length]);
 

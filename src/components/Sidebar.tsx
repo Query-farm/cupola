@@ -16,6 +16,7 @@ import { callablesForSelection, type Callable } from "@/lib/callable";
 import { findRelation } from "@/lib/relation";
 import { CallableHoverCard, RelationHoverCard } from "@/components/inspector/HoverCards";
 import type { CatalogAttachState } from "@/lib/shell-bridge";
+import { useCatalogInventory } from "@/lib/use-catalog-inventory";
 
 /** One configured catalog's status, for its sidebar root. */
 export interface SidebarCatalogStatus {
@@ -55,7 +56,6 @@ interface Props {
   /** Where inserts land. In the editor, a modifier-click inserts instead of selecting. */
   insertTarget?: "shell" | "editor" | "notebook";
   onRefresh?: () => void;
-  refreshing?: boolean;
   /** Each configured catalog's attach status. Empty for a single catalog,
    *  whose failures are full-page. */
   catalogStatuses?: SidebarCatalogStatus[];
@@ -93,7 +93,7 @@ function statusMark(status: SidebarCatalogStatus | undefined, meta: SidebarCatal
   );
 }
 
-export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onInsertCallable, insertTarget = "shell", onRefresh, refreshing, catalogStatuses = [], onRetryCatalog, onSignInCatalog, onCatalogDetails, signInNotice, onDismissSignInNotice, workspaceId, catalogMeta, initialExpanded, onExpandedChange, emptyWorkspace, onAttachCatalog, onEnableCatalog }: Props) {
+export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onInsertCallable, insertTarget = "shell", onRefresh, catalogStatuses = [], onRetryCatalog, onSignInCatalog, onCatalogDetails, signInNotice, onDismissSignInNotice, workspaceId, catalogMeta, initialExpanded, onExpandedChange, emptyWorkspace, onAttachCatalog, onEnableCatalog }: Props) {
   const [search, setSearch] = useState("");
   // One dismissible strip for every catalog that needs attention. Dismissing
   // it hides it until that set changes.
@@ -227,19 +227,7 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
             className="pl-8 h-9 text-sm"
           />
         </div>
-        {onRefresh && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 shrink-0"
-            aria-label="Refresh catalogs"
-            title="Refresh catalogs"
-            disabled={refreshing}
-            onClick={onRefresh}
-          >
-            {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          </Button>
-        )}
+        {onRefresh && <RefreshCatalogsButton onRefresh={onRefresh} />}
       </div>
 
       {signInNotice && (signInNotice.signedIn || signInNotice.remaining.length > 0) && (
@@ -362,5 +350,24 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
         </div>
       </div>
     </div>
+  );
+}
+
+/** Its own component so that only this button re-renders when a refresh
+ *  starts and ends, not the sidebar tree. */
+function RefreshCatalogsButton({ onRefresh }: { onRefresh: () => void }) {
+  const refreshing = useCatalogInventory(s => s.refreshing);
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-9 w-9 shrink-0"
+      aria-label="Refresh catalogs"
+      title="Refresh catalogs"
+      disabled={refreshing}
+      onClick={onRefresh}
+    >
+      {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+    </Button>
   );
 }

@@ -17,7 +17,7 @@ import { VgiDuckDBHandler, perspectiveServeMode, runPerspectiveQuery, type Persp
 import { createQueryPivotSource, dropQueryPivotSource, type QueryPivotSource } from "@/lib/pivot-source";
 import { useSettings } from "@/lib/settings";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
-import { tableFromIPCWithDictionaries } from "@/lib/duckdb-query";
+import { quoteIdent, tableFromIPCWithDictionaries } from "@/lib/duckdb-query";
 import { openPopout } from "@/lib/editor/result-popout";
 import { coerceArrowBufferForPerspective } from "@/lib/perspective-extension-coerce";
 import { engine, terminal, ui, setBootPhase, setEngineLifecycleError } from "@/lib/shell-bridge";
@@ -132,7 +132,7 @@ function loadScripts(): Promise<void> {
 }
 
 export function DuckDBShell({ serviceUrl, catalogName, catalogs, defaultCatalog, activeTab, onTabChange, onAiBusyChange, onShellReady, catalogData, attachedCatalogs = [], selection, onAuthError, onAttachError, onOptionsEvaluated }: Props) {
-  const inventory = useCatalogInventory();
+  const allCatalogs = useCatalogInventory(s => s.catalogs);
   // The parent controls the active tab; expose a local alias so the existing
   // setActiveTab(...) call sites (bridge slots) keep working.
   const setActiveTab = onTabChange;
@@ -164,7 +164,6 @@ export function DuckDBShell({ serviceUrl, catalogName, catalogs, defaultCatalog,
 
   // Resolve the selected table for the Perspective tab.
   // Search the default catalog, every other attached catalog, and memory.
-  const allCatalogs = inventory.catalogs;
   function findTable(name?: string, schema?: string, catalog?: string): TableInfo | null {
     if (!name || !schema) return null;
     for (const cat of allCatalogs) {
@@ -178,7 +177,12 @@ export function DuckDBShell({ serviceUrl, catalogName, catalogs, defaultCatalog,
   // Every catalog source now exposes `schema_name` (VGI wire format; the
   // memory + attached builders match it). The active selection always has it
   // as `schema`, so prefer that and fall back for safety.
-  const selectedTableId = selectedTable ? `${selection?.catalog || catalogName}.${selection?.schema ?? selectedTable.schema_name}.${selectedTable.name}` : null;
+  const selectedTablePath = selectedTable ? [selection?.catalog || catalogName, selection?.schema ?? selectedTable.schema_name, selectedTable.name] : null;
+  // The id is the SQL the Perspective handler reads from, so each part is
+  // quoted: an alias like my-sqlite or a table like "Sales 2024" is not a
+  // bare identifier. The title stays readable.
+  const selectedTableId = selectedTablePath ? selectedTablePath.map(quoteIdent).join(".") : null;
+  const selectedTableTitle = selectedTablePath?.join(".") ?? null;
   const selectedTableIdRef = useRef(selectedTableId);
   selectedTableIdRef.current = selectedTableId;
   /** The sidebar table the Perspective tab last showed, or that an explicit
@@ -432,7 +436,7 @@ export function DuckDBShell({ serviceUrl, catalogName, catalogs, defaultCatalog,
       try {
         // The first time this table is shown; later visits restore its saved config.
         const defaultConfig = () => {
-          const restoreConfig: any = { table: tableId, title: tableId };
+          const restoreConfig: any = { table: tableId, title: selectedTableTitle ?? tableId };
           if (selectedTable) {
             const cols = getColumns(selectedTable);
             const pkIndices = new Set<number>((selectedTable.primary_key_constraints ?? []).flatMap((pk: number[]) => pk));

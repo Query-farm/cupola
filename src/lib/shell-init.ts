@@ -1,3 +1,4 @@
+import { selectionAfterDdl } from './ddl-navigation';
 import { catalogInventory } from "./catalog-store";
 /**
  * Imperative DuckDB shell initialization — terminal setup, ATTACH flow,
@@ -687,23 +688,10 @@ export function initShell(
             const elapsedStr = elapsed >= 1000 ? `${(elapsed / 1000).toFixed(1)}s` : `${Math.round(elapsed)}ms`;
             writeln(`OK (${elapsedStr})`, "32");
             // DDL — refresh sidebar and handle navigation
-            catalogInventory.current().then(() => {
-              const createMatch = trimmed.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
-              if (createMatch) {
-                const schema = createMatch[1] || "main";
-                const name = createMatch[2];
-                ui.navigateToSelection?.({ type: "table", name, schema, catalog: "memory" });
-              }
-              const dropMatch = trimmed.match(/DROP\s+(?:TABLE|VIEW|SCHEMA)\s+(?:IF\s+EXISTS\s+)?(?:memory\.)?(?:(\w+)\.)?(\w+)/i);
-              if (dropMatch) {
-                const isSchemaLevel = /DROP\s+SCHEMA/i.test(trimmed);
-                if (isSchemaLevel) {
-                  ui.navigateToSelection?.({ type: "catalog", name: "memory", catalog: "memory" });
-                } else {
-                  const schema = dropMatch[1] || "main";
-                  ui.navigateToSelection?.({ type: "schema", name: schema, schema, catalog: "memory" });
-                }
-              }
+            const before = catalogInventory.getSnapshot().catalogs;
+            catalogInventory.current().then((after) => {
+              const next = selectionAfterDdl(before, after);
+              if (next) ui.navigateToSelection?.(next);
             }).catch(() => { /* The inventory exposes discovery errors in the sidebar. */ });
 
           // EXPLAIN returns explain_key + explain_value — render as plain text

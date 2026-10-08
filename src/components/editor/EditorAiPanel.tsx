@@ -48,6 +48,7 @@ import { extractSql } from "@/lib/ai/extract-sql";
 import type { ResultState } from "./EditorResultsPane";
 import type { AgentUsage } from "@/lib/ai-usage";
 import { attachmentSummaries, queuedMessageContent, userMessageContent, type AiAttachment, type AttachmentSummary } from '@/lib/ai/attachments';
+import { promptForTurn, promptKey, withNote, type FrozenPrompt } from '@/lib/ai/frozen-prompt';
 
 const uid = () => crypto.randomUUID();
 
@@ -75,6 +76,8 @@ interface ConversationState {
   conversationId: string;
   /** read_query_results store, scoped to this document's conversation. */
   resultCache: QueryResultCache;
+  /** This conversation's system prompt, built once (lib/ai/frozen-prompt). */
+  prompt: FrozenPrompt | null;
   /** Last current-query snapshot sent as context, so we only resend on change. */
   sentContext: string | null;
   /** Follow-ups typed while the agent works. The running turn takes them after its next tool
@@ -115,7 +118,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
   const getConvo = useCallback((id: string): ConversationState => {
     let c = convos.current.get(id);
     if (!c) {
-      c = { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), resultCache: new QueryResultCache(), sentContext: null, queued: [] };
+      c = { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), resultCache: new QueryResultCache(), prompt: null, sentContext: null, queued: [] };
       convos.current.set(id, c);
     }
     return c;
@@ -226,7 +229,14 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
     const editorGuidance = queryMode === "semantic-only"
       ? "\n\nYou are an AI assistant embedded in a SQL editor. The user is editing SQL in the adjacent pane. Be concise. Semantic query results appear in the editor's results grid. Do not produce or execute raw SQL, and do not produce charts."
       : "\n\nYou are an AI assistant embedded in a SQL editor. The user is editing SQL in the adjacent pane. Be concise. When you run a query, its results appear in the editor's results grid. When you produce a final query for the user, run it with run_sql so it can be applied to the editor. Do not produce charts.";
-    const systemPrompt = buildSystemPrompt(catalogs[0] ?? catalogData, getEngineInfo(), catalogs.slice(1), false, queryMode) + editorGuidance;
+    const turn = promptForTurn(c.prompt, catalogs, promptKey(catalogs, queryMode),
+      () => buildSystemPrompt(catalogs[0] ?? catalogData, getEngineInfo(), catalogs.slice(1), false, queryMode) + editorGuidance);
+    c.prompt = turn.prompt;
+    const systemPrompt = turn.prompt.system;
+    if (turn.memoryNote) {
+      const userTurn = c.agentMessages[c.agentMessages.length - 1];
+      userTurn.content = withNote(userTurn.content, turn.memoryNote) as typeof userTurn.content;
+    }
     const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
     const maxRounds = getSetting("aiMaxToolRounds") || 20;
     const maxTokens = getSetting("aiMaxTokens") || DEFAULT_AI_MAX_TOKENS;
@@ -509,7 +519,7 @@ export function EditorAiPanel({ docId, catalogData, attachedCatalogs = [], servi
   const handleNew = useCallback(() => {
     inputRef.current?.clear();
     const c = convos.current.get(docId);
-    if (c) { c.abort?.abort(); convos.current.set(docId, { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), resultCache: new QueryResultCache(), sentContext: null, queued: [] }); bump(); }
+    if (c) { c.abort?.abort(); convos.current.set(docId, { messages: [], agentMessages: [], isLoading: false, abort: null, askUserResolve: null, conversationId: uid(), resultCache: new QueryResultCache(), prompt: null, sentContext: null, queued: [] }); bump(); }
   }, [docId]);
 
   const hasApiKey = !!getSetting("anthropicApiKey");

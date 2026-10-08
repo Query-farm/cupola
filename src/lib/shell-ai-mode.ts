@@ -27,6 +27,7 @@ import type { CatalogData } from "@/lib/service";
 import * as Sentry from "@sentry/astro";
 import { deniedAIQueryToolResult, normalizeAIQueryMode, toolsForAIQueryMode, type AIQueryMode } from "@/lib/ai/query-mode";
 import { userMessageContent, userRequestText, type AiAttachment } from './ai/attachments';
+import { promptForTurn, promptKey, withNote, type FrozenPrompt } from './ai/frozen-prompt';
 
 /** Persistent AI conversation state — survives across .ai mode entries. */
 export interface AIConversationState {
@@ -36,6 +37,9 @@ export interface AIConversationState {
   /** read_query_results store for this .ai session. Survives across `.ai`
    *  entries alongside `messages`, and is replaced by `.ai new`. */
   resultCache: QueryResultCache;
+  /** This conversation's system prompt, built once (lib/ai/frozen-prompt).
+   *  Cleared with `messages`. */
+  prompt?: FrozenPrompt | null;
 }
 
 /** Terminal I/O interface for AI mode. */
@@ -357,6 +361,7 @@ export async function runAIMode(
   // .ai new → fresh conversation
   if (trimmed === ".ai new") {
     conv.messages = [];
+    conv.prompt = null;
     conv.conversationId = `ai-${crypto.randomUUID()}`;
     conv.conversationName = "";
     // The old result_ids referred to the previous conversation and are
@@ -411,14 +416,14 @@ export async function runAIMode(
       }
       if (aiTrimmed === "/new") {
         terminal.clearAiAttachments?.();
-        conv.messages = []; conv.conversationId = `ai-${crypto.randomUUID()}`; conv.conversationName = ""; conv.resultCache.clear();
+        conv.messages = []; conv.prompt = null; conv.conversationId = `ai-${crypto.randomUUID()}`; conv.conversationName = ""; conv.resultCache.clear();
         if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
         term.writeln("Started new conversation.", "33");
         continue;
       }
       if (aiTrimmed === ".clear" || aiTrimmed === "/clear") {
         terminal.clearAiAttachments?.();
-        conv.messages = []; conv.conversationId = `ai-${crypto.randomUUID()}`; conv.conversationName = ""; conv.resultCache.clear();
+        conv.messages = []; conv.prompt = null; conv.conversationId = `ai-${crypto.randomUUID()}`; conv.conversationName = ""; conv.resultCache.clear();
         if (isAiTelemetryEnabled()) Sentry.setConversationId(conv.conversationId);
         term.writeln("Conversation cleared.", "33");
         continue;
@@ -455,7 +460,14 @@ export async function runAIMode(
 
       try {
         const catalogs = catalogInventory.getSnapshot().catalogs;
-        const systemPrompt = buildSystemPrompt(catalogs[0] ?? ops.catalogData, getEngineInfo(), catalogs.slice(1), false, queryMode);
+        const turn = promptForTurn(conv.prompt ?? null, catalogs, promptKey(catalogs, queryMode),
+          () => buildSystemPrompt(catalogs[0] ?? ops.catalogData, getEngineInfo(), catalogs.slice(1), false, queryMode));
+        conv.prompt = turn.prompt;
+        const systemPrompt = turn.prompt.system;
+        if (turn.memoryNote) {
+          const userTurn = conv.messages[conv.messages.length - 1];
+          userTurn.content = withNote(userTurn.content, turn.memoryNote) as typeof userTurn.content;
+        }
         await runAgentTurn({ apiKey, workspaceId }, model, conv.messages, systemPrompt, executeTool, agent.callbacks, abort.signal, maxToolRounds, toolsForAIQueryMode(TOOLS, queryMode), maxTokens, true, effort);
       } catch (err: any) {
         spinner.stop();

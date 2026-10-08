@@ -161,3 +161,84 @@ test('an attachment of the wrong type under a configured alias gets no context',
   await f.inventory.activate();
   expect(f.inventory.getSnapshot().catalogs[0]).toMatchObject({ sourceUrl: undefined, isDefault: false });
 });
+
+test('session-temporary DDL is not a catalog change', () => {
+  for (const sql of [
+    'CREATE TEMP VIEW v AS SELECT 1',
+    'create or replace temporary table t AS SELECT 1',
+    '/* x */ CREATE OR REPLACE TEMP VIEW temp.main."p_1" AS SELECT 1',
+    'DROP VIEW IF EXISTS temp.main."p_1"',
+    'DROP TABLE "temp".main.t',
+    'CREATE TEMP MACRO m(x) AS x',
+  ]) expect(changesCatalog(sql)).toBe(false);
+  for (const sql of [
+    'CREATE TABLE memory.main.t AS SELECT 1',
+    'CREATE OR REPLACE VIEW v AS SELECT 1',
+    'DROP TABLE t',
+    'DROP TABLE templates.t',
+    'CREATE TEMP VIEW v AS SELECT 1; CREATE TABLE t(i INT)',
+  ]) expect(changesCatalog(sql)).toBe(true);
+});
+
+test('a metadata error returned by the loader keeps the last good metadata', async () => {
+  let broken = false;
+  const loaded = (name: string): CatalogData => ({ ...catalog(name), schemas: [{ info: { name: 'main' } as any, tables: [], views: [], functions: [] } as any] });
+  const inventory = new CatalogInventory({
+    list: async () => [db('alpha')],
+    // The real loader (fetchAttachedCatalog) never throws: it returns what it
+    // could read plus metadataError.
+    load: async d => broken ? { ...catalog(d.name), schemas: [], metadataError: 'IO Error' } : loaded(d.name),
+  });
+  await inventory.activate();
+  broken = true;
+  await inventory.refresh();
+  const [alpha] = inventory.getSnapshot().catalogs;
+  expect(alpha.metadataError).toBe('IO Error');
+  expect(alpha.schemas.map(s => s.info.name)).toEqual(['main']);
+});
+
+test('a refresh that finds nothing new publishes no new catalogs', async () => {
+  const f = fixture();
+  await f.inventory.activate();
+  const before = f.inventory.getSnapshot();
+  await f.inventory.refresh();
+  const after = f.inventory.getSnapshot();
+  expect(after.catalogs).toBe(before.catalogs);
+  expect(after.revision).toBe(before.revision);
+  f.setDatabases([db('alpha'), db('beta'), db('memory', 'duckdb')]);
+  await f.inventory.refresh();
+  const changed = f.inventory.getSnapshot();
+  expect(changed.catalogs).not.toBe(before.catalogs);
+  // Catalogs that did not change keep their objects.
+  expect(changed.catalogs.find(c => c.catalogName === 'alpha')).toBe(before.catalogs.find(c => c.catalogName === 'alpha')!);
+});
+
+test('a failed listing is retried by the next current()', async () => {
+  const f = fixture();
+  await f.inventory.activate();
+  f.failList(true);
+  await f.inventory.refresh();
+  expect(f.inventory.getSnapshot().error).toBe('Engine unavailable');
+  f.failList(false);
+  // No refresh() or invalidate(): a discovery tool's lookup recovers on its own.
+  expect((await f.inventory.current()).map(c => c.catalogName)).toContain('alpha');
+  expect(f.inventory.getSnapshot().error).toBeNull();
+});
+
+test('a refresh asked for while one is in flight runs another pass', async () => {
+  let names = [db('old')];
+  let release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const inventory = new CatalogInventory({
+    list: async () => names,
+    load: async d => { if (d.name === 'old') await barrier; return catalog(d.name); },
+  });
+  const first = inventory.activate();
+  await Promise.resolve();
+  // Changed outside any observed query (a server-side change): only Retry knows.
+  names = [db('new')];
+  const retry = inventory.refresh();
+  release();
+  await Promise.all([first, retry]);
+  expect(inventory.getSnapshot().catalogs.map(c => c.catalogName)).toEqual(['new']);
+});

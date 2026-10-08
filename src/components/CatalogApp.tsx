@@ -490,9 +490,12 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // shared query links). `autoRun` is false for shared links: the recipient
   // gets the query staged and ready, but chooses when to execute it.
   const [pendingEditorSql, setPendingEditorSql] = useState<PendingEditorSql | null>(null);
-  const inventory = useCatalogInventory();
-  const catalogs = inventory.catalogs;
-  const attachedCatalogs = catalogs.filter(c => !c.isDefault && c.catalogName !== "memory");
+  // Field by field, not the whole snapshot: this is the app root, and the
+  // snapshot changes on every refresh even when the catalogs do not.
+  const catalogs = useCatalogInventory(s => s.catalogs);
+  const inventoryReady = useCatalogInventory(s => s.ready);
+  const inventoryError = useCatalogInventory(s => s.error);
+  const attachedCatalogs = useMemo(() => catalogs.filter(c => !c.isDefault && c.catalogName !== "memory"), [catalogs]);
   // Brand mark for the welcome / connecting / error screens. Defaults to the
   // Cupola mark and is replaced when a `?theme=` config supplies its own logo.
   //
@@ -1266,7 +1269,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   const requestedInitialSchema = data?.catalogName === requestedDefaultAlias ? workspace?.defaultSchema : null;
   const initialSchema = (initialCatalog?.schemas.some((s) => s.info.name === requestedInitialSchema) ? requestedInitialSchema : null)
     || initialCatalog?.defaultSchema || initialCatalog?.schemas[0]?.info.name;
-  const initialCatalogReady = Boolean(initialSchema || inventory.ready);
+  const initialCatalogReady = Boolean(initialSchema || inventoryReady);
 
   // Restore catalog roots and reveal the default schema on a fresh visit.
   // A schema/object link keeps its own path; expansion is seeded only once.
@@ -1684,7 +1687,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                 notebooksActive={activeTab === "notebooks"}
                 catalogs={catalogs}
                 defaultCatalogName={defaultAlias ?? data.catalogName}
-                inventoryError={inventory.error}
+                inventoryError={inventoryError}
                 selection={selection}
                 onSelect={(sel) => {
                   if (activeTab === "editor") {
@@ -1726,7 +1729,6 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                     await catalogInventory.refresh();
                   })();
                 }}
-                refreshing={inventory.refreshing}
                 catalogStatuses={sidebarStatuses}
                 onRetryCatalog={(id) => void retry(id)}
                 onSignInCatalog={signIn}
@@ -2709,7 +2711,31 @@ function ContentPanel({
   const catalog = catalogs.find(c => c.catalogName === selectedName);
   if (!catalog) return <div className="p-6 text-sm text-muted-foreground">Catalog “{selectedName}” is not attached. Select a catalog from the sidebar.</div>;
   const onCatalogNavigate = (next: Selection) => onNavigate({ ...next, catalog: next.catalog ?? catalog.catalogName });
-  if (catalog.metadataError) return <div role="alert" className="p-6 text-sm"><p>Could not load all metadata for {catalog.catalogName}.</p><p className="text-muted-foreground mt-2">{catalog.metadataError}</p><Button className="mt-3" variant="outline" onClick={() => void catalogInventory.refresh()}>Retry catalog metadata</Button></div>;
+  // Metadata that failed to refresh keeps what it last had (catalog-inventory):
+  // show that with a banner. Only a catalog with nothing to show is all error.
+  if (catalog.metadataError && catalog.schemas.length === 0) return <div role="alert" className="p-6 text-sm"><p>Could not load all metadata for {catalog.catalogName}.</p><p className="text-muted-foreground mt-2">{catalog.metadataError}</p><Button className="mt-3" variant="outline" onClick={() => void catalogInventory.refresh()}>Retry catalog metadata</Button></div>;
+  const body = <ContentPanelBody catalog={catalog} selection={selection} onNavigate={onCatalogNavigate} onOpenShell={onOpenShell} onPivotTable={onPivotTable} />;
+  if (!catalog.metadataError) return body;
+  return (
+    <>
+      <div role="alert" className="flex flex-wrap items-center gap-x-3 border-b border-border bg-destructive/5 px-6 py-2 text-xs">
+        <span>Metadata for {catalog.catalogName} could not be refreshed; showing what was last loaded. <span className="text-muted-foreground">{catalog.metadataError}</span></span>
+        <button className="underline" onClick={() => void catalogInventory.refresh()}>Retry</button>
+      </div>
+      {body}
+    </>
+  );
+}
+
+function ContentPanelBody({
+  catalog, selection, onNavigate: onCatalogNavigate, onOpenShell, onPivotTable,
+}: {
+  catalog: CatalogData;
+  selection: Selection | null;
+  onNavigate: (selection: Selection) => void;
+  onOpenShell?: () => void;
+  onPivotTable?: () => void;
+}) {
   const overview = catalog.catalogName === "memory"
     ? <MemoryCatalogOverview catalog={catalog} onNavigate={onCatalogNavigate} />
     : <CatalogOverview catalog={catalog} serviceUrl={catalog.sourceUrl} attachOptions={connectBoxOptions(catalog)} attachSpecs={catalog.attachSpecs} onNavigate={onCatalogNavigate} />;
