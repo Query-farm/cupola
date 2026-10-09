@@ -20,7 +20,9 @@ import {
   getEngineInfo,
   hasExtension,
   resetEngineInfo,
+  restrictShellExtensions,
 } from "../../src/lib/duckdb-engine";
+import { BASE_TEST_EXTENSIONS } from "../extensions";
 
 beforeEach(() => resetEngineInfo());
 
@@ -124,5 +126,22 @@ describe("engine facts", () => {
     // The earlier snapshot must not gain the later extension.
     expect(snapshot.loadedExtensions).toEqual(["icu"]);
     expect(getEngineInfo().loadedExtensions).toEqual(["icu", "spatial"]);
+  });
+});
+
+describe("restrictShellExtensions (test-only boot selection)", () => {
+  test("null keeps every startup extension", () => {
+    expect(restrictShellExtensions(SHELL_EXTENSIONS, null)).toBe(SHELL_EXTENSIONS);
+  });
+  test("keeps the named ones in startup order, plus every required one", () => {
+    const names = restrictShellExtensions(SHELL_EXTENSIONS, ["spatial", "icu", "json"]).map((e) => e.name);
+    expect(names).toEqual(["icu", "json", "vgi", "spatial"]);
+  });
+  test("an empty selection still loads the required vgi extension", () => {
+    expect(restrictShellExtensions(SHELL_EXTENSIONS, []).map((e) => e.name)).toEqual(["vgi"]);
+  });
+  test("the e2e base set names only real startup extensions", () => {
+    const known = new Set(SHELL_EXTENSIONS.map((e) => e.name));
+    for (const name of BASE_TEST_EXTENSIONS) expect(known.has(name)).toBe(true);
   });
 });

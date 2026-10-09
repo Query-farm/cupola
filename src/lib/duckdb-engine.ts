@@ -77,6 +77,43 @@ export function shellExtensionsForVgiVersion(
   );
 }
 
+/**
+ * Test-only: limit startup to the named extensions. Required ones always
+ * load. `null` keeps the full list.
+ *
+ * Loading all of them costs ~3s of every boot (each is compiled and loaded
+ * in turn), and the e2e suite boots a fresh engine per test, while most
+ * tests need only icu, json and httpfs. They cannot be loaded later on
+ * demand by autoload instead: an autoload starts mid-statement, possibly on a
+ * worker thread, and the extension's fetch has to run on the main thread, so
+ * the engine hangs (still reproducible on haybarn 1.5.5-rc8, Oct 2026). An
+ * explicit INSTALL + LOAD after boot is safe, which is how a test that needs
+ * one can still get it.
+ */
+export function restrictShellExtensions(
+  extensions: readonly DuckDBExtension[],
+  only: readonly string[] | null,
+): readonly DuckDBExtension[] {
+  if (!only) return extensions;
+  const wanted = new Set(only);
+  return extensions.filter((extension) => extension.required || wanted.has(extension.name));
+}
+
+/** localStorage key the e2e suite seeds (`tests/extensions.ts`). Honoured by
+ *  the dev server only: a published build always loads every extension. */
+export const TEST_EXTENSIONS_KEY = "cupola.test.extensions";
+
+/** The extension names a test asked for, or null. */
+export function testExtensionSelection(): string[] | null {
+  if (!import.meta.env.DEV) return null;
+  try {
+    const value = localStorage.getItem(TEST_EXTENSIONS_KEY);
+    return value === null ? null : value.split(",").map((name) => name.trim()).filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
 /** Build the explicit INSTALL statement used during shell startup. */
 export function extensionInstallSql(extension: DuckDBExtension): string {
   const fromClause = extension.source ? ` FROM ${extension.source}` : "";

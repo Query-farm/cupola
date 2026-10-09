@@ -22,7 +22,7 @@ import { attachInputHandlers, type CompletionItem } from "./shell-input";
 import { engine, terminal, ui, notifyQueryChange, recordQuery, setBootPhase, setEngineLifecycleError } from "./shell-bridge";
 import { quoteLiteral } from "./duckdb-query";
 import { attachAll, type AttachCallbacks, type DefaultRequest, type ShellCatalog } from "./attach/attach-catalog";
-import { extensionInstallSql, recordExtensionLoaded, shellExtensionsForVgiVersion } from "./duckdb-engine";
+import { extensionInstallSql, recordExtensionLoaded, restrictShellExtensions, shellExtensionsForVgiVersion, testExtensionSelection } from "./duckdb-engine";
 import { QueryResultCache } from "./query-results";
 import { ensureDuckDB } from "./duckdb-worker-boot";
 import { getTerminalTheme } from "./theme";
@@ -352,7 +352,9 @@ export function initShell(
       // INSTALL + LOAD pair so no user query triggers a sync autoload.
       // The list lives in ./duckdb-engine because the AI system prompt has to
       // describe it, and a second hardcoded copy there drifted from this one.
-      for (const ext of shellExtensionsForVgiVersion(vgiVersion.value)) {
+      const selection = testExtensionSelection();
+      if (selection) console.info(`[shell] test extension selection: ${selection.join(", ")}`);
+      for (const ext of restrictShellExtensions(shellExtensionsForVgiVersion(vgiVersion.value), selection)) {
         writeln(`Loading ${ext.name} extension...`, "33");
         setBootPhase(`Loading ${ext.name} extension`, null, "attaching");
         const install = await engine.query!(extensionInstallSql(ext));

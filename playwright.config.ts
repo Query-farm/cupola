@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { withExtensions } from "./tests/extensions";
 
 const pkg = JSON.parse(
   readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
@@ -43,6 +44,10 @@ const config = {
     // diagnosed instead of guessed at; locally they cost time for nothing.
     trace: process.env.CI ? "retain-on-failure" : "off",
     navigationTimeout: 20_000,
+    // Boot with only the base extensions (tests/extensions.ts): loading all
+    // nine was ~3s of every test's ~5s boot. A spec that needs more overrides
+    // this with test.use({ storageState: withExtensions(...) }).
+    storageState: withExtensions(),
   },
   webServer: {
     command: `bun run dev -- --port ${DEV_PORT} --strictPort`,

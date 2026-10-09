@@ -58,7 +58,15 @@ async function waitForShell(page: Page, timeoutMs = 30_000): Promise<void> {
       () => {
         const b = (window as any).__bridge;
         if (!b?.shellTerm || typeof b.runQuery !== "function") return false;
-        try { b.runQuery(".help"); } catch { return false; }
+        // Resend only once the last .help has had time to answer. Sending one
+        // per poll left a second .help on the prompt line once boot got fast
+        // enough, and the next command was appended to it
+        // (`.help.test_formats`, a syntax error, then a 150s wait).
+        const w = window as any;
+        if (!w.__helpSentAt || Date.now() - w.__helpSentAt > 3000) {
+          try { b.runQuery(".help"); } catch { return false; }
+          w.__helpSentAt = Date.now();
+        }
         const buf = b.shellTerm.buffer.active;
         for (let i = 0; i < buf.length; i++) {
           if (/\.maxrows|\.perspective/.test(buf.getLine(i)?.translateToString(true) ?? "")) return true;

@@ -6,6 +6,10 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 import { gotoApp, openEditor, waitForShellBridge, typeInEditor, T_NORMAL, T_SHELL_BOOT } from "./helpers";
+import { withExtensions } from "./extensions";
+
+// Boots with the base extensions plus the one this spec exercises (tests/extensions.ts).
+test.use({ storageState: withExtensions("autocomplete") });
 
 async function reveal(page: Page, name: string) {
   await page.getByLabel("Filter catalog").fill(name);

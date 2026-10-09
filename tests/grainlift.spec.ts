@@ -1,5 +1,9 @@
 import { test, expect, type Page } from '@playwright/test';
 import { gotoApp, waitForShellBridge, shellQuery, APP_ORIGIN, T_SHELL_BOOT } from './helpers';
+import { withExtensions } from './extensions';
+
+// Boots with the base extensions plus the one this spec exercises (tests/extensions.ts).
+test.use({ storageState: withExtensions('grainlift') });
 
 // Grainlift databases (https://github.com/Query-farm/duckdb-grainlift) attach
 // through the `grainlift` community extension loaded at shell boot, and must
