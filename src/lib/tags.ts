@@ -9,7 +9,7 @@
  * strings and decoded *defensively* — a malformed value yields an empty result,
  * never a throw.
  */
-import contract from "./vgi-tag-contract.json";
+import contract from "./vgi-tag-contract.json" with { type: "json" };
 
 type ContractEntry = { symbol: string; key: string; canonical?: string };
 const CONTRACT_ENTRIES: ContractEntry[] = [

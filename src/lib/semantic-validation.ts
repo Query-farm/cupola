@@ -1,4 +1,4 @@
-import schemas from "./vgi-semantic-schemas.json";
+import schemas from "./vgi-semantic-schemas.json" with { type: "json" };
 
 export type SemanticSchemaName = "catalog" | "entity" | "member" | "members" | "relationships" | "query";
 

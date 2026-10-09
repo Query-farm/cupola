@@ -14,5 +14,5 @@ export interface OpenReportDetail { serviceUrl: string; workspaceId?: string; id
 export function reportHref(serviceUrl: string, id?: string, create = false): string {
   const base = `${appBase.replace(/\/$/, '')}/reports`;
   const localWs = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('local_ws');
-  return `${base}${id || create ? '' : '/saved'}?${new URLSearchParams({ ...(localWs ? { local_ws: localWs } : { service: serviceUrl }), ...(create ? { evidence_new: '1' } : id ? { evidence_report: id } : {}) })}`;
+  return `${base}${id || create ? '' : '/saved'}?${new URLSearchParams({ ...(localWs ? { local_ws: localWs } : { service: serviceUrl }), report_service: 'local', ...(create ? { evidence_new: '1' } : id ? { evidence_report: id } : {}) })}`;
 }

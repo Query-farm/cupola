@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { EvidenceEditorNavigation } from './EvidenceEditorNavigation';
 import { EvidenceCodeEditor, type EvidenceCodeHandle } from './EvidenceCodeEditor';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
@@ -32,7 +32,7 @@ const snippets: Record<string, string> = {
   'Two columns': '\n\n{% row %}\n\nAdd components here.\n\n{% /row %}\n',
 };
 
-export function EvidenceEditor({ history, onProposal, performance, parameterChoices, fullScreen, onToggleFullScreen, report, onChange, issues, stale, issuesStale, editorOnly, onTogglePreview, onApplyPreview, previewBusy, dataContext, onRefreshData, reportTheme, catalogs, semanticStates }: { history?: { history: ReportHistory; dirty: boolean; onRestore: (revision: Revision) => void; onDelete: (revision: Revision) => void }; onProposal?: (event: ProposalEvent) => void; performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[]; runnable: (sql: string) => string }; parameterChoices?: ParameterChoicesContext; fullScreen: boolean; onToggleFullScreen: () => void; catalogs: readonly CatalogData[]; semanticStates: SemanticDatasetState[]; reportTheme: ReportTheme; dataContext: EvidenceDataContext | null; onRefreshData: () => Promise<void>; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; issuesStale: boolean; editorOnly: boolean; onTogglePreview: () => void; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
+export function EvidenceEditor({ historyContent, history, onProposal, performance, parameterChoices, fullScreen, onToggleFullScreen, report, onChange, issues, stale, issuesStale, editorOnly, onTogglePreview, onApplyPreview, previewBusy, dataContext, onRefreshData, reportTheme, catalogs, semanticStates }: { historyContent?: ReactNode; history?: { history: ReportHistory; dirty: boolean; onRestore: (revision: Revision) => void; onDelete: (revision: Revision) => void }; onProposal?: (event: ProposalEvent) => void; performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[]; runnable: (sql: string) => string }; parameterChoices?: ParameterChoicesContext; fullScreen: boolean; onToggleFullScreen: () => void; catalogs: readonly CatalogData[]; semanticStates: SemanticDatasetState[]; reportTheme: ReportTheme; dataContext: EvidenceDataContext | null; onRefreshData: () => Promise<void>; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; issuesStale: boolean; editorOnly: boolean; onTogglePreview: () => void; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
   const [tab, setTab] = useState('agent');
   const [agentOpened, setAgentOpened] = useState(true);
   const source = useRef<EvidenceCodeHandle>(null);
@@ -104,7 +104,7 @@ export function EvidenceEditor({ history, onProposal, performance, parameterChoi
       <TabsContent value="appearance" className="min-h-0 overflow-auto px-4 pb-4"><EvidenceAppearance value={report.appearance} theme={reportTheme} onChange={appearance => onChange({ ...report, appearance })} /></TabsContent>
       <TabsContent value="parameters" className="min-h-0 overflow-auto px-4 pb-4"><EvidenceParameters report={report} onChange={onChange} choices={parameterChoices} /></TabsContent>
       <TabsContent value="performance" className="min-h-0 overflow-auto px-4 pb-4"><EvidencePerformance profile={performance?.profile ?? null} namedQueries={performance?.namedQueries ?? []} runnable={performance?.runnable} /></TabsContent>
-      <TabsContent value="history" className="min-h-0 overflow-auto px-4 pb-4">{history ? <EvidenceHistory history={history.history} dirty={history.dirty} onRestore={history.onRestore} onDelete={history.onDelete} /> : null}</TabsContent>
+      <TabsContent value="history" className="min-h-0 overflow-auto px-4 pb-4">{historyContent ?? (history ? <EvidenceHistory history={history.history} dirty={history.dirty} onRestore={history.onRestore} onDelete={history.onDelete} /> : null)}</TabsContent>
     </Tabs>
     <details role="region" open={errors.length > 0 || undefined} aria-label="Report problems" className="max-h-48 shrink-0 overflow-auto border-t bg-background p-3 text-xs">
       <summary className="cursor-pointer font-semibold">Problems · {errors.length} errors{warnings.length > 0 ? ` · ${warnings.length} warnings` : ''}{issuesStale ? ' · previous preview' : ''}</summary>

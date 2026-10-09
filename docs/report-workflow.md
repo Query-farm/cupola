@@ -1,6 +1,8 @@
 # Report authoring and sharing
 
-Reports are saved automatically in the current browser, separately for each data connection. The header says **Saved in this browser** when the definition is stored; this does not mean the preview has been refreshed. Reports do not sync across browsers or devices.
+Choose a destination in **Report library**. Connected workers advertising `vgi.reports.v1` provide shared folders, immutable revisions, publication, ownership and portable links; see [Worker report libraries](reporting-protocols.md). The header says **Saved to worker** only after the worker acknowledges a revision. Preview remains explicit.
+
+The **On this device** library keeps reports in the current browser, separately for each data connection. Its header says **Saved in this browser** when the definition is stored; this does not mean the preview has been refreshed. These local reports do not sync across browsers or devices. The local authoring and sharing workflow is described below.
 
 The sidebar lists browser-saved reports for the current workspace under **On this device → Reports**. Click **Reports** to open the library, its arrow to expand or collapse the list, or **+** to create a local report. Right-click a saved report or use its **⋯** button to rename, duplicate, export its editable report file, or delete it. Shift+F10 opens the same menu from a focused report link. Deletion requires confirmation; stop a refresh or wait for PDF export to finish before deleting the open report. Actions on an open report use its current edits, and report files retain revision history.
 
