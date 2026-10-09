@@ -1,57 +1,137 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Button } from '../ui/button';
 import { EvidenceWorkspace } from '../evidence/EvidenceWorkspace';
 import { ReportLibrary } from './ReportLibrary';
+import { ReportOverview } from './ReportOverview';
+import { TransferDialog } from './TransferDialog';
 import { ReportClient, reportError, serviceLocation } from '../../lib/reporting/client';
 import { getWorkspace } from '../../lib/workspace/store';
-import { OPEN_REPORT_EVENT, type OpenReportDetail } from '../../lib/evidence/open-report';
+import { OPEN_REPORT_EVENT, reportHref, type OpenReportDetail } from '../../lib/evidence/open-report';
+import { saveEvidenceReport, type EvidenceReport } from '../../lib/evidence/reports';
+import { newEvidenceReport } from '../../lib/evidence/templates';
+import { placeLocalReport } from '../../lib/reporting/local-library';
+import { locationLabel, type ReportLocation } from '../../lib/reporting/locations';
+import { forgetTransfer, resumeTransfer, transferJobs, type TransferJob, type TransferSource } from '../../lib/reporting/transfers';
 import type { CatalogData } from '../../lib/service';
+import { hasReportPromotion } from '../../lib/reports/events';
+import { appBase } from '../../lib/app-base';
 
-export interface ReportingWorkspaceProps { catalogName: string; serviceUrl: string; workspaceId?: string; catalogs: readonly CatalogData[]; defaultToLibrary?: boolean }
+export interface ReportingWorkspaceProps {
+  catalogName: string; serviceUrl: string; workspaceId?: string; catalogs: readonly CatalogData[]; defaultToLibrary?: boolean;
+  onCreateLocal?: () => void; onTransferReport?: (source: TransferSource, move: boolean) => void;
+}
+const route = () => {
+  const search = new URLSearchParams(location.search);
+  if (hasReportPromotion()) return { selected: 'local', localEditor: true, localFolder: null };
+  return { selected: search.get('report_service') ?? (search.has('evidence_report') || search.has('evidence_new') ? 'local' : 'all'),
+    localEditor: search.has('evidence_report') || search.has('evidence_new'), localFolder: search.get('local_report_folder') };
+};
 export function ReportingWorkspace(props: ReportingWorkspaceProps) {
-  const [selected, setSelected] = useState(() => new URLSearchParams(location.search).get('report_service') ?? 'local');
-  const [services, setServices] = useState<Array<{ url: string; supported: boolean; error?: string }>>([]);
-  const urls = useMemo(() => [...new Set([props.serviceUrl, ...props.catalogs.map(c => c.sourceUrl), ...(props.workspaceId ? getWorkspace(props.workspaceId)?.catalogs.map(c => c.url) ?? [] : []), selected === 'local' ? undefined : selected].filter((u): u is string => Boolean(u)))].flatMap(url => { try { return [serviceLocation(url)]; } catch { return []; } }), [props.serviceUrl, props.workspaceId, props.catalogs, selected]);
+  const [view, setView] = useState(() => {
+    const current = route();
+    // The original /evidence preview link still opens its example directly.
+    return props.defaultToLibrary === false && current.selected === 'all' && /\/evidence\/?$/.test(location.pathname)
+      ? { ...current, selected: 'local', localEditor: true } : current;
+  });
+  const [services, setServices] = useState<ReportLocation[]>([]), [generation, setGeneration] = useState(0);
+  const [transfer, setTransfer] = useState<{ source: TransferSource; move: boolean } | null>(null);
+  const [jobs, setJobs] = useState<TransferJob[]>([]), [notice, setNotice] = useState(''), [error, setError] = useState(''), [retrying, setRetrying] = useState(false);
+  const [editorKey, setEditorKey] = useState(0);
+  const scope = props.workspaceId ?? props.serviceUrl;
+  useEffect(() => {
+    const url = new URL(location.href);
+    if (!/\/(?:reports|evidence)(?:\/|$)/.test(url.pathname)) {
+      url.pathname = `${appBase.replace(/\/$/, '')}/reports`;
+      history.replaceState({}, '', url);
+    }
+  }, []);
+  const urls = useMemo(() => [...new Set([props.serviceUrl, ...props.catalogs.map(c => c.sourceUrl), ...(props.workspaceId ? getWorkspace(props.workspaceId)?.catalogs.map(c => c.url) ?? [] : []), ...(!['local', 'all'].includes(view.selected) ? [view.selected] : [])]
+    .flatMap(url => { try { return url ? [serviceLocation(url)] : []; } catch { return []; } }))].sort(), [props.serviceUrl, props.workspaceId, props.catalogs, view.selected]);
+  const urlKey = JSON.stringify(urls);
   useEffect(() => {
     const abort = new AbortController();
-    void Promise.all(urls.map(async url => {
-      try { return { url, supported: await new ReportClient(url).discover(abort.signal) }; }
-      catch (error) { return { url, supported: false, error: reportError(error) }; }
-    })).then(found => {
-      if (abort.signal.aborted) return;
-      setServices(found);
-      const search = new URLSearchParams(location.search);
-      if (!search.has('report_service') && !search.has('evidence_report') && !search.has('evidence_new')) {
-        const first = found.find(s => s.supported);
-        if (first) choose(first.url, true);
-      }
-    });
+    setServices(urls.map(url => ({ url, name: new URL(url).host, loading: true })));
+    for (const url of urls) {
+      const client = new ReportClient(url);
+      void client.discover(abort.signal).then(async supported => {
+        if (!supported) { if (!abort.signal.aborted) setServices(old => old.filter(s => s.url !== url)); return; }
+        const info = await client.call('get_report_service_info', {}, abort.signal);
+        if (info.protocol_version.split('.')[0] !== '1') throw new Error(`Unsupported reporting version: ${info.protocol_version}`);
+        if (!abort.signal.aborted) setServices(old => old.map(s => s.url === url ? { url, name: info.display_name.trim() || 'Report storage', info } : s));
+      }).catch(e => { if (!abort.signal.aborted) setServices(old => old.map(s => s.url === url ? { ...s, loading: false, error: reportError(e) } : s)); });
+    }
     return () => abort.abort();
-  }, [urls]);
+  }, [urlKey, generation]);
+  function refresh() { setGeneration(n => n + 1); try { setJobs(transferJobs(scope)); } catch (e) { setError(reportError(e)); } }
+  useEffect(() => { try { setJobs(transferJobs(scope)); } catch (e) { setError(reportError(e)); } }, [scope, generation]);
   useEffect(() => {
-    const pop = () => setSelected(new URLSearchParams(location.search).get('report_service') ?? 'local');
+    const pop = () => { setView(route()); setEditorKey(n => n + 1); };
     const local = (event: Event) => {
       const detail = (event as CustomEvent<OpenReportDetail>).detail;
-      if ((detail.workspaceId ?? detail.serviceUrl) !== (props.workspaceId ?? props.serviceUrl)) return;
-      history.replaceState({}, '', detail.href); setSelected('local');
+      if ((detail.workspaceId ?? detail.serviceUrl) !== scope) return;
+      const next = new URL(detail.href, location.href);
+      if (location.pathname + location.search === next.pathname + next.search) return;
+      history.pushState({}, '', next); pop();
     };
     window.addEventListener('popstate', pop); window.addEventListener(OPEN_REPORT_EVENT, local);
     return () => { window.removeEventListener('popstate', pop); window.removeEventListener(OPEN_REPORT_EVENT, local); };
-  }, [props.workspaceId, props.serviceUrl]);
-  function choose(value: string, replace = false) {
+  }, [scope]);
+  useEffect(() => {
+    const promote = () => {
+      if (view.selected === 'local' && view.localEditor) return; // The mounted editor consumes it.
+      history.pushState({}, '', reportHref(props.serviceUrl, undefined, true));
+      setView(route()); setEditorKey(n => n + 1);
+    };
+    window.addEventListener('cupola:promote-report', promote);
+    return () => window.removeEventListener('cupola:promote-report', promote);
+  }, [view.selected, view.localEditor, props.serviceUrl]);
+  function choose(value: string, reportId?: string, folderId?: string | null) {
     const url = new URL(location.href);
-    if (value === 'local') url.searchParams.set('report_service', 'local'); else url.searchParams.set('report_service', value);
-    for (const key of ['report_id', 'report_revision', 'report_folder']) url.searchParams.delete(key);
-    if (value !== 'local') for (const key of ['evidence_report', 'evidence_new']) url.searchParams.delete(key);
-    history[replace ? 'replaceState' : 'pushState']({}, '', url); setSelected(value);
+    url.pathname = `${appBase.replace(/\/$/, '')}/reports${value === 'local' && !reportId ? '/saved' : ''}`;
+    url.searchParams.set('report_service', value);
+    for (const key of ['report_id', 'report_revision', 'report_folder', 'evidence_report', 'evidence_new', 'evidence_view', 'evidence_edit', 'local_report_folder']) url.searchParams.delete(key);
+    for (const key of [...url.searchParams.keys()]) if (key.startsWith('p.')) url.searchParams.delete(key);
+    if (reportId) url.searchParams.set('report_id', reportId);
+    if (value === 'local' && folderId) url.searchParams.set('local_report_folder', folderId);
+    history.pushState({}, '', url); setView(route()); setEditorKey(n => n + 1);
+  }
+  function openLocal(report: EvidenceReport, editing = false) {
+    const url = new URL(reportHref(props.serviceUrl, report.id), location.href);
+    if (editing) url.searchParams.set('evidence_edit', '1');
+    history.pushState({}, '', url); setView(route()); setEditorKey(n => n + 1);
+  }
+  function createLocal() {
+    try {
+      const report = saveEvidenceReport({ ...newEvidenceReport(props.serviceUrl, props.catalogName), workspaceId: props.workspaceId });
+      if (view.selected === 'local' && view.localFolder) placeLocalReport(scope, report.id, view.localFolder);
+      openLocal(report, true);
+    } catch (e) { setError(`Could not save locally: ${reportError(e)}`); }
+  }
+  function transferReport(source: TransferSource, move: boolean) {
+    // Unmount the editor after its save, before a move can remove its source.
+    // Otherwise an editor's unmount autosave could recreate a deleted report.
+    choose(source.kind === 'local' ? 'local' : source.url);
+    setTransfer({ source, move });
+  }
+  function completed(job: TransferJob) {
+    setTransfer(null); setError(''); setNotice(`${job.move ? 'Moved' : 'Copied'} “${job.envelope.title}” to ${job.destination.name}.`);
+    choose(job.destination.url ?? 'local', undefined, job.destination.folderId); refresh();
   }
   return <div className="flex h-full min-h-0 flex-col">
-    <div className="flex shrink-0 items-center gap-3 border-b bg-card px-5 py-2 text-sm">
-      <label htmlFor="report-library">Report library</label>
-      <select id="report-library" className="max-w-full rounded border bg-background px-2 py-1" value={selected} onChange={e => choose(e.target.value)}>
-        <option value="local">On this device</option>
-        {[...new Set([...services.filter(s => s.supported || s.error).map(s => s.url), ...(selected !== 'local' ? [selected] : [])])].map(url => <option key={url} value={url}>{url}{services.find(s => s.url === url)?.error ? ' · connection unavailable' : ''}</option>)}
-      </select>
-    </div>
-    <div className="min-h-0 flex-1">{selected === 'local' ? <EvidenceWorkspace {...props} /> : <ReportLibrary key={selected} {...props} libraryUrl={selected} />}</div>
+    <nav aria-label="Report locations" className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-card px-5 py-2 text-sm">
+      <Button size="sm" variant={view.selected === 'all' ? 'secondary' : 'ghost'} aria-pressed={view.selected === 'all'} onClick={() => choose('all')}>All reports</Button>
+      <Button size="sm" variant={view.selected === 'local' ? 'secondary' : 'ghost'} aria-pressed={view.selected === 'local'} onClick={() => choose('local')}>On this device</Button>
+      {services.filter(s => s.info || s.url === view.selected).map(s => <Button key={s.url} size="sm" variant={view.selected === s.url ? 'secondary' : 'ghost'} aria-pressed={view.selected === s.url} className="max-w-64 truncate" title={s.url} onClick={() => choose(s.url)}>{locationLabel(s, services)}</Button>)}
+      <Button size="sm" variant="outline" className="ml-auto" onClick={createLocal}>New local report</Button>
+    </nav>
+    {notice && <p role="status" className="shrink-0 px-5 py-2 text-sm">{notice}</p>}
+    {error && <p role="alert" className="shrink-0 px-5 py-2 text-sm text-destructive">{error}</p>}
+    {jobs.length > 0 && <section aria-label="Pending report transfers" className="shrink-0 space-y-2 border-b px-5 py-3 text-sm">{jobs.map(job => <div key={job.id} className="flex flex-wrap items-center gap-2"><span>Unconfirmed {job.move ? 'move' : 'copy'}: {job.envelope.title} → {job.destination.name}</span><Button size="sm" disabled={retrying} onClick={async () => { setRetrying(true); setError(''); try { completed(await resumeTransfer(job)); } catch (e) { setError(reportError(e)); } finally { setRetrying(false); } }}>Retry transfer</Button><Button size="sm" variant="ghost" disabled={retrying} onClick={() => { if (confirm('Stop retrying this transfer? Its copy or move may already have completed. Check both locations before deleting anything.')) { forgetTransfer(job); refresh(); } }}>Stop retrying…</Button></div>)}</section>}
+    <div className="min-h-0 flex-1">{view.selected === 'all' || view.selected === 'local' && !view.localEditor
+      ? <ReportOverview key={`${view.selected}:${view.localFolder ?? ''}`} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} localOnly={view.selected === 'local'} folderId={view.localFolder} onFolder={id => choose('local', undefined, id)} onNew={createLocal} onLocal={openLocal} onWorker={(url, id) => choose(url, id)} onTransfer={transferReport} onRefresh={refresh} />
+      : view.selected === 'local'
+        ? <EvidenceWorkspace key={editorKey} {...props} onLibrary={() => choose('local')} onTransfer={(report, move) => transferReport({ kind: 'local', report }, move)} />
+        : <ReportLibrary key={view.selected + ':' + editorKey} {...props} libraryUrl={view.selected} onCreateLocal={createLocal} onTransferReport={transferReport} />}</div>
+    {transfer && <TransferDialog {...transfer} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} onClose={() => { setTransfer(null); refresh(); }} onComplete={completed} />}
   </div>;
 }

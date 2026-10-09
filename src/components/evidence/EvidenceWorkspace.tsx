@@ -36,7 +36,7 @@ import type { EvidenceIssue } from '../../lib/evidence/editor-support';
 import type { CatalogData } from '../../lib/service';
 import { prepareEvidenceSemanticDatasets, type SemanticDatasetState } from '../../lib/evidence/semantic-datasets';
 import { EvidencePivot } from './EvidencePivot';
-import { consumeReportPromotion } from '../../lib/reports/events';
+import { consumeReportPromotion, hasReportPromotion } from '../../lib/reports/events';
 import { useReportTheme } from './useReportTheme';
 import { EvidenceEditor } from './EvidenceEditor';
 import { EvidencePreview, type EvidenceInputState, type PreviewDrill, type ReportRun } from './EvidencePreview';
@@ -69,7 +69,7 @@ export interface RemoteEvidenceSession {
   historyContent: ReactNode;
 }
 
-export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalogs, defaultToLibrary = true, remote }: { catalogName: string; serviceUrl: string; workspaceId?: string; catalogs: readonly CatalogData[]; defaultToLibrary?: boolean; remote?: RemoteEvidenceSession }) {
+export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalogs, defaultToLibrary = true, remote, onLibrary, onTransfer }: { catalogName: string; serviceUrl: string; workspaceId?: string; catalogs: readonly CatalogData[]; defaultToLibrary?: boolean; remote?: RemoteEvidenceSession; onLibrary?: () => void; onTransfer?: (report: EvidenceReport, move: boolean) => void }) {
   const remoteRef = useRef(remote); remoteRef.current = remote;
   // Reports are kept per workspace (multi-catalog phase 2); without one (a test harness), per service.
   const scope = workspaceId ?? serviceUrl;
@@ -93,9 +93,9 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     // report that was never saved (its URL names it from the start).
     const recovered = id ? loadRecoveryDraft(scope, id) : null;
     const draft = recovered && (!found || specOf(recovered) !== specOf(found)) ? recovered : null;
-    return { reports, report: draft ?? report, savedReport: report, recovered: Boolean(draft), create, error, saved: found ? JSON.stringify(found) : '', library: !create && (isLibraryUrl() || (!found && !draft && (defaultToLibrary || Boolean(id)))) };
+    return { reports, report: draft ?? report, savedReport: report, recovered: Boolean(draft), create, error, saved: found ? JSON.stringify(found) : '', library: !create && !hasReportPromotion() && (isLibraryUrl() || (!found && !draft && (defaultToLibrary || Boolean(id)))) };
   });
-  const [promotion, setPromotion] = useState(consumeReportPromotion);
+  const [promotion, setPromotion] = useState(() => remote ? null : consumeReportPromotion());
   const [report, setReport] = useState(initial.report);
   useEffect(() => { if (remote?.canEdit) remote.onDraft(report); }, [report]);
   const reportTheme = useReportTheme(report.appearance);
@@ -104,7 +104,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   const [library, setLibrary] = useState(initial.library);
   const [hasOpenedReport, setHasOpenedReport] = useState(!initial.library);
   const [search, setSearch] = useState('');
-  const [editing, setEditing] = useState(initial.recovered || initial.create);
+  const [editing, setEditing] = useState(initial.recovered || initial.create || new URLSearchParams(location.search).get('evidence_edit') === '1');
   useEffect(() => { if (remote && !remote.canEdit) setEditing(false); }, [remote?.canEdit]);
   const [focused, setFocused] = useState(false);
   const [editorOnly, setEditorOnly] = useState(false);
@@ -324,6 +324,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   }, [scope]);
   function navigate(showLibrary: boolean, id?: string, replace = false) {
     if (remote) { if (showLibrary) { autosave(); remote.onLeave(); } return; }
+    if (showLibrary && onLibrary) { autosave(); onLibrary(); return; }
     const url = new URL(window.location.href);
     url.pathname = `${appBase.replace(/\/$/, '')}/reports${showLibrary ? '/saved' : ''}`;
     url.searchParams.delete('evidence_view');
@@ -456,13 +457,15 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       booted.current = true;
       if (initial.create) navigate(false, initial.report.id, true);
       if (initial.library) navigate(true, undefined, true);
-      else if (!remote && !initial.library && !initial.error) void refresh(initial.report, 'replace');
+      // A pending Add to report opens and saves its own definition below. A
+      // template refresh here would take the busy lock and discard that open.
+      else if (!remote && !promotion && !initial.library && !initial.error) void refresh(initial.report, 'replace');
     }
     const changed = (event: StorageEvent) => { if (event.key === null || event.key.startsWith(STORAGE_PREFIX) || event.key.startsWith(LEGACY_STORAGE_PREFIX)) reloadList(); };
     // Save on the way out; ask only when the draft can't be saved (it is kept for recovery either way).
     const unload = (event: BeforeUnloadEvent) => { if (!exportingRef.current) autosaveRef.current(); if (unsavedRef.current() || remoteRef.current?.pending) { event.preventDefault(); event.returnValue = ''; } };
     const pop = () => {
-      if (remoteRef.current) return;
+      if (remoteRef.current || onLibrary) return; // The unified browser owns this route.
       if (isLibraryUrl()) { setRun(null); setLibrary(true); reloadList(); return; }
       const id = new URLSearchParams(window.location.search).get('evidence_report');
       const search = new URLSearchParams(window.location.search);
@@ -492,7 +495,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   // A report opened from the sidebar: no page load. Clicking the open report only leaves the list.
   const openFromSidebar = useRef<(detail: OpenReportDetail) => Promise<void>>(async () => {});
   openFromSidebar.current = async detail => {
-    if (remote) return;
+    if (remote || onLibrary) return;
     if ((detail.workspaceId ?? detail.serviceUrl) !== scope) return;
     if (!detail.id && !detail.create) { if (!library || !isLibraryUrl()) navigate(true); return; }
     if (detail.id === reportRef.current.id && savedRef.current) {
@@ -517,7 +520,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     return () => window.removeEventListener(OPEN_REPORT_EVENT, open);
   }, []);
   useEffect(() => {
-    const promoted = () => setPromotion(consumeReportPromotion());
+    const promoted = () => { if (!remoteRef.current) setPromotion(consumeReportPromotion()); };
     window.addEventListener('cupola:promote-report', promoted);
     return () => window.removeEventListener('cupola:promote-report', promoted);
   }, []);
@@ -974,6 +977,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
                 : pdfExport.state === 'done' ? <><Check />PDF exported{pdfExport.omitted.length ? ` · ${pdfExport.omitted.length} not included` : ''}</>
                 : <><FileDown />Export PDF</>}
             </Button>}
+            {!remote && onTransfer && <><Button variant="outline" disabled={busy} onClick={() => { const stored = persist(reportRef.current, { kind: 'edit' }); if (stored) onTransfer(stored, false); }}>Copy to…</Button><Button variant="outline" disabled={busy} onClick={() => { const stored = persist(reportRef.current, { kind: 'edit' }); if (stored) onTransfer(stored, true); }}>Move to…</Button></>}
             {!remote && <ReportSharing canExportPdf={!refreshing && Boolean(run) && !exporting} pending={Boolean(pending)} onPdf={() => void exportPdf()} onFile={() => exportReports([report])} />}
             {!focused && <Button variant="ghost" size="icon" aria-label="Focus report" title="Focus report" onClick={() => setFocused(true)}><Maximize2 /></Button>}
             {saveError && <Button variant="outline" onClick={checkpoint} title={`Not saved: ${saveError}. Your changes are kept in this browser until they can be.`}><Save />Retry save</Button>}

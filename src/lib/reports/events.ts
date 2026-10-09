@@ -17,6 +17,9 @@ export type ReportPromotion = SqlReportPromotion | SemanticReportPromotion;
 
 let pending: ReportPromotion | null = null;
 
+/** Lets the report browser mount the local editor without consuming its payload. */
+export function hasReportPromotion(): boolean { return pending !== null; }
+
 export function promoteToReport(item: ReportPromotion): void {
   pending = item;
   window.dispatchEvent(new CustomEvent("cupola:promote-report"));

@@ -1,13 +1,44 @@
 # Worker report libraries in Cupola
 
-Cupola consumes `vgi.reports.v1` over HTTP. A connected service advertising this
-protocol appears in the **Report library** selector. **On this device** retains
-the existing browser-local reports and history. Import explicitly copies a
-local definition to a worker; it never deletes or replaces the local report.
+Cupola probes the workspace's connected HTTP services for `vgi.reports.v1` and
+combines their visible reports with browser-local reports in **All reports**.
+The **Location** column identifies each source. Named location buttons open its
+folders; there is no library dropdown. The worker's existing
+`get_report_service_info().display_name` supplies its drive name. URLs remain
+connection identities and appear only as details or to distinguish duplicate names.
+
+**New report** in the combined browser starts locally. **New local report** is
+always available, including when a worker is read-only or unavailable. A worker
+location can create reports directly when its current folder allows it; otherwise
+New report opens a local draft and the page explains the missing permission.
+Folder creation respects the worker's current `allowed_actions`; local folders
+need no worker permission. Local reports and folders remain scoped to the current
+workspace and browser.
+
+**Copy to…** and **Move to…** use native destination and folder controls. Reports
+can transfer between local storage and workers, or between workers. A move within
+a location retains its identity and history. Across locations, Cupola copies the
+current saved definition into a new draft with destination-owned permissions;
+history, publication and original ownership do not transfer. The dialog explains
+this before dispatch. Historical revisions can be copied, but cannot replace the
+current definition in a cross-location move.
+
+Cross-location moves confirm the destination before deleting the source using its
+original version precondition. Lost replies retain a durable transfer record with
+the exact request IDs, body and account scopes; retries survive page reloads and
+never silently start another copy. Conflicts keep both copies for review. Each
+worker receives only its own credentials. **Stop retrying…** removes the local
+retry record after explaining that a request may already have succeeded. Transfers
+older than the protocol's 24-hour retry window require manual inspection.
+
+Discovery and listing failures are isolated by location. They do not hide reports
+from healthy workers or prevent local creation. **Refresh** rechecks capabilities
+and permissions. Existing local file import/export and recovery drafts remain
+available in the combined browser.
 
 ## Implemented workflows
 
-- Discover libraries on attached services and switch between them.
+- Discover named libraries on attached services and combine their contents.
 - Browse nested folders, search descendant reports, and filter by publication
   or ownership. Create, rename, move, and delete folders; create, edit, move,
   copy, and delete reports.

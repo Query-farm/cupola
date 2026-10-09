@@ -5,11 +5,11 @@ import { resolve, join } from 'node:path';
 import { ReportClient } from '../../src/lib/reporting/client';
 
 /** A real reference worker with an isolated database. No Yahoo/network dependency in these tests. */
-export async function startReportingWorker() {
+export async function startReportingWorker(displayName = "Finance report library") {
   const directory = await mkdtemp(join(tmpdir(), 'cupola-reporting-'));
   const python = process.env.CUPOLA_REPORTING_PYTHON ?? resolve('../vgi-reporting-protocol-reference/.venv/bin/python');
   const processWorker = spawn(python, ['-m', 'vgi_reporting_reference.worker', '--http', '--host', '127.0.0.1', '--port', '0'], {
-    env: { ...process.env, REPORTING_DB: join(directory, 'reports.sqlite'), REPORTING_TOKENS: JSON.stringify({ 'test-alice': 'alice', 'test-bob': 'bob', 'test-admin': 'operator' }), VGI_INTROSPECT_PRINCIPALS: 'operator', VGI_SIGNING_KEY: 'isolated-reporting-test-key' }, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, REPORTING_DB: join(directory, 'reports.sqlite'), REPORTING_DISPLAY_NAME: displayName, REPORTING_TOKENS: JSON.stringify({ 'test-alice': 'alice', 'test-bob': 'bob', 'test-admin': 'operator' }), VGI_INTROSPECT_PRINCIPALS: 'operator', VGI_SIGNING_KEY: 'isolated-reporting-test-key' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   const url = await new Promise<string>((resolve, reject) => {
     let log = '';

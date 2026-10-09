@@ -1,6 +1,6 @@
 # Report authoring and sharing
 
-Choose a destination in **Report library**. Connected workers advertising `vgi.reports.v1` provide shared folders, immutable revisions, publication, ownership and portable links; see [Worker report libraries](reporting-protocols.md). The header says **Saved to worker** only after the worker acknowledges a revision. Preview remains explicit.
+**All reports** combines this browser's reports with reports from connected workers. Named locations open their folders. New reports can always start **On this device**; use **Copy to…** or **Move to…** to save them elsewhere. Workers advertising `vgi.reports.v1` provide shared folders, immutable revisions, publication, ownership and portable links; see [Worker report libraries](reporting-protocols.md). The header names the storage location and says **Saved to worker** only after the worker acknowledges a revision. Preview remains explicit.
 
 The **On this device** library keeps reports in the current browser, separately for each data connection. Its header says **Saved in this browser** when the definition is stored; this does not mean the preview has been refreshed. These local reports do not sync across browsers or devices. The local authoring and sharing workflow is described below.
 

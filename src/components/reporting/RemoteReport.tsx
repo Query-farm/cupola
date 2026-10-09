@@ -107,7 +107,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
   </article>)}</div>;
   return <section className="flex h-full min-h-0 flex-col" aria-label="Worker report">
     <header className="flex shrink-0 flex-wrap items-center gap-2 border-b px-5 py-2 text-sm">
-      <Button variant="ghost" size="sm" onClick={props.onLeave}><ArrowLeft />Library</Button>
+      <Button variant="ghost" size="sm" onClick={props.onLeave}><ArrowLeft />Library</Button><span className="text-muted-foreground">Saved in {session.info.display_name}</span>
       {record && <><span>Revision {String(record.revision_number)}{revisionId ? ' · pinned view' : ''} · {record.published_revision_id ? 'Published' : 'Unpublished'}</span>
         {opened?.report && <Button variant="ghost" size="sm" onClick={() => setSourceOpen(true)}>View source</Button>}
         {revisionId && <Button variant="ghost" size="sm" onClick={() => props.onOpen(reportId)}>Open current report</Button>}
@@ -115,6 +115,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
         <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}><Link />Share link</Button>
         {controller && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => setDialog({ action: 'metadata' })}>Report details</Button>}
         {can('publish') && <><Button variant="outline" size="sm" disabled={blocked || record.published_revision_id === record.revision_served} onClick={() => void attempt(async () => { await session.journal.run('publish', { report_id: reportId, revision_id: record.revision_served, expected_published_revision_id: record.published_revision_id }); await refreshRecord(); })}>Publish revision</Button>{record.published_revision_id && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => void attempt(async () => { await session.journal.run('publish', { report_id: reportId, revision_id: null, expected_published_revision_id: record.published_revision_id }); await refreshRecord(); })}>Unpublish</Button>}</>}
+        {props.onTransferReport && !record.redacted && <Button variant="outline" size="sm" disabled={blocked} onClick={() => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, false)}>Copy to…</Button>}{props.onTransferReport && !revisionId && can('delete') && <Button variant="outline" size="sm" disabled={blocked} onClick={() => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, true)}>Move to…</Button>}
         {can('move') && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => setDialog({ action: 'move' })}>Move</Button>}
         {can('transfer_ownership') && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => setDialog({ action: 'ownership' })}>Ownership</Button>}
         {can('delete') && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => setDialog({ action: 'delete' })}>Delete</Button>}

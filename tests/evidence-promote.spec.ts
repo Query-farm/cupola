@@ -23,11 +23,11 @@ test('a query added to a report is saved without editing it', async ({ page }) =
   await expect(page.getByRole('navigation', { name: 'Saved reports' }).getByRole('link', { name: 'Query 1' })).toBeVisible({ timeout: 30_000 });
 });
 
-test('a blank new report waits for its first edit, and says so', async ({ page }) => {
+test('a blank new report is saved locally before its first edit', async ({ page }) => {
   await gotoApp(page);
   await waitForShellBridge(page);
   await page.getByTestId('tab-reports').click();
   const panel = page.getByTestId('evidence-panel');
   await panel.getByRole('button', { name: 'New report' }).click();
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Not saved yet · saves here when you edit it');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
 });
