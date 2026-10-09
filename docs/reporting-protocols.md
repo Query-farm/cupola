@@ -2,20 +2,25 @@
 
 Cupola probes the workspace's connected HTTP services for `vgi.reports.v1` and
 combines their visible reports with browser-local reports in **All reports**.
-The **Location** column identifies each source. Named location buttons open its
-folders; there is no library dropdown. The worker's existing
+The **Location** column identifies each source. A folder tree inside the browser
+contains **All reports**, **On this device**, and named worker locations. Expand
+locations and folders with their chevrons, then select a folder to list its contents.
+The editor has no separate location toolbar. The worker's existing
 `get_report_service_info().display_name` supplies its drive name. URLs remain
 connection identities and appear only as details or to distinguish duplicate names.
 
-**New report** in the combined browser starts locally. **New local report** is
-always available, including when a worker is read-only or unavailable. A worker
+**New report** in the combined browser starts locally, including when a worker
+is read-only or unavailable. The tree keeps local storage reachable. A compact
+permission notice with a lock icon offers **New local report** in read-only locations. A worker
 location can create reports directly when its current folder allows it; otherwise
 New report opens a local draft and the page explains the missing permission.
 Folder creation respects the worker's current `allowed_actions`; local folders
 need no worker permission. Local reports and folders remain scoped to the current
 workspace and browser.
 
-**Copy to…** and **Move to…** use native destination and folder controls. Reports
+**Copy to…** and **Move to…** use the same folder tree to select a location and
+destination folder. Read-only destinations carry a lock icon and explain why
+the operation is unavailable; they can still be expanded to show writable children. Reports
 can transfer between local storage and workers, or between workers. A move within
 a location retains its identity and history. Across locations, Cupola copies the
 current saved definition into a new draft with destination-owned permissions;
@@ -35,6 +40,23 @@ Discovery and listing failures are isolated by location. They do not hide report
 from healthy workers or prevent local creation. **Refresh** rechecks capabilities
 and permissions. Existing local file import/export and recovery drafts remain
 available in the combined browser.
+
+## Shared browser components
+
+- `FileTree` provides selection, independent expansion, keyboard navigation,
+  type-ahead, and accessible tree semantics.
+- `ReportStorageTree` adapts local and worker folders to that tree. It is shared
+  by the browser and cross-location transfer dialogs. `ResourceDialog` uses
+  `FileTree` for folder creation and moves within a worker, excluding a folder's
+  own descendants as move targets.
+- `ReportFileList` renders the contents of both local and worker directories.
+- `ReportNotice` standardizes permission, information, and error messages with
+  icons, concise text, and optional actions.
+
+The UI uses filesystem conventions; workers still define access policy and
+validate every mutation. A folder's appearance in the tree does not grant write
+access. Arrow keys navigate or expand, Enter/Space selects, and Home/End or typing
+finds a visible item. Expansion does not select a destination.
 
 ## Implemented workflows
 

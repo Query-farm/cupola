@@ -3,12 +3,11 @@ import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { ReportClient, reportError } from '../../lib/reporting/client';
 import type { FolderRecord } from '../../lib/reporting/contracts.generated';
-import { locationLabel, type ReportLocation } from '../../lib/reporting/locations';
-import { localFolderPath, localLibrary } from '../../lib/reporting/local-library';
+import type { ReportLocation } from '../../lib/reporting/locations';
 import { prepareTransfer, resumeTransfer, type TransferJob, type TransferSource } from '../../lib/reporting/transfers';
-import { folderPath } from './ResourceDialog';
+import { ReportStorageTree } from './ReportStorageTree';
+import { ReportNotice } from './ReportNotice';
 
-const selectClass = 'block w-full min-w-0 rounded-md border border-input bg-background p-2 text-sm [appearance:auto]';
 export function TransferDialog({ source, move, locations, scope, serviceUrl, workspaceId, onClose, onComplete }: {
   source: TransferSource; move: boolean; locations: ReportLocation[]; scope: string; serviceUrl: string; workspaceId?: string;
   onClose: () => void; onComplete: (job: TransferJob) => void;
@@ -18,12 +17,11 @@ export function TransferDialog({ source, move, locations, scope, serviceUrl, wor
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [job, setJob] = useState<TransferJob | null>(null);
   const target = locations.find(l => l.url === destination);
-  const localFolders = localLibrary(scope).folders;
   useEffect(() => {
-    setFolders([]); setFolderId(''); setError('');
+    setFolders([]); setError('');
     if (destination === 'local') { setLoading(false); return; }
     const abort = new AbortController(); setLoading(true);
-    void new ReportClient(destination).call('list_folders', {}, abort.signal).then(setFolders)
+    void new ReportClient(destination).call('list_folders', {}, abort.signal).then(rows => { if (!abort.signal.aborted) setFolders(rows); })
       .catch(e => { if (!abort.signal.aborted) setError(reportError(e)); })
       .finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
@@ -44,18 +42,10 @@ export function TransferDialog({ source, move, locations, scope, serviceUrl, wor
         onComplete(await resumeTransfer(pending));
       } catch (e) { setError(reportError(e)); } finally { setBusy(false); }
     }}>
-      <label className="block text-sm">Save in<select aria-label="Save in" className={selectClass} disabled={busy || Boolean(job)} value={destination} onChange={e => setDestination(e.target.value)}>
-        <option value="local">On this device</option>
-        {locations.filter(l => l.info).map(l => <option key={l.url} value={l.url}>{locationLabel(l, locations)}{!l.info?.writable ? ' (read-only)' : ''}</option>)}
-      </select></label>
-      <label className="block text-sm">Destination folder<select aria-label="Destination folder" className={selectClass} value={folderId} disabled={busy || loading || Boolean(job)} onChange={e => setFolderId(e.target.value)}>
-        <option value="">Library root{destination !== 'local' && !target?.info?.root_allowed_actions.includes('create_report') ? ' (read-only)' : ''}</option>
-        {destination === 'local' ? localFolders.map(f => <option key={f.id} value={f.id}>{localFolderPath(f.id, localFolders)}</option>)
-          : folders.filter(f => f.allowed_actions.includes('create_report')).map(f => <option key={f.folder_id} value={f.folder_id}>{folderPath(f, folders)}</option>)}
-      </select></label>
+      <div className="space-y-2"><p className="text-sm font-medium">Save in</p><div className="max-h-72 overflow-auto rounded border p-2"><ReportStorageTree picker locations={locations} scope={scope} location={destination} folderId={folderId || null} disabled={busy || Boolean(job)} onSelect={(url, folder) => { setDestination(url); setFolderId(folder ?? ''); }} /></div></div>
       {loading && <p role="status" className="text-sm">Loading folders…</p>}
-      {!writable && !loading && <p className="text-sm text-muted-foreground">You cannot save here with your current access. Choose a writable folder or On this device.</p>}
-      {error && <p role="alert" className="text-sm text-destructive">{error}{job && ' The transfer is saved for retry. Your original is kept until the destination is confirmed.'}</p>}
+      {!writable && !loading && <ReportNotice kind="permission" title="Read-only destination">Choose a writable folder or On this device.</ReportNotice>}
+      {error && <ReportNotice kind="error" title="Transfer not confirmed">{error}{job && ' The transfer is saved for retry. Your original is kept until the destination is confirmed.'}</ReportNotice>}
       <DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={onClose}>{job ? 'Close; retry later' : 'Cancel'}</Button><Button type="submit" disabled={busy || loading || !writable}>{busy ? 'Transferring…' : job ? 'Retry transfer' : move ? 'Move report' : 'Copy report'}</Button></DialogFooter>
     </form>
   </DialogContent></Dialog>;
