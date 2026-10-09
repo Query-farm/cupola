@@ -1,9 +1,10 @@
 import { evidencePath } from './helpers';
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 test.use({ viewport: { width: 1500, height: 1100 } });
-test('full-screen authoring completes Core syntax and reports recoverable source and SQL errors', async ({ page }) => {
-  test.setTimeout(180_000);
+
+/** A new report with its source open in the editor. Collects page errors. */
+async function openNewReportSource(page: Page) {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(evidencePath('evidence/reports'));
@@ -13,9 +14,22 @@ test('full-screen authoring completes Core syntax and reports recoverable source
   const source = panel.getByRole('textbox', { name: 'Evidence source', exact: true });
   await expect(source).toBeVisible({ timeout: 90_000 });
   await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
+  return { panel, source, errors };
+}
+
+async function enterFullScreen(page: Page) {
+  const panel = page.getByTestId('evidence-panel');
+  await panel.getByRole('button', { name: 'Full-screen editor', exact: true }).click();
+  await expect(panel.getByRole('region', { name: 'Report preview', exact: true })).not.toBeVisible();
+  expect(await panel.getByRole('complementary', { name: 'Report editor', exact: true }).evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThan(1400);
+}
+
+test('the report editor resizes, goes full screen and completes Core syntax', async ({ page }) => {
+  test.setTimeout(120_000);
+  const { panel, source, errors } = await openNewReportSource(page);
   await expect(panel.getByRole('link', { name: 'Evidence docs ↗', exact: true })).toHaveAttribute('href', /core-concepts\/markdown/);
   await expect(panel.getByRole('link', { name: 'Component reference ↗', exact: true })).toHaveAttribute('target', '_blank');
-  await page.evaluate(() => { (window as any).__authoringWorker = (window as any).__bridge.worker; });
+
   const divider = panel.getByRole('separator', { name: 'Resize report editor' });
   const editor = panel.getByRole('complementary', { name: 'Report editor', exact: true });
   const beforeResize = await editor.evaluate(el => el.getBoundingClientRect().width);
@@ -35,12 +49,15 @@ test('full-screen authoring completes Core syntax and reports recoverable source
   expect(Number(await divider.getAttribute('aria-valuenow'))).toBe(draggedWidth + 2);
   await divider.dblclick();
   await expect(divider).toHaveAttribute('aria-valuenow', '36');
-  await panel.getByRole('button', { name: 'Full-screen editor', exact: true }).click();
-  await expect(panel.getByRole('region', { name: 'Report preview', exact: true })).not.toBeVisible();
-  expect(await panel.getByRole('complementary', { name: 'Report editor', exact: true }).evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThan(1400);
+  await enterFullScreen(page);
+
   await source.fill('{% line_ch');
   await source.press('Control+Space');
-  await expect(page.getByRole('option', { name: 'line_chart', exact: true })).toBeVisible();
+  // The first completion loads Evidence's tag registry (its Markdoc processor
+  // and core: evidenceRegistry in editor-support.ts), a cold import of a large
+  // module graph on the dev server that outlasted the 5s default under a full
+  // parallel run. Later completions reuse it and keep the default timeout.
+  await expect(page.getByRole('option', { name: 'line_chart', exact: true })).toBeVisible({ timeout: 30_000 });
   // Clicking avoids CodeMirror's short keyboard interaction guard immediately after opening.
   await page.getByRole('option', { name: 'line_chart', exact: true }).click();
   await expect(source).toContainText('{% line_chart');
@@ -49,6 +66,15 @@ test('full-screen authoring completes Core syntax and reports recoverable source
   await expect(page.getByRole('option', { name: /data/ }).first()).toBeVisible();
   await source.press('Escape');
   await expect(panel.getByRole('button', { name: 'Exit full-screen editor', exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('the report editor reports recoverable source and SQL errors', async ({ page }) => {
+  test.setTimeout(180_000);
+  const { panel, source, errors } = await openNewReportSource(page);
+  await page.evaluate(() => { (window as any).__authoringWorker = (window as any).__bridge.worker; });
+  await enterFullScreen(page);
+
   const valid = '# Authoring test\n\n```sql example\nSELECT 12 AS value\n```\n\n{% big_value data="example" value="sum(value)" /%}';
   await source.fill(valid + '\n\n{% not_a_component /%}');
   await source.press('Control+Enter');
@@ -65,8 +91,9 @@ test('full-screen authoring completes Core syntax and reports recoverable source
   await expect(problems).toContainText('Problems · 0', { timeout: 30_000 });
   await panel.getByRole('button', { name: 'Show preview', exact: true }).click();
   // The big value's query runs after the document mounts, so it waits as long as
-  // the refreshes above do: under a full parallel run it outlasted the 5s default.
+  // the refreshes do: under a full parallel run it outlasted the 5s default.
   await expect(panel.getByTestId('evidence-document')).toContainText('12', { timeout: 30_000 });
+
   await source.fill('# Broken query\n\n```sql missing\nSELECT * FROM cupola_table_that_does_not_exist\n```\n\n{% table data="missing" /%}');
   await source.press('Control+Enter');
   await expect(problems).toContainText('cupola_table_that_does_not_exist', { timeout: 30_000 });
@@ -75,6 +102,7 @@ test('full-screen authoring completes Core syntax and reports recoverable source
   await source.press('Control+Enter');
   await expect(panel.getByTestId('evidence-document')).toContainText('12', { timeout: 30_000 });
   await expect(problems).toContainText('Problems · 0');
+
   await panel.getByRole('tab', { name: 'Setup SQL', exact: true }).click();
   const data = panel.getByRole('textbox', { name: 'Dataset SQL', exact: true });
   await data.fill('SELECT * FROM missing_setup_table');
@@ -82,8 +110,9 @@ test('full-screen authoring completes Core syntax and reports recoverable source
   await expect(problems).toContainText('Data · error:', { timeout: 30_000 });
   await data.fill('');
   await data.press('Control+Enter');
-  await expect(panel.getByTestId('evidence-document')).toContainText('12');
+  await expect(panel.getByTestId('evidence-document')).toContainText('12', { timeout: 30_000 });
   await expect(problems).toContainText('Problems · 0');
+  // Errors are recovered from in place: the engine is never restarted.
   expect(await page.evaluate(() => (window as any).__authoringWorker === (window as any).__bridge.worker)).toBe(true);
   expect(errors).toEqual([]);
 });
