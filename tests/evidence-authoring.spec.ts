@@ -64,14 +64,16 @@ test('full-screen authoring completes Core syntax and reports recoverable source
   await source.press('Control+Enter');
   await expect(problems).toContainText('Problems · 0', { timeout: 30_000 });
   await panel.getByRole('button', { name: 'Show preview', exact: true }).click();
-  await expect(panel.getByTestId('evidence-document')).toContainText('12');
+  // The big value's query runs after the document mounts, so it waits as long as
+  // the refreshes above do: under a full parallel run it outlasted the 5s default.
+  await expect(panel.getByTestId('evidence-document')).toContainText('12', { timeout: 30_000 });
   await source.fill('# Broken query\n\n```sql missing\nSELECT * FROM cupola_table_that_does_not_exist\n```\n\n{% table data="missing" /%}');
   await source.press('Control+Enter');
   await expect(problems).toContainText('cupola_table_that_does_not_exist', { timeout: 30_000 });
   await expect(problems.getByText('Failed SQL').first()).toBeVisible();
   await source.fill(valid);
   await source.press('Control+Enter');
-  await expect(panel.getByTestId('evidence-document')).toContainText('12');
+  await expect(panel.getByTestId('evidence-document')).toContainText('12', { timeout: 30_000 });
   await expect(problems).toContainText('Problems · 0');
   await panel.getByRole('tab', { name: 'Setup SQL', exact: true }).click();
   const data = panel.getByRole('textbox', { name: 'Dataset SQL', exact: true });

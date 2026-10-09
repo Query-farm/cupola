@@ -55,9 +55,8 @@ async function viewerState(page: Page, config?: Record<string, unknown>): Promis
 
 /**
  * Which settings the viewer offers, once its settings panel has rendered.
- * Split By is shown only when the serving handler advertises split_by —
- * materialized sources do, live ones cannot (a data-dependent PIVOT cannot be
- * stored in a view).
+ * Split By is shown only when the serving handler advertises split_by, which
+ * both modes now do: a layout that splits is always stored as a TEMP TABLE.
  */
 async function settingsOffered(page: Page): Promise<{ groupBy: boolean; splitBy: boolean }> {
   return page.evaluate(() => {
@@ -90,9 +89,28 @@ test("a live view pivots with SQL against the query and sees new rows", async ({
   // Starts with just the first column, like the sidebar and snapshot paths.
   expect(flat.columns).toEqual(["id"]);
   expect(await scratchSources(page)).toEqual(["view __cupola_pivot"]);
-  // Served live: no row identity, so split_by is not offered.
+  // Served live, yet split_by is offered: a layout that splits is stored as a
+  // TEMP TABLE whatever the source (layoutIsFlat), and `__ROW_NUM__` only has
+  // to be unique, which ROW_NUMBER() is even with no rowid to order by.
   await expect.poll(async () => (await settingsOffered(page)).groupBy).toBe(true);
-  expect((await settingsOffered(page)).splitBy).toBe(false);
+  await expect.poll(async () => (await settingsOffered(page)).splitBy).toBe(true);
+  const split = await page.evaluate(async () => {
+    const el = document.querySelector("perspective-viewer") as any;
+    const run = async (config: Record<string, unknown>) => {
+      await el.restore(config);
+      const view = await el.getView();
+      return { rows: Number(await view.num_rows()), paths: ((await view.column_paths()) as string[]).filter((path) => path.includes("|")).sort() };
+    };
+    const result = {
+      grouped: await run({ group_by: ["id"], split_by: ["parity"], columns: ["id"] }),
+      flat: await run({ group_by: [], split_by: ["parity"], columns: ["id"] }),
+    };
+    // restore() merges, so a later restore would otherwise keep splitting.
+    await el.restore({ split_by: [] });
+    return result;
+  });
+  expect(split.grouped).toEqual({ rows: 11, paths: ["even|id", "odd|id"] });
+  expect(split.flat).toEqual({ rows: 10, paths: ["even|id", "odd|id"] });
 
   // Grouping is computed by DuckDB: a rollup total plus one row per parity.
   expect((await viewerState(page, { group_by: ["parity"], columns: ["id"] })).rows).toBe(3);
@@ -141,8 +159,8 @@ test("each pivot replaces the previous scratch source", async ({ page }) => {
 
   await openEditor(page);
   await pivot(page, "table");
-  const second = await viewerState(page);
-  expect(second.table).not.toBe(first.table);
+  // Mounts are queued, so the viewer can still hold the first pivot for a moment.
+  await expect.poll(async () => (await viewerState(page)).table, { timeout: T_NORMAL }).not.toBe(first.table);
   expect(await scratchSources(page)).toEqual(["table __cupola_pivot"]);
 
   await openEditor(page);

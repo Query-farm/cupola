@@ -248,9 +248,9 @@ const WINDOW_AGGREGATES_ANY = [
  * - `live`: each layout is a TEMP VIEW, so nothing is copied and every page
  *   is read from the source on demand. With no row identity, unsorted grids
  *   have no guaranteed order (the `row_id_expr` orders by nothing),
- *   windows need an explicit order (`unordered`), and split_by is off —
- *   DuckDB will not store a data-dependent PIVOT in a view. Upstream's
- *   view-based servers (Postgres, ClickHouse) make the same trade.
+ *   and windows need an explicit order (`unordered`). split_by still works:
+ *   a layout that splits is stored as a TEMP TABLE (see `layoutIsFlat`),
+ *   because DuckDB will not store a data-dependent PIVOT in a view.
  */
 export type PerspectiveServeMode = "materialized" | "live";
 

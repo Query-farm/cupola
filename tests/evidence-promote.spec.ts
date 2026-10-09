@@ -14,7 +14,7 @@ test('a query added to a report is saved without editing it', async ({ page }) =
 
   await expect(page.getByTestId('tab-reports')).toHaveAttribute('aria-selected', 'true');
   const panel = page.getByTestId('evidence-panel');
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved', { timeout: 30_000 });
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser', { timeout: 30_000 });
   await expect(page).toHaveURL(/evidence_report=/);
   const sidebar = page.getByRole('navigation', { name: 'Saved reports' });
   await expect(sidebar.getByRole('link', { name: 'Query 1' })).toBeVisible();

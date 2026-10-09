@@ -70,12 +70,16 @@ test('Evidence exports a typeset PDF of the rendered report', async ({ page }, t
   // Printed at its on-screen size relative to body text.
   expect(main).toMatch(/cupola-metric\(title: "Revenue", size: [\d.]+pt, value: text\("780"\)/);
   expect(main).toContain('cupola-callout(');
-  expect(main).toContain('cupola-chart(title: "Revenue by month", subtitle: "Monthly", legend: (("west", rgb(');
+  // Both series with their colors. Not their order: the series come from an
+  // aggregate (sum(revenue) by month and region), whose row order DuckDB does
+  // not guarantee, and the legend follows it.
+  expect(main).toMatch(/cupola-chart\(title: "Revenue by month", subtitle: "Monthly", legend: \(\("(east|west)", rgb\("#[0-9a-f]{6}"\)\), \("(?!\1)(east|west)", rgb\("#[0-9a-f]{6}"\)\)\)/);
   expect(main).toContain('pagebreak(weak: true)');
   // Only the selected tab prints, and the tab strip itself does not.
   expect(main).toContain('cupola-chart(title: "Sales chart"');
   expect(main).not.toContain('Hidden tab text');
-  expect(main).toMatch(/cupola-table\(title: "Sales details".*text\("west"\).*text\("east"\)/s);
+  // Both regions, in whichever order the aggregate returned them (see the legend above).
+  expect(main).toMatch(/cupola-table\(title: "Sales details".*text\("(east|west)"\).*text\("(?!\1)(east|west)"\)/s);
 
   const charts = Object.entries(files).filter(([name, content]) => name.endsWith('.svg') && content.includes('<path'));
   expect(charts.length).toBeGreaterThanOrEqual(2);
