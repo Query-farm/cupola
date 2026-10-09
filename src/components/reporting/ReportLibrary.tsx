@@ -117,7 +117,7 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
   const pending = session?.journal.pending;
   const blocked = busy || Boolean(pending) || !session?.info.writable;
   if (selected.id && session) return <RemoteReport key={`${selected.id}:${selected.revision ?? ''}:${recovery?.key ?? ''}`} {...props} session={session} reportId={selected.id} revisionId={selected.revision} recovery={recovery}
-    onLeave={() => { navigate(null); setGeneration(n => n + 1); }} onOpen={id => navigate(id)} />;
+    onLeave={() => { navigate(null); setGeneration(n => n + 1); }} onOpen={(id, revision) => navigate(id, folderId, revision ?? null)} />;
   const items: ReportFileItem[] = [
     ...folders.filter(f => f.parent_folder_id === folderId).sort((a, b) => a.name.localeCompare(b.name)).map(folder => ({
       id: folder.folder_id, name: folder.name, kind: 'folder' as const, onOpen: () => navigate(null, folder.folder_id), detail: folder.ownership.owner_ref.display_name || folder.ownership.owner_ref.id, state: 'Folder',

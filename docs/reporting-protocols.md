@@ -68,7 +68,8 @@ finds a visible item. Expansion does not select a destination.
   export. Opening a worker report does not run its SQL. Refresh is explicit.
 - Autosave immutable worker revisions with the head revision as a precondition.
   Reader-selected filter values remain a local view and do not create revisions.
-- Inspect history, restore an earlier revision as a new revision, publish or
+- Browse revision authors, timestamps and messages; open a revision read-only,
+  compare any two saved definitions, restore an earlier revision as a new revision, publish or
   unpublish, and redact eligible historical revisions with a reason.
 - Display author, owner and durable parent; transfer report/folder ownership
   through worker-resolved identity references. Cupola does not define an ACL
@@ -84,6 +85,32 @@ Other reporting protocols (render, schedules, tasks, alerts, notify and owned
 resources) are not hosted by the current reference worker. This implementation
 does not manufacture those capabilities. Preview/PDF execution remains in
 Cupola, with the reader's current catalog connections.
+
+## Revision history
+
+Open a worker report and choose **History**. Each entry shows the worker-recorded
+author, timestamp, revision kind and message, with markers for the current,
+published and viewed revisions. **View revision** opens a read-only, revision-pinned
+URL that survives reload and browser back/forward navigation. **Open current
+report** returns to the editable head when the worker permits editing. Pending
+edits or unresolved saves must finish before opening or restoring another revision.
+
+**Compare changes** starts with adjacent readable revisions. The native **From
+revision** and **To revision** selectors can compare any two visible revisions.
+Comparisons show title, description, tags, data sources, protocol parameters,
+document source (including SQL), setup SQL, report parameters, appearance and
+other stored fields. Unknown fields are retained; JSON whitespace and property
+order are distinguished from content changes. Large fields use bounded before/
+after excerpts with complete downloads; binary bodies can be downloaded for
+inspection. Comparisons use fresh authenticated reads, clear stale content when
+selections change, and offer retries for failures. Redacted content is unavailable.
+
+Viewing and comparing definitions does not execute queries, write revisions or
+restore data snapshots. A preview uses current data and requires an explicit
+refresh. The worker assigns revision authorship from the request identity;
+Cupola does not supply an author or infer one from browser-local history. The
+reference worker's explicit local demo identity records `operator`; distinct
+authenticated accounts record their own identities.
 
 ## Contracts and transport
 
