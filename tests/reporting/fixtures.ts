@@ -11,3 +11,12 @@ export function memoryStorage(): Storage {
   const records = new Map<string, string>();
   return { get length() { return records.size; }, key: i => [...records.keys()][i] ?? null, getItem: key => records.get(key) ?? null, setItem: (key, value) => { records.set(key, value); }, removeItem: key => { records.delete(key); }, clear: () => records.clear() };
 }
+import type { EvidenceParameter } from '../../src/lib/evidence/reports';
+
+export const nativeOnlyParameters: EvidenceParameter[] = [
+  { id: 'empty', key: 'empty', label: 'Empty choices', type: 'select', required: false, defaultValue: null, options: { kind: 'static', values: [] } },
+  { id: 'mixed', key: 'mixed', label: 'Mixed choices', type: 'select', required: false, defaultValue: 'one', options: { kind: 'static', values: [{ label: 'One', value: 'one' }, { label: 'Two', value: 2 }] } },
+  { id: 'stale', key: 'stale', label: 'Stale default', type: 'select', required: false, defaultValue: 'removed', options: { kind: 'static', values: [{ label: 'Current', value: 'current' }] } },
+  { id: 'duplicate', key: 'duplicate', label: 'Duplicate choices', type: 'multi_select', required: false, defaultValue: [], options: { kind: 'static', values: [{ label: 'A', value: 1 }, { label: 'B', value: 1 }] } },
+  { id: 'blank_date', key: 'blank_date', label: 'Blank date', type: 'date', required: false, defaultValue: '' },
+];

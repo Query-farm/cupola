@@ -1,4 +1,4 @@
-import { validateEvidenceReport, titled, type EvidenceReport } from '../evidence/reports';
+import { validateEvidenceReport, titled, type EvidenceParameter, type EvidenceReport } from '../evidence/reports';
 import { serviceLocation } from './client';
 import type { DataSource, ParameterSpec, ReportEnvelope, ReportResult, ReportsInfo } from './contracts.generated';
 
@@ -6,13 +6,32 @@ export const BODY_FORMAT = 'cupola.evidence/1';
 export interface ReportMetadata { description: string; tags: string[]; dataSources?: DataSource[] }
 export interface EncodedReport { envelope: ReportEnvelope; body: Uint8Array; localControls: string[] }
 
+function hasProtocolSemantics(p: EvidenceParameter): boolean {
+  const value = p.defaultValue;
+  if (p.type === 'date_range') return false; // Cupola's end date is inclusive.
+  if (p.type === 'select' || p.type === 'multi_select') {
+    if (p.options?.kind !== 'static' || p.allowAll || p.defaultMode && p.defaultMode !== 'value') return false;
+    const choices = p.options.values.map(option => option.value);
+    // Cupola permits empty/mixed choices and stale defaults while editing. The wire does not.
+    if (!choices.length || new Set(choices.map(choice => typeof choice)).size !== 1 || new Set(choices).size !== choices.length) return false;
+    if (value === null) return true;
+    if (p.type === 'select') return choices.some(choice => choice === value);
+    return Array.isArray(value) && new Set(value).size === value.length && value.every(item => choices.some(choice => choice === item));
+  }
+  if (value === null) return true;
+  if (p.type === 'text') return typeof value === 'string';
+  if (p.type === 'number') return typeof value === 'number' && Number.isFinite(value);
+  if (p.type === 'boolean') return typeof value === 'boolean';
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+}
+
 /** Cupola-only controls stay losslessly in the opaque body. Public parameters must have exactly
  * the protocol's semantics; query-driven choices and inclusive date ranges do not. */
 export function publicParameters(report: EvidenceReport): { parameters: ParameterSpec[]; localControls: string[] } {
   const parameters: ParameterSpec[] = [], localControls: string[] = [];
   for (const p of report.parameters) {
     const selection = p.type === 'select' || p.type === 'multi_select';
-    if (p.type === 'date_range' || selection && (p.options?.kind !== 'static' || p.allowAll || p.defaultMode && p.defaultMode !== 'value')) {
+    if (!hasProtocolSemantics(p)) {
       localControls.push(p.label); continue;
     }
     parameters.push({ key: p.key, label: p.label, type: p.type, required: p.required,

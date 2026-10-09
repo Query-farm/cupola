@@ -3,10 +3,17 @@ import { decodeRecord, encodeRecord, ReportClient, serviceLocation } from '../..
 import { decodeReport, encodeReport } from '../../src/lib/reporting/body';
 import { MutationJournal, parseJournal, serializeJournal } from '../../src/lib/reporting/journal';
 import { SaveController, recoveryDrafts } from '../../src/lib/reporting/save-controller';
-import { info, memoryStorage, record, report } from '../reporting/fixtures';
+import { info, memoryStorage, nativeOnlyParameters, record, report } from '../reporting/fixtures';
 
 const settle = async (controller: SaveController) => { for (let i = 0; i < 100 && ['draft', 'saving'].includes(controller.state.status); i++) await new Promise(resolve => setTimeout(resolve, 1)); };
 describe('reporting wire and documents', () => {
+  test('native controls with incompatible choices or defaults stay losslessly in the body', () => {
+    const r = { ...report(), parameters: nativeOnlyParameters };
+    const encoded = encodeReport(r, { description: '', tags: [] });
+    expect(encoded.envelope.parameters).toEqual([]);
+    expect(encoded.localControls).toEqual(nativeOnlyParameters.map(p => p.label));
+    expect(decodeReport({ ...record(), ...encoded }, r.serviceUrl).parameters).toEqual(nativeOnlyParameters);
+  });
   test('nested Arrow records preserve binary64 defaults, nulls, Unicode and exact int64 versions', () => {
     const r = record(); r.version = 9223372036854775806n; r.envelope!.title = '市場 📊';
     expect(decodeRecord(encodeRecord('ReportResult', r))).toEqual(r);

@@ -74,7 +74,8 @@ definition to the current browser workspace without automatically attaching or
 executing its required catalogs.
 
 The envelope exposes controls that exactly match protocol parameter semantics.
-Query-derived choices, select controls with “all”/dynamic default modes, and
+Query-derived choices, select controls with “all”/dynamic default modes,
+empty/mixed/duplicate choices or defaults outside the wire contract, and
 Cupola's inclusive date ranges remain native controls in the body. They are
 listed in the UI as **Cupola-only controls**, not advertised with an incorrect
 static-option or half-open-range contract. A future renderer must understand
@@ -136,6 +137,17 @@ Without a token, the reference worker exposes only its anonymously readable
 published reports, with no write actions.
 
 ## Verification
+
+The 0.4.226 integration review checked all 17 methods against the pinned Python
+SDK and reference worker. Regenerating the Arrow schemas and method signatures
+produced no drift. HTTP tests cover every method, lost-response replay, and a
+130-folder listing that crosses the worker's continuation boundary.
+
+The review fixed two integration defects: native controls that did not satisfy
+the public parameter contract could prevent saving, and the editor could retain
+an older, apparently dirty definition after a save and resubmit it when details
+changed. The editor now tracks the queued canonical definition, and details
+updates wait for pending saves. Browser regression tests cover that transition.
 
 ```sh
 bun test ./tests/unit

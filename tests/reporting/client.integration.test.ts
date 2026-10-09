@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { startReportingWorker } from './worker';
-import { report } from './fixtures';
+import { nativeOnlyParameters, report } from './fixtures';
 import { decodeReport, encodeReport } from '../../src/lib/reporting/body';
 import { ReportClient } from '../../src/lib/reporting/client';
 import { MutationJournal } from '../../src/lib/reporting/journal';
@@ -9,6 +9,17 @@ import { memoryStorage } from './fixtures';
 let worker: Awaited<ReturnType<typeof startReportingWorker>>;
 beforeAll(async () => { worker = await startReportingWorker(); });
 afterAll(async () => { await worker?.stop(); });
+test('worker accepts Cupola-only controls and exact public parameter defaults together', async () => {
+  const document = { ...report('Parameter interoperability'), parameters: [...nativeOnlyParameters,
+    { id: 'public', key: 'public', label: 'Public choice', type: 'select' as const, required: false, defaultValue: 0, options: { kind: 'static' as const, values: [{ label: 'Zero', value: 0 }, { label: 'One', value: 1 }] } },
+  ] };
+  const c = worker.client();
+  const encoded = encodeReport(document, { description: '', tags: [] });
+  expect(encoded.envelope.parameters.map(p => p.key)).toEqual(['public']);
+  const created = await c.call('create_report', { request_id: crypto.randomUUID(), envelope: encoded.envelope, body: encoded.body });
+  expect(decodeReport(created, worker.url).parameters).toEqual(document.parameters);
+  await c.call('delete_report', { request_id: crypto.randomUUID(), report_id: created.report_id, expected_version: created.version });
+});
 test('all seventeen protocol methods cross real Python HTTP with permission and CAS enforcement', async () => {
   const c = worker.client(), reader = worker.client(null);
   expect(await c.discover()).toBe(true);
@@ -58,4 +69,17 @@ test('a dropped HTTP reply after admission replays the exact create without dupl
   await expect(journal.run('create_report', { envelope, body })).rejects.toThrow('Response lost');
   const result = await journal.retry();
   expect((await c.call('list_reports', { query: 'Interrupted' })).map(r => r.report_id)).toEqual([result.report_id]);
+});
+
+test('folder streams consume every continuation page without losing int64 metadata', async () => {
+  const c = worker.client();
+  const parent = await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Paged library' });
+  const ids = new Set<string>();
+  for (let i = 0; i < 130; i++) {
+    const folder = await c.call('create_folder', { request_id: crypto.randomUUID(), name: `Folder ${i}`, parent_folder_id: parent.folder_id });
+    ids.add(folder.folder_id);
+  }
+  const folders = await c.call('list_folders', { parent_folder_id: parent.folder_id, recursive: false });
+  expect(new Set(folders.map(folder => folder.folder_id))).toEqual(ids);
+  expect(folders.every(folder => folder.version === 1n)).toBe(true);
 });

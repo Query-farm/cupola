@@ -169,3 +169,23 @@ test('switching libraries flushes a local edit before its autosave timer fires',
   await page.getByRole('combobox', { name: 'Report library', exact: true }).selectOption('local');
   await expect(page.getByRole('region', { name: 'Saved reports list', exact: true }).getByRole('button', { name: 'Keep this local edit', exact: true })).toBeVisible();
 });
+
+test('report details wait for autosave and preserve the current definition', async ({ page, reporting }) => {
+  const initial = await seed(reporting, 'Before details');
+  await page.goto(path(reporting.url, initial.report_id)); await edit(page);
+  const details = page.getByRole('button', { name: 'Report details', exact: true });
+  await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Editor change');
+  await expect(details).toBeDisabled();
+  await saved(page);
+  await details.click();
+  await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Updated details');
+  await page.getByRole('textbox', { name: 'Description', exact: true }).fill('Description from details');
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
+  await saved(page);
+  const latest = await reporting.client().call('get_report', { report_id: initial.report_id });
+  expect(latest.envelope!.title).toBe('Updated details');
+  expect(latest.envelope!.description).toBe('Description from details');
+  expect(JSON.parse(new TextDecoder().decode(latest.body!)).document.source).toBe(report().source);
+  await page.getByRole('button', { name: 'View source', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Report source' })).toContainText('42');
+});

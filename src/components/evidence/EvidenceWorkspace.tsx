@@ -575,6 +575,13 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
         const stored = validateEvidenceReport(withDerivedRequires(titled(next), requireCatalogs()));
         if (remote.canEdit) remote.onSave(stored, meta);
         savedRef.current = JSON.stringify(stored); baseline.current = savedRef.current;
+        // Keep the editor's definition aligned with the queued canonical body.
+        // Otherwise derived requirements make it look dirty forever, and unmount
+        // can queue an old definition over a subsequent details/history update.
+        if (reportRef.current === next) {
+          const shown = next.title === stored.title ? stored : { ...stored, title: next.title };
+          reportRef.current = shown; setReport(shown);
+        }
         setSaved(savedRef.current); setSaveError('');
         return stored;
       } catch (error) { setSaveError(describeReportError(error)); return null; }

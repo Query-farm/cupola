@@ -113,7 +113,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
         {revisionId && <Button variant="ghost" size="sm" onClick={() => props.onOpen(reportId)}>Open current report</Button>}
         <Button variant="outline" size="sm" onClick={() => setHistoryOpen(true)}><History />History</Button>
         <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}><Link />Share link</Button>
-        {controller && <Button variant="ghost" size="sm" disabled={busy || managementPending} onClick={() => setDialog({ action: 'metadata' })}>Report details</Button>}
+        {controller && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => setDialog({ action: 'metadata' })}>Report details</Button>}
         {can('publish') && <><Button variant="outline" size="sm" disabled={blocked || record.published_revision_id === record.revision_served} onClick={() => void attempt(async () => { await session.journal.run('publish', { report_id: reportId, revision_id: record.revision_served, expected_published_revision_id: record.published_revision_id }); await refreshRecord(); })}>Publish revision</Button>{record.published_revision_id && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => void attempt(async () => { await session.journal.run('publish', { report_id: reportId, revision_id: null, expected_published_revision_id: record.published_revision_id }); await refreshRecord(); })}>Unpublish</Button>}</>}
         {can('move') && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => setDialog({ action: 'move' })}>Move</Button>}
         {can('transfer_ownership') && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => setDialog({ action: 'ownership' })}>Ownership</Button>}
