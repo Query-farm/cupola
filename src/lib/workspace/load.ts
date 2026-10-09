@@ -21,6 +21,7 @@ import { getAuthTokenForService, hadAuthToken } from "../auth";
 import { extractOrigin, hasTokens as hasOAuthTokens } from "../oauth-client";
 import { grainliftHttpUrl } from "../url-params";
 import { serviceAlias, uniqueAlias } from "./aliases";
+import { connectionErrorMessage } from "../connection-errors";
 import type { ActiveCatalog } from "./spec";
 
 export type CatalogLoad =
@@ -114,7 +115,7 @@ export async function loadCatalogEntry(entry: CatalogEntry, opts: LoadOptions): 
       catalogName: serverName,
     };
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to connect";
+    const message = connectionErrorMessage(err, catalog.url);
     const alias = knownAlias || catalog.url;
     if (isRecoverableAuthError(message)) {
       return { load: { state: "sign-in-required", message }, alias, catalogName: catalog.catalogName };

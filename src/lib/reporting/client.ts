@@ -2,6 +2,7 @@ import { httpConnect } from '@query-farm/vgi-rpc/connect';
 import { deserializeSchema, serializeBatch, singleRowBatch } from '@query-farm/vgi-rpc/arrow';
 import { tableFromIPC } from '@query-farm/apache-arrow';
 import { getAuthTokenForService } from '../auth';
+import { connectionErrorMessage } from '../connection-errors';
 import { methodConfig, recordSchemas, REPORTS_PROTOCOL, type ReportMethods } from './contracts.generated';
 
 export type Method = keyof ReportMethods;
@@ -79,7 +80,13 @@ export class ReportClient {
       const headers = new Headers(init?.headers);
       headers.delete('Authorization');
       if (target.origin === base.origin && (target.pathname === base.pathname || target.pathname.startsWith(base.pathname.replace(/\/$/, '') + '/')) && token) headers.set('Authorization', `Bearer ${token}`);
-      return transport(input, { ...init, headers, credentials: 'omit', redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+      try {
+        return await transport(input, { ...init, headers, credentials: 'omit', redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+      } catch (error) {
+        const message = connectionErrorMessage(error, target.href);
+        if (error instanceof Error && message !== error.message) throw new TypeError(message, { cause: error });
+        throw error;
+      }
     }) as typeof fetch;
     return httpConnect(this.url, { protocol, fetch: scopedFetch });
   }

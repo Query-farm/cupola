@@ -31,6 +31,7 @@ import { decodeOptionSpecs } from "./attach/specs";
 import type { OptionSpecInfo } from "./attach/options";
 import { isRecoverableAuthError } from "./auth-errors";
 import type { ConnectionTest } from "./workspace/manager";
+import { connectionErrorMessage } from "./connection-errors";
 
 /** Column info extracted from a TableInfo's serialized Arrow schema. */
 export interface ColumnInfo {
@@ -339,7 +340,7 @@ export async function fetchServiceCatalogs(serviceUrl: string): Promise<
     const infos = await client.catalogsInfo();
     return { ok: true, catalogs: infos.map((info) => ({ name: info.name, specs: decodeOptionSpecs(info.attach_option_specs) })) };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = connectionErrorMessage(error, serviceUrl);
     return { ok: false, error: message, signInRequired: isRecoverableAuthError(message) };
   } finally {
     client?.close();
@@ -373,7 +374,7 @@ export async function testServiceConnection(serviceUrl: string, catalogName: str
       return { ok: true, latencyMs, catalogFound: true, catalogs, schemaCount: null, schemaNote: `schemas not listed: ${error instanceof Error ? error.message : String(error)}` };
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = connectionErrorMessage(error, serviceUrl);
     return { ok: false, latencyMs: performance.now() - started, error: message, signInRequired: isRecoverableAuthError(message) };
   } finally {
     client?.close();
