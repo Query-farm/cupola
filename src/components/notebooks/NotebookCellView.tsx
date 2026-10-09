@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, MoreHorizontal, Play, Square, Pencil, Plus, Eye } from 'lucide-react';
+import { ChevronDown, MoreHorizontal, Play, Square, Pencil, Plus, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { MarkdownContent } from '../content/MarkdownContent';
 import { DocumentCodeEditor, markdownSupport } from '../content/DocumentCodeEditor';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
@@ -143,12 +143,19 @@ export function NotebookCellView({
   const displayedTable = pinned?.table ?? result?.table;
   const displayedRun = pinned?.provenance ?? result?.provenance;
   const stale = cell.type === 'sql' && isStale(cell, result, parameterScope);
+  const reevaluating = !!result?.running && !!result.table && result.attempt?.mode !== 'explain';
   const editChart = (value: NotebookChart) => {
     setDraft({ ...value });
     setDraftError('');
   };
   const status = result?.running ? (
-    <RunningStatus record={result.attempt} />
+    <span className="inline-flex items-center gap-1.5">
+      <Loader2 className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
+      <span>
+        {reevaluating && 'Reevaluating · '}
+        <RunningStatus record={result.attempt} />
+      </span>
+    </span>
   ) : result?.cancelled ? (
     'Cancelled'
   ) : result?.error ? (
@@ -160,7 +167,7 @@ export function NotebookCellView({
   );
   return (
     <section
-      className={`group/cell min-w-0 rounded-lg border bg-background focus-within:border-primary/40 ${cell.type === 'markdown' && !editingMarkdown ? 'border-transparent hover:border-border/60' : 'border-border/60'}`}
+      className={`group/cell min-w-0 rounded-lg border bg-background focus-within:border-primary/40 ${result?.running ? 'border-primary/60 ring-1 ring-primary/15' : cell.type === 'markdown' && !editingMarkdown ? 'border-transparent hover:border-border/60' : 'border-border/60'}`}
       data-testid="notebook-cell"
       aria-label={`${cell.type === 'sql' ? 'SQL' : 'Markdown'} cell: ${cell.title}`}
     >
@@ -171,7 +178,7 @@ export function NotebookCellView({
               size="icon-sm"
               variant="ghost"
               aria-label={result?.running ? 'Stop' : 'Run'}
-              title="Run cell (Shift+Enter)"
+              title={result?.running ? 'Stop cell' : 'Run cell (Shift+Enter)'}
               disabled={busy && !result?.running}
               onClick={result?.running ? onStop : onRun}
             >
@@ -218,16 +225,29 @@ export function NotebookCellView({
         />
         {cell.type === 'sql' && (
           <span
-            className="order-last w-full pl-2 text-[11px] whitespace-nowrap sm:order-none sm:w-auto sm:pl-0"
+            className={`order-last w-full pl-2 text-[11px] whitespace-nowrap sm:order-none sm:w-auto sm:pl-0 ${result?.running ? 'rounded bg-primary/10 px-2 py-1 font-medium text-primary sm:pl-2' : ''}`}
             title={
               result?.completedAt
                 ? `Last run ${new Date(result.completedAt).toLocaleTimeString()}`
                 : 'Shift+Enter runs this cell'
             }
-            aria-live="polite"
+            role="status"
           >
             {status}
           </span>
+        )}
+        {cell.type === 'sql' && !cell.collapsed && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 text-xs"
+            aria-expanded={!cell.codeHidden}
+            aria-controls={`notebook-source-${cell.id}`}
+            onClick={() => onChange({ ...cell, codeHidden: !cell.codeHidden })}
+          >
+            {cell.codeHidden ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+            {cell.codeHidden ? 'Show code' : 'Hide code'}
+          </Button>
         )}
         {cell.type === 'markdown' && !cell.collapsed && (
           <Button
@@ -310,7 +330,7 @@ export function NotebookCellView({
       )}
       {stale && (
         <p className="px-4 py-1 text-xs text-amber-700 dark:text-amber-400" role="status">
-          Stale output — run to update
+          {reevaluating ? 'Showing previous output while this cell is reevaluating.' : 'Stale output — run to update'}
         </p>
       )}
       {cell.collapsed ? (
@@ -347,17 +367,9 @@ export function NotebookCellView({
         </div>
       ) : (
         <>
-          {cell.codeHidden ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="ml-3 text-xs text-muted-foreground"
-              onClick={() => onChange({ ...cell, codeHidden: false })}
-            >
-              Show code
-            </Button>
-          ) : (
+          {!cell.codeHidden && (
             <div
+              id={`notebook-source-${cell.id}`}
               className="border-t border-border/40"
               style={{
                 height: Math.min(480, Math.max(88, cell.source.split('\n').length * 22 + 24)),

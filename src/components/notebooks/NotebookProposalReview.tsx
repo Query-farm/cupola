@@ -112,7 +112,7 @@ export function NotebookProposalReview({ before, after }: { before: Notebook; af
       </p>
       {JSON.stringify([before.parameters ?? [], before.values ?? {}]) !==
         JSON.stringify([after.parameters ?? [], after.values ?? {}]) && (
-        <details open className="rounded-md border p-2">
+        <details className="rounded-md border p-2">
           <summary className="cursor-pointer font-medium">Parameter changes</summary>
           <div className="grid gap-2 sm:grid-cols-2 mt-2">
             {[
@@ -134,7 +134,7 @@ export function NotebookProposalReview({ before, after }: { before: Notebook; af
       )}
       <div className="space-y-2">
         {changes.map(({ cell, old, next, moved }) => (
-          <details key={cell.id} open className="rounded-md border p-2">
+          <details key={cell.id} className="rounded-md border p-2">
             <summary className="cursor-pointer font-medium">
               {!old ? 'Added' : !next ? 'Removed' : 'Updated'} {cell.type === 'sql' ? 'SQL' : 'Markdown'} ·{' '}
               {cell.title || 'Untitled cell'}

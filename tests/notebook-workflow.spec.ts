@@ -144,17 +144,40 @@ test('widgets bind SQL, preserve run provenance and pinned results, and survive 
   await expect(cell.getByRole('tab', { name: 'Pinned #1', exact: true })).toHaveCount(0);
 });
 
-test('long queries show execution status and cancellation in run details', async ({ page }) => {
+test('reevaluation stays visible with hidden code and collapsed cells and retains previous output', async ({ page }) => {
   await openNotebook(page);
   const cell = page.getByTestId('notebook-cell').first();
-  await cell.locator('.cm-content').fill('SELECT count(*) FROM cupola_test.edge.slow_rows(100000, 2000)');
+  await cell.locator('.cm-content').fill('SELECT 42 AS answer');
   await cell.getByRole('button', { name: 'Run', exact: true }).click();
-  await expect(cell.getByText(/Executing query ·/)).toBeVisible({ timeout: 20_000 });
+  await expect(cell.getByText(/1 returned rows/)).toBeVisible({ timeout: 20_000 });
+  await cell.locator('.cm-content').fill('SELECT count(*) FROM cupola_test.edge.slow_rows(100000, 2000)');
+  await cell.getByRole('button', { name: 'Hide code', exact: true }).click();
+  await cell.getByRole('button', { name: 'Run', exact: true }).click();
+  const status = cell.getByRole('status').filter({ hasText: /Reevaluating · Executing query ·/ });
+  await expect(status).toBeVisible({ timeout: 20_000 });
+  await expect(status.locator('svg')).toBeVisible();
+  await expect(cell.getByText('Showing previous output while this cell is reevaluating.')).toBeVisible();
+  await expect(cell.getByRole('cell', { name: '42', exact: true })).toBeVisible();
+  await expect(cell.locator('.cm-content')).toHaveCount(0);
+  await cell.getByRole('button', { name: 'Cell actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Collapse cell', exact: true }).click();
+  await expect(status).toBeVisible();
   await cell.getByRole('button', { name: 'Stop', exact: true }).click();
   await expect(cell.getByText('Cancelled', { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(status).toHaveCount(0);
+  await cell.getByRole('button', { name: 'Expand cell', exact: true }).click();
+  await expect(cell.getByRole('cell', { name: '42', exact: true })).toBeVisible();
+  await expect(cell.getByText('Stale output — run to update')).toBeVisible();
   await cell.getByRole('button', { name: 'Run details', exact: true }).click();
   const details = page.getByRole('dialog', { name: 'Cell run details', exact: true });
   await expect(details).toContainText('Cancelled');
   await expect(details).toContainText('slow_rows(100000, 2000)');
   await expect(details).toContainText('Finished');
+  await details.press('Escape');
+  await cell.getByRole('button', { name: 'Show code', exact: true }).click();
+  await cell.locator('.cm-content').fill('SELECT 43 AS answer');
+  await cell.getByRole('button', { name: 'Run', exact: true }).click();
+  await expect(cell.getByRole('cell', { name: '43', exact: true })).toBeVisible();
+  await expect(cell.getByText(/1 returned rows/)).toBeVisible();
+  await expect(cell.getByText('Stale output — run to update')).toHaveCount(0);
 });

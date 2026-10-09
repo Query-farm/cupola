@@ -1,5 +1,5 @@
 import type { Table } from '@query-farm/apache-arrow';
-import { decodeArrowBuffer } from '../duckdb-query';
+import { decodeArrowBuffer, quoteIdent } from '../duckdb-query';
 import type { QueryResult } from '../shell-bridge';
 import { isReadOnlySql, splitStatements } from '../evidence/setup-test';
 import type { SqlCell } from './model';
@@ -46,6 +46,7 @@ export interface ResultSnapshot {
   provenance: RunRecord;
 }
 export interface NotebookRunOptions extends ParameterScope {
+  cells?: SqlCell[];
   serviceUrl?: string;
   sessionId?: string;
   engineVersion?: string;
@@ -58,6 +59,8 @@ export interface NotebookQueryContext {
 }
 
 export interface CellResult {
+  upstreamInputs?: string;
+  dependencyStale?: boolean;
   table?: Table;
   source?: string;
   completedAt?: number;
@@ -72,8 +75,9 @@ export interface CellResult {
   plan?: Table;
   planProvenance?: RunRecord;
 }
-export function isStale(cell: SqlCell, result?: CellResult, scope: ParameterScope = {}): boolean {
+export function isStale(cell: SqlCell, result?: CellResult, scope: UpstreamScope = {}): boolean {
   if (!result?.table) return false;
+  if (result.dependencyStale || (result.upstreamInputs ?? '[]') !== upstreamInputs(cell.id, scope)) return true;
   if (result.source !== cell.source) return true;
   if (result.attempt?.mode !== 'explain' && (result.running || result.error || result.cancelled)) return true;
   const lastQuery = result.history?.find((run) => run.mode === 'query');
@@ -85,12 +89,70 @@ export function isStale(cell: SqlCell, result?: CellResult, scope: ParameterScop
     return true;
   }
 }
-export function validateCellSql(sql: string): void {
+export interface CellSql {
+  sql: string;
+  query: string;
+  table?: string;
+}
+
+/** Only materialize a SELECT, never arbitrary DDL or a script. Reconstruct the
+ * prefix so quoted names cannot escape the connection-local temp namespace. */
+export function parseCellSql(sql: string): CellSql {
   if (!sql.trim()) throw new Error('Enter a SQL query first.');
-  if (splitStatements(sql).length !== 1 || !isReadOnlySql(sql))
-    throw new Error(
-      'Each notebook SQL cell accepts one read query. Use the Query Editor for scripts or changes to data.',
-    );
+  const statements = splitStatements(sql);
+  const gap = '(?:\\s|--[^\\n]*(?:\\n|$)|/\\*[\\s\\S]*?\\*/)';
+  const create = new RegExp(`^${gap}*CREATE${gap}+(OR${gap}+REPLACE${gap}+)?TEMP(?:ORARY)?${gap}+TABLE${gap}+("(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_]*)${gap}+AS${gap}+([\\s\\S]+)$`, 'i');
+  const match = statements.length === 1 ? create.exec(statements[0]) : null;
+  if (match && isReadOnlySql(match[3])) {
+    const table = match[2].startsWith('"') ? match[2].slice(1, -1).replaceAll('""', '"') : match[2];
+    return { table, query: match[3], sql: `CREATE ${match[1] ? 'OR REPLACE ' : ''}TEMP TABLE ${quoteIdent(table)} AS\n${match[3]}` };
+  }
+  if (statements.length === 1 && isReadOnlySql(sql)) return { sql, query: sql };
+  throw new Error('Each notebook SQL cell accepts one read query or CREATE [OR REPLACE] TEMP TABLE name AS SELECT …. Use the Query Editor for scripts or changes to stored data.');
+}
+export function validateCellSql(sql: string): void {
+  parseCellSql(sql);
+}
+
+/** Conservatively track preceding setup cells. No automatic execution: edits
+ * mark downstream results stale, and Run changed reruns them in document order. */
+type SetupInput = {
+  source: string;
+  params: unknown[];
+  revision: number;
+  dependencies: [string, number][];
+  stale: boolean;
+};
+type UpstreamScope = ParameterScope & { cells?: { id: string; type: string; source: string }[] };
+export function upstreamInputs(id: string, scope: UpstreamScope): string {
+  return upstreamState(id, scope).fingerprint;
+}
+function upstreamState(id: string, scope: UpstreamScope, executed?: Map<string, SetupInput>) {
+  const inputs: unknown[] = [];
+  const versions: [string, number][] = [];
+  for (const cell of scope.cells ?? []) {
+    if (cell.id === id) break;
+    if (cell.type !== 'sql') continue;
+    try {
+      if (!parseCellSql(cell.source).table) continue;
+      const actual = executed?.get(cell.id);
+      if (!executed) inputs.push([cell.id, cell.source, compileNotebookQuery(cell.source, scope).params]);
+      else if (!actual) inputs.push([cell.id, null, 'not run']);
+      else {
+        // Keep versions flat: nesting every preceding cell's lineage would
+        // grow exponentially. A stale derived table stays stale even if its
+        // consumers are rerun or its displayed output has been cleared.
+        const changed = actual.stale || JSON.stringify(actual.dependencies) !== JSON.stringify(versions);
+        inputs.push([cell.id, actual.source, actual.params, ...(changed ? ['upstream changed'] : [])]);
+      }
+    } catch {
+      // An invalid upstream edit must not make dependent output look current.
+      const actual = executed?.get(cell.id);
+      inputs.push(actual ? [cell.id, actual.source, actual.params] : [cell.id, cell.source, 'invalid']);
+    }
+    versions.push([cell.id, executed?.get(cell.id)?.revision ?? 0]);
+  }
+  return { fingerprint: JSON.stringify(inputs), versions };
 }
 
 /** Use DuckDB's parser before execution: a leading WITH can also prefix DELETE or UPDATE.
@@ -115,6 +177,7 @@ export class NotebookRunner {
   private active: AbortController | null = null;
   private sequence = 0;
   private history = new Map<string, RunRecord[]>();
+  private setupInputs = new Map<string, SetupInput>();
   constructor(
     private query: (sql: string, signal: AbortSignal, context: NotebookQueryContext) => Promise<QueryResult>,
     private publish: (id: string, update: Partial<CellResult>) => void,
@@ -124,6 +187,12 @@ export class NotebookRunner {
   }
   stop() {
     this.active?.abort();
+  }
+  reset() {
+    if (this.active) throw new Error('Stop the notebook run before resetting its session.');
+    this.sequence = 0;
+    this.history.clear();
+    this.setupInputs.clear();
   }
   async run(cells: SqlCell[], options: NotebookRunOptions = {}): Promise<void> {
     if (this.active) return;
@@ -181,6 +250,15 @@ export class NotebookRunner {
           if (response.arrowBuffers?.length !== 1) throw new Error('Expected one tabular result.');
           phase('decoding');
           const table = decodeArrowBuffer(response.arrowBuffers[0]);
+          const upstream = upstreamState(cell.id, snapshot.options, this.setupInputs);
+          if (mode === 'query' && parseCellSql(cell.source).table)
+            this.setupInputs.set(cell.id, {
+              source: cell.source,
+              params: compiled.params,
+              revision: record.number,
+              dependencies: upstream.versions,
+              stale: upstream.fingerprint !== upstreamInputs(cell.id, snapshot.options),
+            });
           record = {
             ...record,
             phase: 'complete',
@@ -197,6 +275,8 @@ export class NotebookRunner {
                   completedAt: record.completedAt,
                   elapsedMs: record.elapsedMs,
                   provenance: record,
+                  upstreamInputs: upstream.fingerprint,
+                  dependencyStale: false,
                 }),
             attempt: record,
             running: false,

@@ -17,6 +17,8 @@ import {
   isStale,
   validateCellSql,
   validateSelectQuery,
+  parseCellSql,
+  upstreamInputs,
   type CellResult,
 } from '../../src/lib/notebooks/execution';
 import { chartData, chartSpec, CHART_ROW_LIMIT } from '../../src/lib/notebooks/charts';
@@ -132,10 +134,81 @@ describe('notebook execution', () => {
       '-- only a comment',
       'select 1; select 2',
       'delete from sales',
-      'create temp table x as select 1',
+      'create table x as select 1',
       'EXPLAIN ANALYZE DELETE FROM sales',
     ])
       expect(() => validateCellSql(sql)).toThrow();
+  });
+  test('accepts only connection-local CREATE TABLE AS queries and safely quotes names', () => {
+    for (const sql of [
+      'create temp table x as select 1',
+      'CREATE OR REPLACE TEMPORARY TABLE x AS WITH t AS (SELECT 1) SELECT * FROM t;',
+      '-- setup\nCREATE /* note */ TEMP TABLE "x.y" AS VALUES (1)',
+    ]) expect(() => validateCellSql(sql)).not.toThrow();
+    expect(parseCellSql('create temp table "a""b" as select 1')).toEqual({
+      table: 'a"b', query: 'select 1', sql: 'CREATE TEMP TABLE "a""b" AS\nselect 1',
+    });
+    for (const sql of [
+      'create table x as select 1',
+      'create temp table memory.main.x as select 1',
+      'create temp view x as select 1',
+      'create temp table x (id integer)',
+      'create temp table x as select 1; delete from sales',
+      'create temp table x as delete from sales',
+      'create temp table x as select 1; create temp table y as select 2',
+    ]) expect(() => validateCellSql(sql)).toThrow();
+  });
+  test('downstream freshness tracks upstream SQL, bound parameters and table replacements', () => {
+    const setup = cell('setup', 'CREATE OR REPLACE TEMP TABLE totals AS SELECT $n AS n');
+    const consumer = cell('consumer', 'SELECT * FROM totals');
+    const scope = { cells: [setup, consumer], parameters: [{ id: 'n', key: 'n', label: 'N', type: 'number' as const, defaultValue: 2, required: false }] };
+    const result = { source: consumer.source, table: tableFromArrays({ n: [2] }), upstreamInputs: upstreamInputs(consumer.id, scope) };
+    expect(isStale(consumer, result, scope)).toBe(false);
+    expect(isStale(consumer, result, { ...scope, values: { n: 3 } })).toBe(true);
+    expect(isStale(consumer, result, { ...scope, cells: [{ ...setup, source: 'SELECT 1' }, consumer] })).toBe(true);
+    expect(isStale(consumer, { ...result, dependencyStale: true }, scope)).toBe(true);
+  });
+  test('running only a consumer cannot make an unexecuted setup edit look fresh', async () => {
+    const setup = cell('setup', 'CREATE OR REPLACE TEMP TABLE totals AS SELECT 42 AS n');
+    const consumer = cell('consumer', 'SELECT * FROM totals');
+    const results: Record<string, CellResult> = {};
+    const runner = new NotebookRunner(async () => response(), (id, update) => {
+      results[id] = { ...results[id], ...update };
+    });
+    const scope = { cells: [setup, consumer] };
+    await runner.run(scope.cells, scope);
+    expect(isStale(consumer, results.consumer, scope)).toBe(false);
+    const changed = { cells: [{ ...setup, source: setup.source.replace('42', '80') }, consumer] };
+    await runner.run([consumer], changed);
+    expect(isStale(consumer, results.consumer, changed)).toBe(true);
+    await runner.run(changed.cells, changed);
+    expect(isStale(consumer, results.consumer, changed)).toBe(false);
+    runner.reset();
+    await runner.run([consumer], changed);
+    expect(results.consumer.provenance?.number).toBe(1);
+    expect(results.consumer.history).toHaveLength(1);
+    expect(isStale(consumer, results.consumer, changed)).toBe(true);
+  });
+  test('consumers of derived tables stay stale until every changed setup is rebuilt', async () => {
+    const setup = cell('setup', 'CREATE OR REPLACE TEMP TABLE totals AS SELECT 42 AS n');
+    const derived = cell('derived', 'CREATE OR REPLACE TEMP TABLE doubled AS SELECT n * 2 AS n FROM totals');
+    const consumer = cell('consumer', 'SELECT * FROM doubled');
+    const scope = { cells: [setup, derived, consumer] };
+    const results: Record<string, CellResult> = {};
+    const runner = new NotebookRunner(async () => response(), (id, update) => {
+      results[id] = { ...results[id], ...update };
+    });
+    await runner.run(scope.cells, scope);
+    await runner.run([setup], scope);
+    await runner.run([consumer], scope);
+    expect(isStale(consumer, results.consumer, scope)).toBe(true);
+    // Displayed outputs may be cleared without losing table lineage.
+    delete results.setup;
+    delete results.derived;
+    await runner.run([consumer], scope);
+    expect(isStale(consumer, results.consumer, scope)).toBe(true);
+    await runner.run([derived, consumer], scope);
+    expect(isStale(consumer, results.consumer, scope)).toBe(false);
   });
   test('runs in document order, stops on error and preserves the previous table', async () => {
     const calls: string[] = [],

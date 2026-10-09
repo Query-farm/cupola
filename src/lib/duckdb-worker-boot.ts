@@ -2,6 +2,7 @@ import { observeCatalogQuery } from './catalog-store';
 import { decodeArrowBuffer } from './duckdb-query';
 import { pendingQuery, parameterVariableSql } from './pending-query';
 import { createQueryExecutor, type QueryExecutionOptions } from './query-execution';
+import { scopedConnection } from './duckdb-scoped-connection';
 // Boot DuckDB on the main thread via @haybarn/haybarn-wasm's AsyncDuckDB.
 //
 // AsyncDuckDB runs its own sub-worker (COI/EH/MVP variant selected by
@@ -258,7 +259,9 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   const interruptHandle = handleSource.getInterruptHandle ? await handleSource.getInterruptHandle(connId) : null;
   const interruptFlag = interruptHandle ? new Uint8Array(interruptHandle.memory, interruptHandle.offset, 1) : null;
   engine.interruptsRunningQueries = interruptFlag !== null;
+  let sessionInterrupt: (() => void) | null = null;
   const execute = createQueryExecutor(() => {
+    if (sessionInterrupt) { sessionInterrupt(); return; }
     if (interruptFlag) Atomics.store(interruptFlag, 0, 1);
     cancelPending();
   });
@@ -363,6 +366,16 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
     }
   }), options ?? {});
   engine.getTableNames = (sql: string) => execute(() => conn.getTableNames(sql));
+  engine.openConnection = () => execute(async () => {
+    const session = await db.connect();
+    try {
+      return await scopedConnection(db, session, execute, cancelInt32,
+        interrupt => { sessionInterrupt = interrupt; }, interruptible);
+    } catch (error) {
+      await session.close();
+      throw error;
+    }
+  });
   // Keep the shell alias on the same connection queue.
   engine.querySync = engine.query;
   notifyQueryChange();

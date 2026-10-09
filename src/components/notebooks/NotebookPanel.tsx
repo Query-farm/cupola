@@ -46,9 +46,9 @@ import {
   type Notebook,
   type NotebookCell,
 } from '../../lib/notebooks/model';
-import { NotebookRunner, isStale, validateSelectQuery, type CellResult } from '../../lib/notebooks/execution';
-import { EvidenceQueryRun } from '../../lib/evidence/query-run';
-import { waitForEngineReady, engine } from '../../lib/shell-bridge';
+import { NotebookRunner, isStale, parseCellSql, type CellResult } from '../../lib/notebooks/execution';
+import { NotebookSession } from '../../lib/notebooks/session';
+import { engine } from '../../lib/shell-bridge';
 import { copyNotebook, exportNotebook as download } from '../../lib/notebooks/actions';
 import { useSavedDocumentActions } from '../../lib/saved-document-actions';
 import type { CatalogData } from '../../lib/service';
@@ -337,6 +337,10 @@ function NotebookWorkspace({
   const [running, setRunning] = useState(false);
   const [batch, setBatch] = useState<string[]>([]);
   const sessionId = useRef(uid());
+  const session = useRef<NotebookSession | null>(null);
+  const getSession = () => (session.current ??= new NotebookSession());
+  const [resetting, setResetting] = useState(false);
+  const [sessionMessage, setSessionMessage] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   const [showAi, setShowAi] = useState(false);
   const aiReturnFocus = useRef<HTMLElement | null>(null);
@@ -380,35 +384,18 @@ function NotebookWorkspace({
   const runner = useRef<NotebookRunner | null>(null);
   if (!runner.current)
     runner.current = new NotebookRunner(
-      async (sql, signal, context) => {
-        const run = new EvidenceQueryRun();
-        const stop = () => run.stop();
-        signal.addEventListener('abort', stop, { once: true });
-        try {
-          signal.throwIfAborted();
-          await run.wait(waitForEngineReady());
-          context.phase('queued');
-          await validateSelectQuery(sql, (text, params) =>
-            run.query(text, params, signal, () => context.phase('validating')),
-          );
-          context.phase('queued');
-          return await run.query(
-            context.mode === 'explain' ? `EXPLAIN ${sql}` : sql,
-            context.params,
-            signal,
-            () => context.phase('executing'),
-          );
-        } finally {
-          signal.removeEventListener('abort', stop);
-          run.stop();
-        }
-      },
+      (sql, signal, context) => getSession().runCell(sql, signal, context),
       (id, update) => {
         if (alive.current && latest.current.cells.some((cell) => cell.id === id))
-          setResults((previous) => ({
-            ...previous,
-            [id]: { ...previous[id], ...update },
-          }));
+          setResults((previous) => {
+            const next = { ...previous, [id]: { ...previous[id], ...update } };
+            if (update.provenance && update.source && parseCellSql(update.source).table) {
+              const index = latest.current.cells.findIndex(cell => cell.id === id);
+              for (const cell of latest.current.cells.slice(index + 1))
+                if (next[cell.id]) next[cell.id] = { ...next[cell.id], dependencyStale: true };
+            }
+            return next;
+          });
       },
     );
   useEffect(() => {
@@ -416,12 +403,14 @@ function NotebookWorkspace({
     return () => {
       alive.current = false;
       runner.current?.stop();
+      void session.current?.close().catch(error => console.error('Notebook session cleanup failed', error));
+      session.current = null;
       onBusyChange?.(false);
     };
   }, []);
   useEffect(() => {
-    onBusyChange?.(running || aiBusy);
-  }, [running, aiBusy, onBusyChange]);
+    onBusyChange?.(running || aiBusy || resetting);
+  }, [running, aiBusy, resetting, onBusyChange]);
   useEffect(() => {
     const ids = new Set(doc.cells.filter((cell) => cell.type === 'sql').map((cell) => cell.id));
     setResults((previous) =>
@@ -512,7 +501,8 @@ function NotebookWorkspace({
     setPendingInsertion({ ...insertion, cellId: cell.id });
   }, [insertion]);
   async function run(ids?: string[], mode: 'query' | 'explain' = 'query') {
-    if (runner.current!.running || aiBusy) return;
+    if (runner.current!.running || aiBusy || resetting) return;
+    setSessionMessage('');
     const cells = latest.current.cells.filter(
       (cell) => cell.type === 'sql' && (!ids || ids.includes(cell.id)),
     );
@@ -520,6 +510,7 @@ function NotebookWorkspace({
     setBatch(cells.map((cell) => cell.id));
     try {
       await runner.current!.run(cells as Extract<NotebookCell, { type: 'sql' }>[], {
+        cells: latest.current.cells.filter(cell => cell.type === 'sql'),
         parameters: latest.current.parameters,
         values: latest.current.values,
         serviceUrl: latest.current.serviceUrl,
@@ -531,7 +522,24 @@ function NotebookWorkspace({
       if (alive.current) setRunning(false);
     }
   }
-  const busy = running || aiBusy;
+  const busy = running || aiBusy || resetting;
+  async function resetSession() {
+    if (busy) return;
+    setResetting(true);
+    setSessionMessage('');
+    try {
+      await session.current?.close();
+      session.current = null;
+      sessionId.current = uid();
+      runner.current!.reset();
+      setResults({});
+      setSessionMessage('Session reset. Temporary tables and outputs cleared. Run all to rebuild them.');
+    } catch (error) {
+      setSessionMessage(`Could not reset the session: ${String(error)}`);
+    } finally {
+      setResetting(false);
+    }
+  }
   useSavedDocumentActions('notebook', notebookScope(initial), initial.id, action => {
     const current = latest.current;
     switch (action.type) {
@@ -542,7 +550,7 @@ function NotebookWorkspace({
       case 'duplicate': copyNotebook(current); break;
       case 'export': download(current); break;
       case 'delete':
-        if (runner.current?.running || aiBusy)
+        if (runner.current?.running || aiBusy || resetting)
           throw new Error('Stop the running query or AI response before deleting this notebook.');
         deleteNotebook(notebookScope(current), current.id);
         deleted.current = true;
@@ -657,6 +665,9 @@ function NotebookWorkspace({
             <DropdownMenuItem disabled={busy || !Object.keys(results).length} onClick={() => setResults({})}>
               Clear all outputs
             </DropdownMenuItem>
+            <DropdownMenuItem disabled={busy} onClick={() => void resetSession()}>
+              Reset session
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
         <Button
@@ -696,7 +707,7 @@ function NotebookWorkspace({
           size="sm"
           variant="outline"
           disabled={busy || !changed.length}
-          title="Run cells whose SQL or referenced parameter values changed. Changes in source data are not monitored."
+          title="Run changed cells and cells affected by earlier temporary-table cells. Changes in remote data are not monitored."
           onClick={() => void run(changed)}
         >
           Run changed
@@ -712,6 +723,7 @@ function NotebookWorkspace({
           Ask AI
         </Button>
       </header>
+      {sessionMessage && <p role="status" className="border-b px-4 py-2 text-xs">{sessionMessage}</p>}
       {insertionError && (
         <p role="alert" className="border-b px-4 py-2 text-sm text-destructive">
           {insertionError}
@@ -757,6 +769,12 @@ function NotebookWorkspace({
         >
           <div className="mx-auto max-w-5xl">
             <NotebookParameters document={doc} onChange={change} />
+            <details className="mb-2 text-xs text-muted-foreground">
+              <summary className="cursor-pointer">Share data between cells</summary>
+              <p className="mt-2">Create a temporary table in one cell, then query it in later cells. Run all executes cells in order.</p>
+              <pre className="my-2 overflow-auto rounded bg-muted p-2">{'-- First cell\nCREATE OR REPLACE TEMP TABLE totals AS\nSELECT \'West\' AS region, 42 AS total;\n\n-- Later cell\nSELECT * FROM totals WHERE total > 10;'}</pre>
+              <p>Tables belong to this open notebook. Switching notebooks, reloading, or choosing Reset session clears them. Switching workspace tabs keeps this session. Clear outputs only hides results.</p>
+            </details>
             <InsertCell index={0} disabled={busy || doc.cells.length >= 200} onAdd={add} />
             {doc.cells.map((cell, index) => (
               <div key={cell.id} id={`notebook-${cell.id}`} onFocusCapture={() => setSelected(cell.id)}>
@@ -854,9 +872,11 @@ function NotebookWorkspace({
           >
             <Suspense fallback={<p className="p-3">Loading assistant…</p>}>
               <NotebookAgent
-                key={doc.id}
+                key={sessionId.current}
+                sessionId={sessionId.current}
+                querySession={(sql, params, options) => getSession().query(sql, params, options)}
                 active={showAi}
-                disabled={running}
+                disabled={running || resetting}
                 document={doc}
                 results={results}
                 selectedCell={selected}

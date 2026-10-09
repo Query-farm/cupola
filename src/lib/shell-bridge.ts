@@ -34,6 +34,16 @@ export interface QueryResult {
   error?: string;
 }
 
+/** An isolated SQL session on the existing WASM database. Attached catalogs are
+ * shared; temporary tables, variables, transactions and USE are connection-local. */
+export interface EngineConnection {
+  query: (sql: string, options?: QueryExecutionOptions) => Promise<QueryResult>;
+  queryPrepared: (sql: string, params: unknown[], options?: QueryExecutionOptions) => Promise<QueryResult>;
+  transaction: <T>(work: (query: (sql: string, params?: unknown[]) => Promise<QueryResult>) => Promise<T>, options?: QueryExecutionOptions) => Promise<T>;
+  /** Reject new work immediately, cancel owned work, then disconnect after it settles. */
+  close: () => Promise<void>;
+}
+
 export interface QueryHistoryEntry {
   id: number;
   timestamp: number;
@@ -123,6 +133,7 @@ export function recordQuery(opts: {
 // ---------------------------------------------------------------------------
 
 export const engine = {
+  openConnection: null as (() => Promise<EngineConnection>) | null,
   /** Run SQL. Becomes callable at worker boot — well BEFORE the VGI catalog is
    *  attached, so anything needing the catalog must await `attached` too. */
   query: null as ((sql: string, options?: QueryExecutionOptions) => Promise<QueryResult>) | null,
@@ -408,6 +419,7 @@ export function waitForEngineReady(timeoutMs = 60_000): Promise<void> {
 // Getters delegate, so the handle always reflects live state.
 if (typeof window !== "undefined") {
   (window as any).__bridge = {
+    get openConnection() { return engine.openConnection; },
     get query() { return engine.query; },
     get queryPrepared() { return engine.queryPrepared; },
     set queryPrepared(value) { engine.queryPrepared = value; },

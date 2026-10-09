@@ -21,9 +21,8 @@ import { runAgentTurn, type MessageParam } from '../../lib/ai-agent';
 import { normalizeEffort } from '../../lib/ai/model-features';
 import { aiQueryModePrompt, normalizeAIQueryMode, toolsForAIQueryMode } from '../../lib/ai/query-mode';
 import { executeReportDataTool } from '../../lib/evidence/agent-data-tools';
-import { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { isReadOnlySql } from '../../lib/evidence/setup-test';
-import { waitForEngineReady } from '../../lib/shell-bridge';
+import type { EngineConnection } from '../../lib/shell-bridge';
 import { QueryResultCache } from '../../lib/query-results';
 import {
   NOTEBOOK_PROMPT,
@@ -40,6 +39,8 @@ import { attachmentSummaries, userMessageContent, type AiAttachment, type Attach
 
 export function NotebookAgent({
   active,
+  sessionId,
+  querySession,
   disabled,
   document,
   results,
@@ -50,6 +51,8 @@ export function NotebookAgent({
   onClose,
 }: {
   active: boolean;
+  sessionId: string;
+  querySession: EngineConnection['queryPrepared'];
   disabled: boolean;
   document: Notebook;
   results: Record<string, CellResult>;
@@ -117,16 +120,12 @@ export function NotebookAgent({
     let readContext = latest.current;
     const controller = new AbortController();
     abort.current = controller;
-    const run = new EvidenceQueryRun();
-    const stop = () => run.stop();
-    controller.signal.addEventListener('abort', stop, { once: true });
     const mode = normalizeAIQueryMode(settings.aiQueryMode);
     const query = async (sql: string, params: unknown[] = []) => {
       if (!isReadOnlySql(sql)) throw new Error('Notebook exploration accepts read queries only.');
-      await run.wait(waitForEngineReady());
-      if (params.length) return run.query(sql, params);
+      if (params.length) return querySession(sql, params, { signal: controller.signal });
       const bound = compileNotebookQuery(sql, readContext.document);
-      return run.query(bound.sql, bound.params);
+      return querySession(bound.sql, bound.params, { signal: controller.signal });
     };
     setBusy(true);
     onBusy(true);
@@ -174,6 +173,7 @@ export function NotebookAgent({
               readContext = latest.current;
               return JSON.stringify({
                 ...readContext,
+                session: { id: sessionId, temporaryTables: 'Available to run_sql in this notebook only. Reset, notebook switching and reload clear them.' },
                 results: Object.fromEntries(
                   Object.entries(readContext.results).map(([id, result]) => [
                     id,
@@ -202,8 +202,7 @@ export function NotebookAgent({
             }
             if (name === 'run_sql' && mode !== 'semantic-only') {
               if (typeof input?.sql !== 'string') throw new Error('SQL is required.');
-              await run.wait(waitForEngineReady());
-              await validateSelectQuery(input.sql, (text, values) => run.query(text, values));
+              await validateSelectQuery(input.sql, (text, values) => querySession(text, values, { signal: controller.signal }));
             }
             const result = await executeReportDataTool(
               name,
@@ -274,8 +273,6 @@ export function NotebookAgent({
     } catch (e) {
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      controller.signal.removeEventListener('abort', stop);
-      run.stop();
       if (controller.signal.aborted) {
         setProposal(null);
         setError('Stopped. No proposed changes were applied.');

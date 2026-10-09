@@ -143,9 +143,18 @@ test('chart drafts, resizing, stale results and saved presentation survive reope
   await sql(cell, 'select nonexistent from missing_table');
   await cell.getByRole('button', { name: 'Run', exact: true }).click();
   await expect(cell.getByText(/Previous result retained/)).toBeVisible();
-  await cellAction(page, cell, 'Hide code');
+  await cell.getByRole('button', { name: 'Hide code', exact: true }).click();
   await expect(cell.locator('.cm-content')).toHaveCount(0);
+  const showCode = cell.getByRole('button', { name: 'Show code', exact: true });
+  await expect(showCode).toHaveAttribute('aria-expanded', 'false');
   await expect(cell.getByTestId('notebook-chart')).toBeVisible();
+  await showCode.press('Enter');
+  await expect(cell.locator('.cm-content')).toHaveText('select nonexistent from missing_table');
+  await expect(cell.getByRole('button', { name: 'Hide code', exact: true })).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
+  await cellAction(page, cell, 'Hide code');
   await insertCell(page, 'Markdown');
   const markdown = page.getByTestId('notebook-cell').last();
   await markdown.getByRole('textbox', { name: 'Markdown source' }).fill('## Findings\nRevenue increased.');
@@ -354,10 +363,23 @@ test('AI stages an editable notebook, applies without executing, and supports un
   const review = agent.getByTestId('notebook-proposal-review');
   await expect(review).toContainText('Added SQL');
   await expect(review).toContainText('Added Markdown');
-  await expect(review).toContainText('+ select 42 as answer');
+  const sqlDiff = review.getByLabel('Source changes').filter({ hasText: '+ select 42 as answer' });
+  const markdownDiff = review.getByLabel('Source changes').filter({ hasText: '+ A sample query.' });
+  await expect(sqlDiff).toBeHidden();
+  await expect(markdownDiff).toBeHidden();
+  const sqlSummary = review.locator('summary').filter({ hasText: 'Added SQL' });
+  await sqlSummary.click();
+  await expect(sqlDiff).toBeVisible();
+  await expect(markdownDiff).toBeHidden();
+  await sqlSummary.press('Enter');
+  await expect(sqlDiff).toBeHidden();
   await agent.getByRole('button', { name: 'Expand review' }).click();
   const expanded = page.getByRole('dialog', { name: 'Review notebook changes' });
   await expect(expanded).toContainText('Added SQL');
+  const expandedSqlDiff = expanded.getByLabel('Source changes').filter({ hasText: '+ select 42 as answer' });
+  await expect(expandedSqlDiff).toBeHidden();
+  await expanded.locator('summary').filter({ hasText: 'Added SQL' }).click();
+  await expect(expandedSqlDiff).toBeVisible();
   await expanded.getByRole('button', { name: 'Back to assistant' }).click();
   await agent.getByRole('button', { name: 'Apply changes' }).click();
   await expect(page.getByRole('textbox', { name: 'Notebook title' })).toHaveValue('AI analysis');
