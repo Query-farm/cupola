@@ -14,10 +14,10 @@ import { catalogInventory } from "@/lib/catalog-store";
 import { callablesForSelection } from "@/lib/callable";
 import { buildCallText } from "@/lib/editor/call-snippet";
 import { VgiDuckDBHandler, perspectiveServeMode, runPerspectiveQuery, type PerspectiveServeMode } from "@/lib/perspective-duckdb-handler";
-import { createQueryPivotSource, dropQueryPivotSource, type QueryPivotSource } from "@/lib/pivot-source";
+import { createQueryPivotSource, dropQueryPivotSource, perspectiveTableId, type QueryPivotSource } from "@/lib/pivot-source";
 import { useSettings } from "@/lib/settings";
 import type { Table as ArrowTable } from "@query-farm/apache-arrow";
-import { quoteIdent, tableFromIPCWithDictionaries } from "@/lib/duckdb-query";
+import { tableFromIPCWithDictionaries } from "@/lib/duckdb-query";
 import { openPopout } from "@/lib/editor/result-popout";
 import { coerceArrowBufferForPerspective } from "@/lib/perspective-extension-coerce";
 import { engine, terminal, ui, setBootPhase, setEngineLifecycleError } from "@/lib/shell-bridge";
@@ -178,10 +178,9 @@ export function DuckDBShell({ serviceUrl, catalogName, catalogs, defaultCatalog,
   // memory + attached builders match it). The active selection always has it
   // as `schema`, so prefer that and fall back for safety.
   const selectedTablePath = selectedTable ? [selection?.catalog || catalogName, selection?.schema ?? selectedTable.schema_name, selectedTable.name] : null;
-  // The id is the SQL the Perspective handler reads from, so each part is
-  // quoted: an alias like my-sqlite or a table like "Sales 2024" is not a
-  // bare identifier. The title stays readable.
-  const selectedTableId = selectedTablePath ? selectedTablePath.map(quoteIdent).join(".") : null;
+  // Quoted, and spelled exactly as the handler's hosted-table list spells it
+  // (perspectiveTableId); the title stays readable.
+  const selectedTableId = selectedTablePath ? perspectiveTableId(selectedTablePath[0], selectedTablePath[1], selectedTablePath[2]) : null;
   const selectedTableTitle = selectedTablePath?.join(".") ?? null;
   const selectedTableIdRef = useRef(selectedTableId);
   selectedTableIdRef.current = selectedTableId;

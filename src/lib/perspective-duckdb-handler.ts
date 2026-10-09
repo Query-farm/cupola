@@ -9,7 +9,7 @@
 
 import { tableFromIPC } from "@query-farm/apache-arrow";
 import { engine } from "@/lib/shell-bridge";
-import { QUERY_PIVOT_PREFIX } from "@/lib/pivot-source";
+import { QUERY_PIVOT_PREFIX, perspectiveTableId } from "@/lib/pivot-source";
 
 // ---------------------------------------------------------------------------
 // Traversal — tracks visible rows for collapse/expand in grouped views
@@ -650,7 +650,7 @@ export class VgiDuckDBHandler {
       UNION ALL
       SELECT database_name, schema_name, view_name FROM duckdb_views()
        WHERE temporary AND view_name LIKE '${pivotViews}%' ESCAPE '\\'`, "getHostedTables");
-    return rows.map((row) => `${row.database_name}.${row.schema_name}.${row.table_name}`);
+    return rows.map((row) => perspectiveTableId(String(row.database_name), String(row.schema_name), String(row.table_name)));
   }
 
   tableSchema(tableId: string): Promise<Record<string, ColumnType>> {

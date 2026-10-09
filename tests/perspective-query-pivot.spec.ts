@@ -85,7 +85,7 @@ test("a live view pivots with SQL against the query and sees new rows", async ({
   await pivot(page, "view");
 
   const flat = await viewerState(page);
-  expect(flat.table).toMatch(/^temp\.main\.__cupola_pivot_\d+$/);
+  expect(flat.table).toMatch(/^"temp"\."main"\."__cupola_pivot_\d+"$/);
   expect(flat.rows).toBe(10);
   // Starts with just the first column, like the sidebar and snapshot paths.
   expect(flat.columns).toEqual(["id"]);
@@ -170,7 +170,7 @@ test("Run in Perspective opens a query without running it in the editor", async 
   await page.getByTestId("editor-run-perspective-view").click();
 
   const opened = await viewerState(page);
-  expect(opened.table).toMatch(/^temp\.main\.__cupola_pivot_\d+$/);
+  expect(opened.table).toMatch(/^"temp"\."main"\."__cupola_pivot_\d+"$/);
   expect(opened.rows).toBe(10);
   expect(opened.columns).toEqual(["id"]);
 
@@ -237,7 +237,7 @@ test("pivoting a query while a sidebar table is selected shows the pivot, once",
   await runInEditor(page, QUERY);
   await pivot(page, "table");
   const shown = await viewerState(page);
-  expect(shown.table).toMatch(/^temp\.main\.__cupola_pivot_\d+$/);
+  expect(shown.table).toMatch(/^"temp"\."main"\."__cupola_pivot_\d+"$/);
   expect(shown.rows).toBe(10);
   // Give a second mount time to start, then check nothing replaced or broke the pivot.
   await page.waitForTimeout(3_000);
@@ -253,6 +253,6 @@ test("pivoting a query while a sidebar table is selected shows the pivot, once",
   const next = other.rows?.[0] as { table_schema: string; table_name: string } | undefined;
   if (next) {
     await page.evaluate((hash) => { window.location.hash = hash; }, `#/schema/${encodeURIComponent(next.table_schema)}/table/${encodeURIComponent(next.table_name)}`);
-    await expect.poll(async () => (await viewerState(page)).table, { timeout: 30_000 }).toMatch(new RegExp(`\\.${next.table_name}$`));
+    await expect.poll(async () => (await viewerState(page)).table, { timeout: 30_000 }).toMatch(new RegExp(`\\."${next.table_name}"$`));
   }
 });

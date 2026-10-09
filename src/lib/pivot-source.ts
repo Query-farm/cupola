@@ -27,9 +27,23 @@ import { splitStatements } from "@/lib/editor/sql-statements";
 export type QueryPivotMode = "view" | "table";
 export type PerspectivePivotMode = QueryPivotMode | "snapshot";
 
+/**
+ * The id a table is pivoted by: its quoted three-part name. The handler puts
+ * it in SQL verbatim, so every part is quoted (an alias like `my-sqlite` or a
+ * table like `Sales 2024` is not a bare identifier), and Perspective opens
+ * only an id the handler lists in getHostedTables, so every place that names
+ * a table for Perspective builds it here. 0.4.223 quoted the sidebar's ids but
+ * not the hosted list, and Pivot stopped finding any table.
+ */
+export function perspectiveTableId(catalog: string, schema: string, name: string): string {
+  return [catalog, schema, name].map((part) => `"${part.replace(/"/g, '""')}"`).join(".");
+}
+
 export interface QueryPivotSource {
-  /** Three-part name, safe to interpolate: the handler puts it in FROM verbatim. */
+  /** perspectiveTableId of the scratch object. */
   tableId: string;
+  /** The scratch object's name in temp.main. */
+  name: string;
   mode: QueryPivotMode;
 }
 
@@ -66,10 +80,9 @@ export async function createQueryPivotSource(sql: string, mode: QueryPivotMode, 
     const how = mode === "view" ? "a live view" : "a table";
     throw new Error(`This result can't be pivoted as ${how}: ${result.error ?? "DuckDB rejected the query"}. Snapshot works for any result.`);
   }
-  return { tableId: `temp.main.${name}`, mode };
+  return { tableId: perspectiveTableId("temp", "main", name), name, mode };
 }
 
 export async function dropQueryPivotSource(source: QueryPivotSource, run: RunSql): Promise<void> {
-  const name = source.tableId.slice("temp.main.".length);
-  await run(`DROP ${source.mode === "view" ? "VIEW" : "TABLE"} IF EXISTS temp.main."${name}"`);
+  await run(`DROP ${source.mode === "view" ? "VIEW" : "TABLE"} IF EXISTS ${source.tableId}`);
 }
