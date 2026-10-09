@@ -31,7 +31,18 @@ describe("Iroh identity", () => {
   });
 
   test("without usable storage the identity is ephemeral", () => {
-    expect(getOrCreateIrohSecretKey(undefined)).toBeUndefined();
+    // An undefined argument selects browser storage. Make its absence explicit,
+    // independently of DOM/storage fixtures installed by earlier test files.
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    try {
+      Object.defineProperty(globalThis, "localStorage", { configurable: true, value: undefined });
+      expect(getOrCreateIrohSecretKey()).toBeUndefined();
+      Object.defineProperty(globalThis, "localStorage", { configurable: true, get() { throw new Error("blocked"); } });
+      expect(getOrCreateIrohSecretKey()).toBeUndefined();
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, "localStorage", descriptor);
+      else Reflect.deleteProperty(globalThis, "localStorage");
+    }
     const throwing = { getItem: () => { throw new Error("blocked"); }, setItem: () => {} };
     expect(getOrCreateIrohSecretKey(throwing)).toBeUndefined();
   });
