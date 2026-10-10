@@ -10,13 +10,17 @@
  * against the workspace's; several are aliased by their names, de-duplicated
  * once. A server that cannot be reached, or wants a sign-in first, can still
  * be attached under an alias of the reader's choosing: the catalog then
- * shows its status with Retry or Sign in.
+ * shows its status with Retry or Sign in. A service behind OAuth lists its
+ * catalogs only once signed in: "Sign in to list catalogs" (`onSignIn`)
+ * signs in and comes back to this form.
  */
 import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { CatalogListStatus, SignInToListPrompt } from "./SignInToListPrompt";
+import { getUserInfo } from "@/lib/auth";
 import { Button } from "../ui/button";
 import { OptionsFields } from "../AttachOptions";
-import { fetchServiceCatalogs } from "@/lib/service";
+import { discoverCatalogs } from "@/lib/workspace/catalog-discovery";
 import { collectFormOptions } from "@/lib/attach/form";
 import { partitionSecrets, type OptionSpecInfo } from "@/lib/attach/options";
 import { aliasProblem, assignAliases, isReservedAlias, isValidAlias, sanitizeAlias } from "@/lib/workspace/aliases";
@@ -45,6 +49,7 @@ export function AttachCatalogForm({
   takenAliases,
   onAttach,
   onCancel,
+  onSignIn,
   initial,
 }: {
   takenAliases: readonly string[];
@@ -54,6 +59,8 @@ export function AttachCatalogForm({
   /** Resolves with an error to show, or null once attached. */
   onAttach: (requests: AttachRequest[]) => Promise<string | null>;
   onCancel: () => void;
+  /** Sign in to the service, then come back to this form with `url`. */
+  onSignIn?: (url: string) => Promise<unknown>;
 }) {
   const [url, setUrl] = useState(initial?.url ?? "");
   const [discovery, setDiscovery] = useState<Discovery>({ state: "idle" });
@@ -69,14 +76,14 @@ export function AttachCatalogForm({
   const target = url.trim();
   const discover = async (which: string) => {
     setDiscovery({ state: "loading" });
-    const found = await fetchServiceCatalogs(which);
+    const found = await discoverCatalogs(which);
     if (which !== url.trim()) return found;
-    if (found.ok) {
+    if (found.state === "ok") {
       setDiscovery({ state: "ok", catalogs: found.catalogs });
       const wanted = initial?.catalogName && found.catalogs.find((c) => c.name.toLowerCase() === initial.catalogName!.toLowerCase());
       setTicked(new Set(wanted ? [wanted.name] : found.catalogs.map((c) => c.name)));
     } else {
-      setDiscovery({ state: "error", error: found.error, signInRequired: found.signInRequired });
+      setDiscovery(found);
     }
     return found;
   };
@@ -190,16 +197,26 @@ export function AttachCatalogForm({
             Reachable: {catalogs.length} {catalogs.length === 1 ? "catalog" : "catalogs"}
           </span>
         )}
-        {discovery.state === "error" && (
+        {discovery.state === "error" && !discovery.signInRequired && (
           <span className="text-destructive line-clamp-2" data-testid="attach-catalog-test-result">
-            {discovery.signInRequired ? "Needs sign-in. Attach it, then sign in from its row." : `Not reachable: ${discovery.error}`}
+            Not reachable: {discovery.error}
           </span>
         )}
       </div>
 
+      {discovery.state === "error" && discovery.signInRequired && (
+        <SignInToListPrompt
+          layout="stacked"
+          url={target}
+          hint={onSignIn ? "Or attach it now and sign in from its row." : "Attach it now and sign in from its row."}
+          onSignIn={onSignIn}
+        />
+      )}
+
       {catalogs.length > 1 && (
         <fieldset className="flex flex-col gap-1" data-testid="attach-catalog-choices">
           <legend className="text-xs font-medium text-foreground mb-1">Catalogs on this service</legend>
+          <CatalogListStatus user={getUserInfo(target)} />
           {catalogs.map((c, i) => (
             <label key={c.name} className="flex items-center gap-2 text-sm">
               <input

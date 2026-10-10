@@ -12,5 +12,15 @@ export function connectionErrorMessage(error: unknown, serviceUrl: string, pageP
   const host = url.hostname.toLowerCase().replace(/\.$/, '');
   const loopback = host === 'localhost' || host.endsWith('.localhost') || host === '[::1]' || /^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(host);
   if (url.protocol !== 'http:' || !loopback) return message;
-  return `Could not connect to the local server at ${url.host}. Cupola is using HTTPS, but this server uses HTTP. Safari can block this connection. Try opening this page in desktop Chrome, or connect to the server using HTTPS. Check that the local server is running, and allow local-network access if your browser asks.`;
+  return `Could not connect to the local server at ${url.host}.${LOCAL_HTTP_TAIL}`;
+}
+
+const LOCAL_HTTP_TAIL = ' Cupola is using HTTPS, but this server uses HTTP. Safari can block this connection. Try opening this page in desktop Chrome, or connect to the server using HTTPS. Check that the local server is running, and allow local-network access if your browser asks.';
+
+/** The host of a loopback-over-HTTP failure written by `connectionErrorMessage`,
+ * or null for any other message. Lets the UI lay that guidance out properly while
+ * the message itself stays plain text for logs, tooltips and the AI. */
+export function localHttpBlockedHost(message: string | null | undefined): string | null {
+  if (!message?.endsWith(LOCAL_HTTP_TAIL)) return null;
+  return /^Could not connect to the local server at (\S+)\.$/.exec(message.slice(0, -LOCAL_HTTP_TAIL.length))?.[1] ?? null;
 }

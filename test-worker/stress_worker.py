@@ -26,7 +26,9 @@
 #     # still renders over HTTP, so the shell is what looks dead. 0.40.0 needs
 #     # vgi-rpc 0.48.
 #     "vgi-python[http]>=0.40.0,<0.41",
-#     "vgi-rpc>=0.48.0,<0.49",
+#     # The oauth extra (joserfc) validates JWTs when VGI_JWT_ISSUER is set,
+#     # e.g. Google ID tokens; without it the worker exits at startup.
+#     "vgi-rpc[oauth]>=0.48.0,<0.49",
 #     "numpy",
 #     "pyarrow",
 # ]
@@ -920,5 +922,102 @@ class CupolaTestWorker(Worker):
     )
 
 
+# CUPOLA_TEST_MULTI_CATALOG=1 serves three catalogs from one URL, for Cupola's
+# catalog picker (the welcome page's and "Attach a catalog…"'s checkbox list):
+#
+#   cupola_test    the usual catalog, listed first, so `?service=` still opens it
+#   cupola_edge    the edge schema only: a plain second catalog
+#   cupola_secure  small + edge, with the attach options above (api_key required)
+#
+#   CUPOLA_TEST_MULTI_CATALOG=1 PORT=9012 ./run.sh
+#
+# vgi-python's MetaWorker composes one Worker per catalog; it is served here the
+# way vgi.serve.create_app serves a single Worker, which takes a class rather
+# than a MetaWorker instance. Auth comes from the same environment variables as
+# `Worker.main` (VGI_OAUTH_*, VGI_JWT_*, VGI_BEARER_TOKENS), so either mode can
+# be put behind OAuth without changing this file.
+MULTI_CATALOG = os.environ.get("CUPOLA_TEST_MULTI_CATALOG") == "1"
+
+
+class CupolaEdgeWorker(Worker):
+    """``cupola_edge``: the edge schema on its own (multi-catalog mode)."""
+
+    catalog = Catalog(
+        name="cupola_edge",
+        default_schema="edge",
+        comment="Edge-case types and shapes, served as a second catalog beside cupola_test",
+        tags={"vgi.title": "Cupola edge cases", "vgi.author": "Query Farm"},
+        schemas=[EDGE],
+    )
+
+
+class CupolaSecureWorker(Worker):
+    """``cupola_secure``: small + edge behind attach options (multi-catalog mode)."""
+
+    AttachOptions = SecureAttachOptions
+    catalog = Catalog(
+        name="cupola_secure",
+        default_schema="small",
+        comment="The small and edge schemas behind attach options (api_key is required)",
+        tags={"vgi.title": "Cupola test data (options)", "vgi.author": "Query Farm"},
+        schemas=[SMALL, EDGE],
+    )
+
+
+def serve_multi_catalog() -> None:
+    """Serve cupola_test, cupola_edge and cupola_secure over HTTP from one MetaWorker."""
+    import argparse
+    import logging
+
+    import waitress  # type: ignore[import-untyped]
+    from vgi_rpc.http import make_wsgi_app
+
+    from vgi.meta_worker import MetaWorker
+    from vgi.rpc_server import build_rpc_server
+    from vgi.serve import _resolve_authenticate, _resolve_oauth_resource_metadata
+
+    parser = argparse.ArgumentParser(description="Cupola's multi-catalog test worker")
+    parser.add_argument("--http", action="store_true")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=9009)
+    parser.add_argument("--http-threads", type=int, default=8)
+    args, _ = parser.parse_known_args()
+    if not args.http:
+        raise SystemExit("CUPOLA_TEST_MULTI_CATALOG serves HTTP only: pass --http (run.sh does)")
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    workers = [cls(quiet=True, log_level=logging.INFO) for cls in (CupolaTestWorker, CupolaEdgeWorker, CupolaSecureWorker)]
+    meta = MetaWorker(workers)
+    # One key for every sub-worker's opaque-data seal and the HTTP state tokens;
+    # MetaWorker's setter hands it to each child.
+    signing_key = os.environ.get("VGI_SIGNING_KEY", "").encode() or os.urandom(32)
+    meta._signing_key = signing_key
+    server = build_rpc_server(meta, transport="http", describe=True)
+    authenticate = _resolve_authenticate()
+    oauth_metadata = _resolve_oauth_resource_metadata()
+    app = make_wsgi_app(
+        server,
+        prefix=os.environ.get("VGI_HTTP_PREFIX", ""),
+        cors_origins=os.environ.get("VGI_HTTP_CORS_ORIGINS", "*"),
+        token_key=signing_key,
+        authenticate=authenticate,
+        oauth_resource_metadata=oauth_metadata,
+        enable_landing_page=False,
+    )
+    auth = "OAuth" if oauth_metadata is not None else "auth" if authenticate is not None else "no auth"
+    print(f"PORT:{args.port}", flush=True)
+    print(f"Serving cupola_test, cupola_edge, cupola_secure on http://{args.host}:{args.port} ({auth})", flush=True)
+    buffer = 64 << 20  # keep multi-MiB Arrow bodies in RAM, as Worker.main does
+    waitress.serve(
+        app, host=args.host, port=args.port, threads=args.http_threads, _quiet=True, asyncore_use_poll=True,
+        inbuf_overflow=buffer, outbuf_overflow=buffer, recv_bytes=1 << 20, send_bytes=1 << 20,
+    )
+
+
 if __name__ == "__main__":
-    CupolaTestWorker.main()
+    if MULTI_CATALOG and ATTACH_OPTIONS_VARIANT:
+        raise SystemExit("CUPOLA_TEST_MULTI_CATALOG already serves cupola_secure; unset CUPOLA_TEST_ATTACH_OPTIONS")
+    if MULTI_CATALOG:
+        serve_multi_catalog()
+    else:
+        CupolaTestWorker.main()

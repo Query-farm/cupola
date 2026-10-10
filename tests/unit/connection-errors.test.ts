@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { connectionErrorMessage } from '../../src/lib/connection-errors';
+import { connectionErrorMessage, localHttpBlockedHost } from '../../src/lib/connection-errors';
 
 test('opaque failures from an HTTPS page to loopback HTTP get actionable browser guidance', () => {
   for (const host of ['127.0.0.1', '127.2.3.4', 'localhost', 'localhost.', 'worker.localhost', '[::1]']) {
@@ -24,4 +24,10 @@ test('specific server errors, cancellation and timeouts retain their original me
     Object.assign(new Error('Load failed'), { errorCode: 'PERMISSION_DENIED' }),
   ]) expect(connectionErrorMessage(error, 'http://127.0.0.1:9137', 'https:')).toBe(error.message);
   expect(connectionErrorMessage(new TypeError('Load failed'), 'http://user:secret@127.0.0.1:9137/?token=private', 'https:')).not.toMatch(/secret|private/);
+});
+
+test('the loopback guidance is recognised for display, other messages are not', () => {
+  expect(localHttpBlockedHost(connectionErrorMessage(new TypeError('Load failed'), 'http://127.0.0.1:9137', 'https:'))).toBe('127.0.0.1:9137');
+  expect(localHttpBlockedHost(connectionErrorMessage(new TypeError('Load failed'), 'http://[::1]:9137', 'https:'))).toBe('[::1]:9137');
+  for (const message of ['Load failed', 'HTTP 401: sign-in required', '', undefined]) expect(localHttpBlockedHost(message)).toBeNull();
 });

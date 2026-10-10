@@ -29,7 +29,10 @@ import { hostOf, listWorkspaces, workspaceLabel, type Workspace } from "@/lib/wo
 import { CatalogChip, ChipStack } from "./workspace/CatalogChip";
 import { AttachCatalogForm, type AttachRequest } from "./workspace/AttachCatalogForm";
 import { cn } from "@/lib/utils";
-import { OPEN_ATTACH_EVENT, type AttachPrefill } from "@/lib/workspace/events";
+import { ConnectionErrorText } from "./ConnectionErrorText";
+import { OPEN_ATTACH_EVENT, openAttachCatalog, type AttachPrefill } from "@/lib/workspace/events";
+import { stashPendingAttach, takePendingAttach } from "@/lib/workspace/catalog-discovery";
+import { startLoginFlow } from "@/lib/oauth-client";
 
 export interface PickerCatalog {
   id: string;
@@ -164,7 +167,7 @@ function CatalogRow({ c, actions, user, onClose }: { c: PickerCatalog; actions: 
           </span>
           <span className="block truncate text-xs text-muted-foreground">{hostOf(c.url)}{c.catalogName && c.catalogName !== c.alias ? ` · ${c.catalogName}` : ""}</span>
           {user && <span className="block truncate text-xs text-muted-foreground" data-testid="picker-catalog-identity">{user.name ? `${user.name} · ` : ""}{user.email}</span>}
-          {c.enabled && c.state === "failed" && c.error && <span className="block text-[11px] text-destructive line-clamp-2 break-words">{c.error}</span>}
+          {c.enabled && c.state === "failed" && c.error && <span className="block text-[11px] text-destructive line-clamp-2 break-words"><ConnectionErrorText message={c.error} compact /></span>}
         </button>
         <span className="flex shrink-0 items-center gap-1">
           {c.enabled && c.state === "sign-in-required" && <Button size="xs" onClick={() => { actions.signIn(c.id); }}>Sign in</Button>}
@@ -256,6 +259,12 @@ export function ServiceSwitcher({ workspace, catalogs, actions }: Props) {
     window.addEventListener(OPEN_ATTACH_EVENT, openAttach);
     return () => window.removeEventListener(OPEN_ATTACH_EVENT, openAttach);
   }, []);
+  // Back from "Sign in to list catalogs": reopen the attach form on the same URL.
+  useEffect(() => {
+    const url = takePendingAttach(workspace.id);
+    if (url) openAttachCatalog({ url });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace.id]);
 
   const enabled = catalogs.filter((c) => c.enabled);
   const attention = enabled.filter((c) => NEEDS_ATTENTION.has(c.state));
@@ -341,6 +350,13 @@ export function ServiceSwitcher({ workspace, catalogs, actions }: Props) {
                 initial={prefill ?? undefined}
                 takenAliases={catalogs.map((c) => c.alias)}
                 onCancel={() => setAttaching(false)}
+                onSignIn={(url) => {
+                  stashPendingAttach(workspace.id, url);
+                  return startLoginFlow(url, window.location.href).catch((err) => {
+                    console.error("[picker] sign-in to list catalogs failed:", err);
+                    throw err;
+                  });
+                }}
                 onAttach={async (requests) => {
                   const error = await actions.attach(requests);
                   if (!error) setAttaching(false);

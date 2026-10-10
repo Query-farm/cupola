@@ -17,6 +17,7 @@ import { findRelation } from "@/lib/relation";
 import { CallableHoverCard, RelationHoverCard } from "@/components/inspector/HoverCards";
 import type { CatalogAttachState } from "@/lib/shell-bridge";
 import { useCatalogInventory } from "@/lib/use-catalog-inventory";
+import { ConnectionErrorText } from "./ConnectionErrorText";
 
 /** One configured catalog's status, for its sidebar root. */
 export interface SidebarCatalogStatus {
@@ -290,7 +291,7 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
                     {s.state === "connecting" ? "Connecting…" : s.state === "sign-in-required" ? "Sign-in required" : s.state === "failed" ? "Failed" : "Disabled"}
                   </span>
                 </div>
-                {s.state === "failed" && s.error && <p className="mt-1 pl-6 text-[11px] text-destructive line-clamp-2 break-words">{s.error}</p>}
+                {s.state === "failed" && s.error && <p className="mt-1 pl-6 text-[11px] text-destructive line-clamp-2 break-words"><ConnectionErrorText message={s.error} compact /></p>}
                 {(s.state === "failed" || s.state === "sign-in-required") && (
                   <div className="mt-1 pl-6 flex flex-wrap gap-x-3 gap-y-1 text-xs">
                     {s.state === "sign-in-required" && <button className="underline" onClick={() => onSignInCatalog?.(s.id)}>Sign in</button>}

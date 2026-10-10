@@ -1,7 +1,9 @@
 import { OPEN_NOTEBOOK_EVENT, type OpenNotebookDetail, type NotebookNavigation, type NotebookInsertion } from '../lib/notebooks/navigation';
 import { useEffect, useState, useMemo, useCallback, useRef, useSyncExternalStore, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
 import { buildCallText } from "@/lib/editor/call-snippet";
-import { fetchCatalogSpecs, type CatalogData } from "@/lib/service";
+import { type CatalogData } from "@/lib/service";
+import { discoverCatalogs, stashPendingConnect, takePendingConnect, type CatalogDiscovery } from "@/lib/workspace/catalog-discovery";
+import { initialCatalog, planConnect, type ConnectSelection, type DiscoveredCatalog } from "@/lib/workspace/connect-plan";
 import { quoteIdent } from "@/lib/duckdb-query";
 import { appBase } from "@/lib/app-base";
 import { toLatestBaseUrl } from "@/lib/share-query";
@@ -151,6 +153,9 @@ import { FunctionDetail } from "./content/FunctionDetail";
 import { MacroDetail } from "./content/MacroDetail";
 import { getRecentService } from "@/lib/recent-services";
 import { openedAgo } from "./ServiceSwitcher";
+import { ConnectionErrorText } from "./ConnectionErrorText";
+import { Database } from "lucide-react";
+import { CatalogListStatus, SignInToListPrompt } from "./workspace/SignInToListPrompt";
 
 /** A recoverable auth error: one the SPA login redirect (below) handles by
  *  bouncing the user back through the IdP. These happen routinely (expired
@@ -1986,7 +1991,7 @@ function CatalogsFailedScreen({
                 <li key={e.catalog.id} className="bg-card rounded-xl ring-1 ring-foreground/10 p-4" data-testid="catalog-failed-row">
                   <div className="font-mono text-sm font-semibold text-foreground break-all">{e.catalog.alias || e.catalog.catalogName || e.catalog.url}</div>
                   <div className="font-mono text-xs text-muted-foreground break-all">{e.catalog.url}</div>
-                  <div role="alert" className="mt-2 text-xs text-destructive break-words">{message}</div>
+                  <div role="alert" className="mt-2 text-xs text-destructive break-words">{load.state === "failed" ? <ConnectionErrorText message={message} /> : message}</div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {load.state === "sign-in-required"
                       ? <Button size="sm" onClick={() => onSignIn(e.catalog.id)}>Sign in to {e.catalog.alias}</Button>
@@ -2021,16 +2026,28 @@ export interface ConnectFormHandle {
   prefill: (url: string) => void;
 }
 
+/** One catalog's options in a connect row. */
+interface CatalogForm {
+  values: Record<string, string>;
+  raw: string;
+  open: boolean;
+}
+
 interface ConnectRow {
   key: number;
   url: string;
-  values: Record<string, string>;
-  raw: string;
-  catalogName: string;
-  specs: OptionSpecInfo[];
-  specsFor: string | null;
-  open: boolean;
+  /** The catalog name stored for this URL (its untitled workspace's), "" if none. */
+  storedName: string;
+  discovery: CatalogDiscovery;
+  /** The URL `discovery` answered for. */
+  discoveredFor: string | null;
+  /** Catalogs to connect, when the service listed several. */
+  ticked: string[];
+  /** Options per catalog name; "" until the service has named its catalogs. */
+  forms: Record<string, CatalogForm>;
 }
+
+const EMPTY_FORM: CatalogForm = { values: {}, raw: "", open: false };
 
 /** Stored options for a service, ready for the form: its untitled
  *  workspace's (else the pre-workspace recent entry's) values plus stored
@@ -2085,43 +2102,108 @@ function quoteForRaw(value: string): string {
 
 let rowKeys = 0;
 function emptyRow(): ConnectRow {
-  return { key: ++rowKeys, url: "", values: {}, raw: "", catalogName: "", specs: [], specsFor: null, open: false };
+  return { key: ++rowKeys, url: "", storedName: "", discovery: { state: "idle" }, discoveredFor: null, ticked: [], forms: {} };
 }
 
-/** One URL row of the connect form. */
-function ConnectRowFields({ row, index, onChange, onRemove, onSubmit }: {
+/** A row for a URL, with what is stored for it. */
+function storedRow(url: string): ConnectRow {
+  const stored = storedFormValues(url);
+  return {
+    ...emptyRow(),
+    url,
+    storedName: stored.catalogName,
+    forms: { "": { values: stored.values, raw: stored.raw, open: Boolean(Object.keys(stored.values).length || stored.raw) } },
+  };
+}
+
+/** The catalogs the service listed for the URL as it stands now. */
+function listedCatalogs(row: ConnectRow): DiscoveredCatalog[] {
+  return row.discovery.state === "ok" && row.discoveredFor === row.url.trim() ? row.discovery.catalogs : [];
+}
+
+/** The options typed so far, before the service named its catalogs or after: kept while the URL is edited. */
+function primaryForm(row: ConnectRow): CatalogForm {
+  return (row.ticked[0] !== undefined ? row.forms[row.ticked[0]] : undefined) ?? row.forms[""] ?? EMPTY_FORM;
+}
+
+/** The "Connection options" disclosure for one catalog. */
+function ConnectOptions({ idPrefix, specs, form, onChange, title }: {
+  idPrefix: string;
+  specs: OptionSpecInfo[];
+  form: CatalogForm;
+  onChange: (form: CatalogForm) => void;
+  title?: string;
+}) {
+  const rows = formSpecs(specs, form.values);
+  return (
+    <details className="group" open={form.open} onToggle={(e) => { const open = (e.currentTarget as HTMLDetailsElement).open; if (open !== form.open) onChange({ ...form, open }); }}>
+      <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground select-none">
+        {title ?? "Connection options"}{specs.some((s) => s.required) ? "" : " (optional)"}
+      </summary>
+      <div className="mt-2">
+        <OptionsFields
+          idPrefix={idPrefix}
+          specs={rows}
+          values={form.values}
+          onChange={(values) => onChange({ ...form, values })}
+          raw={form.raw}
+          onRawChange={(raw) => onChange({ ...form, raw })}
+        />
+      </div>
+    </details>
+  );
+}
+
+/** One URL row of the connect form. A service that lists one catalog (or
+ *  can't be asked) shows exactly one options disclosure; one that lists
+ *  several gets a checkbox per catalog, its first ticked (what `?service=`
+ *  opens), and options for each ticked one. */
+function ConnectRowFields({ row, index, onChange, onRemove, onSubmit, onSignIn }: {
   row: ConnectRow;
   index: number;
   onChange: (update: (row: ConnectRow) => ConnectRow) => void;
   onRemove?: () => void;
   onSubmit: () => void;
+  onSignIn: (url: string) => Promise<unknown>;
 }) {
-  // Discover the declared options of whatever the URL names. A server that
-  // cannot be reached, or wants a sign-in first, gets the raw-text box only.
+  // Ask the service what it serves as the URL is typed. Options typed so far
+  // follow the URL; a service that can't be reached gets the raw-text box only.
   useEffect(() => {
     const target = row.url.trim();
-    onChange((r) => ({ ...r, specs: [], specsFor: null }));
+    onChange((r) => ({ ...r, discovery: { state: "idle" }, discoveredFor: null, ticked: [], forms: { "": primaryForm(r) } }));
     if (!/^https?:\/\/[^/\s]+/i.test(target)) return;
     let live = true;
     const timer = setTimeout(() => {
-      void fetchCatalogSpecs(target).then((found) => {
+      onChange((r) => ({ ...r, discovery: { state: "loading" }, discoveredFor: target }));
+      void discoverCatalogs(target).then((found) => {
         if (!live) return;
-        const next = found?.specs ?? [];
-        onChange((r) => ({
-          ...r,
-          specs: next,
-          specsFor: target,
-          catalogName: found?.catalogName || r.catalogName,
-          open: r.open || next.length > 0,
-          // Fold stored values without a row into the raw box.
-          ...absorbExtras(next, r.values, r.raw),
-        }));
+        onChange((r) => {
+          if (found.state !== "ok") return { ...r, discovery: found, discoveredFor: target };
+          const first = initialCatalog(found.catalogs, r.storedName);
+          const pending = r.forms[""] ?? EMPTY_FORM;
+          const forms: Record<string, CatalogForm> = {};
+          for (const c of found.catalogs) {
+            // Stored and typed values belong to the catalog ticked first.
+            const base = c.name === first ? pending : EMPTY_FORM;
+            forms[c.name] = { ...absorbExtras(c.specs, base.values, base.raw), open: base.open || c.specs.length > 0 };
+          }
+          return { ...r, discovery: found, discoveredFor: target, forms, ticked: first ? [first] : [] };
+        });
       });
     }, 400);
     return () => { live = false; clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [row.url]);
-  const rows = formSpecs(row.specs, row.values);
+
+  const catalogs = listedCatalogs(row);
+  const setForm = (name: string) => (form: CatalogForm) => onChange((r) => ({ ...r, forms: { ...r.forms, [name]: form } }));
+  const toggle = (name: string, on: boolean) => onChange((r) => ({
+    ...r,
+    // Keep the service's order, so the first ticked is the one `?service=` would open.
+    ticked: catalogs.map((c) => c.name).filter((n) => (n === name ? on : r.ticked.includes(n))),
+  }));
+  const needsSignIn = row.discovery.state === "error" && row.discovery.signInRequired && row.discoveredFor === row.url.trim();
+  const only = catalogs.length === 1 ? catalogs[0] : null;
   return (
     <div className="flex flex-col gap-2" data-testid="connect-row">
       <div className="flex gap-2">
@@ -2138,23 +2220,52 @@ function ConnectRowFields({ row, index, onChange, onRemove, onSubmit }: {
           <button type="button" onClick={onRemove} aria-label={`Remove catalog ${index + 1}`} className="px-2 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10">×</button>
         )}
       </div>
-      <details className="group" open={row.open} onToggle={(e) => { const open = (e.currentTarget as HTMLDetailsElement).open; onChange((r) => ({ ...r, open })); }}>
-        <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground select-none">
-          Connection options{row.specs.some((s) => s.required) ? "" : " (optional)"}
-        </summary>
-        <div className="mt-2">
-          <OptionsFields
-            idPrefix={index === 0 ? "connect-opt" : `connect-opt-${index}`}
-            specs={rows}
-            values={row.values}
-            onChange={(values) => onChange((r) => ({ ...r, values }))}
-            raw={row.raw}
-            onRawChange={(raw) => onChange((r) => ({ ...r, raw }))}
-          />
-        </div>
-      </details>
+      {needsSignIn && (
+        <SignInToListPrompt url={row.url.trim()} hint="Or press Connect to open its first catalog." onSignIn={onSignIn} />
+      )}
+      {catalogs.length > 1 ? (
+        <fieldset className="flex flex-col gap-2 rounded-md border border-border bg-card/60 px-3 py-2" data-testid="connect-catalog-choices">
+          <legend className="px-1 text-xs font-medium text-foreground">Catalogs to open</legend>
+          <CatalogListStatus count={catalogs.length} user={getUserInfo(row.url.trim())} />
+          {catalogs.map((c, ci) => {
+            const on = row.ticked.includes(c.name);
+            return (
+              <div key={c.name} className="flex flex-col gap-1">
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={on} onChange={(e) => toggle(c.name, e.target.checked)} />
+                  <Database className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span className="font-mono truncate">{c.name}</span>
+                </label>
+                {on && (
+                  <div className="pl-6">
+                    <ConnectOptions
+                      idPrefix={`connect-opt-${index}-${ci}`}
+                      specs={c.specs}
+                      form={row.forms[c.name] ?? EMPTY_FORM}
+                      onChange={setForm(c.name)}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </fieldset>
+      ) : (
+        <ConnectOptions
+          idPrefix={index === 0 ? "connect-opt" : `connect-opt-${index}`}
+          specs={only?.specs ?? []}
+          form={row.forms[only?.name ?? ""] ?? EMPTY_FORM}
+          onChange={setForm(only?.name ?? "")}
+        />
+      )}
     </div>
   );
+}
+
+interface ConnectChoice extends ConnectSelection {
+  specs: OptionSpecInfo[];
+  options: Record<string, string>;
+  rawOptions: string;
 }
 
 const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
@@ -2163,62 +2274,96 @@ const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
   const update = (key: number) => (change: (row: ConnectRow) => ConnectRow) => setRows((list) => list.map((r) => r.key === key ? change(r) : r));
 
   const load = useCallback((target: string) => {
-    const stored = storedFormValues(target);
-    setRows([{ ...emptyRow(), url: target, values: stored.values, raw: stored.raw, catalogName: stored.catalogName, open: Boolean(Object.keys(stored.values).length || stored.raw) }]);
+    setRows([storedRow(target)]);
     setErrors([]);
   }, []);
 
   // Apply ?#prefill=<url> hash on mount — used by the attach-error modal's
   // "Edit connection options" button to bring the user back to a populated
-  // form without invoking ?service= (which would auto-connect).
+  // form without invoking ?service= (which would auto-connect), and by
+  // "Sign in to list catalogs" on its way back from the sign-in, which also
+  // restores the form's other URL rows.
   useEffect(() => {
     const target = consumePrefillFromHash();
-    if (target) load(target);
+    const pending = takePendingConnect();
+    if (target && pending?.includes(target)) {
+      setRows(pending.map(storedRow));
+      setErrors([]);
+    } else if (target) {
+      load(target);
+    }
   }, [load]);
 
   useImperativeHandle(ref, () => ({ prefill: load }), [load]);
+
+  const signIn = (url: string) => {
+    stashPendingConnect(rows.map((r) => r.url.trim()).filter(Boolean));
+    const back = new URL(window.location.href);
+    back.hash = `prefill=${encodeURIComponent(url)}`;
+    return startLoginFlow(url, back.toString()).catch((err) => {
+      setErrors([`Could not start sign-in: ${err instanceof Error ? err.message : String(err)}`]);
+      throw err;
+    });
+  };
 
   const connect = () => {
     const filled = rows.filter((r) => r.url.trim());
     if (!filled.length) return;
     const problems: string[] = [];
-    const collected = filled.map((r, i) => {
-      const result = collectFormOptions(r.values, r.raw, formSpecs(r.specs, r.values));
-      problems.push(...result.errors.map((e) => (filled.length > 1 ? `Catalog ${i + 1}: ${e}` : e)));
-      return result;
+    const choices: ConnectChoice[] = [];
+    filled.forEach((r, i) => {
+      const url = r.url.trim();
+      const catalogs = listedCatalogs(r);
+      const label = filled.length > 1 ? `Catalog ${i + 1}: ` : "";
+      // A service that wasn't listed connects as before: its stored catalog, else its first.
+      const picks = catalogs.length ? catalogs.filter((c) => r.ticked.includes(c.name)) : [{ name: r.storedName, specs: [] as OptionSpecInfo[] }];
+      if (!picks.length) {
+        problems.push(`${label}Tick at least one catalog on ${hostOf(url)}.`);
+        return;
+      }
+      for (const c of picks) {
+        const form = r.forms[catalogs.length ? c.name : ""] ?? EMPTY_FORM;
+        const specs = formSpecs(c.specs, form.values);
+        const collected = collectFormOptions(form.values, form.raw, specs);
+        const prefix = picks.length > 1 ? `${c.name}: ` : label;
+        problems.push(...collected.errors.map((e) => `${prefix}${e}`));
+        choices.push({ url, catalogName: c.name, firstCatalog: catalogs[0]?.name ?? null, specs, options: collected.options, rawOptions: collected.rawOptions });
+      }
     });
-    if (problems.length) {
+    const plan = problems.length ? null : planConnect(choices);
+    if (!plan) {
       setErrors(problems);
-      setRows((list) => list.map((r) => ({ ...r, open: true })));
+      setRows((list) => list.map((r) => ({
+        ...r,
+        forms: Object.fromEntries(Object.entries(r.forms).map(([name, form]) => [name, { ...form, open: true }])),
+      })));
       return;
     }
     const dest = new URL(window.location.href);
     dest.searchParams.delete("attach_options");
     dest.searchParams.delete("workspaces");
     dest.hash = "";
-    if (filled.length === 1) {
+    if (plan.kind === "service") {
       // Saved before the redirect, so the next page load attaches with them.
       // Secrets go to the secret store, never into the workspace or the URL.
-      const row = filled[0];
-      const url = row.url.trim();
-      const catalogName = row.specsFor === url ? row.catalogName : storedFormValues(url).catalogName;
+      const { url, catalogName, options, rawOptions, specs } = plan.selection;
       const { workspace } = openServiceWorkspace(url, undefined, { catalogName });
-      saveFormOptions(catalogOptionSink(workspace.id, workspace.catalogs[0].id), catalogName, collected[0].options, collected[0].rawOptions, formSpecs(row.specs, row.values));
+      saveFormOptions(catalogOptionSink(workspace.id, workspace.catalogs[0].id), catalogName, options, rawOptions, specs);
       dest.searchParams.set("service", url);
       dest.searchParams.delete(LOCAL_WS_PARAM);
     } else {
-      // Several catalogs: aliases are fixed now, once, from the names the
-      // servers gave (or the host, for one that could not be asked).
-      const catalogs = filled.map((r) => {
-        const url = r.url.trim();
-        const catalogName = r.specsFor === url ? r.catalogName : "";
-        return { url, catalogName, alias: catalogName || hostOf(url).split(":")[0].replace(/\./g, "_") };
-      });
-      const { workspace } = openUntitled(catalogs);
+      // Several catalogs, or one that isn't the service's first: aliases are
+      // fixed now, once, from the names the servers gave (or the host, for
+      // one that could not be asked).
+      const { selections } = plan;
+      const { workspace } = openUntitled(selections.map((s) => ({
+        url: s.url,
+        catalogName: s.catalogName,
+        alias: s.catalogName || hostOf(s.url).split(":")[0].replace(/\./g, "_"),
+      })));
       workspace.catalogs.forEach((c, i) => {
-        const row = filled.find((r) => r.url.trim() === c.url) ?? filled[i];
-        const index = filled.indexOf(row);
-        saveFormOptions(catalogOptionSink(workspace.id, c.id), c.catalogName, collected[index].options, collected[index].rawOptions, formSpecs(row.specs, row.values));
+        const s = selections.find((x) => x.url === c.url && x.catalogName === c.catalogName) ?? selections[i];
+        if (s) saveFormOptions(catalogOptionSink(workspace.id, c.id), c.catalogName, s.options, s.rawOptions, s.specs);
       });
       dest.searchParams.delete("service");
       dest.searchParams.set(LOCAL_WS_PARAM, workspace.id);
@@ -2235,6 +2380,7 @@ const ConnectForm = forwardRef<ConnectFormHandle>(function ConnectForm(_, ref) {
           onChange={update(row.key)}
           onRemove={rows.length > 1 ? () => setRows((list) => list.filter((r) => r.key !== row.key)) : undefined}
           onSubmit={connect}
+          onSignIn={signIn}
         />
       ))}
       <div className="flex items-center justify-between gap-2">
@@ -2539,7 +2685,7 @@ function ErrorScreen({
               {serviceUrl}
             </p>
             <div className="rounded-lg bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive dark:text-red-300 text-left">
-              {error}
+              <ConnectionErrorText message={error} />
             </div>
           </div>
 

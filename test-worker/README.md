@@ -41,6 +41,36 @@ serve `cupola_test`, which is the point: the second is attached as
 `cupola_test_2`, so the same pair covers several catalogs, a cross-catalog join
 and alias de-duplication.
 
+### Several catalogs from one URL
+
+`CUPOLA_TEST_MULTI_CATALOG=1 PORT=9012 ./run.sh` serves three catalogs from one
+worker (a vgi-python `MetaWorker`), for the catalog checkbox list on the welcome
+page and in "Attach a catalog…":
+
+| catalog | schemas | options |
+|---------|---------|---------|
+| `cupola_test` | small, large, edge | none. Listed first, so `?service=` still opens it |
+| `cupola_edge` | edge | none |
+| `cupola_secure` | small, edge | `api_key` (required, secret), `region`, `max_rows` |
+
+It can't be combined with `CUPOLA_TEST_ATTACH_OPTIONS`, which would serve a
+second `cupola_secure`. It serves HTTP only.
+
+### Behind auth
+
+Both modes read the same auth environment as `Worker.main`, so either can be
+protected without editing the worker:
+
+- `VGI_BEARER_TOKENS="token=principal"`: static bearer tokens. Anonymous RPC
+  calls (including `catalogs_info`) get a 401, while `/health` stays open. The
+  quickest way to check Cupola's "Sign in to list catalogs" prompt appears.
+- `VGI_OAUTH_*` (`VGI_OAUTH_AUTH_SERVERS`, `VGI_OAUTH_CLIENT_ID`,
+  `VGI_OAUTH_CLIENT_SECRET`, `VGI_OAUTH_SCOPES`, `VGI_OAUTH_USE_ID_TOKEN`, …)
+  with `VGI_JWT_ISSUER` / `VGI_JWT_AUDIENCE`: OAuth resource metadata at
+  `/.well-known/oauth-protected-resource` plus JWT validation, which is what
+  Cupola's PKCE sign-in follows. See `vgi/serve.py` in vgi-python for the full
+  list.
+
 From a DuckDB-compatible CLI, without HTTP:
 
 ```sql
