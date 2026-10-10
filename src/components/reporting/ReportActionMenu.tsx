@@ -1,9 +1,10 @@
 import { Fragment } from 'react';
-import { Copy, Download, FileText, FolderInput, History, Info, Maximize2, MoreHorizontal, Pencil, Trash2, UserRound, type LucideIcon } from 'lucide-react';
+import { CalendarClock, Copy, Download, FileText, FolderInput, History, Info, Maximize2, MoreHorizontal, Pencil, Trash2, UserRound, type LucideIcon } from 'lucide-react';
 import { buttonVariants } from '../ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu';
 
 const definitions = {
+  schedules: ['Schedules & email', CalendarClock],
   ownership: ['Transfer ownership…', UserRound], copy: ['Save a copy…', Copy], move: ['Move…', FolderInput], history: ['Version history', History],
   details: ['Details', Info], rename: ['Rename…', Pencil], source: ['View source', FileText],
   export: ['Download report file', Download], focus: ['Focus report', Maximize2], delete: ['Delete…', Trash2],

@@ -149,7 +149,7 @@ authenticated accounts record their own identities.
 ## Contracts and transport
 
 `src/lib/reporting/contracts.generated.ts` is generated from the actual Python
-dataclasses in SDK commit `7b5301406bca63677ff61cdd58978b697046fa43`:
+dataclasses in the adjacent SDK checkout, including the inline HTML email contract:
 
 ```sh
 ../vgi-reporting-protocol-reference/.venv/bin/python scripts/generate-reporting-contracts.py
@@ -157,7 +157,7 @@ dataclasses in SDK commit `7b5301406bca63677ff61cdd58978b697046fa43`:
 
 The generated file contains TypeScript record/method types, all explicit method
 defaults, structured-argument mappings, and Arrow schemas. The browser uses the
-existing VGI RPC HTTP client, with `vgi.reports.v1` selected explicitly. Unary
+existing VGI RPC HTTP client, with each hosted protocol selected explicitly. Unary
 arguments are individual fields; dataclass arguments and return values use
 their one-row Arrow IPC encoding. Streams are consumed through their final
 continuation and closed. Version/precondition values remain exact `bigint`s.
@@ -226,6 +226,71 @@ failed journal writes prevent dispatch. Recovery data stays on the device until
 acknowledged or explicitly discarded. Users can export drafts when access is
 revoked. This is not an offline library mirror or background synchronization
 service.
+
+## Report schedules and email
+
+Open a saved worker report and choose **⋯ → Schedules & email**. These are normal
+pages with browser Back/Forward navigation. Local reports offer **Save to report
+library** first: a browser-only report cannot be scheduled while the browser is closed.
+
+The page discovers `vgi.schedules.v1` on the report worker. The native scheduling
+worker selector includes other connected workers when available. Schedules are
+filtered by both report ID and service URL. Workers without scheduling support
+show an explanation; they retain all saved-report functionality.
+
+New schedules start paused. Choose daily, weekday, weekly, one-time, or custom
+cron timing, an IANA time zone, and the latest published, latest saved, or a
+specific report revision. The worker previews upcoming fire times and DST
+warnings. Public report parameters support fixed values and the worker's
+advertised relative periods. Advanced settings expose the optional read-only
+condition SQL. A worker remains authoritative for validation and limits.
+
+Email supports multiple recipients, worker-provided suggestions and recipient
+policy checks. Choose the full report as email content (when advertised through
+`ChannelInfo.html_body`), a summary, or attachments only; PDF and HTML attachments
+are independent choices. Provider credentials and sender configuration remain
+on the worker. Cupola never calls `notify.send` directly.
+
+**Authorize / renew access** issues grants using each source's signed-in account,
+seals the exact attached catalog options, and installs credentials using delegation
+version preconditions. Report service access and catalog access are separate.
+The UI shows expiration metadata; the worker caps requested lifetimes. A fresh
+login can be requested with OIDC `prompt=login` and `max_age=0`. Non-secret schedule
+drafts survive that redirect in this tab. Grant and ticket bytes stay in memory
+and are explicitly prohibited from the persistent mutation journal. Delegations
+belong to the signed-in scheduler account; an execution identity belonging to
+someone else must renew its own credentials.
+
+**Preview without sending** calls `test_run`, returning downloadable files and
+prospective message descriptions without sending mail or creating a scheduled
+run. **Run & send now** admits a real manual run. Run history polls the worker
+and shows rendering steps, provider acceptance, errors, downloads and recovery
+events. Acceptance by an email provider does not claim inbox delivery.
+
+Schedule changes and manual runs use the same durable request journal as saved
+reports. Lost acknowledgements replay the original request ID; they never become
+a second send. The schedule editor keeps its original version precondition even
+while status polling updates the surrounding UI. Conflicts retain the draft and
+offer explicitly discarding it to load the current schedule. Retry, cancel and
+resolution controls follow the worker's allowed actions. Unknown delivery
+outcomes require worker-verified evidence; the UI does not blindly resend them.
+
+The first UI covers report generation and email. It preserves schedules with
+additional delivery kinds as read-only definitions rather than rewriting them.
+Worker-side retention, retries, supported formats, destination policy, grants,
+execution-account assignment, and provider reconciliation remain worker policy.
+
+To run the scheduling browser test with a real isolated execution host:
+
+```sh
+bun test tests/reporting/scheduling.integration.test.ts
+CUPOLA_APP_ORIGIN=http://localhost:4341 bunx playwright test tests/report-scheduling.spec.ts
+```
+
+The test host forces local `.eml` capture and removes Resend/SMTP configuration.
+It renders PDF and HTML with the worker's headless browser. Install the reference
+worker's Playwright Chromium dependency first. Unit and HTTP suites run in
+separate Bun processes because existing unit tests mock the RPC module globally.
 
 ## Run against the reference worker
 

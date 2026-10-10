@@ -1,0 +1,53 @@
+import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { startReportingWorker } from './worker';
+import { memoryStorage, report } from './fixtures';
+import { encodeReport } from '../../src/lib/reporting/body';
+import { authorizeSchedules, newSchedule, requiredDelegations, PDF, HTML } from '../../src/lib/reporting/schedules';
+import { ReportClient } from '../../src/lib/reporting/client';
+import { MutationJournal } from '../../src/lib/reporting/journal';
+
+let worker: Awaited<ReturnType<typeof startReportingWorker>>;
+beforeAll(async () => { worker = await startReportingWorker('Scheduling test', 'http://127.0.0.1:1/unavailable-renderer'); });
+afterAll(async () => { await worker?.stop(); });
+test('schedule/grant/ticket/recipient contracts cross Python HTTP with CAS and idempotent run admission', async () => {
+  const client = worker.client(), request = () => crypto.randomUUID();
+  expect(await client.discover(undefined, 'vgi.schedules.v1')).toBe(true);
+  expect((await client.call('schedules.get_scheduler_info', {})).action_kinds).toContain('render_report');
+  expect((await client.call('notify.get_notify_info', {})).channels[0].html_body).toBe(true);
+  const checks = await client.call('notify.check_destinations', { destinations: [{ kind: 'email', address: 'reader@example.test' }, { kind: 'email', address: 'reader@not-allowed.test' }] });
+  expect(checks.results.map(r => r.allowed)).toEqual([true, false]);
+  const encoded = encodeReport(report('Scheduled HTTP report'), { description: '', tags: [] });
+  const saved = await client.call('create_report', { ...encoded, request_id: request() });
+  const keys = requiredDelegations(worker.url, [{ alias: 'finance', attachment_id: 'finance', location: worker.url, catalog_name: 'yfinance', label: '', required: true }]);
+  const grants = await authorizeSchedules(client, keys, saved.envelope!.title, () => ({ options: null, data_version_spec: '', implementation_version: '' }), 7, url => new ReportClient(url, { token: async () => 'test-alice' }));
+  expect(grants).toHaveLength(2);
+  expect(grants.every(g => g.version === 1n && g.expires_at! > Date.now())).toBe(true);
+  const renewed = await authorizeSchedules(client, keys, 'Renewed', () => ({ options: null, data_version_spec: '', implementation_version: '' }), 7, () => client);
+  expect(renewed.every(g => g.version === 2n)).toBe(true);
+  const definition = newSchedule(saved, worker.url);
+  definition.action.render_report!.outputs = [PDF, HTML];
+  definition.deliveries = [{ destinations: [{ kind: 'email', address: 'reader@example.test' }], inline: 'report', attach: [PDF] }];
+  const times = await client.call('schedules.preview_trigger', { trigger: definition.trigger, after: Date.now(), count: 3n });
+  expect(times.fire_times).toHaveLength(3); expect(times.fire_times[0]).toBeGreaterThan(Date.now());
+  const created = await client.call('schedules.create_schedule', { request_id: request(), schedule: definition });
+  expect(created.version).toBe(1n);
+  const changed = await client.call('schedules.update_schedule', { request_id: request(), schedule_id: created.schedule_id, expected_version: created.version, schedule: { ...definition, title: 'Edited' } });
+  await expect(client.call('schedules.update_schedule', { request_id: request(), schedule_id: created.schedule_id, expected_version: created.version, schedule: definition })).rejects.toMatchObject({ errorCode: 'ABORTED' });
+  expect((await client.call('schedules.list_schedules', { report_id: saved.report_id }))[0].version).toBe(changed.version);
+  let drop = true;
+  const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await fetch(input, init);
+    if (String(input).endsWith('/run_now') && drop) { drop = false; await response.arrayBuffer(); throw new TypeError('Lost admitted run reply'); }
+    return response;
+  }) as typeof fetch;
+  const interrupted = new ReportClient(worker.url, { token: async () => 'test-alice', fetch: transport });
+  const journal = new MutationJournal(interrupted, await interrupted.recoveryScope(), 'test-schedule', memoryStorage());
+  await expect(journal.run('schedules.run_now', { schedule_id: created.schedule_id })).rejects.toThrow('Lost admitted');
+  const retried = await journal.retry();
+  const runs = await client.call('schedules.list_runs', { schedule_id: created.schedule_id });
+  expect(runs).toHaveLength(1); expect(runs[0].run_id).toBe(retried.run_id);
+  expect((await client.call('schedules.get_run', { run_id: retried.run_id })).schedule.deliveries[0].inline).toBe('report');
+  await expect(client.call('schedules.delete_schedule', { request_id: request(), schedule_id: created.schedule_id, expected_version: changed.version })).rejects.toMatchObject({ errorCode: 'FAILED_PRECONDITION' });
+  const unused = await client.call('schedules.create_schedule', { request_id: request(), schedule: definition });
+  expect((await client.call('schedules.delete_schedule', { request_id: request(), schedule_id: unused.schedule_id, expected_version: unused.version })).applied).toBe(true);
+}, 30_000);

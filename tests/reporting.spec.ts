@@ -783,7 +783,8 @@ test('read-only worker sidebar menu offers navigation without move or local muta
   await row.getByRole('link', { name: 'Read-only context report', exact: true }).click({ button: 'right' });
   const menu = page.getByRole('menu', { name: 'Read-only context report actions', exact: true });
   await expect(menu).toBeVisible();
-  await expect(menu.getByRole('menuitem')).toHaveCount(4);
+  await expect(menu.getByRole('menuitem')).toHaveCount(5);
+  await expect(menu.getByRole('menuitem', { name: 'Schedules & email', exact: true })).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: 'Transfer ownership…', exact: true })).toHaveCount(0);
   await expect(menu.getByRole('menuitem', { name: 'Open in new tab', exact: true })).toBeVisible();
   await expect(menu.getByRole('separator')).toHaveCount(0);

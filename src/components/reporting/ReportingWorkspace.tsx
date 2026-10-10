@@ -51,7 +51,7 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     read(); window.addEventListener(REPORT_TRANSFERS_CHANGED, read); window.addEventListener('storage', read);
     return () => { window.removeEventListener(REPORT_TRANSFERS_CHANGED, read); window.removeEventListener('storage', read); };
   }, [scope, generation]);
-  const routeIdentity = () => { const url = new URL(location.href); url.searchParams.delete('report_view'); return url.pathname + url.search; };
+  const routeIdentity = () => { const url = new URL(location.href); for (const key of ['report_view', 'report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit']) url.searchParams.delete(key); return url.pathname + url.search; };
   const activeRoute = useRef(routeIdentity());
   useEffect(() => {
     const track = () => { activeRoute.current = routeIdentity(); };
@@ -80,7 +80,7 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     const url = new URL(location.href);
     url.pathname = `${appBase.replace(/\/$/, '')}/reports${value === 'local' && !reportId ? '/saved' : ''}`;
     url.searchParams.set('report_service', value);
-    for (const key of ['report_view', 'report_id', 'report_revision', 'report_folder', 'evidence_report', 'evidence_new', 'evidence_view', 'evidence_edit', 'local_report_folder']) url.searchParams.delete(key);
+    for (const key of ['report_view', 'report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit', 'report_id', 'report_revision', 'report_folder', 'evidence_report', 'evidence_new', 'evidence_view', 'evidence_edit', 'local_report_folder']) url.searchParams.delete(key);
     for (const key of [...url.searchParams.keys()]) if (key.startsWith('p.')) url.searchParams.delete(key);
     if (reportId) url.searchParams.set('report_id', reportId);
     if (value === 'local' && folderId) url.searchParams.set('local_report_folder', folderId);

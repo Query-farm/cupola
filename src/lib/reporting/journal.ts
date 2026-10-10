@@ -31,6 +31,7 @@ export class MutationJournal {
     finally { release(); if (localLocks.get(this.key) === current) localLocks.delete(this.key); }
   }
   async run<M extends Method>(method: M, input: Omit<Input<M>, 'request_id'>): Promise<Output<M>> {
+    if (method.startsWith('identity.') || method.startsWith('tickets.') || method === 'delegations.put_delegations') throw new Error('Credentials cannot be stored in a browser recovery journal.');
     return this.exclusive(async () => {
       if (this.busy || this.pending) throw new Error('Resolve the pending request before starting another change.');
       const pending: PendingMutation = { method, input: { ...input, request_id: crypto.randomUUID() }, createdAt: Date.now(), scope: this.scope };

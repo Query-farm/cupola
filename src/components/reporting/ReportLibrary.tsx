@@ -81,6 +81,7 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
   function navigate(id: string | null, folder = folderId, pinned: string | null = null, view?: string) {
     const url = new URL(location.href);
     for (const key of [...url.searchParams.keys()]) if (key.startsWith('p.')) url.searchParams.delete(key);
+    for (const key of ['report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit']) url.searchParams.delete(key);
     if (view) url.searchParams.set('report_view', view); else url.searchParams.delete('report_view');
     if (id) url.searchParams.set('report_id', id); else url.searchParams.delete('report_id');
     if (folder) url.searchParams.set('report_folder', folder); else url.searchParams.delete('report_folder');
@@ -150,6 +151,7 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
       onOpen: () => navigate(report.report_id), detail: report.ownership.owner_ref.display_name || report.ownership.owner_ref.id, state: `${report.published_revision_id ? 'Published' : 'Draft'} · revision ${String(report.revision_number)}`,
       actions: <ReportActionMenu label={`Actions for ${report.envelope?.title ?? 'report'}`} actions={[
         reportAction('details', () => navigate(report.report_id, folderId, null, 'details')),
+        ...(!report.redacted ? [reportAction('schedules', () => navigate(report.report_id, folderId, null, 'schedules'), blocked)] : []),
         ...(report.allowed_actions.includes('transfer_ownership') ? [reportAction('ownership', () => navigate(report.report_id, folderId, null, 'ownership'), blocked)] : []),
         ...(props.onTransferReport && !report.redacted ? [reportAction('copy', () => props.onTransferReport?.({ kind: 'worker', url: client.url, record: report }, false), busy || Boolean(pending)),
           ...(report.allowed_actions.some(a => a === 'move' || a === 'delete') ? [reportAction('move', () => props.onTransferReport?.({ kind: 'worker', url: client.url, record: report }, true), blocked)] : [])] : []),

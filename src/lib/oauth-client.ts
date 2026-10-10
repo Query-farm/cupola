@@ -382,7 +382,7 @@ export function redirectUri(): string {
  *  On successful authentication the user is redirected to
  *  `${origin}/oauth-callback.html?code=...` → cupola bootstrap → exchange →
  *  navigate back to `returnTo`. */
-export async function startLoginFlow(serviceUrl: string, returnTo?: string): Promise<never> {
+export async function startLoginFlow(serviceUrl: string, returnTo?: string, options: { fresh?: boolean } = {}): Promise<never> {
   const ctx = await discoverAuthContext(serviceUrl);
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = await generateCodeChallenge(codeVerifier);
@@ -412,6 +412,7 @@ export async function startLoginFlow(serviceUrl: string, returnTo?: string): Pro
     state,
     scope: ctx.scope,
   });
+  if (options.fresh) { params.set("prompt", "login"); params.set("max_age", "0"); }
   const authorizeUrl = `${ctx.authorizationEndpoint}?${params.toString()}`;
   console.log("[oauth] startLoginFlow → redirect", ctx.authorizationEndpoint, "scope=", ctx.scope);
   // `replace`, not `href`: the pre-auth app URL we're leaving is the one the

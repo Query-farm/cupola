@@ -3,8 +3,8 @@ import { ArrowLeft } from 'lucide-react';
 import { Button } from '../ui/button';
 import { REPORT_ROUTE_CHANGED } from '../../lib/reporting/navigation';
 
-export type ReportPageName = 'history' | 'details' | 'share' | 'source' | 'ownership';
-const pages = new Set(['history', 'details', 'share', 'source', 'ownership']);
+export type ReportPageName = 'history' | 'details' | 'share' | 'source' | 'ownership' | 'schedules';
+const pages = new Set(['history', 'details', 'share', 'source', 'ownership', 'schedules']);
 const readPage = () => {
   const value = new URLSearchParams(location.search).get('report_view');
   return value && pages.has(value) ? value as ReportPageName : null;
@@ -19,6 +19,7 @@ export function useReportPage() {
   }, []);
   function navigate(value: ReportPageName | null) {
     const url = new URL(location.href);
+    for (const key of ['report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit']) url.searchParams.delete(key);
     if (value) url.searchParams.set('report_view', value); else url.searchParams.delete('report_view');
     if (!value && history.state?.reportPageFrom === url.href) { history.back(); return; }
     if (url.href !== location.href) {

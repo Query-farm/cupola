@@ -103,13 +103,13 @@ export class ReportClient {
     const rpc = await this.connection(config.protocol, signal);
     try {
       if (!config.stream) {
-        const result = decodeRecord((await rpc.call(method, params))?.result);
+        const result = decodeRecord((await rpc.call(config.name, params))?.result);
         if ('request_id' in params && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
           window.dispatchEvent(new CustomEvent(REPORT_LIBRARY_CHANGED, { detail: { url: this.url } }));
         }
         return result;
       }
-      const stream = await rpc.stream(method, params);
+      const stream = await rpc.stream(config.name, params);
       try {
         const rows: unknown[] = [];
         for await (const batch of stream) rows.push(...batch.map(row => {

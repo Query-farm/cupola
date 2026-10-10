@@ -17,6 +17,7 @@ import { ReportHeader } from './ReportHeader';
 import { reportAction, type ReportAction } from './ReportActionMenu';
 import { ReportDetailsPage } from './ReportDetailsPage';
 import { WorkerReportSharing } from './WorkerReportSharing';
+import { ReportSchedulesPage } from './ReportSchedulesPage';
 import { OwnershipPage } from './OwnershipPage';
 import { useTransferSource } from '../../lib/reporting/transfer-source';
 
@@ -123,6 +124,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
   const reportActions: ReportAction[] = record ? [
     ...(!opened?.report ? [reportAction('history', () => { setHistoryReload(n => n + 1); showPage('history'); })] : []),
     reportAction('details', () => showPage('details')),
+    ...(!record.redacted ? [reportAction('schedules', () => showPage('schedules'), blocked)] : []),
     ...(can('transfer_ownership') ? [reportAction('ownership', () => showPage('ownership'), blocked)] : []),
     ...(props.onTransferReport && !record.redacted ? [reportAction('copy', () => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, false), blocked),
       ...(!revisionId && (can('move') || can('delete')) ? [reportAction('move', () => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, true), blocked)] : [])] : []),
@@ -139,7 +141,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
       <div className="flex flex-wrap gap-2"><Button disabled={busy || save.status === 'conflict'} onClick={() => void controller.retry()}>Retry save</Button><Button variant="outline" disabled={busy} onClick={() => setGeneration(n => n + 1)}>Load latest from worker</Button><Button variant="outline" disabled={busy || managementPending || !session.info.root_allowed_actions.includes('create_report')} onClick={() => void attempt(() => copy(controller.current.report))}>Save draft as a copy</Button><Button variant="ghost" onClick={() => downloadDocumentFile(JSON.stringify(controller.current.report, null, 2), 'report-draft.json')}>Export draft</Button></div>
     </div>}
     {opened?.bodyError && <div className="space-y-3 p-5"><p role="alert">{opened.bodyError}</p>{record?.body && <Button variant="outline" onClick={downloadBody}><Download />Download original body</Button>}</div>}
-    {opened?.report && <div className="min-h-0 flex-1" hidden={page === 'details' || page === 'share' || page === 'ownership'}><EvidenceWorkspace key={editorGeneration} {...props} remote={{
+    {opened?.report && <div className="min-h-0 flex-1" hidden={page === 'details' || page === 'share' || page === 'ownership' || page === 'schedules'}><EvidenceWorkspace key={editorGeneration} {...props} remote={{
       report: opened.report, canEdit: Boolean(controller), status: !controller ? 'Read only' : save?.status === 'error' || save?.status === 'conflict' ? 'Not saved' : pending ? 'Saving…' : 'Saved', pending: Boolean(blocked),
       location: reportLocation, actions: reportActions, onShare: () => showPage('share'), onHistoryOpen: () => setHistoryReload(n => n + 1),
       versionLabel: revisionId ? `Version ${record?.revision_number}` : controller ? record?.published_revision_id ? record.published_revision_id === record.head_revision_id ? 'Published' : 'Unpublished changes' : 'Draft' : undefined,
@@ -148,6 +150,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
       onDraft: report => controller?.capture(report), onSave: (report, meta) => controller?.stage(report, meta),
       onLeave: props.onLeave, onCopy: report => void attempt(() => copy(report)), historyContent,
     }} /></div>}
+    {page === 'schedules' && record && <ReportSchedulesPage report={record} reportClient={session.client} catalogs={props.catalogs} workspaceId={props.workspaceId} pinned={Boolean(revisionId)} onBack={() => showPage(null)} />}
     {page === 'details' && record && <ReportDetailsPage key={String(record.version)} initial={{ name: record.envelope?.title ?? '', description: record.envelope?.description ?? '', tags: record.envelope?.tags ?? [] }} location={reportLocation} blocked={blocked}
       onClose={() => showPage(null)} onSave={controller ? async values => {
         if (blocked || !opened?.report) throw new Error('Finish saving before changing report details.');

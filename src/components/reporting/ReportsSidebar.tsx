@@ -1,5 +1,5 @@
 import { useEffect, useState, type MouseEvent } from 'react';
-import { FileChartColumn, FileText, FolderPlus, Folder, HardDrive, Pencil, UserRound, Copy, History, Info, Trash2 } from 'lucide-react';
+import { CalendarClock, FileChartColumn, FileText, FolderPlus, Folder, HardDrive, Pencil, UserRound, Copy, History, Info, Trash2 } from 'lucide-react';
 import { SavedDocumentsSidebar } from '../shared/SavedDocumentsSidebar';
 import { SavedDocumentRow } from '../shared/SavedDocumentRow';
 import { FileTree, type FileTreeNode } from './FileTree';
@@ -58,9 +58,9 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
   function open(destination: ReportDestination, action?: string) {
     // Opening management for the current item preserves its parameters and editor.
     const url = new URL(reportNodeKey(destination) === currentReportNode() ? window.location.href : href(destination), window.location.href);
-    url.searchParams.delete('report_view');
+    for (const key of ['report_view', 'report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit']) url.searchParams.delete(key);
     if (action === 'folder') url.searchParams.set('report_new_folder', '1');
-    else if (action && ['history', 'details', 'ownership'].includes(action)) url.searchParams.set('report_view', action);
+    else if (action && ['history', 'details', 'ownership', 'schedules'].includes(action)) url.searchParams.set('report_view', action);
     else if (action) url.searchParams.set('report_folder_action', action);
     window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId, href: url.href } }));
   }
@@ -125,6 +125,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
     const source = sources.get(entry.id);
     return [
       { id: 'history', label: 'Version history', icon: History, onClick: () => open(entry.destination, 'history') },
+      { id: 'schedules', label: 'Schedules & email', icon: CalendarClock, onClick: () => open(entry.destination, 'schedules') },
       { id: 'details', label: 'Details', icon: Info, onClick: () => open(entry.destination, 'details') },
       ...(source?.kind === 'worker' && !source.record.redacted ? [{ id: 'copy', label: 'Save a copy…', icon: Copy, disabled: preparing || Boolean(transfer), onClick: () => void copy(entry.id) }] : []),
       ...(source?.kind === 'worker' && locations.find(l => l.url === source.url)?.info?.writable && source.record.allowed_actions.includes('transfer_ownership') ? [{ id: 'ownership', label: 'Transfer ownership…', icon: UserRound, onClick: () => open(entry.destination, 'ownership') }] : []),

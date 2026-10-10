@@ -963,7 +963,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   function transfer(move: boolean) { const stored = persist(reportRef.current, { kind: 'edit' }); if (stored) onTransfer?.(stored, move); }
   const reportActions: ReportAction[] = [
     reportAction('history', () => { remote?.onHistoryOpen(); showPage('history'); }),
-    ...(remote ? remote.actions.filter(a => a.id !== 'delete') : [reportAction('details', () => showPage('details')), reportAction('copy', onTransfer ? () => transfer(false) : saveCopy, busy), ...(onTransfer ? [reportAction('move', () => transfer(true), busy)] : [])]),
+    ...(remote ? remote.actions.filter(a => a.id !== 'delete') : [reportAction('details', () => showPage('details')), reportAction('schedules', () => showPage('schedules')), reportAction('copy', onTransfer ? () => transfer(false) : saveCopy, busy), ...(onTransfer ? [reportAction('move', () => transfer(true), busy)] : [])]),
     { ...reportAction('source', () => showPage('source')), separator: true },
     { id: 'pdf', label: 'Export PDF', icon: FileDown, disabled: refreshing || !run || exporting || Boolean(pending), onClick: () => void exportPdf() },
     ...(run?.report.parameters.filter(item => item.type === 'select' || item.type === 'multi_select').map(item => ({ id: `pdf-${item.key}`, label: `PDF per ${item.label.toLowerCase()}`, icon: FileDown, disabled: refreshing || exporting, onClick: () => void exportPdfPerValue(item.key) })) ?? []),
@@ -1133,8 +1133,9 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       </div>
     </main>
   </div>;
-  const managingHere = managementPage === 'history' || managementPage === 'source' || !remote && (managementPage === 'details' || managementPage === 'share');
+  const managingHere = managementPage === 'history' || managementPage === 'source' || !remote && (managementPage === 'details' || managementPage === 'share' || managementPage === 'schedules');
   return <>
+    {managementPage === 'schedules' && !remote && <ReportPage title="Schedules & email" description={report.title} onBack={() => showPage(null)}><div className="space-y-4 rounded-lg border p-5"><h2 className="font-semibold">Save this report to a worker first</h2><p className="text-sm text-muted-foreground">Scheduled reports run on a worker while Cupola is closed. Save a copy to a report library, then open Schedules &amp; email on that report.</p>{onTransfer && <Button onClick={() => transfer(false)}>Save to report library</Button>}</div></ReportPage>}
     {managementPage === 'share' && !remote && <ReportSharing canExportPdf={!refreshing && Boolean(run) && !exporting} pending={Boolean(pending)} onPdf={() => void exportPdf()} onFile={() => exportReports([report])} onSaveToLibrary={onTransfer ? () => transfer(false) : undefined} onClose={() => showPage(null)} />}
     {managementPage === 'history' && <ReportPage title="Report history" description={report.title} onBack={() => showPage(null)}>{remote?.historyContent ?? <EvidenceHistory history={history} dirty={dirty} onRestore={revision => { restoreRevision(revision); showPage(null); }} onDelete={deleteRevision} />}</ReportPage>}
     {managementPage === 'source' && <ReportPage title="Report source" description={report.title} onBack={() => showPage(null)}><h3>Setup SQL</h3><pre className="overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">{report.setupSql || 'No setup SQL'}</pre><h3>Document</h3><pre className="overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">{report.source}</pre></ReportPage>}
