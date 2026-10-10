@@ -1,5 +1,6 @@
 import type { CompletionContext, CompletionResult } from '@codemirror/autocomplete';
 import type { ValidateError } from '@markdoc/markdoc';
+import type { ReportQueryFailure } from './query-error';
 
 export interface EvidenceIssue {
   message: string;
@@ -7,6 +8,7 @@ export interface EvidenceIssue {
   line?: number;
   target: 'document' | 'data';
   sql?: string;
+  failure?: ReportQueryFailure;
 }
 export function validationIssues(errors: ValidateError[]): EvidenceIssue[] {
   return errors.map(item => ({

@@ -1,5 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { EvidenceEditorNavigation } from './EvidenceEditorNavigation';
+import { EvidenceQueryError } from './EvidenceQueryError';
+import { queryErrorSummary } from '../../lib/evidence/query-error';
 import { EvidenceCodeEditor, type EvidenceCodeHandle } from './EvidenceCodeEditor';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
 import { BLANK_REPORT_SOURCE, REPORT_STARTERS } from '../../lib/evidence/starters';
@@ -52,9 +54,9 @@ export function EvidenceEditor({ historyContent, history, onProposal, performanc
   const warnings = issues.filter(issue => issue.severity === 'warning');
   const renderIssue = (issue: EvidenceIssue, index: number) => <div key={index} className="mt-2 rounded border p-2">
     <button type="button" disabled={issuesStale} className={`text-left disabled:opacity-60 ${issue.severity === 'error' ? 'text-destructive' : 'text-muted-foreground'}`} onClick={() => { setTab(issue.target); setJump({ target: issue.target, line: issue.line ?? 1 }); }}>
-      {issue.target === 'data' ? 'Data' : 'Document'}{issue.line ? ` · line ${issue.line}` : ''} · {issue.severity}: {issue.message}
+      {issue.target === 'data' ? 'Data' : 'Document'}{issue.line ? ` · line ${issue.line}` : ''} · {issue.severity}: {issue.failure ? queryErrorSummary(issue.message) : issue.message}
     </button>
-    {issue.sql && <details className="mt-1"><summary className="cursor-pointer">Failed SQL</summary><pre className="overflow-auto whitespace-pre-wrap p-2">{issue.sql}</pre></details>}
+    {issue.failure ? <div className="mt-2"><EvidenceQueryError failure={issue.failure} /></div> : issue.sql && <details className="mt-1"><summary className="cursor-pointer">Failed SQL</summary><pre className="overflow-auto whitespace-pre-wrap p-2">{issue.sql}</pre></details>}
   </div>;
   return <aside aria-label="Report editor" className="flex min-h-0 min-w-0 flex-col border-t bg-card lg:border-l lg:border-t-0">
     <div className="space-y-3 border-b p-4">

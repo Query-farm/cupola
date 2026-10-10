@@ -115,8 +115,43 @@ describe('runSetupSql', () => {
     let calls = 0;
     const result = await runSetupSql('SELECT 1; SELECT boom; SELECT 3', report, {},
       async () => ++calls === 2 ? { ok: false, error: 'Binder Error' } : { ok: true }, step => steps.push(`${step.index}:${step.error}`));
-    expect(result).toEqual({ ok: false, error: 'Statement 2: Binder Error' });
+    expect(result).toEqual({ ok: false, error: 'Statement 2: Binder Error', failure: {
+      phase: 'setup', message: 'Binder Error', sql: 'SELECT boom', statementIndex: 2, statementCount: 3, startLine: 1, endLine: 1,
+    } });
     expect(calls).toBe(2);
     expect(steps).toEqual(['1:null', '2:Binder Error']);
+  });
+  test('preserves the failing source range and executed placeholders without copying parameter values', async () => {
+    const sql = "-- comment only;\n;\nSELECT ';' /* outer /* nested ; */ comment */;\n-- balances\nCREATE TEMP TABLE balances AS\nSELECT $n AS value;\nSELECT 3;";
+    const error = 'VGI Worker Exception: ValidationError: 21 validation errors for AccountBalanceSnapshot\ncash-balance\n  Field required';
+    const observed: unknown[] = [];
+    let calls = 0;
+    const result = await runSetupSql(sql, report, { n: 123456789 }, async () => ++calls === 2 ? { ok: false, error } : { ok: true }, step => observed.push(step));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure).toEqual({
+      phase: 'setup', message: error, name: 'balances', statementIndex: 2, statementCount: 3, startLine: 4, endLine: 6,
+      sql: '-- balances\nCREATE TEMP TABLE balances AS\nSELECT $n AS value',
+      executedSql: '-- balances\nCREATE TEMP TABLE balances AS\nSELECT ? AS value',
+    });
+    expect(observed.at(-1)).toMatchObject({ failure: result.failure });
+    expect(JSON.stringify(result.failure)).not.toContain('123456789');
+    expect(calls).toBe(2);
+  });
+  test('thrown engine and parameter compilation errors retain their SQL context', async () => {
+    const result = await runSetupSql('SELECT 1;\nSELECT $n', report, {}, async sql => {
+      if (sql.includes('?')) throw new Error('Worker disconnected');
+      return { ok: true };
+    });
+    expect(result).toMatchObject({ ok: false, failure: { message: 'Worker disconnected', sql: 'SELECT $n', executedSql: 'SELECT ?', statementIndex: 2, startLine: 2 } });
+    let calls = 0;
+    const invalid = await runSetupSql('SELECT $unknown', report, {}, async () => { calls++; return { ok: true }; });
+    expect(invalid).toMatchObject({ ok: false, failure: { sql: 'SELECT $unknown', statementIndex: 1 } });
+    expect(calls).toBe(0);
+  });
+  test('cancellation stays a cancellation instead of a report problem', async () => {
+    const observed: unknown[] = [];
+    await expect(runSetupSql('SELECT 1', report, {}, async () => { throw new DOMException('Report refresh stopped.', 'AbortError'); }, step => observed.push(step))).rejects.toThrow('Report refresh stopped');
+    expect(observed).toEqual([]);
   });
 });

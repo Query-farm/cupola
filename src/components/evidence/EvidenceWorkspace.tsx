@@ -40,6 +40,7 @@ import { EvidencePivot } from './EvidencePivot';
 import { consumeReportPromotion, hasReportPromotion } from '../../lib/reports/events';
 import { useReportTheme } from './useReportTheme';
 import { EvidenceEditor } from './EvidenceEditor';
+import { EvidenceQueryError } from './EvidenceQueryError';
 import { EvidencePreview, type EvidenceInputState, type PreviewDrill, type ReportRun } from './EvidencePreview';
 import { useReportPrint } from './useReportPrint';
 import { captureReportPreview, RetainedReportPreview } from './RetainedReportPreview';
@@ -437,14 +438,14 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       if (hasSqlStatements(next.setupSql)) {
         profile.begin('setup');
         // Statement by statement, so the Performance tab times each one.
-        const start = performance.now();
         const setup = await runSetupSql(next.setupSql, next, values, (sql, params) => current.query(sql, params),
-          step => profile.query({ phase: 'setup', name: step.name, sql: step.sql, startedAt: step.startedAt, durationMs: step.durationMs, error: step.error }),
+          step => {
+            profile.query({ phase: 'setup', name: step.name, sql: step.sql, startedAt: step.startedAt, durationMs: step.durationMs, error: step.error });
+            setLogs(logs => [...logs, { sql: step.sql, rows: 0, durationMs: step.durationMs, error: step.error, startedAt: step.startedAt, failure: step.failure }]);
+          },
           step => profile.start({ phase: 'setup', ...step }));
-        // Logged against the whole setup SQL, so an error points the editor at the Dataset SQL.
-        setLogs([{ sql: next.setupSql, rows: 0, durationMs: performance.now() - start, error: setup.ok ? null : setup.error, startedAt: start }]);
         profile.end('setup');
-        if (!setup.ok) throw new Error(setup.error);
+        if (!setup.ok) { setStatus('Refresh failed'); profile.finish('failed'); return false; }
       }
       if (next.semanticDatasets?.length) profile.begin('semantic');
       const semanticCatalogs = next.semanticDatasets?.length ? await current.wait(sessionCatalogs(catalogs)) : catalogs;
@@ -943,7 +944,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
 
   const lint = useMemo(() => { try { return parameterLint(report); } catch { return []; } }, [report.parameters, report.setupSql, report.source, report.drillPaths]);
   const issues: EvidenceIssue[] = [...lint, ...specIssues, ...logs.filter(log => log.error).map(log => ({
-    message: log.error!, severity: 'error' as const, target: log.sql === report.setupSql ? 'data' as const : 'document' as const, sql: log.sql,
+    message: log.error!, severity: 'error' as const, target: log.failure?.phase === 'setup' ? 'data' as const : 'document' as const,
+    sql: log.sql, line: log.failure?.startLine, failure: log.failure,
   }))];
 
   const errorCount = issues.filter(issue => issue.severity === 'error').length;
@@ -994,7 +996,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
         : <Button key="refresh" size="sm" variant="outline" aria-label={editing ? 'Update preview' : 'Refresh report'} title="⌘ / Ctrl + Enter" onClick={() => void refresh()}><RefreshCw />{editing ? 'Update preview' : 'Refresh'}{pending && <span role="status" aria-label="Changes not applied" className="size-2 rounded-full bg-amber-400" />}</Button>}
       <div className="flex rounded-lg bg-muted p-1" role="group" aria-label="Report mode">
         <Button variant={editing ? 'ghost' : 'outline'} size="sm" aria-pressed={!editing} aria-label="View report" onClick={() => { setEditing(false); setEditorOnly(false); }}><Eye />View</Button>
-        <Button disabled={remote && !remote.canEdit} variant={editing ? 'outline' : 'ghost'} size="sm" aria-pressed={editing} aria-label="Edit report" onClick={() => setEditing(true)}><Code2 />Edit{errorCount > 0 && <span className="rounded-full bg-destructive px-1.5 text-[10px] font-semibold text-white" data-testid="report-problem-count">{errorCount}</span>}</Button>
+        <Button disabled={remote && !remote.canEdit} variant={editing ? 'outline' : 'ghost'} size="sm" aria-pressed={editing} aria-label="Edit report" onClick={() => { setEditing(true); setCompactView('editor'); }}><Code2 />Edit{errorCount > 0 && <span className="rounded-full bg-destructive px-1.5 text-[10px] font-semibold text-white" data-testid="report-problem-count">{errorCount}</span>}</Button>
       </div>
       {editing && remote?.publishAction && <Button size="sm" disabled={remote.publishAction.disabled} onClick={remote.publishAction.onClick}>Publish changes</Button>}
       {remote ? <Button size="sm" variant="outline" onClick={remote.onShare}>Share</Button>
@@ -1004,7 +1006,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     </ReportHeader>}
     {rename !== null && <Dialog open onOpenChange={open => { if (!open) setRename(null); }}><DialogContent className="sm:max-w-sm"><DialogHeader><DialogTitle>Rename report</DialogTitle><DialogDescription>Choose a name for this report.</DialogDescription></DialogHeader><form className="space-y-4" onSubmit={e => { e.preventDefault(); if (remote && (!remote.canEdit || remote.pending)) return; const next = { ...reportRef.current, title: rename.trim() }; change(next); if (persist(next, { kind: 'edit', label: 'Renamed report' })) setRename(null); }}><Input aria-label="Report name" autoFocus required value={rename} onChange={e => setRename(e.target.value)} />{saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}<Button type="submit" disabled={!rename.trim() || Boolean(remote?.pending)}>Save name</Button></form></DialogContent></Dialog>}
     {pdfExport.state !== 'idle' && <p role="status" className="mx-5 mt-3 flex items-center gap-2 text-xs text-muted-foreground">{pdfExport.state === 'exporting' ? <><Loader2 className="size-3 animate-spin" />Preparing PDF{pdfExport.progress ? ` ${pdfExport.progress}` : ''}…</> : <><Check className="size-3" />PDF exported{pdfExport.omitted.length ? ` · ${pdfExport.omitted.length} items not included` : ''}</>}</p>}
-    {error && <div role="alert" className="m-5 whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+    {error && <div role="alert" className="m-5 max-h-40 shrink-0 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
     {notice && <p role="status" className="mx-5 mt-3 text-xs text-muted-foreground">{notice}</p>}
     {recovered && !library && <p role="status" className="mx-5 mt-3 text-xs text-muted-foreground">{RECOVERED_NOTICE}</p>}
     {showRequires && <div role="region" aria-label="Report catalogs" data-testid="report-requires-banner" className="mx-5 mt-3 space-y-2 rounded-lg border border-amber-300 bg-amber-50/60 p-3 text-sm dark:border-amber-700/60 dark:bg-amber-950/20">
@@ -1056,6 +1058,10 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
         <section style={{ display: editing && editorOnly ? 'none' : undefined }} aria-label={editing ? 'Report preview' : 'Report viewer'} className={`${editing && compactView === 'editor' ? 'hidden lg:flex' : 'flex'} min-h-0 min-w-0 flex-col`}>
           <div data-testid="evidence-viewer-scroll" className="min-h-0 flex-1 overflow-auto bg-muted/20 p-3 md:p-6">
             <article data-testid="evidence-report-surface" data-print-title={report.title} data-report-mode={reportTheme.mode} style={reportTheme.style} aria-busy={busy} className="mx-auto min-w-0 max-w-6xl rounded-lg border bg-card p-5 md:p-8">
+              {logs.some(log => log.failure) && <div role="region" aria-label="Report query errors" className="mb-4 space-y-3">
+                {checkedSpec.current !== diagnosticSpec(report) && <p className="text-xs text-muted-foreground">From the previous preview. Refresh to check your changes.</p>}
+                {logs.flatMap((log, index) => log.failure ? [<EvidenceQueryError key={index} failure={log.failure} />] : [])}
+              </div>}
               {pending && !busy && <p role="status" aria-label="Unapplied report changes" className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
                 {filtersPending ? 'Filters have changed. Results below still use the applied filters.' : 'Your edits have not been applied. The preview still shows the previous version.'} {editing ? 'Update preview to apply changes.' : 'Refresh the report to apply changes.'}
               </p>}

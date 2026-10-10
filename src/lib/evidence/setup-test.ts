@@ -1,4 +1,6 @@
-import { compileReportQuery, hasSqlStatements } from '../reports/parameters';
+import { compileReportQuery } from '../reports/parameters';
+import { splitStatements as statementRanges } from '../editor/sql-statements';
+import type { ReportQueryFailure } from './query-error';
 import { decodeArrowBuffer } from '../duckdb-query';
 import type { QueryResult } from '../shell-bridge';
 import { evidenceResult } from './haybarn-query-service';
@@ -7,26 +9,7 @@ import { compilerParameters, type EvidenceReport, type ParameterValues } from '.
 /** Split SQL into statements at top-level semicolons, respecting strings, quoted
  *  identifiers, comments and dollar-quoted bodies. Statements keep their own text. */
 export function splitStatements(sql: string): string[] {
-  const out: string[] = [];
-  let start = 0, i = 0;
-  while (i < sql.length) {
-    const char = sql[i];
-    if (char === "'" || char === '"') {
-      i++;
-      while (i < sql.length) { if (sql[i] === char) { if (sql[i + 1] === char) { i += 2; continue; } break; } i++; }
-      i++; continue;
-    }
-    if (char === '-' && sql[i + 1] === '-') { const end = sql.indexOf('\n', i); i = end === -1 ? sql.length : end + 1; continue; }
-    if (char === '/' && sql[i + 1] === '*') { const end = sql.indexOf('*/', i + 2); i = end === -1 ? sql.length : end + 2; continue; }
-    if (char === '$') {
-      const tag = /^\$[A-Za-z0-9_]*\$/.exec(sql.slice(i))?.[0];
-      if (tag) { const end = sql.indexOf(tag, i + tag.length); i = end === -1 ? sql.length : end + tag.length; continue; }
-    }
-    if (char === ';') { out.push(sql.slice(start, i)); start = i + 1; }
-    i++;
-  }
-  out.push(sql.slice(start));
-  return out.filter(hasSqlStatements).map(statement => statement.trim());
+  return statementRanges(sql).map(statement => statement.text);
 }
 
 /** A statement's words, without comments or quoted text (quoted identifiers keep their text). */
@@ -199,31 +182,41 @@ export async function testSetupSql(sql: string, report: Pick<EvidenceReport, 'pa
   }, { timeoutMs: 120_000, ...options });
 }
 
-export interface SetupStatementRun { index: number; sql: string; name: string; startedAt: number; durationMs: number; error: string | null }
+export interface SetupStatementRun { index: number; sql: string; name: string; startedAt: number; durationMs: number; error: string | null; failure?: ReportQueryFailure }
 
 /** Run a report's setup SQL for a refresh, one statement at a time with parameters bound, so
  *  each statement can be timed on its own (the Performance tab). Stops at the first failure. */
 export async function runSetupSql(sql: string, report: Pick<EvidenceReport, 'parameters'>, values: ParameterValues,
   query: (sql: string, params: unknown[]) => Promise<QueryResult>, observe: (run: SetupStatementRun) => void = () => {},
-  onStart: (step: { index: number; total: number; sql: string; name: string; startedAt: number }) => void = () => {}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const statements = splitStatements(sql);
-  for (const [index, statement] of statements.entries()) {
+  onStart: (step: { index: number; total: number; sql: string; name: string; startedAt: number }) => void = () => {}): Promise<{ ok: true } | { ok: false; error: string; failure: ReportQueryFailure }> {
+  const statements = statementRanges(sql);
+  for (const [index, range] of statements.entries()) {
+    const statement = range.text;
     const kind = classifySetupStatement(statement, new Set());
     const name = `Dataset SQL · ${kind.kind === 'create' ? kind.name : `statement ${index + 1}`}`;
     const startedAt = performance.now();
     onStart({ index: index + 1, total: statements.length, sql: statement, name, startedAt });
     let error: string | null;
+    let executedSql: string | undefined;
     try {
       const compiled = compileReportQuery(statement, compilerParameters(report, values), values);
+      executedSql = compiled.sql;
       const outcome = await query(compiled.sql, compiled.params);
       error = outcome.ok ? null : outcome.error || 'Dataset setup failed';
     } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') throw e;
       error = e instanceof Error ? e.message : String(e);
-      observe({ index: index + 1, sql: statement, name, startedAt, durationMs: performance.now() - startedAt, error });
-      throw e;
     }
-    observe({ index: index + 1, sql: statement, name, startedAt, durationMs: performance.now() - startedAt, error });
-    if (error) return { ok: false, error: `Statement ${index + 1}: ${error}` };
+    const failure: ReportQueryFailure | undefined = error ? {
+      phase: 'setup', message: error, sql: statement,
+      ...(executedSql && executedSql !== statement ? { executedSql } : {}),
+      statementIndex: index + 1, statementCount: statements.length,
+      startLine: sql.slice(0, range.from).split('\n').length,
+      endLine: sql.slice(0, range.to).split('\n').length,
+      ...(kind.kind === 'create' ? { name: kind.name } : {}),
+    } : undefined;
+    observe({ index: index + 1, sql: statement, name, startedAt, durationMs: performance.now() - startedAt, error, ...(failure ? { failure } : {}) });
+    if (failure) return { ok: false, error: `Statement ${index + 1}: ${error}`, failure };
   }
   return { ok: true };
 }

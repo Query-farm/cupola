@@ -146,8 +146,14 @@ component syntax.
 Update preview runs validation and queries explicitly. The Problems panel shows
 Core validation errors with one-based source lines and editor markers; clicking
 an error opens the corresponding editor and line. Warnings are advisory and
-collapsed separately. Query failures include the executed SQL, and setup failures
-point to the Data tab. Runtime rendering failures are caught by a Svelte boundary
+collapsed separately. Query failures appear in both the reader and Problems panel
+with the failing SQL, a short error summary, expandable full backend error details,
+and Copy diagnostics. Setup failures identify the statement number, source lines,
+and temporary dataset name when available; selecting the problem opens that line
+in Setup SQL. Bound queries also expose the executed SQL with placeholders, without
+adding parameter values to diagnostics. Error details scroll within the report so
+the editor remains usable, and Edit selects the editor pane on narrow screens.
+Runtime rendering failures are caught by a Svelte boundary
 or the mount handler so the surrounding editor remains usable. Editing marks
 previous diagnostics stale and removes their editor markers until the next run.
 Core's named SQL queries must be registered by transformation before validating

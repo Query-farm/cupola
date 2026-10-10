@@ -7,9 +7,10 @@ import { decodeArrowBuffer, duckdbExtensionDecoder } from '../duckdb-query';
 import { getDuckDBExtensionType } from '../format';
 import { compileReportQuery } from '../reports/parameters';
 import type { ReportParameter, ReportParameterValue } from '../reports/types';
+import type { ReportQueryFailure } from './query-error';
 
 /** `startedAt` is `performance.now()`; `cached` marks a repeat served from this service's cache. */
-export interface QueryLogEntry { sql: string; rows: number; durationMs: number; error: string | null; startedAt: number; cached?: boolean }
+export interface QueryLogEntry { sql: string; rows: number; durationMs: number; error: string | null; startedAt: number; cached?: boolean; failure?: ReportQueryFailure }
 
 /** Normalize nested Arrow vectors too: Evidence sparklines expect ordinary arrays.
  *  DuckDB's lossless export sends HUGEINT/UUID/BIT/… as raw extension bytes;
@@ -108,8 +109,10 @@ export class HaybarnQueryService implements QueryService {
   private async execute(sql: string, signal?: AbortSignal): Promise<QueryResult> {
     const start = performance.now();
     let result: QueryResult;
+    let executedSql: string | undefined;
     try {
       const compiled = compileReportQuery(sql, { parameters: this.parameters.map(parameter => ({ ...parameter, defaultValue: Object.hasOwn(this.values, parameter.key) ? this.values[parameter.key] : parameter.defaultValue })) }, this.values);
+      executedSql = compiled.sql;
       const response = await this.run.query(compiled.sql, compiled.params, signal);
       if (!response.ok) throw new Error(response.error || 'Query failed');
       result = { ...(response.arrowBuffers?.length ? evidenceResult(decodeArrowBuffer(response.arrowBuffers[0])) : { rows: [], columns: [] }), error: null };
@@ -120,7 +123,9 @@ export class HaybarnQueryService implements QueryService {
     // A query cancelled because its refresh was stopped or superseded did not fail:
     // logging it made every in-flight query of a stopped run a "report problem".
     const cancelled = this.run.signal.aborted || Boolean(signal?.aborted);
-    if (!cancelled) this.onQuery?.({ sql, rows: result.rows.length, durationMs: result.queryDurationMs, error: result.error, startedAt: start });
+    if (!cancelled) this.onQuery?.({ sql, rows: result.rows.length, durationMs: result.queryDurationMs, error: result.error, startedAt: start,
+      ...(result.error ? { failure: { phase: 'render', message: result.error, sql, ...(executedSql && executedSql !== sql ? { executedSql } : {}) } satisfies ReportQueryFailure } : {}),
+    });
     return result;
   }
 }

@@ -107,7 +107,7 @@ test('the report editor reports recoverable source and SQL errors', async ({ pag
   const data = panel.getByRole('textbox', { name: 'Dataset SQL', exact: true });
   await data.fill('SELECT * FROM missing_setup_table');
   await data.press('Control+Enter');
-  await expect(problems).toContainText('Data · error:', { timeout: 30_000 });
+  await expect(problems).toContainText('Data · line 1 · error:', { timeout: 30_000 });
   await data.fill('');
   await data.press('Control+Enter');
   await expect(panel.getByTestId('evidence-document')).toContainText('12', { timeout: 30_000 });
@@ -116,3 +116,45 @@ test('the report editor reports recoverable source and SQL errors', async ({ pag
   expect(await page.evaluate(() => (window as any).__authoringWorker === (window as any).__bridge.worker)).toBe(true);
   expect(errors).toEqual([]);
 });
+
+for (const width of [1500, 800]) {
+  test(`a long setup failure keeps the report editable at ${width}px`, async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width, height: 900 });
+    const { panel, source, errors } = await openNewReportSource(page);
+    await source.fill('# Recovered report\n\n```sql answer\nSELECT 42 AS value\n```\n\n{% table data="answer" /%}');
+    await panel.getByRole('tab', { name: 'Setup SQL', exact: true }).click();
+    const setup = panel.getByRole('textbox', { name: 'Dataset SQL', exact: true });
+    const failedSql = "CREATE TEMP TABLE broken_balances AS\nSELECT error('VGI Worker Exception: ValidationError: 21 validation errors for AccountBalanceSnapshot' || chr(10) || repeat('cash-balance: Field required' || chr(10), 100))";
+    await setup.fill(`SELECT 1;\nSELECT 2;\nSELECT 3;\n\n${failedSql};\nSELECT 5;`);
+    await panel.getByRole('button', { name: 'View report', exact: true }).click();
+    await panel.getByRole('button', { name: 'Refresh report', exact: true }).click();
+    const failures = panel.getByRole('region', { name: 'Report query errors', exact: true });
+    await expect(failures).toContainText('Setup SQL failed · statement 4 of 5 · broken_balances · lines 5–6', { timeout: 30_000 });
+    await expect(failures.locator('pre').first()).toHaveText(failedSql);
+    await expect(failures.locator('details')).not.toHaveAttribute('open');
+    await failures.getByText('Full error details', { exact: true }).click();
+    await expect(failures.locator('details pre')).toContainText('cash-balance: Field required');
+    // Even expanded details scroll inside the viewer and cannot consume the editor's height.
+    const edit = panel.getByRole('button', { name: 'Edit report', exact: true });
+    await expect(edit).toBeInViewport();
+    await edit.click();
+    const editor = panel.getByRole('complementary', { name: 'Report editor', exact: true });
+    await expect(editor).toBeVisible();
+    expect((await editor.boundingBox())!.height).toBeGreaterThan(300);
+    const problems = editor.getByRole('region', { name: 'Report problems', exact: true });
+    await problems.getByRole('button').filter({ hasText: 'Data · line 5 · error:' }).click();
+    await expect(setup).toBeFocused();
+    await setup.fill('SELECT 1');
+    await panel.getByRole('button', { name: 'Update preview', exact: true }).click();
+    // Update preview selects Preview on narrow screens; returning through View → Edit
+    // must select the editor again, not leave it hidden behind Preview.
+    await panel.getByRole('button', { name: 'View report', exact: true }).click();
+    await expect(panel.getByTestId('evidence-document')).toContainText('42', { timeout: 30_000 });
+    await expect(failures).toHaveCount(0);
+    await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
+    await expect(editor).toBeVisible();
+    await expect(problems).toContainText('Problems · 0');
+    expect(errors).toEqual([]);
+  });
+}

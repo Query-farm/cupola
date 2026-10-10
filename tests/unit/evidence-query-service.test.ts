@@ -36,6 +36,16 @@ describe('Evidence Haybarn adapter', () => {
     engine.query = async () => ({ ok: true });
     expect((await service.query('select 1')).error).toBeNull();
   });
+  test('logs failed report SQL separately from the full engine error', async () => {
+    const error = 'ValidationError: 21 validation errors\ncash-balance\n  Field required';
+    engine.query = async () => ({ ok: true });
+    engine.queryPrepared = async () => ({ ok: false, error });
+    const logged: unknown[] = [];
+    const service = new HaybarnQueryService(entry => logged.push(entry), [{ id: 'n', key: 'n', label: 'N', type: 'number', defaultValue: 7 }]);
+    expect((await service.query('SELECT $n')).error).toBe(error);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ error, sql: 'SELECT $n', failure: { phase: 'render', message: error, sql: 'SELECT $n', executedSql: 'SELECT ?' } });
+  });
   test('does not execute an already cancelled query', async () => {
     let calls = 0;
     engine.query = async () => { calls++; return { ok: true }; };
