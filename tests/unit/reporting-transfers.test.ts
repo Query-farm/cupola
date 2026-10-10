@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { ReportClient } from '../../src/lib/reporting/client';
 import { listEvidenceReports, saveEvidenceReport } from '../../src/lib/evidence/reports';
-import { createLocalFolder, deleteLocalFolder, localReportEntry, placeLocalReport } from '../../src/lib/reporting/local-library';
+import { createLocalFolder, deleteLocalFolder, renameLocalFolder, localReportEntry, placeLocalReport } from '../../src/lib/reporting/local-library';
 import { prepareTransfer, resumeTransfer, transferJobs } from '../../src/lib/reporting/transfers';
 import { locationLabel } from '../../src/lib/reporting/locations';
 import { info, memoryStorage, record, report } from '../reporting/fixtures';
@@ -141,4 +141,41 @@ test('moving a local report between folders does not require an HTTP-compatible 
   await resumeTransfer(job, factory, storage);
   expect(listEvidenceReports(context.scope, storage)).toHaveLength(1);
   expect(localReportEntry(context.scope, original, storage).folderId).toBe(folder.id);
+});
+
+
+test('copy naming is frozen for retries and never renames the source or a move', async () => {
+  const storage = memoryStorage(), original = saveEvidenceReport({ ...report('Revenue'), workspaceId: context.scope }, storage);
+  const job = await prepareTransfer({ kind: 'local', report: original }, localDestination, false, context, undefined, storage);
+  expect(job.envelope.title).toBe('Revenue (copy)');
+  await resumeTransfer(job, undefined, storage);
+  expect(listEvidenceReports(context.scope, storage).map(r => r.title).sort()).toEqual(['Revenue', 'Revenue (copy)']);
+  const folder = createLocalFolder(context.scope, 'Folder', null, storage);
+  const move = await prepareTransfer({ kind: 'local', report: original }, { ...localDestination, folderId: folder.id }, true, { ...context, copyName: 'Ignored name' }, undefined, storage);
+  expect(move.envelope.title).toBe('Revenue');
+  await resumeTransfer(move, undefined, storage);
+  expect(listEvidenceReports(context.scope, storage).find(r => r.id === original.id)?.title).toBe('Revenue');
+});
+
+test('worker copy keeps an edited name across a lost reply and preserves the source envelope', async () => {
+  const storage = memoryStorage(), original = record(report('Revenue')), creates: any[] = []; let lose = true;
+  const factory = () => ({ recoveryScope: async () => 'alice', call: async (method: string, input: any) => {
+    if (method === 'get_report') return original;
+    if (method === 'get_report_service_info') return info;
+    if (method === 'create_report') { creates.push(input); if (lose) { lose = false; throw new Error('lost'); } return { ...original, report_id: 'copy' }; }
+    throw new Error(method);
+  } }) as unknown as ReportClient;
+  const job = await prepareTransfer({ kind: 'worker', url: 'https://source.test', record: original }, remoteDestination, false, { ...context, copyName: 'Revenue for review' }, factory, storage);
+  await expect(resumeTransfer(job, factory, storage)).rejects.toThrow('lost');
+  await resumeTransfer(transferJobs(context.scope, storage)[0], factory, storage);
+  expect(creates[1]).toEqual(creates[0]); expect(creates[1].envelope.title).toBe('Revenue for review');
+  expect(original.envelope!.title).toBe('Revenue');
+});
+
+test('local folder rename preserves descendants and rejects normalized sibling collisions', () => {
+  const storage = memoryStorage(), a = createLocalFolder(context.scope, 'Café', null, storage), b = createLocalFolder(context.scope, 'Second', null, storage);
+  const child = createLocalFolder(context.scope, 'Child', b.id, storage);
+  expect(() => renameLocalFolder(context.scope, b.id, 'Cafe\u0301', storage)).toThrow('already exists');
+  renameLocalFolder(context.scope, b.id, 'Renamed', storage);
+  expect(child.parentId).toBe(b.id); expect(a.id).not.toBe(b.id);
 });

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check, Copy, Link } from 'lucide-react';
 import { Button } from '../ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog';
+import { ReportPage } from './ReportPage';
 import { ReportNotice } from './ReportNotice';
 import type { ReportResult } from '../../lib/reporting/contracts.generated';
 import { reportLink } from '../../lib/reporting/body';
@@ -20,8 +20,8 @@ export function WorkerReportSharing({ record, url, pinned, blocked, canPublish, 
     setBusy(true); setError('');
     try { await onPublish(revision); setConfirmUnpublish(false); } catch (e) { setError(reportError(e)); } finally { setBusy(false); }
   }
-  return <Dialog open onOpenChange={open => { if (!open && !busy) onClose(); }}><DialogContent className="sm:max-w-lg">
-    <DialogHeader><DialogTitle>Share report</DialogTitle><DialogDescription>Share with people who have access to this report library. Copying a link does not change access.</DialogDescription></DialogHeader>
+  return <ReportPage title="Share report" description={record.envelope?.title} onBack={onClose}>
+    <p className="text-sm text-muted-foreground">Share with people who have access to this report library. Copying a link does not change access.</p>
     <section className="space-y-3"><label className="block space-y-1 text-sm"><span>Link to</span><select aria-label="Link to" value={specific ? 'version' : 'latest'} onChange={e => { setSpecific(e.target.value === 'version'); setCopied(false); }} className="w-full rounded border bg-background p-2 [appearance:auto]"><option value="latest">Latest available version</option><option value="version">This version ({String(record.revision_number)})</option></select></label>
       <p className="text-xs text-muted-foreground">{specific ? 'This link stays on the selected saved version.' : 'The library determines which version each recipient can see.'}</p>
       <input aria-label="Report link" readOnly value={link} onFocus={e => e.target.select()} className="w-full rounded border bg-background p-2 text-xs" />
@@ -35,5 +35,5 @@ export function WorkerReportSharing({ record, url, pinned, blocked, canPublish, 
       {confirmUnpublish && <ReportNotice title="Remove the published version?" action={<div className="flex gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmUnpublish(false)}>Cancel</Button><Button size="sm" disabled={blocked || busy} onClick={() => void publish(null)}>Unpublish report</Button></div>}>Saved versions and history remain. People who rely on the published version may lose access.</ReportNotice>}
     </section>}
     {error && <ReportNotice kind="error" title="Could not share or publish">{error}</ReportNotice>}
-  </DialogContent></Dialog>;
+  </ReportPage>;
 }

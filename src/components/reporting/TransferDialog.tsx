@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Input } from '../ui/input';
 import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import { ReportClient, reportError } from '../../lib/reporting/client';
@@ -17,6 +18,7 @@ export function TransferDialog({ source, move, locations, scope, serviceUrl, wor
   const [destination, setDestination] = useState(initialDestination ? initialDestination.url ?? 'local' : source.kind === 'worker' ? source.url : move ? 'local' : locations.find(l => l.info?.writable)?.url ?? 'local');
   const [folderId, setFolderId] = useState(initialDestination ? initialDestination.folderId ?? '' : source.kind === 'worker' ? source.record.folder_id ?? '' : move ? localReportEntry(scope, source.report).folderId ?? '' : ''), [folders, setFolders] = useState<FolderRecord[]>([]);
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [copyName, setCopyName] = useState(`${source.kind === 'local' ? source.report.title : source.record.envelope?.title ?? 'Report'} (copy)`);
   const [job, setJob] = useState<TransferJob | null>(null);
   const target = locations.find(l => l.url === destination);
   useEffect(() => {
@@ -41,18 +43,19 @@ export function TransferDialog({ source, move, locations, scope, serviceUrl, wor
     <form className="space-y-4" onSubmit={async e => {
       e.preventDefault(); if (!writable || !mayRemove || sameFolder || busy || loading) return; setBusy(true); setError('');
       try {
-        const pending = job ?? await prepareTransfer(source, { url: destination === 'local' ? null : destination, folderId: folderId || null, name: destination === 'local' ? 'Local' : target?.name ?? 'Report storage' }, move, { scope, serviceUrl, workspaceId });
+        const pending = job ?? await prepareTransfer(source, { url: destination === 'local' ? null : destination, folderId: folderId || null, name: destination === 'local' ? 'Local' : target?.name ?? 'Report storage' }, move, { scope, serviceUrl, workspaceId, copyName });
         setJob(pending);
         onComplete(await resumeTransfer(pending));
       } catch (e) { setError(reportError(e)); } finally { setBusy(false); }
     }}>
+      {!move && <label className="block space-y-1 text-sm font-medium">Copy name<Input aria-label="Copy name" required value={copyName} disabled={busy || Boolean(job)} onChange={e => setCopyName(e.target.value)} /></label>}
       <div className="space-y-2"><p className="text-sm font-medium">Save in</p><div className="max-h-72 overflow-auto rounded border p-2"><ReportStorageTree picker locations={locations} scope={scope} location={destination} folderId={folderId || null} disabled={busy || Boolean(job)} onSelect={(url, folder) => { setDestination(url); setFolderId(folder ?? ''); }} /></div></div>
       {loading && <p role="status" className="text-sm">Loading folders…</p>}
       {!writable && !loading && <ReportNotice kind="permission" title="Read-only destination">Choose a writable folder or Local.</ReportNotice>}
       {!mayRemove && <ReportNotice kind="permission" title="Move restricted">{sameStore ? 'You cannot move this report between folders here.' : 'You can move this report only within its current library. Save a copy to use another location.'}</ReportNotice>}
       {sameFolder && <p className="text-sm text-muted-foreground">Choose a different folder or location.</p>}
       {error && <ReportNotice kind="error" title="Transfer not confirmed">{error}{job && ' The transfer is saved for retry. Your original is kept until the destination is confirmed.'}</ReportNotice>}
-      <DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={onClose}>{job ? 'Close; retry later' : 'Cancel'}</Button><Button type="submit" disabled={busy || loading || !writable || !mayRemove || sameFolder}>{busy ? 'Transferring…' : job ? 'Retry transfer' : move ? 'Move report' : 'Save copy'}</Button></DialogFooter>
+      <DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={onClose}>{job ? 'Close; retry later' : 'Cancel'}</Button><Button type="submit" disabled={busy || loading || !writable || !mayRemove || sameFolder || !move && !copyName.trim()}>{busy ? 'Transferring…' : job ? 'Retry transfer' : move ? 'Move report' : 'Save copy'}</Button></DialogFooter>
     </form>
   </DialogContent></Dialog>;
 }

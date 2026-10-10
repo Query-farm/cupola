@@ -20,6 +20,7 @@ export function FileTree({ nodes, label, selectedId, onSelect, disabled = false,
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(initialExpandedIds));
   const [focused, setFocused] = useState<string | undefined>(selectedId);
   const root = useRef<HTMLUListElement>(null);
+  const focusTarget = useRef(selectedId);
   const search = useRef({ value: '', time: 0 });
   const dragging = useRef<string | null>(null);
   const hover = useRef<{ id: string; timer: ReturnType<typeof setTimeout> } | null>(null);
@@ -54,8 +55,9 @@ export function FileTree({ nodes, label, selectedId, onSelect, disabled = false,
   }
   function focus(id?: string) {
     if (!id) return;
-    setFocused(id);
+    setFocused(id); focusTarget.current = id;
     requestAnimationFrame(() => {
+      if (focusTarget.current !== id) return; // A newer user focus wins.
       // Selecting a directory may replace the contents view and its tree.
       const tree = root.current ?? document.querySelector<HTMLElement>(`[role="tree"][aria-label="${CSS.escape(label)}"]`);
       tree?.querySelector<HTMLElement>(`[data-file-node="${CSS.escape(id)}"]`)?.focus();
@@ -91,7 +93,7 @@ export function FileTree({ nodes, label, selectedId, onSelect, disabled = false,
     const Icon = node.kind === 'report' ? FileText : node.kind === 'location' ? HardDrive : node.kind === 'collection' ? Layers : open ? FolderOpen : Folder;
     return <Fragment key={node.id}><li role="treeitem" aria-label={node.name} aria-level={level} aria-posinset={index + 1} aria-setsize={items.length} aria-selected={selectedId === node.id}
       aria-expanded={branch ? open : undefined} aria-disabled={disabled || node.disabled || undefined} tabIndex={tabStop === node.id ? 0 : -1}
-      data-file-node={node.id} onFocus={e => { if (e.target === e.currentTarget) setFocused(node.id); }}
+      data-file-node={node.id} onFocus={e => { if (e.target === e.currentTarget) { setFocused(node.id); focusTarget.current = node.id; } }}
       onKeyDown={e => { if (e.target === e.currentTarget || e.target instanceof HTMLAnchorElement && !['Enter', ' '].includes(e.key)) key(e, node); }}
       onDragStart={e => {
         if (!dragDrop) return;
@@ -121,6 +123,8 @@ export function FileTree({ nodes, label, selectedId, onSelect, disabled = false,
       data-drop-target={dropTarget === node.id || undefined}
       className={cn('rounded outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset', dropTarget === node.id && 'bg-accent ring-2 ring-primary ring-inset')}>
       <div title={node.detail} style={{ paddingLeft: 8 + (level - 1) * 16 }} className={cn('flex min-h-9 cursor-pointer items-center gap-2 rounded px-2 text-sm hover:bg-muted/60', selectedId === node.id && 'bg-muted font-medium', (disabled || node.disabled) && 'text-muted-foreground')}
+        onContextMenuCapture={() => { if (node.kind !== 'report') toggle(node.id, true); }}
+        onClickCapture={e => { if (node.kind !== 'report' && (e.target as HTMLElement).closest('button[aria-haspopup="menu"]')) toggle(node.id, true); }}
         draggable={Boolean(dragDrop && !disabled && dragDrop.canDrag(node.id))}
         onClick={e => { if ((e.target as HTMLElement).closest('a,button,input,[role="menuitem"]')) return; focus(node.id); if (!disabled && !node.disabled) onSelect(node.id); }}>
         {branch ? <button type="button" tabIndex={-1} aria-label={`${open ? 'Collapse' : 'Expand'} ${node.name}`} className="flex size-5 shrink-0 items-center justify-center" onClick={e => { e.stopPropagation(); focus(node.id); toggle(node.id); }}><ChevronRight aria-hidden className={cn('size-4 transition-transform', open && 'rotate-90')} /></button> : <span className="size-5 shrink-0" />}

@@ -46,7 +46,8 @@ import { captureReportPreview, RetainedReportPreview } from './RetainedReportPre
 import { ReportSharing } from './ReportSharing';
 import { ReportHeader } from '../reporting/ReportHeader';
 import { reportAction, type ReportAction } from '../reporting/ReportActionMenu';
-import { ReportDetailsDialog } from '../reporting/ReportDetailsDialog';
+import { ReportPage, useReportPage } from '../reporting/ReportPage';
+import { ReportDetailsPage } from '../reporting/ReportDetailsPage';
 import { localFolderPath, localLibrary, localReportEntry, placeLocalReport } from '../../lib/reporting/local-library';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog';
 import { EvidenceHistory } from './EvidenceHistory';
@@ -117,7 +118,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   const [saved, setSaved] = useState(initial.saved);
   const [reports, setReports] = useState(initial.reports);
   const [library, setLibrary] = useState(initial.library);
-  const [historyOpen, setHistoryOpen] = useState(false), [detailsOpen, setDetailsOpen] = useState(false), [sourceOpen, setSourceOpen] = useState(false);
+  const [managementPage, showPage] = useReportPage();
+  const deferredInitialRender = useRef(Boolean(managementPage));
   const [rename, setRename] = useState<string | null>(null);
   const [hasOpenedReport, setHasOpenedReport] = useState(!initial.library);
   const [search, setSearch] = useState('');
@@ -477,7 +479,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       if (initial.library) navigate(true, undefined, true);
       // A pending Add to report opens and saves its own definition below. A
       // template refresh here would take the busy lock and discard that open.
-      else if (!promotion && !initial.library && !initial.error) void refresh(initial.report, 'replace');
+      else if (!managementPage && !promotion && !initial.library && !initial.error) void refresh(initial.report, 'replace');
     }
     const changed = (event: StorageEvent) => { if (event.key === null || event.key.startsWith(STORAGE_PREFIX) || event.key.startsWith(LEGACY_STORAGE_PREFIX)) reloadList(); };
     // Save on the way out; ask only when the draft can't be saved (it is kept for recovery either way).
@@ -948,20 +950,26 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   // "Connected" is the normal state: kept for assistive tech, shown only when it isn't.
   const quietStatus = pendingQueries === 0 && status === 'Connected';
 
+  useEffect(() => {
+    if (!managementPage && deferredInitialRender.current) {
+      deferredInitialRender.current = false;
+      if (!promotion && !initial.library && !initial.error) void refresh(reportRef.current, 'replace');
+    }
+  }, [managementPage]);
   const localEntry = remote ? null : localReportEntry(scope, report);
   const localLocation = remote ? '' : ['Local', localFolderPath(localEntry?.folderId ?? null, localLibrary(scope).folders)].filter(Boolean).join(' / ');
   function transfer(move: boolean) { const stored = persist(reportRef.current, { kind: 'edit' }); if (stored) onTransfer?.(stored, move); }
   const reportActions: ReportAction[] = [
-    reportAction('history', () => { remote?.onHistoryOpen(); setHistoryOpen(true); }),
-    ...(remote ? remote.actions.filter(a => a.id !== 'delete') : [reportAction('details', () => setDetailsOpen(true)), reportAction('copy', onTransfer ? () => transfer(false) : saveCopy, busy), ...(onTransfer ? [reportAction('move', () => transfer(true), busy)] : [])]),
-    { ...reportAction('source', () => setSourceOpen(true)), separator: true },
+    reportAction('history', () => { remote?.onHistoryOpen(); showPage('history'); }),
+    ...(remote ? remote.actions.filter(a => a.id !== 'delete') : [reportAction('details', () => showPage('details')), reportAction('copy', onTransfer ? () => transfer(false) : saveCopy, busy), ...(onTransfer ? [reportAction('move', () => transfer(true), busy)] : [])]),
+    { ...reportAction('source', () => showPage('source')), separator: true },
     { id: 'pdf', label: 'Export PDF', icon: FileDown, disabled: refreshing || !run || exporting || Boolean(pending), onClick: () => void exportPdf() },
     ...(run?.report.parameters.filter(item => item.type === 'select' || item.type === 'multi_select').map(item => ({ id: `pdf-${item.key}`, label: `PDF per ${item.label.toLowerCase()}`, icon: FileDown, disabled: refreshing || exporting, onClick: () => void exportPdfPerValue(item.key) })) ?? []),
     reportAction('export', () => exportReports([report])),
     reportAction('focus', () => setFocused(true)),
     ...(remote ? remote.actions.filter(a => a.id === 'delete') : [reportAction('delete', () => { remove(reportRef.current); if (!listEvidenceReports(scope).some(r => r.id === report.id)) navigate(true); }, busy)]),
   ];
-  return <div ref={workspace} className={`${focused ? 'fixed inset-0 z-50' : 'h-full'} flex min-h-0 flex-col overflow-hidden bg-background text-foreground`} onKeyDown={event => {
+  const editor = <div ref={workspace} className={`${focused ? 'fixed inset-0 z-50' : 'h-full'} flex min-h-0 flex-col overflow-hidden bg-background text-foreground`} onKeyDown={event => {
     if (event.defaultPrevented) return;
     if (event.key === 'Escape' && focused) { setFocused(false); setEditorOnly(false); event.stopPropagation(); }
     if (library || !(event.metaKey || event.ctrlKey)) return;
@@ -990,19 +998,11 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       </div>
       {editing && remote?.publishAction && <Button size="sm" disabled={remote.publishAction.disabled} onClick={remote.publishAction.onClick}>Publish changes</Button>}
       {remote ? <Button size="sm" variant="outline" onClick={remote.onShare}>Share</Button>
-        : <ReportSharing canExportPdf={!refreshing && Boolean(run) && !exporting} pending={Boolean(pending)} onPdf={() => void exportPdf()} onFile={() => exportReports([report])} onSaveToLibrary={onTransfer ? () => transfer(false) : undefined} />}
+        : <Button size="sm" variant="outline" onClick={() => showPage('share')}>Share</Button>}
       {saveError && <Button size="sm" variant="outline" onClick={checkpoint} title={saveError}><Save />Retry save</Button>}
       {focused && <Button variant="ghost" size="icon" aria-label="Exit focus mode" title="Exit focus mode · Esc" onClick={() => { setEditorOnly(false); setFocused(false); }}><Minimize2 /></Button>}
     </ReportHeader>}
     {rename !== null && <Dialog open onOpenChange={open => { if (!open) setRename(null); }}><DialogContent className="sm:max-w-sm"><DialogHeader><DialogTitle>Rename report</DialogTitle><DialogDescription>Choose a name for this report.</DialogDescription></DialogHeader><form className="space-y-4" onSubmit={e => { e.preventDefault(); if (remote && (!remote.canEdit || remote.pending)) return; const next = { ...reportRef.current, title: rename.trim() }; change(next); if (persist(next, { kind: 'edit', label: 'Renamed report' })) setRename(null); }}><Input aria-label="Report name" autoFocus required value={rename} onChange={e => setRename(e.target.value)} />{saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}<Button type="submit" disabled={!rename.trim() || Boolean(remote?.pending)}>Save name</Button></form></DialogContent></Dialog>}
-    {historyOpen && <Dialog open onOpenChange={setHistoryOpen}><DialogContent className="max-h-[85vh] overflow-auto sm:max-w-4xl"><DialogHeader><DialogTitle>Report history</DialogTitle><DialogDescription>{remote ? 'History visible to your account in this library.' : 'Saved versions on this device.'}</DialogDescription></DialogHeader>{remote?.historyContent ?? <EvidenceHistory history={history} dirty={dirty} onRestore={revision => { restoreRevision(revision); setHistoryOpen(false); }} onDelete={deleteRevision} />}</DialogContent></Dialog>}
-    {sourceOpen && <Dialog open onOpenChange={setSourceOpen}><DialogContent className="max-h-[85vh] overflow-auto sm:max-w-3xl"><DialogHeader><DialogTitle>Report source</DialogTitle><DialogDescription>Source inspection does not execute queries.</DialogDescription></DialogHeader><h3>Setup SQL</h3><pre className="overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">{report.setupSql || 'No setup SQL'}</pre><h3>Document</h3><pre className="overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">{report.source}</pre></DialogContent></Dialog>}
-    {detailsOpen && !remote && <ReportDetailsDialog initial={{ name: report.title, description: localEntry?.metadata?.description ?? '', tags: localEntry?.metadata?.tags ?? [] }} location={localLocation}
-      identity={<p>Saved on this device. Local history does not identify an authenticated author.</p>} onClose={() => setDetailsOpen(false)} onSave={values => {
-        const next = { ...reportRef.current, title: values.name }; change(next);
-        if (!persist(next, { kind: 'edit', label: 'Updated report details' })) throw new Error('Could not save report details. Your draft is kept on this device.');
-        placeLocalReport(scope, report.id, localEntry?.folderId ?? null, { ...localEntry?.metadata, description: values.description, tags: values.tags });
-      }} />}
     {pdfExport.state !== 'idle' && <p role="status" className="mx-5 mt-3 flex items-center gap-2 text-xs text-muted-foreground">{pdfExport.state === 'exporting' ? <><Loader2 className="size-3 animate-spin" />Preparing PDF{pdfExport.progress ? ` ${pdfExport.progress}` : ''}…</> : <><Check className="size-3" />PDF exported{pdfExport.omitted.length ? ` · ${pdfExport.omitted.length} items not included` : ''}</>}</p>}
     {error && <div role="alert" className="m-5 whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
     {notice && <p role="status" className="mx-5 mt-3 text-xs text-muted-foreground">{notice}</p>}
@@ -1127,6 +1127,20 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       </div>
     </main>
   </div>;
+  const managingHere = managementPage === 'history' || managementPage === 'source' || !remote && (managementPage === 'details' || managementPage === 'share');
+  return <>
+    {managementPage === 'share' && !remote && <ReportSharing canExportPdf={!refreshing && Boolean(run) && !exporting} pending={Boolean(pending)} onPdf={() => void exportPdf()} onFile={() => exportReports([report])} onSaveToLibrary={onTransfer ? () => transfer(false) : undefined} onClose={() => showPage(null)} />}
+    {managementPage === 'history' && <ReportPage title="Report history" description={report.title} onBack={() => showPage(null)}>{remote?.historyContent ?? <EvidenceHistory history={history} dirty={dirty} onRestore={revision => { restoreRevision(revision); showPage(null); }} onDelete={deleteRevision} />}</ReportPage>}
+    {managementPage === 'source' && <ReportPage title="Report source" description={report.title} onBack={() => showPage(null)}><h3>Setup SQL</h3><pre className="overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">{report.setupSql || 'No setup SQL'}</pre><h3>Document</h3><pre className="overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">{report.source}</pre></ReportPage>}
+    {managementPage === 'details' && !remote && <ReportDetailsPage initial={{ name: report.title, description: localEntry?.metadata?.description ?? '', tags: localEntry?.metadata?.tags ?? [] }} location={localLocation}
+      identity={<p>Saved on this device. Local history does not identify an authenticated author.</p>} onClose={() => showPage(null)} onSave={values => {
+        const next = { ...reportRef.current, title: values.name }; change(next);
+        if (!persist(next, { kind: 'edit', label: 'Updated report details' })) throw new Error('Could not save report details. Your draft is kept on this device.');
+        placeLocalReport(scope, report.id, localEntry?.folderId ?? null, { ...localEntry?.metadata, description: values.description, tags: values.tags });
+      }} />}
+    <div className="h-full min-h-0" hidden={managingHere}>{editor}</div>
+  </>;
+
 }
 
 /** "Copy to workspace…": every other workspace in this browser. */

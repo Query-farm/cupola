@@ -52,14 +52,14 @@ test('folder hierarchy, editing, rendering, worker history and a portable publis
   await page.getByRole('button', { name: 'Update preview', exact: true }).click();
   await expect(page.getByTestId('evidence-document')).toContainText('42', { timeout: 120_000 });
   await chooseReportAction(page, 'Version history');
-  await expect(page.getByRole('dialog')).toContainText('Revision 1');
-  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Report history', exact: true })).toContainText('Revision 1');
+  await page.getByRole('region', { name: 'Report history', exact: true }).getByRole('button', { name: 'Back to report', exact: true }).click();
   await chooseReportAction(page, 'Move…');
   await page.getByRole('dialog').getByRole('treeitem', { name: 'Finance report library', exact: true }).click();
   await page.getByRole('button', { name: 'Move report', exact: true }).click();
   await page.getByRole('region', { name: 'Worker report library' }).getByRole('button', { name: 'Quarterly finance', exact: true }).click();
   await page.getByRole('button', { name: 'Share', exact: true }).click();
-  await page.getByRole('dialog', { name: 'Share report', exact: true }).getByRole('button', { name: 'Publish changes', exact: true }).click();
+  await page.getByRole('region', { name: 'Share report', exact: true }).getByRole('button', { name: 'Publish changes', exact: true }).click();
   await expect.poll(async () => (await c.call('get_report', { report_id: id })).published_revision_id).not.toBeNull();
   const link = await page.getByRole('textbox', { name: 'Report link', exact: true }).inputValue();
   expect(link).not.toContain('token'); expect(link).not.toContain('local_ws');
@@ -126,21 +126,21 @@ test('restores immutable history, redacts an eligible revision, and transfers ow
   await c.call('commit_revision', { request_id: crypto.randomUUID(), report_id: first.report_id, expected_revision_id: first.head_revision_id, envelope: { ...first.envelope!, title: 'Later revision' }, body: first.body! });
   await page.goto(path(reporting.url, first.report_id));
   await chooseReportAction(page, 'Version history');
-  await page.getByRole('dialog').getByRole('button', { name: 'Restore revision 1', exact: true }).click();
+  await page.getByRole('region', { name: 'Report history', exact: true }).getByRole('button', { name: 'Restore revision 1', exact: true }).click();
   await saved(page);
   await expect.poll(async () => (await c.call('get_report', { report_id: first.report_id })).revision_number).toBe(3n);
   expect((await c.call('list_revisions', { report_id: first.report_id }))[0].kind).toBe('restore');
   await chooseReportAction(page, 'Version history');
-  await page.getByRole('dialog').getByRole('button', { name: 'Redact revision 2…', exact: true }).click();
+  await page.getByRole('region', { name: 'Report history', exact: true }).getByRole('button', { name: 'Redact revision 2…', exact: true }).click();
   await page.getByRole('textbox', { name: 'Reason', exact: true }).fill('Remove superseded information');
   await page.getByRole('button', { name: 'Redact permanently', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: 'Report history', exact: true })).toContainText('Redacted: Remove superseded information');
-  await page.getByRole('dialog', { name: 'Report history', exact: true }).getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Report history', exact: true })).toContainText('Redacted: Remove superseded information');
+  await page.getByRole('region', { name: 'Report history', exact: true }).getByRole('button', { name: 'Back to report', exact: true }).click();
   await chooseReportAction(page, 'Details');
   await page.getByRole('button', { name: 'Transfer ownership…', exact: true }).click();
-  await expect(page.getByRole('textbox', { name: 'Owner kind', exact: true })).toBeFocused();
-  await page.getByRole('textbox', { name: 'Owner ID', exact: true }).fill('bob');
-  await page.getByRole('button', { name: 'Apply', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Search owners', exact: true }).fill('bob@example.test');
+  await page.getByRole('radio', { name: /Bob Finance/ }).check();
+  await page.getByRole('button', { name: 'Transfer ownership', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Worker report library', exact: true })).toBeVisible();
   const transferred = await reporting.client('test-bob').call('get_report', { report_id: first.report_id });
   expect(transferred.ownership.owner_ref.id).toBe('bob'); expect(transferred.created_by.id).toBe('alice');
@@ -191,7 +191,7 @@ test('report details wait for autosave and preserve the current definition', asy
   await page.route('**/commit_revision', async route => { await saving; await route.continue(); });
   await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Editor change');
   await chooseReportAction(page, 'Details');
-  const details = page.getByRole('dialog', { name: 'Report details', exact: true });
+  const details = page.getByRole('region', { name: 'Report details', exact: true });
   try { await expect(details.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled(); }
   finally { releaseSave(); }
   await expect(details.getByRole('button', { name: 'Save changes', exact: true })).toBeEnabled();
@@ -206,7 +206,7 @@ test('report details wait for autosave and preserve the current definition', asy
   expect(latest.envelope!.description).toBe('Description from details');
   expect(JSON.parse(new TextDecoder().decode(latest.body!)).document.source).toBe(report().source);
   await chooseReportAction(page, 'View source');
-  await expect(page.getByRole('dialog', { name: 'Report source' })).toContainText('42');
+  await expect(page.getByRole('region', { name: 'Report source' })).toContainText('42');
 });
 
 test('read-only worker explains permissions and still allows local reports and folders', async ({ page, reporting }) => {
@@ -259,7 +259,7 @@ test('move local to worker, then copy and move back without resurrecting the loc
   await dialog.getByRole('treeitem', { name: 'Local', exact: true }).click();
   await dialog.getByRole('button', { name: 'Save copy', exact: true }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'Report browser' }).getByRole('button', { name: 'Portable report', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Report browser' }).getByRole('button', { name: 'Portable report (copy)', exact: true })).toBeVisible();
   expect((await reporting.client().call('get_report', { report_id: workerReport.report_id })).envelope?.title).toBe('Portable report');
   await locations.getByRole('treeitem', { name: 'Finance report library', exact: true }).click();
   await chooseReportAction(page, 'Move…', page.getByRole('row').filter({ has: page.getByRole('button', { name: 'Portable report', exact: true }) }));
@@ -360,7 +360,7 @@ test('views specific revisions and compares definitions with authorship without 
   page.on('request', request => { if (/\/(?:commit_revision|create_report)$/.test(request.url())) writes++; });
   await page.goto(path(reporting.url, first.report_id));
   await chooseReportAction(page, 'Version history');
-  const history = page.getByRole('dialog', { name: 'Report history', exact: true });
+  const history = page.getByRole('region', { name: 'Report history', exact: true });
   await expect(history.getByRole('article', { name: 'Revision 1', exact: true })).toContainText('alice');
   await expect(history.getByRole('article', { name: 'Revision 2', exact: true })).toContainText('operator');
   await history.getByRole('button', { name: 'Compare revision 2', exact: true }).click();
@@ -381,12 +381,12 @@ test('views specific revisions and compares definitions with authorship without 
   await expect(page.getByRole('button', { name: 'Edit report', exact: true })).toBeDisabled();
   await expect(page.getByTestId('evidence-document')).toContainText('42', { timeout: 120_000 });
   await chooseReportAction(page, 'View source');
-  await expect(page.getByRole('dialog', { name: 'Report source', exact: true })).toContainText('SELECT 42 AS value');
-  await page.getByRole('dialog', { name: 'Report source', exact: true }).getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Report source', exact: true })).toContainText('SELECT 42 AS value');
+  await page.getByRole('region', { name: 'Report source', exact: true }).getByRole('button', { name: 'Back to report', exact: true }).click();
   await page.reload();
   await expect(page.getByRole('status', { name: 'Save status', exact: true })).toHaveText('Read only');
   await page.goBack();
-  await expect(page.getByRole('button', { name: 'Edit report', exact: true })).toBeEnabled();
+  await expect(page.getByRole('heading', { name: 'Report history', exact: true })).toBeVisible();
   await page.goForward();
   await expect(page.getByRole('button', { name: 'Open current report', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Open current report', exact: true }).click();
@@ -403,12 +403,12 @@ test('revision viewing protects unsaved edits while comparisons remain available
   await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Unsaved history edit');
   await expect(page.getByRole('button', { name: 'Retry save', exact: true })).toBeVisible();
   await chooseReportAction(page, 'Version history');
-  const history = page.getByRole('dialog', { name: 'Report history', exact: true });
+  const history = page.getByRole('region', { name: 'Report history', exact: true });
   await expect(history.getByRole('button', { name: 'View revision 1', exact: true })).toBeDisabled();
   await history.getByRole('button', { name: 'Compare revision 2', exact: true }).click();
   await expect(history.getByRole('region', { name: 'Description changes', exact: true })).toContainText('Saved description');
   await expect(history.getByRole('button', { name: 'View selected revision', exact: true })).toBeDisabled();
-  await history.getByRole('button', { name: 'Close', exact: true }).click();
+  await history.getByRole('button', { name: 'Back to report', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'Report title', exact: true })).toHaveValue('Unsaved history edit');
   await page.unroute('**/commit_revision');
   await page.getByRole('button', { name: 'Retry save', exact: true }).click(); await saved(page);
@@ -420,7 +420,7 @@ test('comparison retries failures and does not retain old content after denied o
   const second = await client.call('commit_revision', { request_id: crypto.randomUUID(), report_id: first.report_id, expected_revision_id: first.head_revision_id, envelope: { ...first.envelope!, title: 'Current title' }, body: first.body! });
   await page.goto(path(reporting.url, first.report_id));
   await chooseReportAction(page, 'Version history');
-  const history = page.getByRole('dialog', { name: 'Report history', exact: true });
+  const history = page.getByRole('region', { name: 'Report history', exact: true });
   await history.getByRole('button', { name: 'Compare revision 2', exact: true }).click();
   const comparison = history.getByRole('region', { name: 'Revision comparison', exact: true });
   await expect(comparison.getByRole('region', { name: 'Title changes', exact: true })).toContainText('Private original title');
@@ -457,17 +457,17 @@ test('shared report header keeps management in menus and publishing in Share', a
   await expect(page.getByRole('menuitem', { name: 'Move…', exact: true })).toHaveCount(1);
   await expect(page.getByRole('menuitem', { name: 'Save a copy…', exact: true })).toHaveCount(1);
   await page.getByRole('menuitem', { name: 'Details', exact: true }).click();
-  const details = page.getByRole('dialog', { name: 'Report details', exact: true });
+  const details = page.getByRole('region', { name: 'Report details', exact: true });
   await expect(details.getByRole('region', { name: 'Report ownership' })).toContainText('alice');
   await details.getByRole('button', { name: 'Close', exact: true }).first().click();
   await page.getByRole('button', { name: 'Share', exact: true }).click();
-  const share = page.getByRole('dialog', { name: 'Share report', exact: true });
+  const share = page.getByRole('region', { name: 'Share report', exact: true });
   await share.getByRole('combobox', { name: 'Link to', exact: true }).selectOption('version');
   const latest = await reporting.client().call('get_report', { report_id: initial.report_id });
   expect(new URL(await share.getByRole('textbox', { name: 'Report link', exact: true }).inputValue()).searchParams.get('report_revision')).toBe(latest.head_revision_id);
   await share.getByRole('button', { name: 'Publish changes', exact: true }).click();
   await expect(share).toContainText('This saved version is published.');
-  await share.getByRole('button', { name: 'Close', exact: true }).click();
+  await share.getByRole('button', { name: 'Back to report', exact: true }).click();
   await edit(page);
   await expect(header.getByRole('button', { name: 'Publish changes', exact: true })).toHaveCount(0);
   await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Unpublished edit'); await saved(page);
@@ -478,7 +478,7 @@ test('shared report header keeps management in menus and publishing in Share', a
   await share.getByRole('button', { name: 'Unpublish report', exact: true }).click();
   await expect(share).toContainText('This report has not been published.');
   expect((await reporting.client().call('list_revisions', { report_id: initial.report_id })).length).toBe(3);
-  await share.getByRole('button', { name: 'Close', exact: true }).click();
+  await share.getByRole('button', { name: 'Back to report', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(() => header.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
 });
@@ -489,26 +489,27 @@ test('local Share saves a library copy and keeps local metadata and the original
   await expect(page.locator('header[aria-label="Report toolbar"]')).toHaveCount(1);
   await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Shared local draft');
   await chooseReportAction(page, 'Details');
-  const details = page.getByRole('dialog', { name: 'Report details', exact: true });
+  const details = page.getByRole('region', { name: 'Report details', exact: true });
   await details.getByRole('textbox', { name: 'Description', exact: true }).fill('Local description');
   await details.getByRole('textbox', { name: 'Tags', exact: true }).fill('quarterly, finance');
   await details.getByRole('button', { name: 'Save changes', exact: true }).click();
   await page.getByRole('button', { name: 'Share', exact: true }).click();
-  await page.getByRole('dialog', { name: 'Share report', exact: true }).getByRole('button', { name: 'Save to a report library…', exact: true }).click();
+  await page.getByRole('region', { name: 'Share report', exact: true }).getByRole('button', { name: 'Save to a report library…', exact: true }).click();
   const copy = page.getByRole('dialog', { name: 'Save a copy', exact: true });
+  await expect(copy.getByRole('textbox', { name: 'Copy name', exact: true })).toHaveValue('Shared local draft (copy)');
   await copy.getByRole('treeitem', { name: 'Finance report library', exact: true }).click();
   await copy.getByRole('button', { name: 'Save copy', exact: true }).click();
   await expect(copy).toHaveCount(0);
   const stored = (await reporting.client().call('list_reports', { query: 'Shared local draft' }))[0];
-  expect(stored.envelope).toMatchObject({ title: 'Shared local draft', description: 'Local description', tags: ['quarterly', 'finance'] });
+  expect(stored.envelope).toMatchObject({ title: 'Shared local draft (copy)', description: 'Local description', tags: ['quarterly', 'finance'] });
   expect(stored.published_revision_id).toBeNull();
-  const libraryRow = page.getByRole('row').filter({ has: page.getByRole('button', { name: 'Shared local draft', exact: true }) });
+  const libraryRow = page.getByRole('row').filter({ has: page.getByRole('button', { name: 'Shared local draft (copy)', exact: true }) });
   await expect(libraryRow.getByRole('button', { name: /^Actions for / })).toHaveCount(1);
   await expect(libraryRow.getByRole('button', { name: /Copy|Move/ })).toHaveCount(0);
   await page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true }).getByRole('treeitem', { name: 'Local', exact: true }).click();
   await page.getByRole('region', { name: 'Report browser' }).getByRole('button', { name: 'Shared local draft', exact: true }).click();
   await chooseReportAction(page, 'Version history');
-  await expect(page.getByRole('dialog', { name: 'Report history', exact: true })).toContainText('saved version');
+  await expect(page.getByRole('region', { name: 'Report history', exact: true })).toContainText('saved version');
 });
 
 test('main sidebar opens nested worker reports without reloading and follows saved changes', async ({ page, reporting }) => {
@@ -571,7 +572,8 @@ test('sidebar creates nested folders through the worker API, including from a la
   const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
   let parent: string | null = null;
   for (const [index, name] of ['Sidebar folders', 'FY2026', 'October'].entries()) {
-    await tree.getByRole('button', { name: `New folder in ${index ? ['Sidebar folders', 'FY2026'][index - 1] : 'Finance report library'}`, exact: true }).click();
+    await tree.getByRole('link', { name: index ? ['Sidebar folders', 'FY2026'][index - 1] : 'Finance report library', exact: true }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'New folder…', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'New folder', exact: true });
     await dialog.getByRole('textbox', { name: 'Name', exact: true }).fill(name);
     await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
@@ -589,7 +591,8 @@ test('sidebar creates nested folders through the worker API, including from a la
 test('sidebar folder creation recovers an admitted request without creating another folder', async ({ page, reporting }) => {
   await page.goto(path(reporting.url));
   const sidebar = page.getByTestId('catalog-sidebar');
-  await sidebar.getByRole('button', { name: 'New folder in Finance report library', exact: true }).click();
+  await sidebar.getByRole('link', { name: 'Finance report library', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'New folder…', exact: true }).click();
   let dropped = false;
   await page.route('**/create_folder', async route => {
     const response = await route.fetch();
@@ -696,7 +699,8 @@ test.describe('touch sidebar actions', () => {
     await page.goto(path(reporting.url, initial.report_id)); await saved(page);
     await page.getByRole('button', { name: 'Show catalog sidebar', exact: true }).click();
     let drawer = page.getByRole('dialog', { name: 'Catalog sidebar', exact: true });
-    await drawer.getByRole('button', { name: 'New folder in Finance report library', exact: true }).click();
+    await drawer.getByRole('button', { name: 'Actions for Finance report library', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'New folder…', exact: true }).click();
     const folder = page.getByRole('dialog', { name: 'New folder', exact: true });
     await expect(drawer).toHaveCount(0);
     await folder.getByRole('textbox', { name: 'Name', exact: true }).fill('Mobile destination');
@@ -779,7 +783,8 @@ test('read-only worker sidebar menu offers navigation without move or local muta
   await row.getByRole('link', { name: 'Read-only context report', exact: true }).click({ button: 'right' });
   const menu = page.getByRole('menu', { name: 'Read-only context report actions', exact: true });
   await expect(menu).toBeVisible();
-  await expect(menu.getByRole('menuitem')).toHaveCount(1);
+  await expect(menu.getByRole('menuitem')).toHaveCount(4);
+  await expect(menu.getByRole('menuitem', { name: 'Transfer ownership…', exact: true })).toHaveCount(0);
   await expect(menu.getByRole('menuitem', { name: 'Open in new tab', exact: true })).toBeVisible();
   await expect(menu.getByRole('separator')).toHaveCount(0);
   expect((await c.call('get_report', { report_id: initial.report_id })).folder_id).toBeNull();
@@ -860,4 +865,110 @@ test('remote reports render on sidebar open and sidebar refresh preserves the dr
   await page.getByRole('button', { name: 'Retry save', exact: true }).click();
   await saved(page);
   expect((await c.call('get_report', { report_id: initial.report_id })).envelope?.title).toBe('Keep this unsaved draft');
+});
+
+
+test('folder context menus rename and show duplicate-name errors inside the naming dialog', async ({ page, reporting }) => {
+  const c = reporting.client(), folder = await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Naming test' });
+  const child = await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Child preserved', parent_folder_id: folder.folder_id });
+  await page.goto(path(reporting.url));
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  await expect(tree.getByRole('button', { name: 'Actions for Finance report library' })).toHaveCSS('opacity', '0');
+  await tree.getByRole('link', { name: 'Finance report library', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'New folder…', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'New folder', exact: true });
+  await dialog.getByRole('textbox', { name: 'Name', exact: true }).fill('Naming test');
+  await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('already exists');
+  await expect(dialog.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Naming test');
+  await dialog.getByRole('textbox', { name: 'Name', exact: true }).fill('Another name');
+  await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await tree.getByRole('link', { name: 'Finance report library', exact: true }).click();
+  const root = tree.getByRole('treeitem', { name: 'Finance report library', exact: true });
+  if (await root.getAttribute('aria-expanded') !== 'true') await root.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
+  await tree.getByRole('treeitem', { name: 'Naming test', exact: true }).focus();
+  await page.keyboard.press('Shift+F10');
+  await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
+  const rename = page.getByRole('dialog', { name: 'Rename folder', exact: true });
+  await rename.getByRole('textbox', { name: 'Name', exact: true }).fill('Another name');
+  await rename.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(rename.getByRole('alert')).toContainText('already exists');
+  await rename.getByRole('textbox', { name: 'Name', exact: true }).fill('Renamed folder');
+  await rename.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(tree.getByRole('link', { name: 'Renamed folder', exact: true })).toBeVisible();
+  expect((await c.call('get_folder', { folder_id: child.folder_id })).parent_folder_id).toBe(folder.folder_id);
+});
+
+test('metadata search and tag filters work across reports and inside a library', async ({ page, reporting }) => {
+  const first = encodeReport(report('Metadata only match'), { description: 'Quarterly forecast', tags: ['planning', 'finance'] });
+  await reporting.client().call('create_report', { request_id: crypto.randomUUID(), ...first });
+  await seed(reporting, 'Other report');
+  await page.goto(`reports?service=${encodeURIComponent(reporting.url)}#token=test-alice`);
+  const browser = page.getByRole('region', { name: 'Report browser', exact: true });
+  await browser.getByRole('textbox', { name: 'Search reports', exact: true }).fill('FORECAST');
+  await expect(browser.getByRole('button', { name: 'Metadata only match', exact: true })).toBeVisible();
+  await expect(browser.getByRole('button', { name: 'Other report', exact: true })).toHaveCount(0);
+  await browser.getByRole('textbox', { name: 'Search reports', exact: true }).fill('');
+  await browser.getByRole('combobox', { name: 'Filter by tag', exact: true }).selectOption('planning');
+  await expect(browser.getByRole('button', { name: 'Other report', exact: true })).toHaveCount(0);
+  await page.getByTestId('catalog-sidebar').getByRole('link', { name: 'Finance report library', exact: true }).click();
+  const library = page.getByRole('region', { name: 'Worker report library', exact: true });
+  await expect(library).toContainText('Worker:');
+  await library.getByRole('textbox', { name: 'Search reports', exact: true }).fill('planning');
+  await expect(library.getByRole('button', { name: 'Metadata only match', exact: true })).toBeVisible();
+  await expect(library.getByRole('button', { name: 'Other report', exact: true })).toHaveCount(0);
+});
+
+test('management pages preserve drafts and browser navigation; ownership opens from right-click', async ({ page, reporting }) => {
+  const initial = await seed(reporting, 'Management pages');
+  await page.goto(path(reporting.url, initial.report_id)); await edit(page);
+  await page.route('**/commit_revision', route => route.abort('failed'));
+  await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Draft retained on return');
+  await expect(page.getByRole('button', { name: 'Retry save', exact: true })).toBeVisible();
+  await chooseReportAction(page, 'Version history');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Report history', exact: true })).toBeVisible();
+  expect(new URL(page.url()).searchParams.get('report_view')).toBe('history');
+  await page.goBack();
+  await expect(page.getByRole('textbox', { name: 'Report title', exact: true })).toHaveValue('Draft retained on return');
+  await page.goForward();
+  await expect(page.getByRole('heading', { name: 'Report history', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Back to report', exact: true }).click();
+  await page.unroute('**/commit_revision');
+  await page.getByRole('button', { name: 'Retry save', exact: true }).click(); await saved(page);
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  await tree.getByRole('link', { name: 'Draft retained on return', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Transfer ownership…', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Transfer ownership', exact: true })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Search owners', exact: true }).fill('bob@example.test');
+  await page.getByRole('radio', { name: /Bob Finance/ }).check();
+  await page.getByRole('button', { name: 'Transfer ownership', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Worker report library' })).toBeVisible();
+  const transferred = await reporting.client('test-bob').call('get_report', { report_id: initial.report_id });
+  expect(transferred.created_by.id).toBe('alice'); expect(transferred.ownership.owner_ref.id).toBe('bob');
+});
+
+test('folder ownership uses worker choices and local folders rename from the sidebar', async ({ page, reporting }) => {
+  const folder = await reporting.client().call('create_folder', { request_id: crypto.randomUUID(), name: 'Ownership folder' });
+  await page.goto(path(reporting.url));
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  await tree.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
+  await tree.getByRole('link', { name: 'Ownership folder', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Transfer ownership…', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Transfer ownership', exact: true })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Search owners', exact: true }).fill('bob@example.test');
+  await page.getByRole('radio', { name: /Bob Finance/ }).check();
+  await page.getByRole('button', { name: 'Transfer ownership', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Worker report library' })).toBeVisible();
+  expect((await reporting.client('test-bob').call('get_folder', { folder_id: folder.folder_id })).created_by.id).toBe('alice');
+  await tree.getByRole('link', { name: 'Local', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'New folder…', exact: true }).click();
+  await page.getByRole('dialog', { name: 'New folder' }).getByRole('textbox', { name: 'Name', exact: true }).fill('Local folder to rename');
+  await page.getByRole('button', { name: 'Create folder', exact: true }).click();
+  await tree.getByRole('link', { name: 'Local folder to rename', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Rename folder' }).getByRole('textbox', { name: 'Name', exact: true }).fill('Renamed local folder');
+  await page.getByRole('button', { name: 'Save name', exact: true }).click();
+  await expect(tree.getByRole('link', { name: 'Renamed local folder', exact: true })).toBeVisible();
 });

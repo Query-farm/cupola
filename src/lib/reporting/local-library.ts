@@ -25,13 +25,21 @@ export function localFolderPath(id: string | null, folders: LocalFolder[]): stri
 }
 export function createLocalFolder(scope: string, name: string, parentId: string | null, storage: Storage = localStorage): LocalFolder {
   const library = localLibrary(scope, storage);
-  name = name.trim();
+  name = name.trim().normalize('NFC');
   if (!name || name.includes('/') || name.length > 255) throw new Error('Use a folder name of 1–255 characters without a slash.');
   if (parentId && !library.folders.some(f => f.id === parentId)) throw new Error('The destination folder no longer exists.');
   if (library.folders.some(f => f.parentId === parentId && f.name === name)) throw new Error('A folder with this name already exists here.');
   const folder = { id: crypto.randomUUID(), name, parentId };
   write(scope, { ...library, folders: [...library.folders, folder] }, storage);
   return folder;
+}
+export function renameLocalFolder(scope: string, id: string, name: string, storage: Storage = localStorage) {
+  const library = localLibrary(scope, storage), folder = library.folders.find(f => f.id === id);
+  if (!folder) throw new Error('This folder no longer exists.');
+  name = name.trim().normalize('NFC');
+  if (!name || name.includes('/') || name.length > 255) throw new Error('Use a folder name of 1–255 characters without a slash.');
+  if (library.folders.some(f => f.id !== id && f.parentId === folder.parentId && f.name === name)) throw new Error('A folder with this name already exists here.');
+  write(scope, { ...library, folders: library.folders.map(f => f.id === id ? { ...f, name } : f) }, storage);
 }
 export function deleteLocalFolder(scope: string, id: string, storage: Storage = localStorage) {
   const library = localLibrary(scope, storage);

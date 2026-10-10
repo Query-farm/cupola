@@ -1,10 +1,11 @@
 import { useEffect, useState, type MouseEvent } from 'react';
-import { FileChartColumn, FileText, FolderPlus } from 'lucide-react';
+import { FileChartColumn, FileText, FolderPlus, Folder, HardDrive, Pencil, UserRound, Copy, History, Info, Trash2 } from 'lucide-react';
 import { SavedDocumentsSidebar } from '../shared/SavedDocumentsSidebar';
 import { SavedDocumentRow } from '../shared/SavedDocumentRow';
 import { FileTree, type FileTreeNode } from './FileTree';
 import { useReportLocations } from './ReportLocations';
 import { ReportClient, reportError } from '../../lib/reporting/client';
+import { matchesReport } from '../../lib/reporting/search';
 import { locationLabel } from '../../lib/reporting/locations';
 import type { FolderRecord, ReportRow } from '../../lib/reporting/contracts.generated';
 import { localLibrary } from '../../lib/reporting/local-library';
@@ -54,9 +55,13 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
     return () => { requests.forEach(abort => abort.abort()); window.removeEventListener(REPORT_LIBRARY_CHANGED, changed); };
   }, [locations]);
   const href = (destination: ReportDestination) => reportNavigationHref(serviceUrl, destination, window.location.href, appBase);
-  function open(destination: ReportDestination, newFolder = false) {
-    const url = new URL(href(destination), window.location.href);
-    if (newFolder) url.searchParams.set('report_new_folder', '1');
+  function open(destination: ReportDestination, action?: string) {
+    // Opening management for the current item preserves its parameters and editor.
+    const url = new URL(reportNodeKey(destination) === currentReportNode() ? window.location.href : href(destination), window.location.href);
+    url.searchParams.delete('report_view');
+    if (action === 'folder') url.searchParams.set('report_new_folder', '1');
+    else if (action && ['history', 'details', 'ownership'].includes(action)) url.searchParams.set('report_view', action);
+    else if (action) url.searchParams.set('report_folder_action', action);
     window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId, href: url.href } }));
   }
   function navigate(event: MouseEvent<HTMLAnchorElement>, destination: ReportDestination) {
@@ -97,26 +102,54 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
       setTransfer({ source: current, move: true, initialDestination: destination ? { url: destination.location === 'local' ? null : destination.location, folderId: destination.folderId ?? null, name: destination.location === 'local' ? 'Local' : locations.find(l => l.url === destination.location)?.name ?? 'Report library' } : undefined });
     } catch (e) { setActionError(reportError(e)); } finally { setPreparing(false); }
   }
-  const folderAction = (destination: ReportDestination, name: string) => allowed(destination, 'create_folder') ? <button type="button" aria-label={`New folder in ${name}`} title={`New folder in ${name}`} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-ring" onClick={() => open(destination, true)}><FolderPlus aria-hidden className="size-4" /></button> : undefined;
+  async function copy(sourceId: string) {
+    const source = sources.get(sourceId); if (!source || preparing || transfer) return;
+    setPreparing(true); setActionError('');
+    try {
+      const current = await requestTransferSource(scope, source);
+      open({ location: current.kind === 'local' ? 'local' : current.url });
+      setTransfer({ source: current, move: false });
+    } catch (e) { setActionError(reportError(e)); } finally { setPreparing(false); }
+  }
+  function directoryRow(destination: ReportDestination, name: string) {
+    const id = reportNodeKey(destination);
+    const extraActions = [
+      ...(allowed(destination, 'create_folder') ? [{ id: 'folder', label: 'New folder…', icon: FolderPlus, onClick: () => open(destination, 'folder') }] : []),
+      ...(destination.folderId && allowed(destination, 'rename') ? [{ id: 'rename', label: 'Rename…', icon: Pencil, onClick: () => open(destination, 'rename') }] : []),
+      ...(destination.folderId && destination.location !== 'local' && allowed(destination, 'transfer_ownership') ? [{ id: 'ownership', label: 'Transfer ownership…', icon: UserRound, onClick: () => open(destination, 'ownership') }] : []),
+      ...(destination.folderId && allowed(destination, 'delete') ? [{ id: 'delete', label: 'Delete…', icon: Trash2, onClick: () => open(destination, 'delete') }] : []),
+    ];
+    return <SavedDocumentRow className="min-w-0 flex-1" item={{ id, title: name, href: href(destination) }} icon={destination.folderId ? Folder : HardDrive} active={Boolean(active && selected === id)} documentKind={destination.folderId ? 'folder' : 'library'} actionsOnHover extraActions={extraActions} onNavigate={event => navigate(event, destination)} />;
+  }
+  function reportActions(entry: ReportDirectoryNode) {
+    const source = sources.get(entry.id);
+    return [
+      { id: 'history', label: 'Version history', icon: History, onClick: () => open(entry.destination, 'history') },
+      { id: 'details', label: 'Details', icon: Info, onClick: () => open(entry.destination, 'details') },
+      ...(source?.kind === 'worker' && !source.record.redacted ? [{ id: 'copy', label: 'Save a copy…', icon: Copy, disabled: preparing || Boolean(transfer), onClick: () => void copy(entry.id) }] : []),
+      ...(source?.kind === 'worker' && locations.find(l => l.url === source.url)?.info?.writable && source.record.allowed_actions.includes('transfer_ownership') ? [{ id: 'ownership', label: 'Transfer ownership…', icon: UserRound, onClick: () => open(entry.destination, 'ownership') }] : []),
+    ];
+  }
   const nodes = (entries: ReportDirectoryNode[], isLocal = false): FileTreeNode[] => entries.map(entry => {
     destinations.set(entry.id, entry.destination);
     return { ...entry, href: href(entry.destination), children: entry.children && nodes(entry.children, isLocal),
       readOnly: entry.kind === 'folder' && !allowed(entry.destination, 'create_report') && !allowed(entry.destination, 'create_folder'),
-      actions: entry.kind === 'folder' ? folderAction(entry.destination, entry.name) : undefined,
-      content: entry.kind === 'report' ? <SavedDocumentRow className="min-w-0 flex-1" item={{ id: entry.destination.reportId!, title: entry.name, href: href(entry.destination) }} icon={FileText} active={Boolean(active && selected === entry.id)} documentKind="report" actionsOnHover onAction={isLocal ? act : undefined} onMove={canDrag(entry.id) ? () => void move(entry.id) : undefined} onNavigate={event => navigate(event, entry.destination)} /> : undefined };
+      content: entry.kind === 'report' ? <SavedDocumentRow className="min-w-0 flex-1" item={{ id: entry.destination.reportId!, title: entry.name, href: href(entry.destination) }} icon={FileText} active={Boolean(active && selected === entry.id)} documentKind="report" actionsOnHover extraActions={reportActions(entry)} onAction={isLocal ? act : undefined} onMove={canDrag(entry.id) ? () => void move(entry.id) : undefined} onNavigate={event => navigate(event, entry.destination)} /> : directoryRow(entry.destination, entry.name) };
   });
   const root = (location: string, name: string, children: FileTreeNode[], detail?: string): FileTreeNode => {
     const destination = { location }, id = reportNodeKey(destination); destinations.set(id, destination);
-    return { id, name, kind: 'location', children, href: href(destination), detail, actions: folderAction(destination, name), readOnly: !allowed(destination, 'create_report') && !allowed(destination, 'create_folder') };
+    return { id, name, kind: 'location', children, href: href(destination), detail, content: directoryRow(destination, name), readOnly: !allowed(destination, 'create_report') && !allowed(destination, 'create_folder') };
   };
   const allNodes = [
     ...locations.filter(l => l.info).map(l => root(l.url, locationLabel(l, locations), nodes(reportDirectoryNodes(l.url,
       (remote[l.url]?.folders ?? []).map(f => ({ id: f.folder_id, name: f.name, parentId: f.parent_folder_id })),
-      (remote[l.url]?.reports ?? []).map(r => ({ id: r.report_id, name: r.envelope?.title ?? 'Redacted report', folderId: r.folder_id })))), l.name)),
+      (remote[l.url]?.reports ?? []).map(r => ({ id: r.report_id, name: r.envelope?.title ?? 'Redacted report', folderId: r.folder_id })))), `Worker: ${l.url}`)),
     root('local', 'Local', nodes(reportDirectoryNodes('local', library.folders, local.map(r => ({ id: r.id, name: r.title, folderId: library.entries[r.id]?.folderId ?? null }))), true), 'Saved in this browser'),
   ];
   const filter = (items: FileTreeNode[]): FileTreeNode[] => items.flatMap(node => {
-    if (node.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())) return [node];
+    const source = sources.get(node.id);
+    const metadata = source?.kind === 'worker' ? source.record.envelope : source ? library.entries[source.report.id]?.metadata : undefined;
+    if (matchesReport(node.name, metadata, search)) return [node];
     const children = filter(node.children ?? []); return children.length ? [{ ...node, children }] : [];
   });
   const errors = [...locations.filter(l => l.error).map(l => `${l.name}: ${l.error}`), ...locations.filter(l => remote[l.url]?.error).map(l => `${l.name}: ${remote[l.url].error}`)];

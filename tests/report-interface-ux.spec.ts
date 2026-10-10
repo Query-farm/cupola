@@ -22,7 +22,7 @@ test('filters disclose the displayed values, apply explicitly, and reset to defa
   await expect(panel.getByLabel('Applied filters', { exact: true })).toHaveText('Results use: Region: North');
   await expect(panel.getByRole('status', { name: 'Unapplied report changes' })).toContainText('Filters have changed');
   await expect(rows).toContainText('North');
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   await expect(panel.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
   await panel.getByRole('button', { name: 'Apply filters', exact: true }).click();
   await expect(rows).toContainText('South');
@@ -63,17 +63,17 @@ test('new reports have runnable starters and explain sharing and local storage',
   await expect(panel.getByTestId('evidence-document')).toContainText('540', { timeout: 30_000 });
   await expect(panel.getByTestId('evidence-document')).toContainText('Sample data');
   await expect(panel.getByRole('textbox', { name: 'Report title', exact: true })).toHaveValue('Sales summary');
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   await panel.getByRole('button', { name: 'Share', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: 'Share report' });
-  await expect(dialog).toContainText('saved in this browser');
+  const dialog = page.getByRole('region', { name: 'Share report', exact: true });
+  await expect(dialog).toContainText('Saved on this device');
   await expect(dialog).toContainText('Reports → Import');
   const [download] = await Promise.all([
     page.waitForEvent('download'),
     dialog.getByRole('button', { name: 'Download editable report' }).click(),
   ]);
   expect(download.suggestedFilename()).toContain('sales-summary');
-  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Back to report', exact: true }).click();
 
   // At tablet widths the report editor has the entire available pane, with a separate preview.
   await page.setViewportSize({ width: 800, height: 900 });

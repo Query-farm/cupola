@@ -44,12 +44,14 @@ export function SavedDocumentRow({
   onAction,
   onMove,
   actionsOnHover = false,
+  extraActions = [],
   className = 'ml-5',
 }: {
   item: SavedDocumentItem;
   icon: LucideIcon;
   active: boolean;
-  documentKind: 'notebook' | 'report';
+  documentKind: 'notebook' | 'report' | 'folder' | 'library';
+  extraActions?: Array<{ id: string; label: string; icon?: LucideIcon; onClick: () => void; disabled?: boolean }>;
   onNavigate: (event: MouseEvent<HTMLAnchorElement>, id?: string) => void;
   onAction?: (id: string, action: SavedDocumentAction) => Promise<void>;
   onMove?: () => void;
@@ -112,6 +114,7 @@ export function SavedDocumentRow({
         </>
       )}
       {onMove && <DropdownMenuItem disabled={pending} onClick={onMove}><FolderInput aria-hidden />Move…</DropdownMenuItem>}
+      {extraActions.map(action => <DropdownMenuItem key={action.id} disabled={pending || action.disabled} onClick={action.onClick}>{action.icon && <action.icon aria-hidden />}{action.label}</DropdownMenuItem>)}
       {onAction && (
         <>
           <DropdownMenuItem disabled={pending} onClick={() => void perform({ type: 'export' })}>

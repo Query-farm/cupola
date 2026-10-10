@@ -17,7 +17,7 @@ export function EvidenceHistory({ history, dirty, onRestore, onDelete }: { histo
   const newestFirst = useMemo(() => [...history.revisions].reverse(), [history]);
   if (!history.revisions.length) return <p className="text-xs text-muted-foreground">No revisions yet. Each time you save the report, the saved version is kept here with what changed and who changed it: you, or the report agent’s applied proposals.</p>;
   const format = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-  return <section className="space-y-3 text-xs" aria-label="Report history">
+  return <section className="space-y-3 text-xs" aria-label="Saved report versions">
     <p className="text-muted-foreground">{history.revisions.length} saved {history.revisions.length === 1 ? 'version' : 'versions'}.{dirty ? ' Saving your latest changes…' : ''} Changes save automatically: edits made close together form one revision, and each applied agent proposal, undo and restore is its own. Report files include the history.</p>
     <ol className="divide-y rounded-md border" aria-label="Revisions, newest first">
       {newestFirst.map((revision, index) => {

@@ -34,7 +34,7 @@ const equalBytes = (a: Uint8Array | null, b: Uint8Array) => a?.length === b.leng
 
 /** Freeze the definition and credentials' scopes before any write; never store bearer tokens. */
 export async function prepareTransfer(source: TransferSource, destination: TransferDestination, move: boolean,
-  context: { scope: string; serviceUrl: string; workspaceId?: string },
+  context: { scope: string; serviceUrl: string; workspaceId?: string; copyName?: string },
   client: ClientFactory = url => new ReportClient(url), storage: Storage = localStorage): Promise<TransferJob> {
   const job: TransferJob = { ...context, id: crypto.randomUUID(), localId: crypto.randomUUID(), createdAt: Date.now(),
     source, destination, move, phase: 'copy', envelope: null!, body: null! };
@@ -62,6 +62,13 @@ export async function prepareTransfer(source: TransferSource, destination: Trans
     if (move && destination.url !== source.url && record.revision_served !== record.head_revision_id) throw new Error('Open the current report before moving it to another location. A historical revision can be copied.');
     job.envelope = record.envelope; job.body = record.body;
     if (!destination.url) job.localReport = decodeReport(record, context.serviceUrl, context.workspaceId);
+  }
+  if (!move) {
+    const title = context.copyName?.trim() || `${job.envelope.title} (copy)`;
+    job.envelope = { ...job.envelope, title };
+    if (job.localReport) job.localReport = { ...job.localReport, title };
+    // The envelope is authoritative for worker bodies; local copies also carry
+    // the chosen name in their saved definition.
   }
   if (destination.url) {
     const target = client(destination.url);

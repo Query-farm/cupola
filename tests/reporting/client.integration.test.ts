@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { startReportingWorker } from './worker';
 import { nativeOnlyParameters, report } from './fixtures';
 import { decodeReport, encodeReport } from '../../src/lib/reporting/body';
-import { ReportClient } from '../../src/lib/reporting/client';
+import { ReportClient, reportError } from '../../src/lib/reporting/client';
 import { MutationJournal } from '../../src/lib/reporting/journal';
 import { memoryStorage } from './fixtures';
 
@@ -82,4 +82,22 @@ test('folder streams consume every continuation page without losing int64 metada
   const folders = await c.call('list_folders', { parent_folder_id: parent.folder_id, recursive: false });
   expect(new Set(folders.map(folder => folder.folder_id))).toEqual(ids);
   expect(folders.every(folder => folder.version === 1n)).toBe(true);
+});
+
+
+test('HTTP owner lookup resolves worker identities and duplicate folder errors remain actionable', async () => {
+  const c = worker.client();
+  expect(await c.discover(undefined, 'vgi.reports.ownership.v1')).toBe(true);
+  const { envelope, body } = encodeReport(report('Owner lookup'), { description: 'Searchable forecast', tags: ['budget'] });
+  const created = await c.call('create_report', { request_id: crypto.randomUUID(), envelope, body });
+  const options = await c.call('find_owners', { resource_kind: 'report', resource_id: created.report_id, query: 'bob@example.test' });
+  expect(options.candidates).toHaveLength(1);
+  expect(options.candidates[0].ownership.owner_ref.id).toBe('bob');
+  expect((await c.call('list_reports', { query: 'FORECAST', tags: ['budget'] })).some(r => r.report_id === created.report_id)).toBe(true);
+  await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Unique HTTP folder' });
+  const journal = new MutationJournal(c, await c.recoveryScope(), 'duplicate-folder', memoryStorage());
+  try { await journal.run('create_folder', { name: 'Unique HTTP folder' }); throw new Error('Expected duplicate failure'); }
+  catch (error: any) { expect(error.errorCode).toBe('ALREADY_EXISTS'); expect(reportError(error)).toContain('already exists'); }
+  expect(journal.pending).toBeNull();
+  expect((await journal.run('create_folder', { name: 'Corrected HTTP folder' })).name).toBe('Corrected HTTP folder');
 });

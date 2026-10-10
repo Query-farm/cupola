@@ -91,16 +91,16 @@ export class ReportClient {
     }) as typeof fetch;
     return httpConnect(this.url, { protocol, fetch: scopedFetch });
   }
-  async discover(signal?: AbortSignal): Promise<boolean> {
+  async discover(signal?: AbortSignal, protocol: string = REPORTS_PROTOCOL): Promise<boolean> {
     const rpc = await this.connection(undefined, signal);
-    try { const info = await rpc.describe(); return info.protocolName === REPORTS_PROTOCOL || info.hostedProtocols?.includes(REPORTS_PROTOCOL) === true; }
+    try { const info = await rpc.describe(); return info.protocolName === protocol || info.hostedProtocols?.includes(protocol) === true; }
     finally { rpc.close(); }
   }
   async call<M extends Method>(method: M, input: Input<M>, signal?: AbortSignal): Promise<Output<M>> {
     const config = methodConfig[method];
     const params: Record<string, any> = { ...config.defaults, ...input };
     for (const [key, name] of Object.entries(config.structured)) if (params[key] != null) params[key] = encodeRecord(name, params[key]);
-    const rpc = await this.connection(REPORTS_PROTOCOL, signal);
+    const rpc = await this.connection(config.protocol, signal);
     try {
       if (!config.stream) {
         const result = decodeRecord((await rpc.call(method, params))?.result);

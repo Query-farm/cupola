@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FolderOpen, Plus, RefreshCw, MoreHorizontal } from 'lucide-react';
 import { Button, buttonVariants } from '../ui/button';
-import { Input } from '../ui/input';
+import { ReportSearch } from './ReportSearch';
+import { matchesReport, reportTags } from '../../lib/reporting/search';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu';
 import { ReportClient, reportError, type Input as RpcInput, type Method, type Output } from '../../lib/reporting/client';
 import type { FolderRecord, ReportResult, ReportRow, ReportsInfo } from '../../lib/reporting/contracts.generated';
@@ -18,7 +19,8 @@ import type { ReportingWorkspaceProps } from './ReportingWorkspace';
 import { ReportFileList, type ReportFileItem } from './ReportFileList';
 import { ReportNotice } from './ReportNotice';
 import { ReportActionMenu, reportAction } from './ReportActionMenu';
-import { ReportDetailsDialog } from './ReportDetailsDialog';
+import { OwnershipPage } from './OwnershipPage';
+import { useReportPage } from './ReportPage';
 import { REPORT_ROUTE_CHANGED, REPORT_LIBRARY_CHANGED, reportFolderCreationRequested, clearReportFolderCreation } from '../../lib/reporting/navigation';
 import { useReportLocations } from './ReportLocations';
 
@@ -30,12 +32,13 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
   const [folderId, setFolderId] = useState<string | null>(() => new URLSearchParams(location.search).get('report_folder'));
   const [selected, setSelected] = useState(() => ({ id: new URLSearchParams(location.search).get('report_id'), revision: new URLSearchParams(location.search).get('report_revision') }));
   const [folders, setFolders] = useState<FolderRecord[]>([]), [reports, setReports] = useState<ReportRow[]>([]);
+  const [tag, setTag] = useState('');
   const [query, setQuery] = useState(''), [publishedOnly, setPublishedOnly] = useState(false), [ownedByMe, setOwnedByMe] = useState(false);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false);
   const [generation, setGeneration] = useState(0);
   const [dialog, setDialog] = useState<{ action: ResourceAction; resource?: FolderRecord | ReportRow } | null>(() => reportFolderCreationRequested() ? { action: 'folder' } : null);
   const [drafts, setDrafts] = useState<Array<{ key: string; value: RecoveryDraft }>>([]);
-  const [details, setDetails] = useState<ReportRow | null>(null);
+  const [page, showPage] = useReportPage();
   const [recovery, setRecovery] = useState<{ key: string; value: RecoveryDraft } | undefined>();
   useEffect(clearReportFolderCreation, []);
   const file = useRef<HTMLInputElement>(null);
@@ -61,23 +64,24 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
     setLoading(true); setError(''); setReports([]); setFolders([]);
     const timer = setTimeout(() => void Promise.all([
       client.call('list_folders', {}, abort.signal),
-      client.call('list_reports', { folder_id: folderId, recursive: Boolean(query), query, published_only: publishedOnly, owned_by_me: ownedByMe }, abort.signal),
+      client.call('list_reports', { folder_id: folderId, recursive: true, published_only: publishedOnly, owned_by_me: ownedByMe }, abort.signal),
       folderId ? client.call('get_folder', { folder_id: folderId }, abort.signal) : Promise.resolve(null),
     ]).then(([allFolders, rows, parent]) => {
       if (abort.signal.aborted || current !== revision.current) return;
       setFolders(parent && !allFolders.some(f => f.folder_id === parent.folder_id) ? [...allFolders, parent] : allFolders); setReports(rows);
       setDrafts(recoveryDrafts(session.scope));
       setLocalReports(listEvidenceReports(props.workspaceId ?? props.serviceUrl));
-    }).catch(e => { if (!abort.signal.aborted) setError(reportError(e)); }).finally(() => { if (!abort.signal.aborted) setLoading(false); }), query ? 200 : 0);
+    }).catch(e => { if (!abort.signal.aborted) setError(reportError(e)); }).finally(() => { if (!abort.signal.aborted) setLoading(false); }), 0);
     return () => { clearTimeout(timer); abort.abort(); };
-  }, [session, folderId, selected.id, query, publishedOnly, ownedByMe]);
+  }, [session, folderId, selected.id, publishedOnly, ownedByMe]);
   useEffect(() => {
-    const pop = () => { const search = new URLSearchParams(location.search); setFolderId(search.get('report_folder')); setSelected({ id: search.get('report_id'), revision: search.get('report_revision') }); setRecovery(undefined); };
+    const pop = () => { const search = new URLSearchParams(location.search); setFolderId(search.get('report_folder')); const id = search.get('report_id'), revision = search.get('report_revision'); if (id !== selected.id || revision !== selected.revision) { setSelected({ id, revision }); setRecovery(undefined); } };
     window.addEventListener('popstate', pop); return () => window.removeEventListener('popstate', pop);
-  }, []);
-  function navigate(id: string | null, folder = folderId, pinned: string | null = null) {
+  }, [selected.id, selected.revision]);
+  function navigate(id: string | null, folder = folderId, pinned: string | null = null, view?: string) {
     const url = new URL(location.href);
     for (const key of [...url.searchParams.keys()]) if (key.startsWith('p.')) url.searchParams.delete(key);
+    if (view) url.searchParams.set('report_view', view); else url.searchParams.delete('report_view');
     if (id) url.searchParams.set('report_id', id); else url.searchParams.delete('report_id');
     if (folder) url.searchParams.set('report_folder', folder); else url.searchParams.delete('report_folder');
     if (pinned) url.searchParams.set('report_revision', pinned); else url.searchParams.delete('report_revision');
@@ -101,14 +105,12 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
     if (action === 'folder') await mutate('create_folder', { name: values.name, parent_folder_id: values.folderId });
     else if (target && 'name' in target) {
       const base = { folder_id: target.folder_id, expected_version: target.version };
-      if (action === 'delete') await mutate('delete_folder', base);
-      else if (action === 'ownership') await mutate('set_folder_ownership', { ...base, ownership: values.ownership });
+      if (action === 'delete') { await mutate('delete_folder', base); if (folderId === target.folder_id) navigate(null, target.parent_folder_id); }
       else await mutate('update_folder', { ...base, name: values.name, parent_folder_id: values.folderId });
     } else if (target) {
       const base = { report_id: target.report_id, expected_version: target.version };
       if (action === 'delete') await mutate('delete_report', base);
       else if (action === 'move') await mutate('move_report', { ...base, folder_id: values.folderId });
-      else if (action === 'ownership') await mutate('set_ownership', { ...base, ownership: values.ownership });
     }
   }
   async function retry() {
@@ -121,21 +123,34 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
       else setNotice('The worker confirmed the pending change.');
     } catch (e) { setError(reportError(e)); } finally { setBusy(false); }
   }
+  useEffect(() => {
+    const url = new URL(location.href), action = url.searchParams.get('report_folder_action');
+    const resource = folders.find(f => f.folder_id === folderId);
+    if (!resource || !action) return;
+    if (['rename', 'move', 'delete'].includes(action)) setDialog({ action: action as ResourceAction, resource });
+    url.searchParams.delete('report_folder_action'); history.replaceState(history.state, '', url);
+  }, [folders, folderId]);
   const parent = folders.find(f => f.folder_id === folderId);
   const actions = (session?.info.writable ? folderId ? parent?.allowed_actions : session.info.root_allowed_actions : []) ?? [];
   const pending = session?.journal.pending;
   const blocked = busy || Boolean(pending) || !session?.info.writable;
   if (selected.id && session) return <RemoteReport key={`${selected.id}:${selected.revision ?? ''}:${recovery?.key ?? ''}`} {...props} session={session} reportId={selected.id} revisionId={selected.revision} recovery={recovery}
     onLeave={() => { navigate(null); setGeneration(n => n + 1); }} onOpen={(id, revision) => navigate(id, folderId, revision ?? null)} />;
+  if (page === 'ownership' && parent && session) return <OwnershipPage client={client} resourceKind="folder" resourceId={parent.folder_id} name={parent.name} current={parent.ownership} blocked={blocked || !parent.allowed_actions.includes('transfer_ownership')} onBack={() => showPage(null)} onRetry={pending?.method === 'set_folder_ownership' ? async () => {
+    setBusy(true); try { await session.journal.retry(); navigate(null, parent.parent_folder_id); setGeneration(n => n + 1); } finally { setBusy(false); }
+  } : undefined} onApply={async ownership => {
+    await mutate('set_folder_ownership', { folder_id: parent.folder_id, expected_version: parent.version, ownership }); navigate(null, parent.parent_folder_id);
+  }} />;
   const items: ReportFileItem[] = [
-    ...folders.filter(f => f.parent_folder_id === folderId).sort((a, b) => a.name.localeCompare(b.name)).map(folder => ({
+    ...folders.filter(f => !query && !tag && f.parent_folder_id === folderId).sort((a, b) => a.name.localeCompare(b.name)).map(folder => ({
       id: folder.folder_id, name: folder.name, kind: 'folder' as const, onOpen: () => navigate(null, folder.folder_id), detail: folder.ownership.owner_ref.display_name || folder.ownership.owner_ref.id, state: 'Folder',
-      actions: <ResourceMenu resource={folder} disabled={blocked} onAction={action => setDialog({ action, resource: folder })} />,
+      actions: <ResourceMenu resource={folder} disabled={blocked} onAction={action => action === 'ownership' ? navigate(null, folder.folder_id, null, 'ownership') : setDialog({ action, resource: folder })} />,
     })),
-    ...reports.map(report => ({ id: report.report_id, name: report.envelope?.title ?? 'Redacted report', description: report.envelope?.description, kind: 'report' as const,
+    ...reports.filter(r => (Boolean(query || tag) || r.folder_id === folderId) && matchesReport(r.envelope?.title ?? '', r.envelope, query, tag)).map(report => ({ id: report.report_id, name: report.envelope?.title ?? 'Redacted report', description: report.envelope?.description, kind: 'report' as const,
       onOpen: () => navigate(report.report_id), detail: report.ownership.owner_ref.display_name || report.ownership.owner_ref.id, state: `${report.published_revision_id ? 'Published' : 'Draft'} · revision ${String(report.revision_number)}`,
       actions: <ReportActionMenu label={`Actions for ${report.envelope?.title ?? 'report'}`} actions={[
-        reportAction('details', () => setDetails(report)),
+        reportAction('details', () => navigate(report.report_id, folderId, null, 'details')),
+        ...(report.allowed_actions.includes('transfer_ownership') ? [reportAction('ownership', () => navigate(report.report_id, folderId, null, 'ownership'), blocked)] : []),
         ...(props.onTransferReport && !report.redacted ? [reportAction('copy', () => props.onTransferReport?.({ kind: 'worker', url: client.url, record: report }, false), busy || Boolean(pending)),
           ...(report.allowed_actions.some(a => a === 'move' || a === 'delete') ? [reportAction('move', () => props.onTransferReport?.({ kind: 'worker', url: client.url, record: report }, true), blocked)] : [])] : []),
         ...(report.allowed_actions.includes('delete') ? [reportAction('delete', () => setDialog({ action: 'delete', resource: report }), blocked)] : []),
@@ -144,7 +159,7 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
   ];
   return <section aria-label="Worker report library" className="flex h-full min-h-0 flex-col">
     <header className="flex flex-wrap items-center gap-3 border-b px-5 py-4">
-      <FolderOpen className="size-5" /><h1 className="font-semibold">{session?.info.display_name ?? 'Report library'}</h1>
+      <FolderOpen className="size-5" /><div><h1 className="font-semibold">{session?.info.display_name ?? 'Report library'}</h1><p className="text-xs text-muted-foreground">Worker: {props.catalogs.filter(c => c.sourceUrl === client.url || !c.sourceUrl && props.serviceUrl === client.url).map(c => c.catalogName).map((name, index, names) => name + (index === names.length - 1 ? ' · ' : ' / ')).join('')}{new URL(client.url).host}</p></div>
       <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setGeneration(n => n + 1); window.dispatchEvent(new CustomEvent(REPORT_LIBRARY_CHANGED, { detail: { url: client.url } })); }}><RefreshCw />Reload library</Button>
       <div className="ml-auto flex flex-wrap gap-2">
         <Button variant="outline" disabled={blocked || !actions.includes('create_folder')} onClick={() => setDialog({ action: 'folder' })}>New folder</Button>
@@ -159,7 +174,7 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
       {notice && <p role="status" className="text-sm">{notice}</p>}
       {pending && <div className="space-y-2 rounded border border-amber-400 p-3 text-sm"><p>A previous change has not been confirmed. Retry uses the same request ID and content.</p><Button disabled={busy} onClick={() => void retry()}>Retry pending change</Button> <Button variant="outline" disabled={busy} onClick={async () => { if (confirm('This change may already have succeeded. Inspect the worker first. Discard the saved request without retrying?')) { await session.journal.discard(); setGeneration(n => n + 1); } }}>Discard request…</Button></div>}
       <nav aria-label="Report folders" className="flex flex-wrap items-center gap-2 text-sm"><Button variant="ghost" size="sm" onClick={props.onAllReports}>All reports</Button><span>/</span><Button variant="ghost" size="sm" onClick={() => navigate(null, null)} aria-current={parent ? undefined : 'page'}>{session?.info.display_name || 'Library root'}</Button>{parent && <><span>/</span><span aria-current="page">{folderPath(parent, folders)}</span><Button variant="ghost" size="sm" onClick={() => navigate(null, parent.parent_folder_id)}>Up one folder</Button></>}</nav>
-      <div className="flex flex-wrap items-center gap-4"><Input className="max-w-md" aria-label="Search reports" placeholder="Search this folder and its descendants…" value={query} onChange={e => setQuery(e.target.value)} /><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={publishedOnly} onChange={e => setPublishedOnly(e.target.checked)} />Published only</label><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={ownedByMe} onChange={e => setOwnedByMe(e.target.checked)} />Owned by me</label></div>
+      <div className="flex flex-wrap items-center gap-4"><ReportSearch query={query} onQuery={setQuery} tag={tag} onTag={setTag} tags={reportTags(reports.map(r => r.envelope))} /><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={publishedOnly} onChange={e => setPublishedOnly(e.target.checked)} />Published only</label><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={ownedByMe} onChange={e => setOwnedByMe(e.target.checked)} />Owned by me</label></div>
       {loading ? <p role="status">Loading report library…</p> : <ReportFileList items={items} detailLabel="Owner" emptyMessage="This folder is empty." />}
       <details className="rounded border p-3 text-sm"><summary className="cursor-pointer font-medium">Import reports</summary><p className="my-3 text-muted-foreground">Copies the current report definition into this folder. Existing reports and their history remain on this device or in the source file.</p>
         <select aria-label="Import report from this device" className="rounded border bg-background p-2" value="" disabled={blocked || !actions.includes('create_report')} onChange={e => { const report = localReports.find(r => r.id === e.target.value); if (report) void create(report, true).catch(e => setError(reportError(e))); }}><option value="">Choose a report on this device…</option>{localReports.map(r => <option key={r.id} value={r.id}>{r.title}</option>)}</select>
@@ -172,15 +187,12 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
       {drafts.length > 0 && <section aria-label="Recovered worker drafts" className="space-y-2 rounded border p-3"><h2 className="text-sm font-semibold">Drafts kept on this device</h2>{drafts.map(draft => <div key={draft.key} className="flex flex-wrap items-center gap-3 text-sm"><span>{draft.value.draft.report.title} · {new Date(draft.value.updatedAt).toLocaleString()}</span><Button size="sm" variant="outline" onClick={() => { navigate(draft.value.base.report_id); setRecovery(draft); }}>Review draft</Button><Button size="sm" variant="ghost" onClick={() => downloadDocumentFile(JSON.stringify(draft.value.draft.report, null, 2), 'recovered-report.json')}>Export draft</Button><Button size="sm" variant="ghost" onClick={async () => { if (confirm('Discard this recovery draft? Any pending worker request may already have succeeded.')) { localStorage.removeItem(draft.key); await new MutationJournal(client, session!.scope, draft.value.journalId).discard(); setDrafts(recoveryDrafts(session!.scope)); } }}>Discard draft…</Button></div>)}</section>}
       <p className="text-xs text-muted-foreground">Folder and report permissions are defined by this worker. Publishing does not itself grant access.</p>
     </div>
-    {details && <ReportDetailsDialog initial={{ name: details.envelope?.title ?? '', description: details.envelope?.description ?? '', tags: details.envelope?.tags ?? [] }} location={session?.info.display_name ?? 'Report library'} onClose={() => setDetails(null)} blocked={blocked}
-      identity={<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2"><dt>Created by</dt><dd>{details.created_by.display_name || details.created_by.id}</dd><dt>Owner</dt><dd>{details.ownership.owner_ref.display_name || details.ownership.owner_ref.id}</dd></dl>}
-      onTransferOwnership={details.allowed_actions.includes('transfer_ownership') ? () => { setDialog({ action: 'ownership', resource: details }); setDetails(null); } : undefined} />}
     {dialog && <ResourceDialog key={`${dialog.action}:${dialog.resource && ('name' in dialog.resource ? dialog.resource.folder_id : dialog.resource.report_id)}`} {...dialog} folders={folders} libraryName={session?.info.display_name} rootActions={session?.info.root_allowed_actions ?? []} writable={Boolean(session?.info.writable)} parentId={folderId} onClose={() => setDialog(null)} onApply={apply} />}
   </section>;
 }
 
-export function ResourceMenu({ resource, disabled, onAction }: { resource: FolderRecord | ReportRow; disabled: boolean; onAction: (action: ResourceAction) => void }) {
-  const actions: Array<[string, ResourceAction, string]> = [['rename', 'rename', 'Rename'], ['move', 'move', 'Move'], ['transfer_ownership', 'ownership', 'Transfer ownership'], ['delete', 'delete', 'Delete']];
+export function ResourceMenu({ resource, disabled, onAction }: { resource: FolderRecord | ReportRow; disabled: boolean; onAction: (action: ResourceAction | 'ownership') => void }) {
+  const actions: Array<[string, ResourceAction | 'ownership', string]> = [['rename', 'rename', 'Rename'], ['move', 'move', 'Move'], ['transfer_ownership', 'ownership', 'Transfer ownership'], ['delete', 'delete', 'Delete']];
   const offered = actions.filter(([hint]) => resource.allowed_actions.includes(hint) && (hint !== 'rename' || 'name' in resource));
   return offered.length ? <DropdownMenu><DropdownMenuTrigger disabled={disabled} aria-label={`Actions for ${'name' in resource ? resource.name : resource.envelope?.title ?? 'report'}`} className={buttonVariants({ variant: 'ghost', size: 'icon' })}><MoreHorizontal /></DropdownMenuTrigger><DropdownMenuContent align="end">{offered.map(([hint, action, label]) => <DropdownMenuItem key={hint} onClick={() => onAction(action)}>{label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null;
 }

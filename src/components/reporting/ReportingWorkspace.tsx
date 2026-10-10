@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/button';
 import { EvidenceWorkspace } from '../evidence/EvidenceWorkspace';
 import { ReportLibrary } from './ReportLibrary';
@@ -51,18 +51,21 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     read(); window.addEventListener(REPORT_TRANSFERS_CHANGED, read); window.addEventListener('storage', read);
     return () => { window.removeEventListener(REPORT_TRANSFERS_CHANGED, read); window.removeEventListener('storage', read); };
   }, [scope, generation]);
+  const routeIdentity = () => { const url = new URL(location.href); url.searchParams.delete('report_view'); return url.pathname + url.search; };
+  const activeRoute = useRef(routeIdentity());
   useEffect(() => {
-    const pop = () => { setView(route()); setEditorKey(n => n + 1); };
+    const track = () => { activeRoute.current = routeIdentity(); };
+    const pop = () => { const next = routeIdentity(); setView(route()); if (activeRoute.current !== next) setEditorKey(n => n + 1); activeRoute.current = next; };
     const local = (event: Event) => {
       const detail = (event as CustomEvent<OpenReportDetail>).detail;
       if ((detail.workspaceId ?? detail.serviceUrl) !== scope) return;
       detail.handled = true;
       const next = new URL(detail.href, location.href);
       if (location.pathname + location.search === next.pathname + next.search) return;
-      history.pushState({}, '', next); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED)); pop();
+      history.pushState({}, '', next); pop(); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
     };
-    window.addEventListener('popstate', pop); window.addEventListener(OPEN_REPORT_EVENT, local);
-    return () => { window.removeEventListener('popstate', pop); window.removeEventListener(OPEN_REPORT_EVENT, local); };
+    window.addEventListener('popstate', pop); window.addEventListener(OPEN_REPORT_EVENT, local); window.addEventListener(REPORT_ROUTE_CHANGED, track);
+    return () => { window.removeEventListener('popstate', pop); window.removeEventListener(OPEN_REPORT_EVENT, local); window.removeEventListener(REPORT_ROUTE_CHANGED, track); };
   }, [scope]);
   useEffect(() => {
     const promote = () => {
@@ -77,7 +80,7 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     const url = new URL(location.href);
     url.pathname = `${appBase.replace(/\/$/, '')}/reports${value === 'local' && !reportId ? '/saved' : ''}`;
     url.searchParams.set('report_service', value);
-    for (const key of ['report_id', 'report_revision', 'report_folder', 'evidence_report', 'evidence_new', 'evidence_view', 'evidence_edit', 'local_report_folder']) url.searchParams.delete(key);
+    for (const key of ['report_view', 'report_id', 'report_revision', 'report_folder', 'evidence_report', 'evidence_new', 'evidence_view', 'evidence_edit', 'local_report_folder']) url.searchParams.delete(key);
     for (const key of [...url.searchParams.keys()]) if (key.startsWith('p.')) url.searchParams.delete(key);
     if (reportId) url.searchParams.set('report_id', reportId);
     if (value === 'local' && folderId) url.searchParams.set('local_report_folder', folderId);
