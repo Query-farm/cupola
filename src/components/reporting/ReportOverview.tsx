@@ -16,6 +16,7 @@ import { downloadDocumentFile } from '../../lib/saved-document-actions';
 import { exportSavedReport } from '../../lib/evidence/report-actions';
 import { ReportFileList, type ReportFileItem } from './ReportFileList';
 import { ReportActionMenu, reportAction } from './ReportActionMenu';
+import { useReportLocations } from './ReportLocations';
 
 import { reportFolderCreationRequested, clearReportFolderCreation } from '../../lib/reporting/navigation';
 
@@ -26,6 +27,7 @@ export function ReportOverview({ locations, scope, localOnly, folderId, onAllRep
   onFolder: (id: string | null) => void; onNew: () => void; onLocal: (report: EvidenceReport) => void;
   onWorker: (url: string, id: string) => void; onTransfer: (source: TransferSource, move: boolean) => void; onRefresh: () => void;
 }) {
+  const { refreshVersion } = useReportLocations();
   const [local, setLocal] = useState<EvidenceReport[]>([]), [localError, setLocalError] = useState('');
   const [library, setLibrary] = useState(() => localLibrary(scope)), [workers, setWorkers] = useState<WorkerRows[]>([]);
   const [query, setQuery] = useState(''), [newFolder, setNewFolder] = useState(() => localOnly && reportFolderCreationRequested()), [name, setName] = useState('');
@@ -61,7 +63,7 @@ export function ReportOverview({ locations, scope, localOnly, folderId, onAllRep
   useEffect(() => {
     reloadLocal(); window.addEventListener(EVIDENCE_REPORTS_CHANGED, reloadLocal); window.addEventListener('storage', reloadLocal);
     return () => { window.removeEventListener(EVIDENCE_REPORTS_CHANGED, reloadLocal); window.removeEventListener('storage', reloadLocal); };
-  }, [scope]);
+  }, [scope, refreshVersion]);
   useEffect(() => {
     const abort = new AbortController();
     const supported = localOnly ? [] : locations.filter(l => l.info);

@@ -8,7 +8,7 @@ import { REPORT_ROUTE_CHANGED } from '../../lib/reporting/navigation';
 import type { TransferDestination, TransferSource } from '../../lib/reporting/transfers';
 
 interface TransferRequest { source: TransferSource; move: boolean; initialDestination?: TransferDestination }
-const Context = createContext<{ locations: ReportLocation[]; refresh: () => void; transfer: TransferRequest | null; setTransfer: (request: TransferRequest | null) => void } | null>(null);
+const Context = createContext<{ locations: ReportLocation[]; refresh: () => void; refreshVersion: number; transfer: TransferRequest | null; setTransfer: (request: TransferRequest | null) => void } | null>(null);
 
 /** The sidebar and report pages discover the same libraries, including a shared-link target. */
 export function ReportLocationsProvider({ serviceUrl, workspaceId, catalogs, children }: {
@@ -43,7 +43,7 @@ export function ReportLocationsProvider({ serviceUrl, workspaceId, catalogs, chi
     return () => abort.abort();
   }, [key, generation]);
   const refresh = useCallback(() => setGeneration(n => n + 1), []);
-  return <Context.Provider value={{ locations, refresh, transfer, setTransfer }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ locations, refresh, refreshVersion: generation, transfer, setTransfer }}>{children}</Context.Provider>;
 }
 
 export function useReportLocations() {

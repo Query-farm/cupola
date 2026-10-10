@@ -8,6 +8,12 @@ Browser-only reports live under **Reports → Local**, alongside worker librarie
 they are no longer listed under the sidebar's **On this device** section.
 Click Reports for the combined listing, a library or folder for its contents, or
 a report to open it. The report page has no second navigation sidebar.
+**Refresh catalogs and reports** reloads the sidebar and report listings, including
+worker library permissions. It preserves the active report's draft and preview;
+it does not rerun that report's queries.
+Opening a report renders it automatically using the connected catalogs, just as
+opening a local report does. **Refresh** reruns it with current data. **⋯ → View
+source** is available for optional inspection, including for read-only reports.
 The worker's existing
 `get_report_service_info().display_name` supplies its drive name. URLs remain
 connection identities and appear only as details or to distinguish duplicate names.
@@ -132,9 +138,10 @@ after excerpts with complete downloads; binary bodies can be downloaded for
 inspection. Comparisons use fresh authenticated reads, clear stale content when
 selections change, and offer retries for failures. Redacted content is unavailable.
 
-Viewing and comparing definitions does not execute queries, write revisions or
-restore data snapshots. A preview uses current data and requires an explicit
-refresh. The worker assigns revision authorship from the request identity;
+Comparing definitions or choosing **View source** does not execute queries or
+write revisions. Opening a saved revision renders that definition against current
+data; it does not restore a historical data snapshot or change the saved report.
+The worker assigns revision authorship from the request identity;
 Cupola does not supply an author or infer one from browser-local history. The
 reference worker's explicit local demo identity records `operator`; distinct
 authenticated accounts record their own identities.
@@ -177,8 +184,8 @@ pivots and drill paths. It excludes the browser report ID, local workspace ID,
 service URL, selected input values, timestamps and title. The envelope owns the
 title, description, tags and data-source metadata; the worker owns resource
 identity, timestamps, ownership and revision identity. Decoding binds that
-definition to the current browser workspace without automatically attaching or
-executing its required catalogs.
+definition to the current browser workspace. Opening it renders against that
+workspace's connected catalogs; missing catalogs still require an explicit attachment.
 
 The envelope exposes controls that exactly match protocol parameter semantics.
 Query-derived choices, select controls with “all”/dynamic default modes,

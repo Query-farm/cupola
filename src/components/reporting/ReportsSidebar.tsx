@@ -23,7 +23,7 @@ interface LibraryRows { reports: ReportRow[]; folders: FolderRecord[]; loading?:
 export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }: {
   serviceUrl: string; workspaceId?: string; search?: string; active?: boolean;
 }) {
-  const scope = workspaceId ?? serviceUrl, { locations, refresh, transfer, setTransfer } = useReportLocations();
+  const scope = workspaceId ?? serviceUrl, { locations, refresh, refreshVersion, transfer, setTransfer } = useReportLocations();
   const [local, setLocal] = useState<EvidenceReport[]>([]), [library, setLibrary] = useState<ReturnType<typeof localLibrary>>({ folders: [], entries: {} });
   const [localError, setLocalError] = useState(''), [remote, setRemote] = useState<Record<string, LibraryRows>>({});
   const [selected, setSelected] = useState(currentReportNode);
@@ -37,7 +37,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
     const read = () => { try { setLocal(listEvidenceReports(scope)); setLibrary(localLibrary(scope)); setLocalError(''); } catch (e) { setLocal([]); setLocalError(reportError(e)); } };
     read(); window.addEventListener(EVIDENCE_REPORTS_CHANGED, read); window.addEventListener('storage', read);
     return () => { window.removeEventListener(EVIDENCE_REPORTS_CHANGED, read); window.removeEventListener('storage', read); };
-  }, [scope]);
+  }, [scope, refreshVersion]);
   useEffect(() => {
     const supported = locations.filter(l => l.info), requests = new Map<string, AbortController>();
     setRemote(old => Object.fromEntries(supported.map(l => [l.url, old[l.url] ?? { reports: [], folders: [], loading: true }])));

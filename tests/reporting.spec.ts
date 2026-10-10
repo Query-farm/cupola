@@ -49,7 +49,6 @@ test('folder hierarchy, editing, rendering, worker history and a portable publis
   const id = new URL(page.url()).searchParams.get('report_id')!;
   const c = reporting.client();
   expect((await c.call('get_report', { report_id: id })).envelope!.title).toBe('Quarterly finance');
-  await expect(page.getByText('Refresh to render this report.', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Update preview', exact: true }).click();
   await expect(page.getByTestId('evidence-document')).toContainText('42', { timeout: 120_000 });
   await chooseReportAction(page, 'Version history');
@@ -69,6 +68,7 @@ test('folder hierarchy, editing, rendering, worker history and a portable publis
     const reader = await context.newPage(); await reader.goto(link);
     await expect(reader.getByRole('button', { name: 'Edit report', exact: true })).toBeDisabled();
     await expect(reader.getByRole('status', { name: 'Save status', exact: true })).toHaveText('Read only');
+    await expect(reader.getByTestId('evidence-document')).toContainText('42', { timeout: 120_000 });
     await expect(reader.getByRole('button', { name: 'Publish changes', exact: true })).toHaveCount(0);
     expect((await reporting.client(null).call('get_report', { report_id: id })).envelope!.title).toBe('Quarterly finance');
   } finally { await context.close(); }
@@ -379,7 +379,7 @@ test('views specific revisions and compares definitions with authorship without 
   await expect.poll(() => new URL(page.url()).searchParams.get('report_revision')).toBe(first.head_revision_id);
   await expect(page.getByRole('status', { name: 'Save status', exact: true })).toHaveText('Read only');
   await expect(page.getByRole('button', { name: 'Edit report', exact: true })).toBeDisabled();
-  await expect(page.getByText('Refresh to render this report.', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('evidence-document')).toContainText('42', { timeout: 120_000 });
   await chooseReportAction(page, 'View source');
   await expect(page.getByRole('dialog', { name: 'Report source', exact: true })).toContainText('SELECT 42 AS value');
   await page.getByRole('dialog', { name: 'Report source', exact: true }).getByRole('button', { name: 'Close', exact: true }).click();
@@ -783,4 +783,81 @@ test('read-only worker sidebar menu offers navigation without move or local muta
   await expect(menu.getByRole('menuitem', { name: 'Open in new tab', exact: true })).toBeVisible();
   await expect(menu.getByRole('separator')).toHaveCount(0);
   expect((await c.call('get_report', { report_id: initial.report_id })).folder_id).toBeNull();
+});
+
+test('sidebar refresh discovers external changes in the tree, overview and worker library', async ({ page, reporting }) => {
+  const c = reporting.client(), initial = await seed(reporting, 'Before external update');
+  const removed = await seed(reporting, 'Removed outside Cupola');
+  await page.goto(`reports?service=${encodeURIComponent(reporting.url)}#token=test-alice`);
+  const sidebar = page.getByTestId('catalog-sidebar');
+  const tree = sidebar.getByRole('tree', { name: 'Reports', exact: true });
+  const overview = page.getByRole('region', { name: 'Report browser', exact: true });
+  const refresh = sidebar.getByRole('button', { name: 'Refresh catalogs and reports', exact: true });
+  await expect(overview.getByRole('button', { name: 'Before external update', exact: true })).toBeVisible();
+  await tree.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
+  await c.call('commit_revision', { request_id: crypto.randomUUID(), report_id: initial.report_id, expected_revision_id: initial.head_revision_id, envelope: { ...initial.envelope!, title: 'Updated outside Cupola' }, body: initial.body! });
+  await c.call('delete_report', { request_id: crypto.randomUUID(), report_id: removed.report_id, expected_version: removed.version });
+  const folder = await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Created outside Cupola' });
+  const nested = await seed(reporting, 'New nested external report');
+  await c.call('move_report', { request_id: crypto.randomUUID(), report_id: nested.report_id, expected_version: nested.version, folder_id: folder.folder_id });
+  await expect(tree.getByRole('link', { name: 'Created outside Cupola', exact: true })).toHaveCount(0);
+  await refresh.click();
+  await expect(tree.getByRole('link', { name: 'Updated outside Cupola', exact: true })).toBeVisible();
+  await expect(tree.getByRole('link', { name: 'Removed outside Cupola', exact: true })).toHaveCount(0);
+  await tree.getByRole('button', { name: 'Expand Created outside Cupola', exact: true }).click();
+  await expect(tree.getByRole('link', { name: 'New nested external report', exact: true })).toBeVisible();
+  await expect(overview.getByRole('button', { name: 'Updated outside Cupola', exact: true })).toBeVisible();
+  await expect(overview.getByRole('button', { name: 'New nested external report', exact: true })).toBeVisible();
+  await expect(overview.getByRole('button', { name: 'Removed outside Cupola', exact: true })).toHaveCount(0);
+  // The worker contents view has its own session and must refresh too.
+  await tree.getByRole('link', { name: 'Finance report library', exact: true }).click();
+  const library = page.getByRole('region', { name: 'Worker report library', exact: true });
+  await expect(library.getByRole('button', { name: 'Created outside Cupola', exact: true })).toBeVisible();
+  await seed(reporting, 'Created while browsing the library');
+  await reporting.client('test-admin').call('set_folder_ownership', { request_id: crypto.randomUUID(), folder_id: folder.folder_id, expected_version: folder.version,
+    ownership: { owner_ref: { kind: 'principal', id: 'bob', display_name: '' }, parent_owner_ref: null } });
+  await refresh.click();
+  await expect(library.getByRole('button', { name: 'Created while browsing the library', exact: true })).toBeVisible();
+  await expect(library.getByRole('button', { name: 'Created outside Cupola', exact: true })).toHaveCount(0);
+  await expect(tree.getByRole('link', { name: 'Created outside Cupola', exact: true })).toHaveCount(0);
+});
+
+test('remote reports render on sidebar open and sidebar refresh preserves the draft and execution', async ({ page, reporting }) => {
+  const definition = encodeReport({ ...report('Automatic worker report'),
+    setupSql: 'CREATE TEMP TABLE IF NOT EXISTS sidebar_refresh_runs (value INTEGER); INSERT INTO temp.main.sidebar_refresh_runs VALUES (1);',
+    source: '# Automatic worker report\n\n```sql runs\nSELECT \'Render \' || COUNT(*)::VARCHAR AS label FROM temp.main.sidebar_refresh_runs\n```\n\n{% table data="runs" /%}',
+  }, { description: '', tags: [] });
+  const c = reporting.client(), initial = await c.call('create_report', { request_id: crypto.randomUUID(), envelope: definition.envelope, body: definition.body });
+  await page.goto(path(reporting.url));
+  const sidebar = page.getByTestId('catalog-sidebar');
+  const tree = sidebar.getByRole('tree', { name: 'Reports', exact: true });
+  await tree.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
+  await tree.getByRole('link', { name: 'Automatic worker report', exact: true }).click();
+  await expect(page.getByTestId('evidence-document')).toContainText('Render 1', { timeout: 120_000 });
+  await expect(page.getByText(/Review its source before running/)).toHaveCount(0);
+  await edit(page);
+  await page.route('**/commit_revision', route => route.abort('failed'));
+  await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Keep this unsaved draft');
+  await expect(page.getByRole('button', { name: 'Retry save', exact: true })).toBeVisible();
+  let reportReads = 0;
+  page.on('request', request => { if (request.url().endsWith('/get_report')) reportReads++; });
+  await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Added while editing' });
+  const refresh = sidebar.getByRole('button', { name: 'Refresh catalogs and reports', exact: true });
+  await refresh.click();
+  await expect(tree.getByRole('link', { name: 'Added while editing', exact: true })).toBeVisible();
+  await expect(refresh).toBeEnabled();
+  await expect(page.getByRole('textbox', { name: 'Report title', exact: true })).toHaveValue('Keep this unsaved draft');
+  await expect(page.getByRole('button', { name: 'Retry save', exact: true })).toBeVisible();
+  await expect(page.getByTestId('evidence-document')).toContainText('Render 1');
+  expect(reportReads).toBe(0);
+  const execution = await page.evaluate(async () => {
+    const result = await (window as any).__bridge.query("SELECT CASE WHEN COUNT(*) = 1 THEN true ELSE error('Report ran more than once') END FROM temp.main.sidebar_refresh_runs");
+    return { ok: result.ok, error: result.error };
+  });
+  expect(execution).toMatchObject({ ok: true });
+  expect((await c.call('get_report', { report_id: initial.report_id })).envelope?.title).toBe('Automatic worker report');
+  await page.unroute('**/commit_revision');
+  await page.getByRole('button', { name: 'Retry save', exact: true }).click();
+  await saved(page);
+  expect((await c.call('get_report', { report_id: initial.report_id })).envelope?.title).toBe('Keep this unsaved draft');
 });

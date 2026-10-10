@@ -477,7 +477,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       if (initial.library) navigate(true, undefined, true);
       // A pending Add to report opens and saves its own definition below. A
       // template refresh here would take the busy lock and discard that open.
-      else if (!remote && !promotion && !initial.library && !initial.error) void refresh(initial.report, 'replace');
+      else if (!promotion && !initial.library && !initial.error) void refresh(initial.report, 'replace');
     }
     const changed = (event: StorageEvent) => { if (event.key === null || event.key.startsWith(STORAGE_PREFIX) || event.key.startsWith(LEGACY_STORAGE_PREFIX)) reloadList(); };
     // Save on the way out; ask only when the draft can't be saved (it is kept for recovery either way).
@@ -1003,7 +1003,6 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
         if (!persist(next, { kind: 'edit', label: 'Updated report details' })) throw new Error('Could not save report details. Your draft is kept on this device.');
         placeLocalReport(scope, report.id, localEntry?.folderId ?? null, { ...localEntry?.metadata, description: values.description, tags: values.tags });
       }} />}
-    {remote && !run && <p className="mx-5 mt-3 text-sm text-muted-foreground">Refresh runs this report’s SQL using your connected catalogs. Review its source before running an unfamiliar report.</p>}
     {pdfExport.state !== 'idle' && <p role="status" className="mx-5 mt-3 flex items-center gap-2 text-xs text-muted-foreground">{pdfExport.state === 'exporting' ? <><Loader2 className="size-3 animate-spin" />Preparing PDF{pdfExport.progress ? ` ${pdfExport.progress}` : ''}…</> : <><Check className="size-3" />PDF exported{pdfExport.omitted.length ? ` · ${pdfExport.omitted.length} items not included` : ''}</>}</p>}
     {error && <div role="alert" className="m-5 whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
     {notice && <p role="status" className="mx-5 mt-3 text-xs text-muted-foreground">{notice}</p>}

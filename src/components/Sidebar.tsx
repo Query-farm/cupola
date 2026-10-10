@@ -1,5 +1,6 @@
 import { SavedNotebooksSidebar } from './notebooks/SavedNotebooksSidebar';
 import { ReportsSidebar } from './reporting/ReportsSidebar';
+import { useReportLocations } from './reporting/ReportLocations';
 import { useState, useMemo, useRef, useCallback } from "react";
 import { Search, Cpu, RefreshCw, Loader2, CheckCircle2, AlertTriangle, LogIn, Database, Star, Plus, X } from "lucide-react";
 import { CatalogChip, chipIcon } from "./workspace/CatalogChip";
@@ -229,7 +230,7 @@ export function Sidebar({ activeNotebookId, notebooksActive, reportsActive, serv
             className="pl-8 h-9 text-sm"
           />
         </div>
-        {onRefresh && <RefreshCatalogsButton onRefresh={onRefresh} />}
+        {onRefresh && <RefreshSidebarButton onRefresh={onRefresh} />}
       </div>
 
       {signInNotice && (signInNotice.signedIn || signInNotice.remaining.length > 0) && (
@@ -357,17 +358,19 @@ export function Sidebar({ activeNotebookId, notebooksActive, reportsActive, serv
 
 /** Its own component so that only this button re-renders when a refresh
  *  starts and ends, not the sidebar tree. */
-function RefreshCatalogsButton({ onRefresh }: { onRefresh: () => void }) {
-  const refreshing = useCatalogInventory(s => s.refreshing);
+function RefreshSidebarButton({ onRefresh }: { onRefresh: () => void }) {
+  const catalogRefreshing = useCatalogInventory(s => s.refreshing);
+  const { locations, refresh } = useReportLocations();
+  const refreshing = catalogRefreshing || locations.some(location => location.loading);
   return (
     <Button
       variant="ghost"
       size="icon"
       className="h-9 w-9 shrink-0"
-      aria-label="Refresh catalogs"
-      title="Refresh catalogs"
+      aria-label="Refresh catalogs and reports"
+      title="Refresh catalogs and reports"
       disabled={refreshing}
-      onClick={onRefresh}
+      onClick={() => { refresh(); onRefresh(); }}
     >
       {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
     </Button>

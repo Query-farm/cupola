@@ -20,10 +20,12 @@ import { ReportNotice } from './ReportNotice';
 import { ReportActionMenu, reportAction } from './ReportActionMenu';
 import { ReportDetailsDialog } from './ReportDetailsDialog';
 import { REPORT_ROUTE_CHANGED, REPORT_LIBRARY_CHANGED, reportFolderCreationRequested, clearReportFolderCreation } from '../../lib/reporting/navigation';
+import { useReportLocations } from './ReportLocations';
 
 export interface LibrarySession { client: ReportClient; info: ReportsInfo; scope: string; journal: MutationJournal }
 export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: string; onAllReports: () => void }) {
   const client = useMemo(() => new ReportClient(props.libraryUrl), [props.libraryUrl]);
+  const { refreshVersion } = useReportLocations();
   const [session, setSession] = useState<LibrarySession | null>(null);
   const [folderId, setFolderId] = useState<string | null>(() => new URLSearchParams(location.search).get('report_folder'));
   const [selected, setSelected] = useState(() => ({ id: new URLSearchParams(location.search).get('report_id'), revision: new URLSearchParams(location.search).get('report_revision') }));
@@ -45,11 +47,14 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
     void Promise.all([client.call('get_report_service_info', {}, abort.signal), client.recoveryScope()]).then(([info, scope]) => {
       if (!abort.signal.aborted) {
         if (info.protocol_version.split('.')[0] !== '1') throw new Error(`Unsupported reporting version: ${info.protocol_version}`);
-        setSession({ client, info, scope, journal: new MutationJournal(client, scope, 'library') });
+        // Refresh library metadata without replacing an in-flight journal or
+        // reopening the current report and losing its editor state.
+        setSession(old => old?.client === client && old.scope === scope
+          ? { ...old, info } : { client, info, scope, journal: new MutationJournal(client, scope, 'library') });
       }
     }).catch(e => { if (!abort.signal.aborted) { setError(reportError(e)); setLoading(false); } });
     return () => abort.abort();
-  }, [client, generation]);
+  }, [client, generation, refreshVersion]);
   useEffect(() => {
     if (!session || selected.id) return;
     const abort = new AbortController(), current = ++revision.current;
