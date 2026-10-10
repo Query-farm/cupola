@@ -1,17 +1,20 @@
-import { Download, FileDown, Share2 } from 'lucide-react';
+import { useState } from 'react';
+import { Download, FileDown, FolderInput, Share2 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog';
 
-export function ReportSharing({ canExportPdf, pending, onPdf, onFile }: {
-  canExportPdf: boolean; pending: boolean; onPdf: () => void; onFile: () => void;
+export function ReportSharing({ canExportPdf, pending, onPdf, onFile, onSaveToLibrary }: {
+  canExportPdf: boolean; pending: boolean; onPdf: () => void; onFile: () => void; onSaveToLibrary?: () => void;
 }) {
-  return <Dialog>
+  const [open, setOpen] = useState(false);
+  return <Dialog open={open} onOpenChange={setOpen}>
     <DialogTrigger render={<Button variant="outline" />}><Share2 />Share</DialogTrigger>
     <DialogContent className="sm:max-w-lg">
       <DialogHeader>
         <DialogTitle>Share report</DialogTitle>
-        <DialogDescription>This report is saved in this browser. Send a downloaded copy to share it.</DialogDescription>
+        <DialogDescription>This report is saved on this device. Save a copy to a report library or download a copy to share.</DialogDescription>
       </DialogHeader>
+      {onSaveToLibrary && <section className="space-y-2 rounded-lg border p-3"><h3 className="font-medium">Share from a report library</h3><p className="text-sm text-muted-foreground">Choose a library and folder. The local original stays on this device; the library controls who can access the copy.</p><Button onClick={() => { setOpen(false); onSaveToLibrary(); }}><FolderInput />Save to a report library…</Button></section>}
       <section className="space-y-2 rounded-lg border p-3">
         <h3 className="font-medium">For someone to read</h3>
         <p className="text-sm text-muted-foreground">A PDF contains the displayed results and applied filters. Recipients can read it without a data connection.</p>

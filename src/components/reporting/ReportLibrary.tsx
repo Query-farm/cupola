@@ -18,6 +18,8 @@ import type { ReportingWorkspaceProps } from './ReportingWorkspace';
 import { ReportBrowserLayout, type ReportBrowserNavigation } from './ReportStorageTree';
 import { ReportFileList, type ReportFileItem } from './ReportFileList';
 import { ReportNotice } from './ReportNotice';
+import { ReportActionMenu, reportAction } from './ReportActionMenu';
+import { ReportDetailsDialog } from './ReportDetailsDialog';
 
 export interface LibrarySession { client: ReportClient; info: ReportsInfo; scope: string; journal: MutationJournal }
 export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: string; navigation: ReportBrowserNavigation; onAllReports: () => void }) {
@@ -31,6 +33,7 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
   const [generation, setGeneration] = useState(0);
   const [dialog, setDialog] = useState<{ action: ResourceAction; resource?: FolderRecord | ReportRow } | null>(null);
   const [drafts, setDrafts] = useState<Array<{ key: string; value: RecoveryDraft }>>([]);
+  const [details, setDetails] = useState<ReportRow | null>(null);
   const [recovery, setRecovery] = useState<{ key: string; value: RecoveryDraft } | undefined>();
   const file = useRef<HTMLInputElement>(null);
   const [localReports, setLocalReports] = useState<EvidenceReport[]>([]);
@@ -125,7 +128,12 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
     })),
     ...reports.map(report => ({ id: report.report_id, name: report.envelope?.title ?? 'Redacted report', description: report.envelope?.description, kind: 'report' as const,
       onOpen: () => navigate(report.report_id), detail: report.ownership.owner_ref.display_name || report.ownership.owner_ref.id, state: `${report.published_revision_id ? 'Published' : 'Draft'} · revision ${String(report.revision_number)}`,
-      actions: <>{props.onTransferReport && !report.redacted && <><Button size="sm" variant="ghost" onClick={() => props.onTransferReport?.({ kind: 'worker', url: client.url, record: report }, false)}>Copy to…</Button>{report.allowed_actions.includes('delete') && <Button size="sm" variant="ghost" onClick={() => props.onTransferReport?.({ kind: 'worker', url: client.url, record: report }, true)}>Move to…</Button>}</>}<ResourceMenu resource={report} disabled={blocked} onAction={action => setDialog({ action, resource: report })} /></>,
+      actions: <ReportActionMenu label={`Actions for ${report.envelope?.title ?? 'report'}`} actions={[
+        reportAction('details', () => setDetails(report)),
+        ...(props.onTransferReport && !report.redacted ? [reportAction('copy', () => props.onTransferReport?.({ kind: 'worker', url: client.url, record: report }, false), busy || Boolean(pending)),
+          ...(report.allowed_actions.some(a => a === 'move' || a === 'delete') ? [reportAction('move', () => props.onTransferReport?.({ kind: 'worker', url: client.url, record: report }, true), blocked)] : [])] : []),
+        ...(report.allowed_actions.includes('delete') ? [reportAction('delete', () => setDialog({ action: 'delete', resource: report }), blocked)] : []),
+      ]} />,
     })),
   ];
   return <section aria-label="Worker report library" className="flex h-full min-h-0 flex-col">
@@ -160,6 +168,9 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
       <p className="text-xs text-muted-foreground">Folder and report permissions are defined by this worker. Publishing does not itself grant access.</p>
     </div>
     </ReportBrowserLayout>
+    {details && <ReportDetailsDialog initial={{ name: details.envelope?.title ?? '', description: details.envelope?.description ?? '', tags: details.envelope?.tags ?? [] }} location={session?.info.display_name ?? 'Report library'} onClose={() => setDetails(null)} blocked={blocked}
+      identity={<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2"><dt>Created by</dt><dd>{details.created_by.display_name || details.created_by.id}</dd><dt>Owner</dt><dd>{details.ownership.owner_ref.display_name || details.ownership.owner_ref.id}</dd></dl>}
+      onTransferOwnership={details.allowed_actions.includes('transfer_ownership') ? () => { setDialog({ action: 'ownership', resource: details }); setDetails(null); } : undefined} />}
     {dialog && <ResourceDialog key={`${dialog.action}:${dialog.resource && ('name' in dialog.resource ? dialog.resource.folder_id : dialog.resource.report_id)}`} {...dialog} folders={folders} libraryName={session?.info.display_name} rootActions={session?.info.root_allowed_actions ?? []} writable={Boolean(session?.info.writable)} parentId={folderId} onClose={() => setDialog(null)} onApply={apply} />}
   </section>;
 }

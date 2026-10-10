@@ -1,3 +1,4 @@
+import { chooseReportAction } from './helpers';
 import { readFileSync } from 'node:fs';
 import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 import { test, expect } from '@playwright/test';
@@ -42,7 +43,7 @@ test('Evidence exports a typeset PDF of the rendered report', async ({ page }, t
 
   const [download] = await Promise.all([
     page.waitForEvent('download', { timeout: 60_000 }),
-    panel.getByRole('button', { name: 'Export PDF', exact: true }).click(),
+    chooseReportAction(page, 'Export PDF'),
   ]);
   expect(download.suggestedFilename()).toBe('pdf-check-report.pdf');
   const path = testInfo.outputPath('report.pdf');
@@ -51,10 +52,12 @@ test('Evidence exports a typeset PDF of the rendered report', async ({ page }, t
   expect(pdf.startsWith('%PDF-')).toBe(true);
   // The explicit page break forces a second page.
   expect(pdf.match(/\/Type\s*\/Page\b/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
-  // Progress and the result are shown on the button, which then resets.
+  // Progress and the result stay visible after the action menu closes.
   // The dropdown's control is not drawn, but its value is listed, so nothing is "not included".
-  await expect(panel.getByRole('button', { name: 'PDF exported', exact: true })).toBeVisible();
-  await expect(panel.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled({ timeout: 12_000 });
+  await expect(panel.getByRole('status').filter({ hasText: 'PDF exported' })).toBeVisible();
+  await panel.getByRole('button', { name: 'More report actions', exact: true }).click();
+  await expect(page.getByRole('menuitem', { name: 'Export PDF', exact: true })).toBeEnabled({ timeout: 12_000 });
+  await page.keyboard.press('Escape');
 
   const { main, files } = await page.evaluate(() => (window as unknown as { __cupolaPdfDebug: { main: string; files: Record<string, string> } }).__cupolaPdfDebug);
   // The report's own "# PDF check report" is not repeated under the title block.
@@ -122,7 +125,7 @@ test('Evidence PDF export prints collapsed accordion and details sections', asyn
 
   await Promise.all([
     page.waitForEvent('download', { timeout: 90_000 }),
-    panel.getByRole('button', { name: 'Export PDF', exact: true }).click(),
+    chooseReportAction(page, 'Export PDF'),
   ]);
   const { main, coverage } = await page.evaluate(() => (window as unknown as { __cupolaPdfDebug: { main: string; coverage: { render: string; outcome: string }[] } }).__cupolaPdfDebug);
   // Each once: a section read while opened is not printed again from the screen.

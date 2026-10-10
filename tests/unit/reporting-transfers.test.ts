@@ -76,13 +76,15 @@ test('worker to local preserves report metadata and requirements without grantin
 
 test('same-worker move preserves identity and uses move_report without creating a revision copy', async () => {
   const storage = memoryStorage(), calls: string[] = [];
+  const movable = { ...record(), allowed_actions: ['read', 'move'] };
   const factory = () => ({ recoveryScope: async () => 'alice', call: async (method: string) => {
-    calls.push(method); if (method === 'get_report') return record(); if (method === 'get_report_service_info') return info;
+    calls.push(method); if (method === 'get_report') return movable; if (method === 'get_report_service_info') return { ...info, body_formats: [], limits: [{ name: 'max_body_bytes', value: 1n }] };
     if (method === 'get_folder') return { allowed_actions: ['create_report'] }; return record();
   } }) as unknown as ReportClient;
-  const job = await prepareTransfer({ kind: 'worker', url: remoteDestination.url, record: record() }, { ...remoteDestination, folderId: 'folder' }, true, context, factory, storage);
+  const job = await prepareTransfer({ kind: 'worker', url: remoteDestination.url, record: movable }, { ...remoteDestination, folderId: 'folder' }, true, context, factory, storage);
   expect((await resumeTransfer(job, factory, storage)).copied?.id).toBe('report');
   expect(calls).toContain('move_report'); expect(calls).not.toContain('create_report'); expect(calls).not.toContain('delete_report');
+  await expect(prepareTransfer({ kind: 'worker', url: remoteDestination.url, record: movable }, localDestination, true, context, factory, storage)).rejects.toThrow('permission to move');
 });
 
 test('changed account and full recovery storage prevent transfer dispatch', async () => {

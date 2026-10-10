@@ -67,9 +67,13 @@ export async function prepareTransfer(source: TransferSource, destination: Trans
     const info = await target.call('get_report_service_info', {});
     const actions = destination.folderId ? (await target.call('get_folder', { folder_id: destination.folderId })).allowed_actions : info.root_allowed_actions;
     if (!info.writable || !actions.includes('create_report')) throw new Error('You cannot save reports in this destination. Choose another folder or On this device.');
-    if (!info.body_formats.includes(job.envelope.body_format)) throw new Error('The destination does not accept this report format.');
-    const max = info.limits.find(limit => limit.name === 'max_body_bytes')?.value;
-    if (max != null && BigInt(job.body.length) > max) throw new Error('This report exceeds the destination’s size limit.');
+    // A move within a library changes only the folder. It must not require the
+    // existing body's format or size to meet today's rules for new reports.
+    if (!(move && source.kind === 'worker' && source.url === destination.url)) {
+      if (!info.body_formats.includes(job.envelope.body_format)) throw new Error('The destination does not accept this report format.');
+      const max = info.limits.find(limit => limit.name === 'max_body_bytes')?.value;
+      if (max != null && BigInt(job.body.length) > max) throw new Error('This report exceeds the destination’s size limit.');
+    }
   } else if (job.envelope.body_format !== BODY_FORMAT) throw new Error('Only Cupola reports can be saved in this browser. Download the original body instead.');
   persist(job, storage); // A storage failure must prevent dispatch.
   return job;

@@ -1,18 +1,22 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, History, Link, Download } from 'lucide-react';
+import { Download } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog';
 import { EvidenceWorkspace } from '../evidence/EvidenceWorkspace';
-import { decodeReport, encodeReport, publicParameters, reportLink } from '../../lib/reporting/body';
+import { decodeReport, encodeReport, reportLink } from '../../lib/reporting/body';
 import { reportError } from '../../lib/reporting/client';
 import { SaveController, type RecoveryDraft, type SaveState } from '../../lib/reporting/save-controller';
 import type { FolderRecord, ReportResult, RevisionRow } from '../../lib/reporting/contracts.generated';
 import type { EvidenceReport } from '../../lib/evidence/reports';
 import { downloadDocumentFile } from '../../lib/saved-document-actions';
-import { ResourceDialog, type ResourceAction, type ResourceValues } from './ResourceDialog';
+import { ResourceDialog, folderPath, type ResourceAction, type ResourceValues } from './ResourceDialog';
 import type { LibrarySession } from './ReportLibrary';
 import type { ReportingWorkspaceProps } from './ReportingWorkspace';
 import { WorkerReportHistory } from './WorkerReportHistory';
+import { ReportHeader } from './ReportHeader';
+import { reportAction, type ReportAction } from './ReportActionMenu';
+import { ReportDetailsDialog } from './ReportDetailsDialog';
+import { WorkerReportSharing } from './WorkerReportSharing';
 
 interface OpenReport { record: ReportResult; report?: EvidenceReport; controller?: SaveController; bodyError?: string }
 export function RemoteReport(props: ReportingWorkspaceProps & { session: LibrarySession; reportId: string; revisionId: string | null; recovery?: { key: string; value: RecoveryDraft }; onLeave: () => void; onOpen: (id: string, revisionId?: string) => void }) {
@@ -22,7 +26,8 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
   const [generation, setGeneration] = useState(0), [editorGeneration, setEditorGeneration] = useState(0);
   const [folders, setFolders] = useState<FolderRecord[]>([]), [revisions, setRevisions] = useState<RevisionRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true), [historyError, setHistoryError] = useState(''), [historyReload, setHistoryReload] = useState(0);
-  const [historyOpen, setHistoryOpen] = useState(false), [shareOpen, setShareOpen] = useState(false), [sourceOpen, setSourceOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false), [detailsOpen, setDetailsOpen] = useState(false);
+  const [fallbackHistoryOpen, setFallbackHistoryOpen] = useState(false);
   const [dialog, setDialog] = useState<{ action: ResourceAction; revision?: RevisionRow } | null>(null);
   useEffect(() => {
     const abort = new AbortController(); let controller: SaveController | undefined;
@@ -95,7 +100,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     const report = decodeReport(old, props.serviceUrl, props.workspaceId);
     controller.capture(report, { description: old.envelope?.description ?? '', tags: old.envelope?.tags ?? [], dataSources: old.envelope?.data_sources ?? [] });
     controller.stage(report, { kind: 'restore', label: `Restored revision ${revision.revision_number}` });
-    setOpened({ ...opened, report }); setEditorGeneration(n => n + 1); setHistoryOpen(false);
+    setOpened({ ...opened, report }); setEditorGeneration(n => n + 1);
   }
   function downloadBody() {
     if (!record?.body) return;
@@ -108,22 +113,17 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     onCopyLink={revision => void attempt(async () => { await navigator.clipboard.writeText(reportLink(session.client.url, reportId, revision.revision_id)); setNotice('Revision link copied. Recipients need worker access.'); })}
     onRestore={controller ? revision => void attempt(() => restore(revision)) : undefined}
     onRedact={can('redact') ? revision => setDialog({ action: 'redact', revision }) : undefined} />;
+  const reportFolder = folders.find(f => f.folder_id === record?.folder_id);
+  const reportLocation = [session.info.display_name, reportFolder ? folderPath(reportFolder, folders) : record?.folder_id ? 'Folder' : ''].filter(Boolean).join(' / ');
+  const reportActions: ReportAction[] = record ? [
+    ...(!opened?.report ? [reportAction('history', () => { setHistoryReload(n => n + 1); setFallbackHistoryOpen(true); })] : []),
+    reportAction('details', () => setDetailsOpen(true)),
+    ...(props.onTransferReport && !record.redacted ? [reportAction('copy', () => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, false), blocked),
+      ...(!revisionId && (can('move') || can('delete')) ? [reportAction('move', () => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, true), blocked)] : [])] : []),
+    ...(can('delete') ? [reportAction('delete', () => setDialog({ action: 'delete' }), blocked)] : []),
+  ] : [];
   return <section className="flex h-full min-h-0 flex-col" aria-label="Worker report">
-    <header className="flex shrink-0 flex-wrap items-center gap-2 border-b px-5 py-2 text-sm">
-      <Button variant="ghost" size="sm" onClick={props.onLeave}><ArrowLeft />Library</Button><span className="text-muted-foreground">Saved in {session.info.display_name}</span>
-      {record && <><span>Revision {String(record.revision_number)}{revisionId ? ' · pinned view' : ''} · {record.published_revision_id ? 'Published' : 'Unpublished'}</span>
-        {opened?.report && <Button variant="ghost" size="sm" onClick={() => setSourceOpen(true)}>View source</Button>}
-        {revisionId && <Button variant="ghost" size="sm" onClick={() => props.onOpen(reportId)}>Open current report</Button>}
-        <Button variant="outline" size="sm" onClick={() => { setHistoryReload(n => n + 1); setHistoryOpen(true); }}><History />History</Button>
-        <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}><Link />Share link</Button>
-        {controller && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => setDialog({ action: 'metadata' })}>Report details</Button>}
-        {can('publish') && <><Button variant="outline" size="sm" disabled={blocked || record.published_revision_id === record.revision_served} onClick={() => void attempt(async () => { await session.journal.run('publish', { report_id: reportId, revision_id: record.revision_served, expected_published_revision_id: record.published_revision_id }); await refreshRecord(); })}>Publish revision</Button>{record.published_revision_id && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => void attempt(async () => { await session.journal.run('publish', { report_id: reportId, revision_id: null, expected_published_revision_id: record.published_revision_id }); await refreshRecord(); })}>Unpublish</Button>}</>}
-        {props.onTransferReport && !record.redacted && <Button variant="outline" size="sm" disabled={blocked} onClick={() => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, false)}>Copy to…</Button>}{props.onTransferReport && !revisionId && can('delete') && <Button variant="outline" size="sm" disabled={blocked} onClick={() => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, true)}>Move to…</Button>}
-        {can('move') && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => setDialog({ action: 'move' })}>Move</Button>}
-        {can('transfer_ownership') && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => setDialog({ action: 'ownership' })}>Ownership</Button>}
-        {can('delete') && <Button variant="ghost" size="sm" disabled={blocked} onClick={() => setDialog({ action: 'delete' })}>Delete</Button>}
-      </>}
-    </header>
+    {!opened?.report && <ReportHeader title={record?.envelope?.title ?? 'Report'} location={reportLocation} onBack={props.onLeave} actions={reportActions}>{record && <Button size="sm" variant="outline" onClick={() => setShareOpen(true)}>Share</Button>}</ReportHeader>}
     {loading && <p role="status" className="p-5">Opening worker report…</p>}
     {error && <div role="alert" className="flex flex-wrap items-center gap-3 p-3 text-sm text-destructive"><span>{error}</span><Button variant="outline" disabled={busy} onClick={() => { if (!pending || confirm('Your draft will remain in recovery. Load the current worker version?')) setGeneration(n => n + 1); }}>Reload from worker</Button></div>}
     {notice && <p role="status" className="px-5 py-2 text-sm">{notice}</p>}
@@ -134,15 +134,28 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     </div>}
     {opened?.bodyError && <div className="space-y-3 p-5"><p role="alert">{opened.bodyError}</p>{record?.body && <Button variant="outline" onClick={downloadBody}><Download />Download original body</Button>}</div>}
     {opened?.report && <div className="min-h-0 flex-1"><EvidenceWorkspace key={editorGeneration} {...props} remote={{
-      report: opened.report, canEdit: Boolean(controller), status: controller ? save?.message ?? 'Saved to worker' : 'Read-only worker revision', pending,
+      report: opened.report, canEdit: Boolean(controller), status: !controller ? 'Read only' : save?.status === 'error' || save?.status === 'conflict' ? 'Not saved' : pending ? 'Saving…' : 'Saved', pending: Boolean(blocked),
+      location: reportLocation, actions: reportActions, onShare: () => setShareOpen(true), onHistoryOpen: () => setHistoryReload(n => n + 1),
+      versionLabel: revisionId ? `Version ${record?.revision_number}` : controller ? record?.published_revision_id ? record.published_revision_id === record.head_revision_id ? 'Published' : 'Unpublished changes' : 'Draft' : undefined,
+      onOpenCurrent: revisionId ? () => props.onOpen(reportId) : undefined,
+      publishAction: !revisionId && can('publish') && record?.published_revision_id !== record?.head_revision_id ? { disabled: blocked, onClick: () => setShareOpen(true) } : undefined,
       onDraft: report => controller?.capture(report), onSave: (report, meta) => controller?.stage(report, meta),
       onLeave: props.onLeave, onCopy: report => void attempt(() => copy(report)), historyContent,
     }} /></div>}
-    {record && <div className="shrink-0 border-t px-5 py-2 text-xs text-muted-foreground">Owner: {record.ownership.owner_ref.kind} / {record.ownership.owner_ref.display_name || record.ownership.owner_ref.id}{record.ownership.parent_owner_ref && <> · Parent: {record.ownership.parent_owner_ref.kind} / {record.ownership.parent_owner_ref.display_name || record.ownership.parent_owner_ref.id}</>} · Author: {record.created_by.display_name || record.created_by.id}</div>}
-    <Dialog open={sourceOpen} onOpenChange={setSourceOpen}><DialogContent className="max-h-[85vh] overflow-auto sm:max-w-3xl"><DialogHeader><DialogTitle>Report source</DialogTitle><DialogDescription>Source inspection does not execute queries.</DialogDescription></DialogHeader><h3>Setup SQL</h3><pre className="overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">{opened?.report?.setupSql || "No setup SQL"}</pre><h3>Document</h3><pre className="overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">{opened?.report?.source}</pre></DialogContent></Dialog>
-    <Dialog open={historyOpen} onOpenChange={setHistoryOpen}><DialogContent className="max-h-[85vh] overflow-auto sm:max-w-4xl"><DialogHeader><DialogTitle>Report history</DialogTitle><DialogDescription>History visible to your account on this worker.</DialogDescription></DialogHeader>{historyContent}</DialogContent></Dialog>
-    <Dialog open={shareOpen} onOpenChange={setShareOpen}><DialogContent className="sm:max-w-xl"><DialogHeader><DialogTitle>Share report link</DialogTitle><DialogDescription>Recipients use their own worker and data access. This link contains no credentials. Publication and folder access follow the worker’s policy.</DialogDescription></DialogHeader><input className="w-full rounded border bg-background p-2 text-xs" aria-label="Report link" readOnly value={reportLink(session.client.url, reportId, revisionId ?? undefined)} onFocus={e => e.target.select()} /><Button onClick={() => void attempt(async () => { await navigator.clipboard.writeText(reportLink(session.client.url, reportId, revisionId ?? undefined)); setNotice('Report link copied.'); setShareOpen(false); })}>Copy link</Button></DialogContent></Dialog>
+    {detailsOpen && record && <ReportDetailsDialog key={String(record.version)} initial={{ name: record.envelope?.title ?? '', description: record.envelope?.description ?? '', tags: record.envelope?.tags ?? [] }} location={reportLocation} blocked={blocked}
+      onClose={() => setDetailsOpen(false)} onSave={controller ? async values => {
+        if (blocked || !opened?.report) throw new Error('Finish saving before changing report details.');
+        const next = { ...controller.current.report, title: values.name };
+        controller.capture(next, { description: values.description, tags: values.tags }); controller.stage(next, { kind: 'edit', label: 'Updated report details' });
+        setOpened({ ...opened, report: next }); setEditorGeneration(n => n + 1);
+      } : undefined}
+      identity={<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2"><dt className="text-muted-foreground">Created by</dt><dd>{record.created_by.display_name || record.created_by.id}</dd><dt className="text-muted-foreground">Owner</dt><dd>{record.ownership.owner_ref.display_name || record.ownership.owner_ref.id}</dd>{record.ownership.parent_owner_ref && <><dt className="text-muted-foreground">Parent owner</dt><dd>{record.ownership.parent_owner_ref.display_name || record.ownership.parent_owner_ref.id}</dd></>}<dt className="text-muted-foreground">Saved version</dt><dd>{String(record.revision_number)}</dd></dl>}
+      onTransferOwnership={can('transfer_ownership') ? () => { setDetailsOpen(false); setDialog({ action: 'ownership' }); } : undefined} />}
+    {shareOpen && record && <WorkerReportSharing record={record} url={session.client.url} pinned={Boolean(revisionId)} blocked={blocked} canPublish={can('publish')} onClose={() => setShareOpen(false)} onPublish={async revision => {
+      if (blocked) throw new Error('Finish saving before publishing.');
+      setBusy(true); try { await session.journal.run('publish', { report_id: reportId, revision_id: revision, expected_published_revision_id: record.published_revision_id }); await refreshRecord(); } finally { setBusy(false); }
+    }} />}
+    {fallbackHistoryOpen && <Dialog open onOpenChange={setFallbackHistoryOpen}><DialogContent className="max-h-[85vh] overflow-auto sm:max-w-4xl"><DialogHeader><DialogTitle>Report history</DialogTitle><DialogDescription>History visible to your account in this library.</DialogDescription></DialogHeader>{historyContent}</DialogContent></Dialog>}
     {dialog && record && <ResourceDialog {...dialog} resource={record} folders={folders} libraryName={session.info.display_name} rootActions={session.info.root_allowed_actions} writable={session.info.writable} onClose={() => setDialog(null)} onApply={apply} />}
-    {opened?.report && publicParameters(opened.report).localControls.length > 0 && <p className="shrink-0 px-5 py-1 text-xs text-muted-foreground">Cupola-only controls: {publicParameters(opened.report).localControls.join(', ')}. Their definitions are preserved in the report body; they are not exposed as protocol parameters.</p>}
   </section>;
 }

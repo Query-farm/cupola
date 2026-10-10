@@ -164,7 +164,7 @@ test('a PDF per value has one section per choice, links back to the view, and le
   expect(main).not.toContain('Open this view');
 
   // The view the reader had is back.
-  await expect(panel.getByRole('button', { name: 'PDF exported', exact: true })).toBeVisible();
+  await expect(panel.getByRole('status').filter({ hasText: 'PDF exported' })).toBeVisible();
   await expect(rows(page)).toHaveCount(4);
   await expect(page.getByTestId('parameter-choices-state')).toHaveAccessibleName('State: All');
 });

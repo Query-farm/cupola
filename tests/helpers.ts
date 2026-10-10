@@ -5,7 +5,7 @@
  *   - Dev server on localhost:4321 (auto-started by playwright config)
  *   - VGI server on localhost:9009 — `test-worker/run.sh` serves the cupola_test catalog
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -130,4 +130,10 @@ export async function replaceEditorText(editor: import("@playwright/test").Locat
   await editor.click();
   await editor.press("ControlOrMeta+a");
   await editor.page().keyboard.insertText(text);
+}
+
+/** Report commands live in the same menu in the editor and library rows. */
+export async function chooseReportAction(page: Page, name: string, row?: Locator) {
+  await (row ? row.getByRole('button', { name: /^Actions for / }) : page.getByRole('button', { name: 'More report actions', exact: true })).click();
+  await page.getByRole('menuitem', { name, exact: true }).click();
 }

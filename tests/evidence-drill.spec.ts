@@ -1,3 +1,4 @@
+import { chooseReportAction } from './helpers';
 import { test, expect, type Page } from '@playwright/test';
 import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 import { geoDrillReport } from './fixtures/evidence-geo-report';
@@ -47,8 +48,8 @@ test('clicking charts and table values drills through country, state and city; B
   await expect(document.getByRole('button', { name: /^Drill into/ })).toHaveCount(0);
 
   // The PDF names the drill path in its Filters section.
-  await panel.getByRole('button', { name: 'Export PDF', exact: true }).click();
-  await expect(panel.getByRole('button', { name: 'PDF exported', exact: true })).toBeVisible({ timeout: 60_000 });
+  await chooseReportAction(page, 'Export PDF');
+  await expect(panel.getByRole('status').filter({ hasText: 'PDF exported' })).toBeVisible({ timeout: 60_000 });
   const main = await page.evaluate(() => (window as unknown as { __cupolaPdfDebug: { main: string } }).__cupolaPdfDebug.main);
   expect(main).toContain('("Drill path", "All places › United States › Virginia › Richmond")');
   expect(main).toContain('("State", "Virginia")');

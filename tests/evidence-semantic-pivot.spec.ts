@@ -34,7 +34,7 @@ test('semantic datasets feed Evidence and live pivots preserve configuration', a
   const savedPivot = panel.getByRole('region', { name: 'revenue · exploration' }).locator('perspective-viewer');
   await expect(savedPivot).toBeVisible({ timeout: 60000 });
   await expect.poll(() => savedPivot.evaluate(async (viewer: any) => (await viewer.save()).group_by)).toEqual(['revenue']);
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('cupola.evidence.report.v2:' + encodeURIComponent('https://semantic-test.example') + ':semantic-test')!));
   expect(stored.pivots[0].config.group_by).toEqual(['revenue']);
   expect(stored.semanticDatasets[0].acceptedModelFingerprint).toMatch(/^sha256:/);

@@ -1,3 +1,4 @@
+import { chooseReportAction } from './helpers';
 import { readFileSync } from 'node:fs';
 import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 import { test, expect } from '@playwright/test';
@@ -46,7 +47,7 @@ test('paged tables print every row, with the header on every page', async ({ pag
 
   const [download] = await Promise.all([
     page.waitForEvent('download', { timeout: 120_000 }),
-    panel.getByRole('button', { name: 'Export PDF', exact: true }).click(),
+    chooseReportAction(page, 'Export PDF'),
   ]);
   const path = testInfo.outputPath('long-tables.pdf');
   await download.saveAs(path);

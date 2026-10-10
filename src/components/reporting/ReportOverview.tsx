@@ -16,6 +16,7 @@ import { downloadDocumentFile } from '../../lib/saved-document-actions';
 import { exportSavedReport } from '../../lib/evidence/report-actions';
 import { ReportBrowserLayout, type ReportBrowserNavigation } from './ReportStorageTree';
 import { ReportFileList, type ReportFileItem } from './ReportFileList';
+import { ReportActionMenu, reportAction } from './ReportActionMenu';
 
 interface WorkerRows { url: string; reports: ReportRow[]; folders: FolderRecord[]; error?: string; loading?: boolean }
 export function ReportOverview({ navigation, locations, scope, localOnly, folderId, onAllReports, onFolder, onNew, onLocal, onWorker, onTransfer, onRefresh, serviceUrl, workspaceId }: {
@@ -75,13 +76,16 @@ export function ReportOverview({ navigation, locations, scope, localOnly, folder
   const localRows = local.filter(r => match(r.title) && (!localOnly || query || (library.entries[r.id]?.folderId ?? null) === folderId));
   const remoteRows = workers.flatMap(w => w.reports.filter(r => match(r.envelope?.title ?? '')).map(report => ({ worker: w, report })));
   const items: ReportFileItem[] = [
-    ...(localOnly && !query ? library.folders.filter(f => f.parentId === folderId).map(f => ({ id: f.id, name: f.name, kind: 'folder' as const, onOpen: () => onFolder(f.id), detail: 'On this device', state: 'Folder', actions: <Button variant="ghost" onClick={() => { try { deleteLocalFolder(scope, f.id); } catch (e) { setError(reportError(e)); } }}>Delete empty folder</Button> })) : []),
-    ...localRows.map(report => ({ id: `local:${report.id}`, name: report.title, kind: 'report' as const, onOpen: () => onLocal(report), detail: `On this device${library.entries[report.id]?.folderId ? ` / ${localFolderPath(library.entries[report.id].folderId, library.folders)}` : ''}`, state: 'Local', actions: <>
-      <Button size="sm" variant="ghost" onClick={() => onTransfer({ kind: 'local', report }, false)}>Copy to…</Button><Button size="sm" variant="ghost" onClick={() => onTransfer({ kind: 'local', report }, true)}>Move to…</Button><Button size="sm" variant="ghost" onClick={() => { try { exportSavedReport(report); } catch (e) { setError(reportError(e)); } }}>Export</Button><Button size="sm" variant="ghost" onClick={() => { if (confirm(`Delete “${report.title}” from this browser?`)) { try { deleteEvidenceReport(scope, report.id); } catch (e) { setError(reportError(e)); } } }}>Delete</Button>
-    </> })),
-    ...remoteRows.map(({ worker, report }) => ({ id: `${worker.url}:${report.report_id}`, name: report.envelope?.title ?? 'Redacted report', kind: 'report' as const, onOpen: () => onWorker(worker.url, report.report_id), detail: <span title={worker.url}>{locationLabel(locations.find(l => l.url === worker.url)!, locations)}{report.folder_id && ` / ${folderPath(worker.folders.find(f => f.folder_id === report.folder_id) ?? { name: 'Folder', parent_folder_id: null } as FolderRecord, worker.folders)}`}</span>, state: report.published_revision_id ? 'Published' : 'Draft', actions: <>
-      {!report.redacted && <Button size="sm" variant="ghost" onClick={() => onTransfer({ kind: 'worker', url: worker.url, record: report }, false)}>Copy to…</Button>}{report.allowed_actions.includes('delete') && <Button size="sm" variant="ghost" onClick={() => onTransfer({ kind: 'worker', url: worker.url, record: report }, true)}>Move to…</Button>}
-    </> })),
+    ...(localOnly && !query ? library.folders.filter(f => f.parentId === folderId).map(f => ({ id: f.id, name: f.name, kind: 'folder' as const, onOpen: () => onFolder(f.id), detail: 'On this device', state: 'Folder', actions: <ReportActionMenu label={`Actions for ${f.name}`} actions={[{ ...reportAction('delete', () => { try { deleteLocalFolder(scope, f.id); } catch (e) { setError(reportError(e)); } }), label: 'Delete empty folder' }]} /> })) : []),
+    ...localRows.map(report => ({ id: `local:${report.id}`, name: report.title, kind: 'report' as const, onOpen: () => onLocal(report), detail: `On this device${library.entries[report.id]?.folderId ? ` / ${localFolderPath(library.entries[report.id].folderId, library.folders)}` : ''}`, state: 'Local', actions: <ReportActionMenu label={`Actions for ${report.title}`} actions={[
+      reportAction('copy', () => onTransfer({ kind: 'local', report }, false)), reportAction('move', () => onTransfer({ kind: 'local', report }, true)),
+      reportAction('export', () => { try { exportSavedReport(report); } catch (e) { setError(reportError(e)); } }),
+      reportAction('delete', () => { if (confirm(`Delete “${report.title}” from this browser?`)) { try { deleteEvidenceReport(scope, report.id); } catch (e) { setError(reportError(e)); } } }),
+    ]} /> })),
+    ...remoteRows.map(({ worker, report }) => ({ id: `${worker.url}:${report.report_id}`, name: report.envelope?.title ?? 'Redacted report', kind: 'report' as const, onOpen: () => onWorker(worker.url, report.report_id), detail: <span title={worker.url}>{locationLabel(locations.find(l => l.url === worker.url)!, locations)}{report.folder_id && ` / ${folderPath(worker.folders.find(f => f.folder_id === report.folder_id) ?? { name: 'Folder', parent_folder_id: null } as FolderRecord, worker.folders)}`}</span>, state: report.published_revision_id ? 'Published' : 'Draft', actions: <ReportActionMenu label={`Actions for ${report.envelope?.title ?? 'report'}`} actions={[
+      ...(!report.redacted ? [reportAction('copy', () => onTransfer({ kind: 'worker', url: worker.url, record: report }, false))] : []),
+      ...(report.allowed_actions.some(a => a === 'move' || a === 'delete') ? [reportAction('move', () => onTransfer({ kind: 'worker', url: worker.url, record: report }, true))] : []),
+    ]} /> })),
   ];
   return <section className="flex h-full min-h-0 flex-col" aria-label="Report browser">
     <header className="flex flex-wrap items-center gap-3 border-b px-5 py-4"><FolderOpen className="size-5" /><h1 className="font-semibold">{localOnly ? 'On this device' : 'All reports'}</h1><Button variant="ghost" size="sm" onClick={() => { reloadLocal(); onRefresh(); }}><RefreshCw />Refresh</Button>
@@ -89,7 +93,7 @@ export function ReportOverview({ navigation, locations, scope, localOnly, folder
     </header>
     <ReportBrowserLayout navigation={navigation} location={localOnly ? 'local' : 'all'} folderId={folderId}>
     <div className="space-y-4 p-5">
-      <p className="text-sm text-muted-foreground">{localOnly ? 'Reports in this workspace saved in this browser. Copy or move them to a named location to save them on a worker.' : 'Reports from this browser and connected workers. New reports start on this device; choose Copy to or Move to when you are ready to save elsewhere.'}</p>
+      <p className="text-sm text-muted-foreground">{localOnly ? 'Reports in this workspace saved in this browser. Copy or move them to a named location to save them on a worker.' : 'Reports from this browser and connected workers. New reports start on this device; use the report’s action menu to save a copy or move it elsewhere.'}</p>
       {localOnly && <nav aria-label="Local report folders" className="flex flex-wrap items-center gap-2 text-sm"><Button variant="ghost" onClick={onAllReports}>All reports</Button><span>/</span><Button variant="ghost" onClick={() => onFolder(null)} aria-current={folderId ? undefined : 'page'}>On this device</Button>{folderId && <><span aria-current="page">/ {localFolderPath(folderId, library.folders)}</span><Button variant="ghost" onClick={() => onFolder(library.folders.find(f => f.id === folderId)?.parentId ?? null)}>Up one folder</Button></>}</nav>}
       <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => fileInput.current?.click()}>Import report file</Button><Button size="sm" variant="ghost" disabled={!local.length} onClick={exportAll}>Export local reports</Button><input ref={fileInput} hidden type="file" multiple accept=".json" aria-label="Import local report files" onChange={e => { const files = Array.from(e.target.files ?? []); e.target.value = ''; void importFiles(files); }} /></div>
       {notice && <p role="status" className="text-sm">{notice}</p>}

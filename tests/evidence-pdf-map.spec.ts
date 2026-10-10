@@ -1,3 +1,4 @@
+import { chooseReportAction } from './helpers';
 import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 import { test, expect, type Page } from '@playwright/test';
 import { catalogComponentReports, DEMO_SETUP_SQL } from './fixtures/evidence-catalog-reports';
@@ -63,7 +64,7 @@ test('maps draw their basemap on screen and in the PDF', async ({ page }) => {
 
   const [download] = await Promise.all([
     page.waitForEvent('download', { timeout: 60_000 }),
-    panel.getByRole('button', { name: 'Export PDF', exact: true }).click(),
+    chooseReportAction(page, 'Export PDF'),
   ]);
   expect(download.suggestedFilename()).toBe('map-check.pdf');
   // One captured image per map, each still carrying the basemap.

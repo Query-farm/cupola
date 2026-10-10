@@ -1,3 +1,4 @@
+import { chooseReportAction } from './helpers';
 import { readFileSync } from 'node:fs';
 import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 import { test, expect, type Page } from '@playwright/test';
@@ -54,7 +55,7 @@ for (const report of catalogReports()) {
 
     const [download] = await Promise.all([
       page.waitForEvent('download', { timeout: 120_000 }),
-      page.getByTestId('evidence-panel').getByRole('button', { name: 'Export PDF', exact: true }).click(),
+      chooseReportAction(page, 'Export PDF'),
     ]);
     const path = testInfo.outputPath(`${report.id}.pdf`);
     await download.saveAs(path);

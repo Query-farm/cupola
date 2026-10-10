@@ -44,14 +44,14 @@ test('report appearance updates without queries and survives save, copy and reop
   expect(await panel.locator('header').first().evaluate(el => getComputedStyle(el).backgroundColor)).toBe(chrome);
   expect(await page.evaluate(() => (window as any).__themeCalls)).toBe(0);
   expect(await page.evaluate(() => (window as any).__themeWorker === (window as any).__bridge.worker)).toBe(true);
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   await page.reload();
   await expect(panel.getByTestId('evidence-document')).toContainText('My report', { timeout: 90000 });
   await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
   await panel.getByRole('tab', { name: 'Appearance', exact: true }).click();
   await expect(panel.getByLabel('Report theme', { exact: true })).toHaveValue('forest');
   await expect(panel.getByLabel('Report accent color')).toHaveValue('#8844aa');
-  await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
   await panel.getByRole('button', { name: 'Copy Theme test', exact: true }).click();
   await panel.getByRole('row').filter({ hasText: 'Theme test (copy)' }).getByRole('button', { name: 'Open report' }).click();
   await panel.getByRole('button', { name: 'Edit report', exact: true }).click();

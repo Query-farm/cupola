@@ -18,7 +18,7 @@ Folder creation respects the worker's current `allowed_actions`; local folders
 need no worker permission. Local reports and folders remain scoped to the current
 workspace and browser.
 
-**Copy to…** and **Move to…** use the same folder tree to select a location and
+**Save a copy…** and **Move…** in the report's action menu use the same folder tree to select a location and
 destination folder. Read-only destinations carry a lock icon and explain why
 the operation is unavailable; they can still be expanded to show writable children. Reports
 can transfer between local storage and workers, or between workers. A move within
@@ -52,6 +52,24 @@ available in the combined browser.
 - `ReportFileList` renders the contents of both local and worker directories.
 - `ReportNotice` standardizes permission, information, and error messages with
   icons, concise text, and optional actions.
+- `ReportHeader` is the single header for local and worker reports. It shows the
+  report title, library/folder, save status, refresh, view/edit and Share.
+- `ReportActionMenu` shares action names and menu behavior between the header and
+  library rows. Version history, details, copying, moving, downloads and deletion
+  are secondary commands; ownership transfer lives inside Details.
+- `ReportDetailsDialog` displays metadata and ownership, with edits and ownership
+  transfer offered only when available. Pending saves block metadata changes.
+
+Click a report's title to rename it. **Share** on a local report offers saving a
+copy to a report library or downloading a copy. Worker sharing offers links to
+the latest available version or the specific saved version being viewed. The
+worker decides what the recipient can access; copying a link grants no access.
+Publishing controls live in Share, with a contextual **Publish changes** button
+while editing an unpublished draft. Saving never publishes automatically.
+Unpublishing asks for confirmation and preserves saved definitions and history.
+There is one Move command for both folders and locations. Same-library moves
+retain identity and history and require move permission; cross-library moves
+also require permission to delete the source. The destination is checked separately.
 
 The UI uses filesystem conventions; workers still define access policy and
 validate every mutation. A folder's appearance in the tree does not grant write
@@ -88,7 +106,7 @@ Cupola, with the reader's current catalog connections.
 
 ## Revision history
 
-Open a worker report and choose **History**. Each entry shows the worker-recorded
+Open a worker report and choose **⋯ → Version history**. Each entry shows the worker-recorded
 author, timestamp, revision kind and message, with markers for the current,
 published and viewed revisions. **View revision** opens a read-only, revision-pinned
 URL that survives reload and browser back/forward navigation. **Open current

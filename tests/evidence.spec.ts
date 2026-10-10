@@ -176,10 +176,10 @@ test('saved report library restores typed parameters, source and selected values
   await panel.getByLabel('Include', { exact: true }).selectOption('false');
   await panel.getByRole('button', { name: 'Update preview', exact: true }).click();
   await expect(panel.getByTestId('evidence-document')).toContainText(city, { timeout: 30_000 });
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   await expect(panel.getByText('Saved in this browser.', { exact: true })).toHaveCount(0);
   await page.evaluate(() => { (window as any).__savedReportWorker = (window as any).__bridge.worker; });
-  await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
   await expect(page).toHaveURL(/reports\/saved/);
   await expect(panel.getByRole('row').filter({ hasText: 'Parameter round trip' })).toContainText('City, Amount, As of, Include');
   await panel.getByRole('button', { name: 'Parameter round trip', exact: true }).click();
@@ -197,7 +197,7 @@ test('saved report library restores typed parameters, source and selected values
   await expect(panel.getByLabel('Parameter 1 default', { exact: true })).toHaveValue('Glen Allen');
   await expect(panel.getByTestId('evidence-document')).toContainText(city, { timeout: 30_000 });
   await expect(panel.getByRole('alert')).toHaveCount(0);
-  await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
   await panel.getByRole('button', { name: 'Copy Parameter round trip', exact: true }).click();
   await expect(page).toHaveURL(/reports\/saved/);
   await expect(panel.getByRole('row').filter({ hasText: 'Parameter round trip' })).toHaveCount(2);
@@ -267,7 +267,7 @@ test('reports export to a file and import, from another worker, into the saved r
   // Saved against this worker, so it opens here.
   await panel.getByRole('button', { name: 'Open report', exact: true }).click();
   await expect(panel.getByTestId('evidence-document')).toContainText('Shared report', { timeout: 60_000 });
-  await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
 
   // The same file again changes nothing; a changed one replaces it, or is kept beside it.
   await input.setInputFiles({ name: 'shared.cupola-reports.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(fromElsewhere)) });
@@ -302,7 +302,7 @@ test('an earlier revision can be removed from the history; the latest cannot', a
   await expect(panel.getByTestId('evidence-document')).toContainText('First paragraph.', { timeout: 90_000 });
   await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
   await panel.getByLabel('Report title').fill('Pruned report, retitled');
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   await panel.getByRole('tab', { name: 'History', exact: true }).click();
   const revisions = panel.getByRole('list', { name: 'Revisions, newest first' });
   await expect(revisions.getByRole('listitem')).toHaveCount(2);
@@ -348,7 +348,7 @@ test('saving keeps revisions: who changed what, a diff, restore, and the history
   await expect(panel.getByTestId('evidence-document')).toContainText('First paragraph.', { timeout: 90_000 });
   await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
   await panel.getByLabel('Report title').fill('Revised report, retitled');
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   await panel.getByRole('tab', { name: 'History', exact: true }).click();
   const revisions = panel.getByRole('list', { name: 'Revisions, newest first' });
   // The version saved before history began opens it; the save is labelled with what changed.
@@ -365,12 +365,12 @@ test('saving keeps revisions: who changed what, a diff, restore, and the history
   await revisions.getByRole('button', { name: /Saved before revision history began/ }).click();
   await panel.getByRole('button', { name: 'Restore this version' }).click();
   await expect(panel.getByLabel('Report title')).toHaveValue('Revised report');
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   await expect(revisions.getByRole('listitem')).toHaveCount(3);
   await expect(revisions.getByRole('listitem').nth(0)).toContainText(/Restored the version of .*\(Saved before revision history began\)/);
 
   // The file carries the history, and importing it elsewhere brings the history back.
-  await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
   const [download] = await Promise.all([page.waitForEvent('download'), panel.getByRole('button', { name: 'Export Revised report', exact: true }).click()]);
   const file = testInfo.outputPath('revised.cupola-reports.json');
   await download.saveAs(file);
@@ -415,7 +415,7 @@ test('reports save themselves, on close too, and a draft that cannot be saved is
 
   // Shortly after an edit, with nothing pressed.
   await title.fill('Autosaved once');
-  await expect(status).toHaveText('Saved in this browser');
+  await expect(status).toHaveText('Saved');
   expect(await stored()).toBe('Autosaved once');
 
   // A tab closed straight after an edit, before the delay: saved on the way out.
@@ -427,7 +427,7 @@ test('reports save themselves, on close too, and a draft that cannot be saved is
   // A blank title is a title being retyped: it saves as "Untitled report" and the field stays blank.
   await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
   await title.fill('');
-  await expect(status).toHaveText('Saved in this browser');
+  await expect(status).toHaveText('Saved');
   expect(await stored()).toBe('Untitled report');
   await expect(title).toHaveValue('');
 
@@ -443,9 +443,9 @@ test('reports save themselves, on close too, and a draft that cannot be saved is
   await panel.getByRole('tab', { name: 'Parameters', exact: true }).click();
   await expect(panel.getByLabel('Parameter 1 name')).toHaveValue('');
   await panel.getByLabel('Parameter 1 name').fill('fixed');
-  await expect(status).toHaveText('Saved in this browser');
+  await expect(status).toHaveText('Saved');
   await title.fill('Fixed title');
-  await expect(status).toHaveText('Saved in this browser');
+  await expect(status).toHaveText('Saved');
   expect(await stored()).toBe('Fixed title');
   expect(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('cupola.evidence.draft.v1:')))).toEqual([]);
 
@@ -496,10 +496,10 @@ test('a new report that never saved comes back after its tab closes', async ({ p
   expect(new URL(page.url()).searchParams.get('evidence_report')).toBe(id);
   await panel.getByRole('tab', { name: 'Parameters', exact: true }).click();
   await panel.getByLabel('Parameter 1 name').fill('fixed');
-  await expect(status).toHaveText('Saved in this browser');
+  await expect(status).toHaveText('Saved');
   expect(await savedKeys()).toHaveLength(1);
   expect(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('cupola.evidence.draft.v1:')))).toEqual([]);
-  await panel.getByRole('button', { name: 'Saved reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
   await expect(panel.getByRole('region', { name: 'Unsaved reports' })).toHaveCount(0);
   await expect(panel.getByRole('button', { name: 'Open report', exact: true })).toHaveCount(1);
   expect(errors).toEqual([]);
@@ -530,7 +530,7 @@ test('reports saved before revision history migrate on their first change', asyn
   await expect(panel.getByText(/^No revisions yet/)).toBeVisible();
 
   await panel.getByLabel('Report title').fill('Legacy report, edited');
-  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved in this browser');
+  await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   // Saved under the workspace the `?service=` link opened (reports are kept per workspace).
   const workspaces = await page.evaluate(() => JSON.parse(localStorage.getItem('cupola.workspaces.v1')!).workspaces);
   expect(workspaces).toHaveLength(1);

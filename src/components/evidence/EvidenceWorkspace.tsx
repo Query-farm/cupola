@@ -2,9 +2,9 @@ import { appBase } from "../../lib/app-base";
 import { sessionCatalogs } from "@/lib/catalog-store";
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
-import { ArrowLeft, Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Maximize2, Minimize2, Square, FileDown, MoreHorizontal, Loader2, Check, ChevronRight, Download, Upload } from 'lucide-react';
+import { Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Minimize2, Square, FileDown, Loader2, Check, ChevronRight, Download, Upload } from 'lucide-react';
 import { Button, buttonVariants } from '../ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu';
 import { Input } from '../ui/input';
 import { engine, waitForEngineReady } from '../../lib/shell-bridge';
 import { hasSqlStatements, materializeReportQuery } from '../../lib/reports/parameters';
@@ -43,6 +43,12 @@ import { EvidencePreview, type EvidenceInputState, type PreviewDrill, type Repor
 import { useReportPrint } from './useReportPrint';
 import { captureReportPreview, RetainedReportPreview } from './RetainedReportPreview';
 import { ReportSharing } from './ReportSharing';
+import { ReportHeader } from '../reporting/ReportHeader';
+import { reportAction, type ReportAction } from '../reporting/ReportActionMenu';
+import { ReportDetailsDialog } from '../reporting/ReportDetailsDialog';
+import { localFolderPath, localLibrary, localReportEntry, placeLocalReport } from '../../lib/reporting/local-library';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog';
+import { EvidenceHistory } from './EvidenceHistory';
 import { copyReport, exportSavedReport } from '../../lib/evidence/report-actions';
 import { useSavedDocumentActions } from '../../lib/saved-document-actions';
 
@@ -67,6 +73,13 @@ export interface RemoteEvidenceSession {
   onLeave: () => void;
   onCopy: (report: EvidenceReport) => void;
   historyContent: ReactNode;
+  location: string;
+  actions: ReportAction[];
+  onHistoryOpen: () => void;
+  onShare: () => void;
+  versionLabel?: string;
+  onOpenCurrent?: () => void;
+  publishAction?: { disabled: boolean; onClick: () => void };
 }
 
 export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalogs, defaultToLibrary = true, remote, onLibrary, onTransfer }: { catalogName: string; serviceUrl: string; workspaceId?: string; catalogs: readonly CatalogData[]; defaultToLibrary?: boolean; remote?: RemoteEvidenceSession; onLibrary?: () => void; onTransfer?: (report: EvidenceReport, move: boolean) => void }) {
@@ -102,6 +115,8 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   const [saved, setSaved] = useState(initial.saved);
   const [reports, setReports] = useState(initial.reports);
   const [library, setLibrary] = useState(initial.library);
+  const [historyOpen, setHistoryOpen] = useState(false), [detailsOpen, setDetailsOpen] = useState(false), [sourceOpen, setSourceOpen] = useState(false);
+  const [rename, setRename] = useState<string | null>(null);
   const [hasOpenedReport, setHasOpenedReport] = useState(!initial.library);
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState(initial.recovered || initial.create || new URLSearchParams(location.search).get('evidence_edit') === '1');
@@ -925,6 +940,19 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   // "Connected" is the normal state: kept for assistive tech, shown only when it isn't.
   const quietStatus = pendingQueries === 0 && status === 'Connected';
 
+  const localEntry = remote ? null : localReportEntry(scope, report);
+  const localLocation = remote ? '' : ['On this device', localFolderPath(localEntry?.folderId ?? null, localLibrary(scope).folders)].filter(Boolean).join(' / ');
+  function transfer(move: boolean) { const stored = persist(reportRef.current, { kind: 'edit' }); if (stored) onTransfer?.(stored, move); }
+  const reportActions: ReportAction[] = [
+    reportAction('history', () => { remote?.onHistoryOpen(); setHistoryOpen(true); }),
+    ...(remote ? remote.actions.filter(a => a.id !== 'delete') : [reportAction('details', () => setDetailsOpen(true)), reportAction('copy', onTransfer ? () => transfer(false) : saveCopy, busy), ...(onTransfer ? [reportAction('move', () => transfer(true), busy)] : [])]),
+    { ...reportAction('source', () => setSourceOpen(true)), separator: true },
+    { id: 'pdf', label: 'Export PDF', icon: FileDown, disabled: refreshing || !run || exporting || Boolean(pending), onClick: () => void exportPdf() },
+    ...(run?.report.parameters.filter(item => item.type === 'select' || item.type === 'multi_select').map(item => ({ id: `pdf-${item.key}`, label: `PDF per ${item.label.toLowerCase()}`, icon: FileDown, disabled: refreshing || exporting, onClick: () => void exportPdfPerValue(item.key) })) ?? []),
+    reportAction('export', () => exportReports([report])),
+    reportAction('focus', () => setFocused(true)),
+    ...(remote ? remote.actions.filter(a => a.id === 'delete') : [reportAction('delete', () => { remove(reportRef.current); if (!listEvidenceReports(scope).some(r => r.id === report.id)) navigate(true); }, busy)]),
+  ];
   return <div ref={workspace} className={`${focused ? 'fixed inset-0 z-50' : 'h-full'} flex min-h-0 flex-col overflow-hidden bg-background text-foreground`} onKeyDown={event => {
     if (event.defaultPrevented) return;
     if (event.key === 'Escape' && focused) { setFocused(false); setEditorOnly(false); event.stopPropagation(); }
@@ -932,72 +960,43 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     if (event.key === 'Enter') { event.preventDefault(); void refresh(); }
     if (event.key.toLowerCase() === 's') { event.preventDefault(); checkpoint(); }
   }}>
-    <header className="z-10 flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-5 py-3">
-      {library ? <><FolderOpen className="size-4 text-muted-foreground" /><h1 className="text-sm font-semibold">Saved reports</h1><span className="text-xs text-muted-foreground">{reports.length} {reports.length === 1 ? 'report' : 'reports'}</span>
+    {library ? <header className="z-10 flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-5 py-3">
+      <FolderOpen className="size-4 text-muted-foreground" /><h1 className="text-sm font-semibold">Saved reports</h1><span className="text-xs text-muted-foreground">{reports.length} {reports.length === 1 ? 'report' : 'reports'}</span>
         <div className="ml-auto flex gap-2">
           <input ref={importInput} type="file" accept={`${REPORT_FILE_EXTENSION},.json,application/json`} multiple hidden aria-label="Report files to import"
             onChange={event => { const files = [...event.target.files ?? []]; event.target.value = ''; if (files.length) void importReportFiles(files); }} />
           <Button variant="outline" disabled={busy} onClick={() => importInput.current?.click()} title="Import reports from report files"><Upload />Import</Button>
           <Button variant="outline" disabled={!reports.length} onClick={() => exportReports(reports)} title="Download every saved report for this worker as one report file"><Download />Export all</Button>
-          {hasOpenedReport && <Button variant="outline" disabled={busy} onClick={() => { navigate(false, report.id); if (!run) void refresh(report, 'replace'); }}>Back to report</Button>}<Button onClick={() => openReport(stamp(newEvidenceReport(serviceUrl, catalogName)), true, true)} disabled={busy}><Plus />New report</Button></div></>
-        : <>
-          <Button variant="ghost" size="sm" className="-ml-2" onClick={() => navigate(true)}><ArrowLeft />Saved reports</Button>
-          <span className="text-muted-foreground" aria-hidden>/</span>
-          <div className="flex min-w-0 flex-col">
-            <span className="max-w-72 truncate text-sm font-semibold">{report.title.trim() || UNTITLED_REPORT}</span>
-            <span className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-              <span role="status" aria-label="Save status" className={saveError ? 'text-destructive' : undefined} title={remote ? 'Changes are saved as revisions on the report worker.' : saveError ? 'Your changes are kept in this browser, and saved once the report is valid again.' : 'Saved locally for this data connection. Use Share to download a copy for another browser.'}>
-                {saveError ? `Not saved: ${saveError}` : remote ? remote.status : !dirty ? 'Saved in this browser' : saved || asSaved(report) !== baseline.current ? 'Saving in this browser…' : 'Not saved yet · saves here when you edit it'}
-              </span>
-              {(updated || !quietStatus) && <span aria-hidden>·</span>}
-              <span role="status" aria-label="Report refresh status">
-                <span className={quietStatus ? 'sr-only' : ''}>{pendingQueries > 0 ? 'Refreshing report…' : status}</span>
-                {updated && <span>{quietStatus ? '' : ' · '}Updated {updated}</span>}
-              </span>
-            </span>
-          </div>
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <div className="flex rounded-lg bg-muted p-1" role="group" aria-label="Report mode">
-              <Button variant={editing ? 'ghost' : 'outline'} size="sm" aria-pressed={!editing} aria-label="View report" onClick={() => { setEditing(false); setEditorOnly(false); }}><Eye />View</Button>
-              <Button disabled={remote && !remote.canEdit} variant={editing ? 'outline' : 'ghost'} size="sm" aria-pressed={editing} aria-label="Edit report" title={errorCount ? `${errorCount} report problems` : undefined} onClick={() => setEditing(true)}>
-                <Code2 />Edit
-                {errorCount > 0 && <span className="rounded-full bg-destructive px-1.5 text-[10px] leading-4 font-semibold text-white" data-testid="report-problem-count">{errorCount}</span>}
-              </Button>
-            </div>
-            {/* Refresh and Stop share a slot; unapplied edits are explained above the results. */}
-            {offerStop
-              ? <Button key="stop" variant="outline" onClick={stopRefresh}><Square />Stop refresh</Button>
-              : <Button key="refresh" variant="field" aria-label={editing ? 'Update preview' : 'Refresh report'} title={`${pending ? 'Changes not applied · ' : ''}⌘ / Ctrl + Enter`} onClick={() => void refresh()}>
-                  <RefreshCw />{editing ? 'Update preview' : 'Refresh report'}
-                  {pending && <span role="status" aria-label="Changes not applied" className="size-2 rounded-full bg-amber-400" />}
-                </Button>}
-            {(!editing || pdfExport.state !== 'idle') && <Button variant="outline" disabled={refreshing || !run || exporting || Boolean(pending)} onClick={() => void exportPdf()} aria-live="polite"
-              title={pdfExport.state === 'done' && pdfExport.omitted.length ? `Not included: ${pdfExport.omitted.join(', ')}` : 'Download the report as a typeset PDF · The selected tab of each tab group, and every table row'}>
-              {pdfExport.state === 'exporting' ? <><Loader2 className="animate-spin" />{pdfExport.progress ? `Preparing PDF ${pdfExport.progress}…` : 'Preparing PDF…'}</>
-                : pdfExport.state === 'done' ? <><Check />PDF exported{pdfExport.omitted.length ? ` · ${pdfExport.omitted.length} not included` : ''}</>
-                : <><FileDown />Export PDF</>}
-            </Button>}
-            {!remote && onTransfer && <><Button variant="outline" disabled={busy} onClick={() => { const stored = persist(reportRef.current, { kind: 'edit' }); if (stored) onTransfer(stored, false); }}>Copy to…</Button><Button variant="outline" disabled={busy} onClick={() => { const stored = persist(reportRef.current, { kind: 'edit' }); if (stored) onTransfer(stored, true); }}>Move to…</Button></>}
-            {!remote && <ReportSharing canExportPdf={!refreshing && Boolean(run) && !exporting} pending={Boolean(pending)} onPdf={() => void exportPdf()} onFile={() => exportReports([report])} />}
-            {!focused && <Button variant="ghost" size="icon" aria-label="Focus report" title="Focus report" onClick={() => setFocused(true)}><Maximize2 /></Button>}
-            {saveError && <Button variant="outline" onClick={checkpoint} title={`Not saved: ${saveError}. Your changes are kept in this browser until they can be.`}><Save />Retry save</Button>}
-            {focused
-              ? <Button variant="ghost" size="icon" aria-label="Exit focus mode" title="Exit focus mode · Esc" onClick={() => { setEditorOnly(false); setFocused(false); }}><Minimize2 /></Button>
-              : <DropdownMenu>
-                  <DropdownMenuTrigger aria-label="More report actions" className={buttonVariants({ variant: 'ghost', size: 'icon' })}><MoreHorizontal /></DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="min-w-44">
-                    {editing && <DropdownMenuItem disabled={refreshing || !run || exporting || Boolean(pending)} onClick={() => void exportPdf()}><FileDown />Export PDF</DropdownMenuItem>}
-                    {run?.report.parameters.filter(item => item.type === 'select' || item.type === 'multi_select').map(item => <DropdownMenuItem key={item.key} disabled={refreshing || exporting} onClick={() => void exportPdfPerValue(item.key)}><FileDown />PDF per {item.label.toLowerCase()}</DropdownMenuItem>)}
-                    <DropdownMenuItem onClick={saveCopy}><Copy />Save a copy</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => exportReports([report])}><Download />Export report file</DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => setFocused(true)}><Maximize2 />Focus report</DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>}
-          </div></>}
-
-    </header>
+          {hasOpenedReport && <Button variant="outline" disabled={busy} onClick={() => { navigate(false, report.id); if (!run) void refresh(report, 'replace'); }}>Back to report</Button>}<Button onClick={() => openReport(stamp(newEvidenceReport(serviceUrl, catalogName)), true, true)} disabled={busy}><Plus />New report</Button></div>
+    </header> : <ReportHeader title={report.title.trim() || UNTITLED_REPORT} location={remote?.location ?? localLocation} onBack={() => navigate(true)}
+      onRename={!remote || remote.canEdit && !remote.pending ? () => setRename(reportRef.current.title) : undefined} actions={reportActions}
+      status={<><span role="status" aria-label="Save status" className={saveError ? 'text-destructive' : undefined}>{saveError ? `Not saved: ${saveError}` : remote ? remote.status : !dirty ? 'Saved' : saved || asSaved(report) !== baseline.current ? 'Saving…' : 'Not saved yet'}</span>
+        {remote?.versionLabel && <span>· {remote.versionLabel}</span>}
+        <span role="status" aria-label="Report refresh status" className={quietStatus && !updated ? 'sr-only' : undefined}>{pendingQueries > 0 ? 'Refreshing report…' : quietStatus ? '' : status}{updated && ` · Updated ${updated}`}</span></>}>
+      {remote?.onOpenCurrent && <Button size="sm" variant="outline" onClick={remote.onOpenCurrent}>Open current report</Button>}
+      {offerStop ? <Button key="stop" size="sm" variant="outline" onClick={stopRefresh}><Square />Stop refresh</Button>
+        : <Button key="refresh" size="sm" variant="outline" aria-label={editing ? 'Update preview' : 'Refresh report'} title="⌘ / Ctrl + Enter" onClick={() => void refresh()}><RefreshCw />{editing ? 'Update preview' : 'Refresh'}{pending && <span role="status" aria-label="Changes not applied" className="size-2 rounded-full bg-amber-400" />}</Button>}
+      <div className="flex rounded-lg bg-muted p-1" role="group" aria-label="Report mode">
+        <Button variant={editing ? 'ghost' : 'outline'} size="sm" aria-pressed={!editing} aria-label="View report" onClick={() => { setEditing(false); setEditorOnly(false); }}><Eye />View</Button>
+        <Button disabled={remote && !remote.canEdit} variant={editing ? 'outline' : 'ghost'} size="sm" aria-pressed={editing} aria-label="Edit report" onClick={() => setEditing(true)}><Code2 />Edit{errorCount > 0 && <span className="rounded-full bg-destructive px-1.5 text-[10px] font-semibold text-white" data-testid="report-problem-count">{errorCount}</span>}</Button>
+      </div>
+      {editing && remote?.publishAction && <Button size="sm" disabled={remote.publishAction.disabled} onClick={remote.publishAction.onClick}>Publish changes</Button>}
+      {remote ? <Button size="sm" variant="outline" onClick={remote.onShare}>Share</Button>
+        : <ReportSharing canExportPdf={!refreshing && Boolean(run) && !exporting} pending={Boolean(pending)} onPdf={() => void exportPdf()} onFile={() => exportReports([report])} onSaveToLibrary={onTransfer ? () => transfer(false) : undefined} />}
+      {saveError && <Button size="sm" variant="outline" onClick={checkpoint} title={saveError}><Save />Retry save</Button>}
+      {focused && <Button variant="ghost" size="icon" aria-label="Exit focus mode" title="Exit focus mode · Esc" onClick={() => { setEditorOnly(false); setFocused(false); }}><Minimize2 /></Button>}
+    </ReportHeader>}
+    {rename !== null && <Dialog open onOpenChange={open => { if (!open) setRename(null); }}><DialogContent className="sm:max-w-sm"><DialogHeader><DialogTitle>Rename report</DialogTitle><DialogDescription>Choose a name for this report.</DialogDescription></DialogHeader><form className="space-y-4" onSubmit={e => { e.preventDefault(); if (remote && (!remote.canEdit || remote.pending)) return; const next = { ...reportRef.current, title: rename.trim() }; change(next); if (persist(next, { kind: 'edit', label: 'Renamed report' })) setRename(null); }}><Input aria-label="Report name" autoFocus required value={rename} onChange={e => setRename(e.target.value)} />{saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}<Button type="submit" disabled={!rename.trim() || Boolean(remote?.pending)}>Save name</Button></form></DialogContent></Dialog>}
+    {historyOpen && <Dialog open onOpenChange={setHistoryOpen}><DialogContent className="max-h-[85vh] overflow-auto sm:max-w-4xl"><DialogHeader><DialogTitle>Report history</DialogTitle><DialogDescription>{remote ? 'History visible to your account in this library.' : 'Saved versions on this device.'}</DialogDescription></DialogHeader>{remote?.historyContent ?? <EvidenceHistory history={history} dirty={dirty} onRestore={revision => { restoreRevision(revision); setHistoryOpen(false); }} onDelete={deleteRevision} />}</DialogContent></Dialog>}
+    {sourceOpen && <Dialog open onOpenChange={setSourceOpen}><DialogContent className="max-h-[85vh] overflow-auto sm:max-w-3xl"><DialogHeader><DialogTitle>Report source</DialogTitle><DialogDescription>Source inspection does not execute queries.</DialogDescription></DialogHeader><h3>Setup SQL</h3><pre className="overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">{report.setupSql || 'No setup SQL'}</pre><h3>Document</h3><pre className="overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">{report.source}</pre></DialogContent></Dialog>}
+    {detailsOpen && !remote && <ReportDetailsDialog initial={{ name: report.title, description: localEntry?.metadata?.description ?? '', tags: localEntry?.metadata?.tags ?? [] }} location={localLocation}
+      identity={<p>Saved on this device. Local history does not identify an authenticated author.</p>} onClose={() => setDetailsOpen(false)} onSave={values => {
+        const next = { ...reportRef.current, title: values.name }; change(next);
+        if (!persist(next, { kind: 'edit', label: 'Updated report details' })) throw new Error('Could not save report details. Your draft is kept on this device.');
+        placeLocalReport(scope, report.id, localEntry?.folderId ?? null, { ...localEntry?.metadata, description: values.description, tags: values.tags });
+      }} />}
     {remote && !run && <p className="mx-5 mt-3 text-sm text-muted-foreground">Refresh runs this report’s SQL using your connected catalogs. Review its source before running an unfamiliar report.</p>}
+    {pdfExport.state !== 'idle' && <p role="status" className="mx-5 mt-3 flex items-center gap-2 text-xs text-muted-foreground">{pdfExport.state === 'exporting' ? <><Loader2 className="size-3 animate-spin" />Preparing PDF{pdfExport.progress ? ` ${pdfExport.progress}` : ''}…</> : <><Check className="size-3" />PDF exported{pdfExport.omitted.length ? ` · ${pdfExport.omitted.length} items not included` : ''}</>}</p>}
     {error && <div role="alert" className="m-5 whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
     {notice && <p role="status" className="mx-5 mt-3 text-xs text-muted-foreground">{notice}</p>}
     {recovered && !library && <p role="status" className="mx-5 mt-3 text-xs text-muted-foreground">{RECOVERED_NOTICE}</p>}

@@ -1,3 +1,4 @@
+import { chooseReportAction } from './helpers';
 import { test, expect } from '@playwright/test';
 import { evidencePath, EVIDENCE_SERVICE_URL } from './helpers';
 
@@ -54,7 +55,7 @@ test('sandboxed blocks load their runtime from this release, render, and print',
   // In the PDF, each block is a picture of what it drew (bars, a basemap), not an empty frame.
   const [download] = await Promise.all([
     page.waitForEvent('download', { timeout: 120_000 }),
-    panel.getByRole('button', { name: 'Export PDF', exact: true }).click(),
+    chooseReportAction(page, 'Export PDF'),
   ]);
   expect(await download.failure()).toBeNull();
   const printed = await page.evaluate(async () => {
