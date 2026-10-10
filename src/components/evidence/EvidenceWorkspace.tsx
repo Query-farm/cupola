@@ -52,6 +52,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { EvidenceHistory } from './EvidenceHistory';
 import { copyReport, exportSavedReport } from '../../lib/evidence/report-actions';
 import { useSavedDocumentActions } from '../../lib/saved-document-actions';
+import { useTransferSource } from '../../lib/reporting/transfer-source';
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 /** A PDF per parameter value re-renders the report once per section; past this, it stops. */
@@ -650,6 +651,11 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   function autosave() {
     if (unsaved()) persist(reportRef.current, { kind: 'edit', session: session.current });
   }
+  useTransferSource(scope, remote ? null : 'local', report.id, () => {
+    const stored = persist(reportRef.current, { kind: 'edit', session: session.current });
+    if (!stored) throw new Error('Save this report successfully before moving it. Your draft is still open.');
+    return { kind: 'local', report: stored };
+  });
   /** For listeners registered once (beforeunload). */
   const autosaveRef = useRef(autosave); autosaveRef.current = autosave;
   const unsavedRef = useRef(unsaved); unsavedRef.current = unsaved;

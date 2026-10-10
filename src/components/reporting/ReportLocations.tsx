@@ -5,14 +5,18 @@ import type { CatalogData } from '../../lib/service';
 import type { ReportLocation } from '../../lib/reporting/locations';
 import { OPEN_REPORT_EVENT } from '../../lib/evidence/open-report';
 import { REPORT_ROUTE_CHANGED } from '../../lib/reporting/navigation';
+import type { TransferDestination, TransferSource } from '../../lib/reporting/transfers';
 
-const Context = createContext<{ locations: ReportLocation[]; refresh: () => void } | null>(null);
+interface TransferRequest { source: TransferSource; move: boolean; initialDestination?: TransferDestination }
+const Context = createContext<{ locations: ReportLocation[]; refresh: () => void; transfer: TransferRequest | null; setTransfer: (request: TransferRequest | null) => void } | null>(null);
 
 /** The sidebar and report pages discover the same libraries, including a shared-link target. */
 export function ReportLocationsProvider({ serviceUrl, workspaceId, catalogs, children }: {
   serviceUrl: string; workspaceId?: string; catalogs: readonly CatalogData[]; children: ReactNode;
 }) {
   const [locations, setLocations] = useState<ReportLocation[]>([]), [generation, setGeneration] = useState(0);
+  // A sidebar action survives closing the mobile drawer and lazy mounting Reports.
+  const [transfer, setTransfer] = useState<TransferRequest | null>(null);
   const [linked, setLinked] = useState(() => new URLSearchParams(location.search).get('report_service'));
   useEffect(() => {
     const read = () => queueMicrotask(() => setLinked(new URLSearchParams(location.search).get('report_service')));
@@ -39,7 +43,7 @@ export function ReportLocationsProvider({ serviceUrl, workspaceId, catalogs, chi
     return () => abort.abort();
   }, [key, generation]);
   const refresh = useCallback(() => setGeneration(n => n + 1), []);
-  return <Context.Provider value={{ locations, refresh }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ locations, refresh, transfer, setTransfer }}>{children}</Context.Provider>;
 }
 
 export function useReportLocations() {

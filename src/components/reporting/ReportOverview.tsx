@@ -17,6 +17,8 @@ import { exportSavedReport } from '../../lib/evidence/report-actions';
 import { ReportFileList, type ReportFileItem } from './ReportFileList';
 import { ReportActionMenu, reportAction } from './ReportActionMenu';
 
+import { reportFolderCreationRequested, clearReportFolderCreation } from '../../lib/reporting/navigation';
+
 interface WorkerRows { url: string; reports: ReportRow[]; folders: FolderRecord[]; error?: string; loading?: boolean }
 export function ReportOverview({ locations, scope, localOnly, folderId, onAllReports, onFolder, onNew, onLocal, onWorker, onTransfer, onRefresh, serviceUrl, workspaceId }: {
   locations: ReportLocation[]; scope: string; serviceUrl: string; workspaceId?: string; localOnly: boolean; folderId: string | null;
@@ -26,9 +28,10 @@ export function ReportOverview({ locations, scope, localOnly, folderId, onAllRep
 }) {
   const [local, setLocal] = useState<EvidenceReport[]>([]), [localError, setLocalError] = useState('');
   const [library, setLibrary] = useState(() => localLibrary(scope)), [workers, setWorkers] = useState<WorkerRows[]>([]);
-  const [query, setQuery] = useState(''), [newFolder, setNewFolder] = useState(false), [name, setName] = useState('');
+  const [query, setQuery] = useState(''), [newFolder, setNewFolder] = useState(() => localOnly && reportFolderCreationRequested()), [name, setName] = useState('');
   const [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [drafts, setDrafts] = useState<ReturnType<typeof listUnsavedDrafts>>([]);
+  useEffect(clearReportFolderCreation, []);
   const fileInput = useRef<HTMLInputElement>(null);
   const reloadLocal = () => { try { const reports = listEvidenceReports(scope); setLocal(reports); setDrafts(listUnsavedDrafts(scope, new Set(reports.map(r => r.id)))); setLibrary(localLibrary(scope)); setLocalError(''); } catch (e) { setLocalError(reportError(e)); } };
   function exportAll() {

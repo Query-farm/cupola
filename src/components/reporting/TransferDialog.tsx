@@ -4,17 +4,18 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { ReportClient, reportError } from '../../lib/reporting/client';
 import type { FolderRecord } from '../../lib/reporting/contracts.generated';
 import type { ReportLocation } from '../../lib/reporting/locations';
-import { prepareTransfer, resumeTransfer, type TransferJob, type TransferSource } from '../../lib/reporting/transfers';
+import { prepareTransfer, resumeTransfer, type TransferDestination, type TransferJob, type TransferSource } from '../../lib/reporting/transfers';
 import { ReportStorageTree } from './ReportStorageTree';
 import { ReportNotice } from './ReportNotice';
 import { localReportEntry } from '../../lib/reporting/local-library';
 
-export function TransferDialog({ source, move, locations, scope, serviceUrl, workspaceId, onClose, onComplete }: {
+export function TransferDialog({ source, move, locations, scope, serviceUrl, workspaceId, initialDestination, onClose, onComplete }: {
   source: TransferSource; move: boolean; locations: ReportLocation[]; scope: string; serviceUrl: string; workspaceId?: string;
   onClose: () => void; onComplete: (job: TransferJob) => void;
+  initialDestination?: TransferDestination;
 }) {
-  const [destination, setDestination] = useState(source.kind === 'worker' ? source.url : move ? 'local' : locations.find(l => l.info?.writable)?.url ?? 'local');
-  const [folderId, setFolderId] = useState(source.kind === 'worker' ? source.record.folder_id ?? '' : move ? localReportEntry(scope, source.report).folderId ?? '' : ''), [folders, setFolders] = useState<FolderRecord[]>([]);
+  const [destination, setDestination] = useState(initialDestination ? initialDestination.url ?? 'local' : source.kind === 'worker' ? source.url : move ? 'local' : locations.find(l => l.info?.writable)?.url ?? 'local');
+  const [folderId, setFolderId] = useState(initialDestination ? initialDestination.folderId ?? '' : source.kind === 'worker' ? source.record.folder_id ?? '' : move ? localReportEntry(scope, source.report).folderId ?? '' : ''), [folders, setFolders] = useState<FolderRecord[]>([]);
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [job, setJob] = useState<TransferJob | null>(null);
   const target = locations.find(l => l.url === destination);

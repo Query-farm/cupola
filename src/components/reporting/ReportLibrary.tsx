@@ -19,7 +19,7 @@ import { ReportFileList, type ReportFileItem } from './ReportFileList';
 import { ReportNotice } from './ReportNotice';
 import { ReportActionMenu, reportAction } from './ReportActionMenu';
 import { ReportDetailsDialog } from './ReportDetailsDialog';
-import { REPORT_ROUTE_CHANGED, REPORT_LIBRARY_CHANGED } from '../../lib/reporting/navigation';
+import { REPORT_ROUTE_CHANGED, REPORT_LIBRARY_CHANGED, reportFolderCreationRequested, clearReportFolderCreation } from '../../lib/reporting/navigation';
 
 export interface LibrarySession { client: ReportClient; info: ReportsInfo; scope: string; journal: MutationJournal }
 export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: string; onAllReports: () => void }) {
@@ -31,10 +31,11 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
   const [query, setQuery] = useState(''), [publishedOnly, setPublishedOnly] = useState(false), [ownedByMe, setOwnedByMe] = useState(false);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false);
   const [generation, setGeneration] = useState(0);
-  const [dialog, setDialog] = useState<{ action: ResourceAction; resource?: FolderRecord | ReportRow } | null>(null);
+  const [dialog, setDialog] = useState<{ action: ResourceAction; resource?: FolderRecord | ReportRow } | null>(() => reportFolderCreationRequested() ? { action: 'folder' } : null);
   const [drafts, setDrafts] = useState<Array<{ key: string; value: RecoveryDraft }>>([]);
   const [details, setDetails] = useState<ReportRow | null>(null);
   const [recovery, setRecovery] = useState<{ key: string; value: RecoveryDraft } | undefined>();
+  useEffect(clearReportFolderCreation, []);
   const file = useRef<HTMLInputElement>(null);
   const [localReports, setLocalReports] = useState<EvidenceReport[]>([]);
   const revision = useRef(0);

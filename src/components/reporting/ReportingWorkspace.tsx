@@ -11,7 +11,7 @@ import { OPEN_REPORT_EVENT, reportHref, type OpenReportDetail } from '../../lib/
 import { saveEvidenceReport, type EvidenceReport } from '../../lib/evidence/reports';
 import { newEvidenceReport } from '../../lib/evidence/templates';
 import { placeLocalReport } from '../../lib/reporting/local-library';
-import { forgetTransfer, resumeTransfer, transferJobs, type TransferJob, type TransferSource } from '../../lib/reporting/transfers';
+import { forgetTransfer, resumeTransfer, transferJobs, REPORT_TRANSFERS_CHANGED, type TransferJob, type TransferSource } from '../../lib/reporting/transfers';
 import type { CatalogData } from '../../lib/service';
 import { hasReportPromotion } from '../../lib/reports/events';
 import { appBase } from '../../lib/app-base';
@@ -33,9 +33,8 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     return props.defaultToLibrary === false && current.selected === 'all' && /\/evidence\/?$/.test(location.pathname)
       ? { ...current, selected: 'local', localEditor: true } : current;
   });
-  const { locations: services, refresh: refreshLocations } = useReportLocations();
+  const { locations: services, refresh: refreshLocations, transfer, setTransfer } = useReportLocations();
   const [generation, setGeneration] = useState(0);
-  const [transfer, setTransfer] = useState<{ source: TransferSource; move: boolean } | null>(null);
   const [jobs, setJobs] = useState<TransferJob[]>([]), [notice, setNotice] = useState(''), [error, setError] = useState(''), [retrying, setRetrying] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
   const scope = props.workspaceId ?? props.serviceUrl;
@@ -47,12 +46,17 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     }
   }, []);
   function refresh() { refreshLocations(); setGeneration(n => n + 1); try { setJobs(transferJobs(scope)); } catch (e) { setError(reportError(e)); } }
-  useEffect(() => { try { setJobs(transferJobs(scope)); } catch (e) { setError(reportError(e)); } }, [scope, generation]);
+  useEffect(() => {
+    const read = () => { try { setJobs(transferJobs(scope)); } catch (e) { setError(reportError(e)); } };
+    read(); window.addEventListener(REPORT_TRANSFERS_CHANGED, read); window.addEventListener('storage', read);
+    return () => { window.removeEventListener(REPORT_TRANSFERS_CHANGED, read); window.removeEventListener('storage', read); };
+  }, [scope, generation]);
   useEffect(() => {
     const pop = () => { setView(route()); setEditorKey(n => n + 1); };
     const local = (event: Event) => {
       const detail = (event as CustomEvent<OpenReportDetail>).detail;
       if ((detail.workspaceId ?? detail.serviceUrl) !== scope) return;
+      detail.handled = true;
       const next = new URL(detail.href, location.href);
       if (location.pathname + location.search === next.pathname + next.search) return;
       history.pushState({}, '', next); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED)); pop();
@@ -107,7 +111,7 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     {error && <p role="alert" className="shrink-0 px-5 py-2 text-sm text-destructive">{error}</p>}
     {jobs.length > 0 && <section aria-label="Pending report transfers" className="shrink-0 space-y-2 border-b px-5 py-3 text-sm">{jobs.map(job => <div key={job.id} className="flex flex-wrap items-center gap-2"><span>Unconfirmed {job.move ? 'move' : 'copy'}: {job.envelope.title} → {job.destination.name}</span><Button size="sm" disabled={retrying} onClick={async () => { setRetrying(true); setError(''); try { completed(await resumeTransfer(job)); } catch (e) { setError(reportError(e)); } finally { setRetrying(false); } }}>Retry transfer</Button><Button size="sm" variant="ghost" disabled={retrying} onClick={() => { if (confirm('Stop retrying this transfer? Its copy or move may already have completed. Check both locations before deleting anything.')) { forgetTransfer(job); refresh(); } }}>Stop retrying…</Button></div>)}</section>}
     <div className="min-h-0 flex-1">{view.selected === 'all' || view.selected === 'local' && !view.localEditor
-      ? <ReportOverview key={`${view.selected}:${view.localFolder ?? ''}`} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} localOnly={view.selected === 'local'} folderId={view.localFolder} onAllReports={() => choose('all')} onFolder={id => choose('local', undefined, id)} onNew={createLocal} onLocal={openLocal} onWorker={(url, id) => choose(url, id)} onTransfer={transferReport} onRefresh={refresh} />
+      ? <ReportOverview key={`${view.selected}:${view.localFolder ?? ''}:${editorKey}`} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} localOnly={view.selected === 'local'} folderId={view.localFolder} onAllReports={() => choose('all')} onFolder={id => choose('local', undefined, id)} onNew={createLocal} onLocal={openLocal} onWorker={(url, id) => choose(url, id)} onTransfer={transferReport} onRefresh={refresh} />
       : view.selected === 'local'
         ? <EvidenceWorkspace key={editorKey} {...props} onLibrary={() => choose('local')} onTransfer={(report, move) => transferReport({ kind: 'local', report }, move)} />
         : <ReportLibrary key={view.selected + ':' + editorKey} {...props} libraryUrl={view.selected} onAllReports={() => choose('all')} onCreateLocal={createLocal} onTransferReport={transferReport} />}</div>

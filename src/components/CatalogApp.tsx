@@ -9,6 +9,7 @@ import { appBase } from "@/lib/app-base";
 import { toLatestBaseUrl } from "@/lib/share-query";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { OPEN_REPORT_EVENT, reportHref, type OpenReportDetail } from "@/lib/evidence/open-report";
+import { REPORT_ROUTE_CHANGED } from "@/lib/reporting/navigation";
 import {
   getServiceUrl,
   hasExplicitService,
@@ -480,12 +481,17 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // A saved report opened from the sidebar. A mounted workspace opens it itself; one that isn't
   // mounted yet reads the report from the URL on its first render, so the URL goes first. The
   // catalog selection in the hash is kept.
-  const reportsMountedRef = useRef(reportsMounted);
-  reportsMountedRef.current = reportsMounted;
   useEffect(() => {
     const openReport = (event: Event) => {
-      const { href } = (event as CustomEvent<OpenReportDetail>).detail;
-      if (!reportsMountedRef.current) window.history.pushState(window.history.state, "", href + window.location.hash);
+      const detail = (event as CustomEvent<OpenReportDetail>).detail;
+      // Suspense may still be loading an already requested Reports tab. Give its
+      // listener a chance to handle the route; otherwise leave it in the URL.
+      queueMicrotask(() => {
+        if (!detail.handled) {
+          window.history.pushState(window.history.state, "", detail.href + window.location.hash);
+          window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
+        }
+      });
       setActiveTab("reports");
       setMobileSidebarOpen(false);
     };

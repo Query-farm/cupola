@@ -16,6 +16,8 @@ export interface TransferJob {
 }
 export type ClientFactory = (url: string) => ReportClient;
 const prefix = 'cupola.reporting.transfer.v1:';
+export const REPORT_TRANSFERS_CHANGED = 'cupola:report-transfers-changed';
+function notify(storage: Storage) { if (typeof window !== 'undefined' && storage === window.localStorage) window.dispatchEvent(new Event(REPORT_TRANSFERS_CHANGED)); }
 const jobKey = (job: TransferJob) => prefix + encodeURIComponent(job.scope) + ':' + job.id;
 export function transferJobs(scope: string, storage: Storage = localStorage): TransferJob[] {
   const jobs: TransferJob[] = [], start = prefix + encodeURIComponent(scope) + ':';
@@ -25,8 +27,8 @@ export function transferJobs(scope: string, storage: Storage = localStorage): Tr
   }
   return jobs;
 }
-export function forgetTransfer(job: TransferJob, storage: Storage = localStorage) { storage.removeItem(jobKey(job)); }
-const persist = (job: TransferJob, storage: Storage) => storage.setItem(jobKey(job), serializeJournal(job));
+export function forgetTransfer(job: TransferJob, storage: Storage = localStorage) { storage.removeItem(jobKey(job)); notify(storage); }
+const persist = (job: TransferJob, storage: Storage) => { storage.setItem(jobKey(job), serializeJournal(job)); notify(storage); };
 const sameReport = (a: EvidenceReport, b: EvidenceReport) => JSON.stringify(a) === JSON.stringify(b);
 const equalBytes = (a: Uint8Array | null, b: Uint8Array) => a?.length === b.length && a.every((byte, i) => byte === b[i]);
 

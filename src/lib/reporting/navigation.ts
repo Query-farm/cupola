@@ -23,3 +23,11 @@ export function currentReportNode(search = window.location.search): string {
   const reportId = params.get(location === 'local' ? 'evidence_report' : 'report_id') ?? undefined;
   return reportNodeKey({ location, reportId, folderId: reportId ? null : params.get(location === 'local' ? 'local_report_folder' : 'report_folder') });
 }
+
+/** A sidebar folder action survives lazy mounting, then is consumed once. */
+export const reportFolderCreationRequested = () => new URLSearchParams(window.location.search).get('report_new_folder') === '1';
+export function clearReportFolderCreation() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has('report_new_folder')) return;
+  url.searchParams.delete('report_new_folder'); history.replaceState(history.state, '', url);
+}

@@ -17,6 +17,7 @@ import { ReportHeader } from './ReportHeader';
 import { reportAction, type ReportAction } from './ReportActionMenu';
 import { ReportDetailsDialog } from './ReportDetailsDialog';
 import { WorkerReportSharing } from './WorkerReportSharing';
+import { useTransferSource } from '../../lib/reporting/transfer-source';
 
 interface OpenReport { record: ReportResult; report?: EvidenceReport; controller?: SaveController; bodyError?: string }
 export function RemoteReport(props: ReportingWorkspaceProps & { session: LibrarySession; reportId: string; revisionId: string | null; recovery?: { key: string; value: RecoveryDraft }; onLeave: () => void; onOpen: (id: string, revisionId?: string) => void }) {
@@ -52,6 +53,11 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
   const pending = controller?.dirty ?? false;
   const managementPending = Boolean(session.journal.pending);
   const blocked = busy || pending || managementPending;
+  useTransferSource(props.workspaceId ?? props.serviceUrl, session.client.url, reportId, () => {
+    if (blocked || controller?.dirty || !record) throw new Error('Finish saving this report and resolve any pending changes before moving it.');
+    if (revisionId) throw new Error('Open the current version of this report before moving it.');
+    return { kind: 'worker', url: session.client.url, record };
+  });
   const can = (action: string) => Boolean(session.info.writable && record?.allowed_actions.includes(action));
   useEffect(() => {
     if (!record) return;

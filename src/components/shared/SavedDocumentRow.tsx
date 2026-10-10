@@ -4,6 +4,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  FolderInput,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -41,6 +42,7 @@ export function SavedDocumentRow({
   documentKind,
   onNavigate,
   onAction,
+  onMove,
   className = 'ml-5',
 }: {
   item: SavedDocumentItem;
@@ -49,6 +51,7 @@ export function SavedDocumentRow({
   documentKind: 'notebook' | 'report';
   onNavigate: (event: MouseEvent<HTMLAnchorElement>, id?: string) => void;
   onAction: (id: string, action: SavedDocumentAction) => Promise<void>;
+  onMove?: () => void;
   className?: string;
 }) {
   const link = useRef<HTMLAnchorElement | null>(null);
@@ -101,6 +104,7 @@ export function SavedDocumentRow({
         <Copy aria-hidden />
         Duplicate
       </DropdownMenuItem>
+      {onMove && <DropdownMenuItem disabled={pending} onClick={onMove}><FolderInput aria-hidden />Move…</DropdownMenuItem>}
       <DropdownMenuItem disabled={pending} onClick={() => void perform({ type: 'export' })}>
         <Download aria-hidden />
         {documentKind === 'report' ? 'Export report file' : 'Export notebook'}

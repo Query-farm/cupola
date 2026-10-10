@@ -5,21 +5,29 @@ import { cn } from '../../lib/utils';
 export interface FileTreeNode {
   id: string; name: string; kind: 'location' | 'folder' | 'collection' | 'report';
   children?: FileTreeNode[]; disabled?: boolean; readOnly?: boolean; detail?: string;
-  href?: string; content?: ReactNode;
+  href?: string; content?: ReactNode; actions?: ReactNode;
 }
 
 /** Shared folder navigation and destination selection. Expansion is independent
  * of selection so read-only parents can still reveal writable children. */
-export function FileTree({ nodes, label, selectedId, onSelect, disabled = false, initialExpandedIds = [], expandAll = false, autoFocusSelection = true, onNavigate }: {
+export function FileTree({ nodes, label, selectedId, onSelect, disabled = false, initialExpandedIds = [], expandAll = false, autoFocusSelection = true, onNavigate, dragDrop }: {
   nodes: FileTreeNode[]; label: string; selectedId?: string;
   onSelect: (id: string) => void; disabled?: boolean;
   initialExpandedIds?: string[]; expandAll?: boolean; autoFocusSelection?: boolean;
   onNavigate?: (event: MouseEvent<HTMLAnchorElement>, id: string) => void;
+  dragDrop?: { canDrag: (id: string) => boolean; canDrop: (source: string, destination: string) => boolean; onDrop: (source: string, destination: string) => void };
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(initialExpandedIds));
   const [focused, setFocused] = useState<string | undefined>(selectedId);
   const root = useRef<HTMLUListElement>(null);
   const search = useRef({ value: '', time: 0 });
+  const dragging = useRef<string | null>(null);
+  const hover = useRef<{ id: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const dragType = 'application/x-cupola-report-node';
+  function clearHover() { if (hover.current) clearTimeout(hover.current.timer); hover.current = null; }
+  function endDrag() { clearHover(); dragging.current = null; setDropTarget(null); }
+  useEffect(() => () => clearHover(), []);
   const entries = useMemo(() => {
     const result = new Map<string, { node: FileTreeNode; parent?: string }>();
     const visit = (items: FileTreeNode[], parent?: string) => items.forEach(node => {
@@ -78,12 +86,40 @@ export function FileTree({ nodes, label, selectedId, onSelect, disabled = false,
       aria-expanded={branch ? open : undefined} aria-disabled={disabled || node.disabled || undefined} tabIndex={tabStop === node.id ? 0 : -1}
       data-file-node={node.id} onFocus={e => { if (e.target === e.currentTarget) setFocused(node.id); }}
       onKeyDown={e => { if (e.target === e.currentTarget || e.target instanceof HTMLAnchorElement && !['Enter', ' '].includes(e.key)) key(e, node); }}
-      className="rounded outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
+      onDragStart={e => {
+        if (!dragDrop) return;
+        if (disabled || !dragDrop.canDrag(node.id) || (e.target as HTMLElement).closest('button')) { e.preventDefault(); return; }
+        dragging.current = node.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData(dragType, node.id);
+      }}
+      onDragEnd={endDrag}
+      onDragOver={e => {
+        if (!dragDrop || !dragging.current || !e.dataTransfer.types.includes(dragType)) return;
+        e.preventDefault(); e.stopPropagation();
+        const allowed = !disabled && dragDrop.canDrop(dragging.current, node.id);
+        e.dataTransfer.dropEffect = allowed ? 'move' : 'none'; setDropTarget(allowed ? node.id : null);
+        // Expand even a read-only parent: a child may have different permissions.
+        if (hover.current?.id !== node.id) {
+          clearHover();
+          if (branch && !open) hover.current = { id: node.id, timer: setTimeout(() => toggle(node.id, true), 600) };
+        }
+      }}
+      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) { clearHover(); setDropTarget(null); } }}
+      onDrop={e => {
+        if (!dragDrop || !dragging.current) return;
+        e.preventDefault(); e.stopPropagation();
+        const source = dragging.current;
+        const allowed = !disabled && e.dataTransfer.getData(dragType) === source && dragDrop.canDrop(source, node.id);
+        endDrag(); if (allowed) { toggle(node.id, true); dragDrop.onDrop(source, node.id); }
+      }}
+      data-drop-target={dropTarget === node.id || undefined}
+      className={cn('rounded outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset', dropTarget === node.id && 'bg-accent ring-2 ring-primary ring-inset')}>
       <div title={node.detail} style={{ paddingLeft: 8 + (level - 1) * 16 }} className={cn('flex min-h-9 cursor-pointer items-center gap-2 rounded px-2 text-sm hover:bg-muted/60', selectedId === node.id && 'bg-muted font-medium', (disabled || node.disabled) && 'text-muted-foreground')}
+        draggable={Boolean(dragDrop && !disabled && dragDrop.canDrag(node.id))}
         onClick={e => { if ((e.target as HTMLElement).closest('a,button,input,[role="menuitem"]')) return; focus(node.id); if (!disabled && !node.disabled) onSelect(node.id); }}>
         {branch ? <button type="button" tabIndex={-1} aria-label={`${open ? 'Collapse' : 'Expand'} ${node.name}`} className="flex size-5 shrink-0 items-center justify-center" onClick={e => { e.stopPropagation(); focus(node.id); toggle(node.id); }}><ChevronRight aria-hidden className={cn('size-4 transition-transform', open && 'rotate-90')} /></button> : <span className="size-5 shrink-0" />}
         {node.content ?? <>{node.href ? <a href={node.href} title={node.detail ?? node.name} aria-current={selectedId === node.id ? 'page' : undefined} className="flex min-w-0 flex-1 items-center gap-2 py-1.5 focus-visible:outline focus-visible:outline-ring" onClick={e => onNavigate?.(e, node.id)}><Icon aria-hidden className="size-4 shrink-0" /><span className="truncate">{node.name}</span></a>
           : <><Icon aria-hidden className="size-4 shrink-0" /><span className="min-w-0 flex-1 truncate">{node.name}</span></>}{(node.disabled || node.readOnly) && <LockKeyhole aria-label="Read-only" className="size-3 shrink-0" />}</>}
+        {node.actions && <span className="flex shrink-0 items-center" onClick={() => { if (node.kind !== 'report') toggle(node.id, true); }}>{node.actions}</span>}
       </div>
     </li>{branch && open && render(node.children!, level + 1)}</Fragment>;
   });
