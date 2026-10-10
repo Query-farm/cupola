@@ -60,7 +60,8 @@ async function contextMenu(page: Page, collection: 'notebooks' | 'reports', titl
     .getByRole('navigation', { name: `Saved ${collection}` })
     .getByRole('link', { name: title, exact: true })
     .click({ button: 'right' });
-  const menu = page.getByRole('menu', { name: `${title} actions`, exact: true });
+  // Autosave can rename the open menu while it is being inspected.
+  const menu = page.getByRole('menu');
   await expect(menu).toBeVisible();
   return menu;
 }
@@ -144,7 +145,7 @@ for (const kind of ['notebook', 'report'] as const) {
     if (kind === 'report')
       await expect(
         page
-          .getByRole('region', { name: 'Saved reports list' })
+          .getByRole('region', { name: 'Report browser' })
           .getByText(renamed, { exact: true }),
       ).toBeVisible();
     await (await contextMenu(page, collection, renamed))
@@ -267,7 +268,7 @@ test('open report actions export pending edits and deletion leaves no saved or r
     .getByRole('menuitem', { name: 'Delete…' })
     .click();
   await page.getByRole('dialog').getByRole('button', { name: 'Confirm delete' }).click();
-  await expect(page.getByRole('region', { name: 'Saved reports list' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Report browser' })).toBeVisible();
   await page.waitForTimeout(1800);
   expect(await saved(page, 'report', 'one')).toBeNull();
   await expect(sidebar.getByRole('link', { name: /Active report|Pending deletion/ })).toHaveCount(
@@ -275,7 +276,7 @@ test('open report actions export pending edits and deletion leaves no saved or r
   );
   await expect(page.getByRole('region', { name: 'Unsaved reports' })).toHaveCount(0);
   // Restoring the same ID through Import must reopen a working editor, rather than stay deleted.
-  await page.getByLabel('Report files to import').setInputFiles({
+  await page.getByLabel('Import local report files').setInputFiles({
     name: 'restored.cupola-reports.json',
     mimeType: 'application/json',
     buffer: Buffer.from(await readFile((await download.path())!, 'utf8')),

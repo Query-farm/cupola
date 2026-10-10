@@ -21,3 +21,22 @@ export function folderBranches(location: string, folders: ReportFolderNode[]): F
   for (const folder of folders) if (!visited.has(folder.id)) roots.push(visit(folder));
   return roots;
 }
+import { reportNodeKey, type ReportDestination } from './navigation';
+
+
+export interface ReportDirectoryNode { id: string; name: string; kind: 'folder' | 'report'; destination: ReportDestination; children?: ReportDirectoryNode[] }
+/** A report belongs to its visible folder; hidden parents leave accessible reports at the root. */
+export function reportDirectoryNodes(location: string, folders: ReportFolderNode[], reports: { id: string; name: string; folderId: string | null }[]): ReportDirectoryNode[] {
+  const known = new Set(folders.map(f => f.id));
+  const leaves = (folderId: string | null): ReportDirectoryNode[] => reports
+    .filter(r => (r.folderId && known.has(r.folderId) ? r.folderId : null) === folderId)
+    .sort((a, b) => a.name.localeCompare(b.name)).map(r => {
+      const destination = { location, folderId, reportId: r.id };
+      return { id: reportNodeKey(destination), name: r.name, kind: 'report', destination };
+    });
+  const branches = (items: FolderBranch[]): ReportDirectoryNode[] => items.map(f => {
+    const destination = { location, folderId: f.folderId };
+    return { id: reportNodeKey(destination), name: f.name, kind: 'folder', destination, children: [...branches(f.children), ...leaves(f.folderId)] };
+  });
+  return [...branches(folderBranches(location, folders)), ...leaves(null)];
+}

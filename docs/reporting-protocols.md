@@ -2,10 +2,13 @@
 
 Cupola probes the workspace's connected HTTP services for `vgi.reports.v1` and
 combines their visible reports with browser-local reports in **All reports**.
-The **Location** column identifies each source. A folder tree inside the browser
-contains **All reports**, **On this device**, and named worker locations. Expand
-locations and folders with their chevrons, then select a folder to list its contents.
-The editor has no separate location toolbar. The worker's existing
+The **Location** column identifies each source. The main catalog sidebar has one
+**Reports → library → folders → reports** tree, available in every app tab.
+Browser-only reports live under **Reports → Local**, alongside worker libraries;
+they are no longer listed under the sidebar's **On this device** section.
+Click Reports for the combined listing, a library or folder for its contents, or
+a report to open it. The report page has no second navigation sidebar.
+The worker's existing
 `get_report_service_info().display_name` supplies its drive name. URLs remain
 connection identities and appear only as details or to distinguish duplicate names.
 
@@ -45,8 +48,14 @@ available in the combined browser.
 
 - `FileTree` provides selection, independent expansion, keyboard navigation,
   type-ahead, and accessible tree semantics.
-- `ReportStorageTree` adapts local and worker folders to that tree. It is shared
-  by the browser and cross-location transfer dialogs. `ResourceDialog` uses
+- `ReportsSidebar` puts libraries, folders and report links in the main sidebar.
+  Filtering reveals matching reports with their parent folders. Links preserve
+  browser Back/Forward, new-tab clicks and workspace context. Successful worker
+  mutations refresh that library's tree; denied reads clear its previous entries.
+- `ReportLocationsProvider` shares protocol discovery between the sidebar and
+  report pages, deduplicating catalogs that use the same worker endpoint.
+- `ReportStorageTree` adapts local and worker folders for transfer dialogs.
+  `ResourceDialog` uses
   `FileTree` for folder creation and moves within a worker, excluding a folder's
   own descendants as move targets.
 - `ReportFileList` renders the contents of both local and worker directories.

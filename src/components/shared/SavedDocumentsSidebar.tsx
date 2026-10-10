@@ -1,4 +1,4 @@
-import { useId, useState, type MouseEvent } from 'react';
+import { useId, useState, type MouseEvent, type ReactNode } from 'react';
 import { ChevronRight, Plus, type LucideIcon } from 'lucide-react';
 import { SavedDocumentRow } from './SavedDocumentRow';
 import type { SavedDocumentAction } from '../../lib/saved-document-actions';
@@ -22,6 +22,7 @@ export function SavedDocumentsSidebar({
   error,
   documentKind,
   onAction,
+  children,
 }: {
   title: string;
   icon: LucideIcon;
@@ -39,6 +40,7 @@ export function SavedDocumentsSidebar({
   error?: string;
   documentKind: 'notebook' | 'report';
   onAction: (id: string, action: SavedDocumentAction) => Promise<void>;
+  children?: ReactNode;
 }) {
   const itemsId = useId();
   const [open, setOpen] = useState(() => {
@@ -49,8 +51,8 @@ export function SavedDocumentsSidebar({
     }
   });
   const visible = items.filter((item) => item.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
-  if (search && !visible.length && !error) return null;
-  const hasItems = items.length > 0;
+  if (search && !visible.length && !error && !children) return null;
+  const hasItems = items.length > 0 || Boolean(children);
   const expanded = hasItems && (open || Boolean(search));
   return (
     <nav aria-label={`Saved ${title.toLocaleLowerCase()}`} className="text-sm">
@@ -101,7 +103,7 @@ export function SavedDocumentsSidebar({
         )}
       </div>
       {hasItems && <div id={itemsId} hidden={!expanded} className="ml-4 border-l pb-1 pl-1">
-        {visible.map((item) => (
+        {children ?? visible.map((item) => (
           <SavedDocumentRow
             key={item.id}
             item={item}

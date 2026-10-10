@@ -1,5 +1,5 @@
 import { SavedNotebooksSidebar } from './notebooks/SavedNotebooksSidebar';
-import { SavedReportsSidebar } from "./evidence/SavedReportsSidebar";
+import { ReportsSidebar } from './reporting/ReportsSidebar';
 import { useState, useMemo, useRef, useCallback } from "react";
 import { Search, Cpu, RefreshCw, Loader2, CheckCircle2, AlertTriangle, LogIn, Database, Star, Plus, X } from "lucide-react";
 import { CatalogChip, chipIcon } from "./workspace/CatalogChip";
@@ -48,6 +48,7 @@ interface Props {
   serviceUrl?: string;
   activeNotebookId?: string | null;
   notebooksActive?: boolean;
+  reportsActive?: boolean;
   selection: Selection | null;
   onSelect: (selection: Selection | null) => void;
   /** Insert text into the DuckDB shell (or the editor, per `insertTarget`). */
@@ -94,7 +95,7 @@ function statusMark(status: SidebarCatalogStatus | undefined, meta: SidebarCatal
   );
 }
 
-export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onInsertCallable, insertTarget = "shell", onRefresh, catalogStatuses = [], onRetryCatalog, onSignInCatalog, onCatalogDetails, signInNotice, onDismissSignInNotice, workspaceId, catalogMeta, initialExpanded, onExpandedChange, emptyWorkspace, onAttachCatalog, onEnableCatalog }: Props) {
+export function Sidebar({ activeNotebookId, notebooksActive, reportsActive, serviceUrl, catalogs, defaultCatalogName, inventoryError, selection, onSelect, onShellInsert, onInsertCallable, insertTarget = "shell", onRefresh, catalogStatuses = [], onRetryCatalog, onSignInCatalog, onCatalogDetails, signInNotice, onDismissSignInNotice, workspaceId, catalogMeta, initialExpanded, onExpandedChange, emptyWorkspace, onAttachCatalog, onEnableCatalog }: Props) {
   const [search, setSearch] = useState("");
   // One dismissible strip for every catalog that needs attention. Dismissing
   // it hides it until that set changes.
@@ -170,8 +171,8 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
   const localData = useMemo(() => filteredData.filter((item) => item.id === 'memory'), [filteredData]);
 
   const selectedTreeId = useMemo(
-    () => selection ? selectionToTreeId(selection, defaultCatalogName) : defaultCatalogName,
-    [selection, defaultCatalogName]
+    () => reportsActive ? '' : selection ? selectionToTreeId(selection, defaultCatalogName) : defaultCatalogName,
+    [selection, defaultCatalogName, reportsActive]
   );
 
   function handleSelectChange(item: { id: string } | undefined, event?: React.MouseEvent | React.KeyboardEvent) {
@@ -322,6 +323,7 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
           onExpandedChange={handleExpanded}
           trailingDropZone={false}
         />
+        {serviceUrl && <ReportsSidebar key={`reports:${workspaceId ?? serviceUrl}`} serviceUrl={serviceUrl} workspaceId={workspaceId} search={search} active={reportsActive} />}
         {(serviceUrl || localData.length > 0) && (
           <section aria-label="On this device" className="mt-2 border-t border-border pt-2">
             <h2 className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">On this device</h2>
@@ -336,7 +338,6 @@ export function Sidebar({ activeNotebookId, notebooksActive, serviceUrl, catalog
               trailingDropZone={false}
             />
             {serviceUrl && <SavedNotebooksSidebar key={`notebooks:${workspaceId ?? serviceUrl}`} serviceUrl={serviceUrl} workspaceId={workspaceId} search={search} activeId={notebooksActive ? activeNotebookId : undefined} libraryActive={notebooksActive && !activeNotebookId} />}
-            {serviceUrl && <SavedReportsSidebar key={`reports:${workspaceId ?? serviceUrl}`} serviceUrl={serviceUrl} workspaceId={workspaceId} search={search} />}
           </section>
         )}
       </div>

@@ -4,6 +4,7 @@ import { tableFromIPC } from '@query-farm/apache-arrow';
 import { getAuthTokenForService } from '../auth';
 import { connectionErrorMessage } from '../connection-errors';
 import { methodConfig, recordSchemas, REPORTS_PROTOCOL, type ReportMethods } from './contracts.generated';
+import { REPORT_LIBRARY_CHANGED } from './navigation';
 
 export type Method = keyof ReportMethods;
 export type Input<M extends Method> = ReportMethods[M]['input'];
@@ -101,7 +102,13 @@ export class ReportClient {
     for (const [key, name] of Object.entries(config.structured)) if (params[key] != null) params[key] = encodeRecord(name, params[key]);
     const rpc = await this.connection(REPORTS_PROTOCOL, signal);
     try {
-      if (!config.stream) return decodeRecord((await rpc.call(method, params))?.result);
+      if (!config.stream) {
+        const result = decodeRecord((await rpc.call(method, params))?.result);
+        if ('request_id' in params && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+          window.dispatchEvent(new CustomEvent(REPORT_LIBRARY_CHANGED, { detail: { url: this.url } }));
+        }
+        return result;
+      }
       const stream = await rpc.stream(method, params);
       try {
         const rows: unknown[] = [];

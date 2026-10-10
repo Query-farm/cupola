@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { FileTree, type FileTreeNode } from './FileTree';
 import { ReportNotice } from './ReportNotice';
 import { ReportClient, reportError } from '../../lib/reporting/client';
@@ -7,10 +7,6 @@ import { localLibrary } from '../../lib/reporting/local-library';
 import { EVIDENCE_REPORTS_CHANGED } from '../../lib/evidence/reports';
 import { locationLabel, type ReportLocation } from '../../lib/reporting/locations';
 
-export interface ReportBrowserNavigation {
-  locations: ReportLocation[]; scope: string;
-  onNavigate: (location: string, folderId?: string | null) => void;
-}
 interface StorageTreeProps {
   locations: ReportLocation[]; scope: string; location: string; folderId: string | null;
   onSelect: (location: string, folderId: string | null) => void;
@@ -42,7 +38,7 @@ export function ReportStorageTree({ locations, scope, location, folderId, onSele
   };
   const nodes: FileTreeNode[] = [
     ...(!picker ? [{ id: directoryKey('all'), name: 'All reports', kind: 'collection' as const }] : []),
-    { id: directoryKey('local'), name: 'On this device', kind: 'location', children: branches('local', local) },
+    { id: directoryKey('local'), name: 'Local', kind: 'location', children: branches('local', local) },
     ...locations.filter(l => l.info).map(l => ({ id: directoryKey(l.url), name: locationLabel(l, locations), kind: 'location' as const,
       children: branches(l.url, remote[l.url] ?? []), readOnly: picker && (!l.info?.writable || !l.info.root_allowed_actions.includes('create_report')), detail: errors[l.url] || (!l.info?.root_allowed_actions.includes('create_report') ? 'Read-only root; folders may allow writes' : undefined) })),
   ];
@@ -50,16 +46,5 @@ export function ReportStorageTree({ locations, scope, location, folderId, onSele
     onSelect={id => { const [url, folder] = JSON.parse(id); onSelect(url, folder); }} />
     {loading && <p role="status" className="px-2 text-xs text-muted-foreground">Loading folders…</p>}
     {Object.entries(errors).map(([url, message]) => <ReportNotice key={url} kind="error" title={`Could not load ${locations.find(l => l.url === url)?.name ?? 'folders'}`}>{message}</ReportNotice>)}
-  </div>;
-}
-
-export function ReportBrowserLayout({ navigation, location, folderId, refreshKey, children }: {
-  navigation: ReportBrowserNavigation; location: string; folderId: string | null; refreshKey?: unknown; children: ReactNode;
-}) {
-  return <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-    <aside aria-label="Report storage" className="max-h-52 shrink-0 overflow-auto border-b p-3 md:max-h-none md:w-60 md:border-r md:border-b-0">
-      <ReportStorageTree {...navigation} location={location} folderId={folderId} onSelect={navigation.onNavigate} refreshKey={refreshKey} />
-    </aside>
-    <div className="min-h-0 min-w-0 flex-1 overflow-auto">{children}</div>
   </div>;
 }

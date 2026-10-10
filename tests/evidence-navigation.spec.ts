@@ -7,7 +7,7 @@ test('Reports starts at the list and preserves an opened report across tab switc
   await waitForShellBridge(page);
   await page.getByTestId('tab-reports').click();
   const panel = page.getByTestId('evidence-panel');
-  const list = panel.getByRole('heading', { name: /^(All reports|On this device)$/ });
+  const list = panel.getByRole('heading', { name: /^(All reports|Local)$/ });
   await expect(list).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Back to report', exact: true })).toHaveCount(0);
   await expect(panel.getByTestId('evidence-document')).toHaveCount(0);

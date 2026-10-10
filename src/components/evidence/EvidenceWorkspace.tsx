@@ -16,6 +16,7 @@ import { resolveRequires, rewriteReportAliases, withDerivedRequires, type Requir
 import { rebindLabel, REPORT_REWRITE_EVENT, rewriteReportForRename, type ReportRewrite } from '../../lib/workspace/alias-rename';
 import { openAttachCatalog } from '../../lib/workspace/events';
 import { OPEN_REPORT_EVENT, type OpenReportDetail } from '../../lib/evidence/open-report';
+import { REPORT_ROUTE_CHANGED } from '../../lib/reporting/navigation';
 import { parseReportFile, planImport, reportFileName, serializeReportFile, REPORT_FILE_EXTENSION } from '../../lib/evidence/report-file';
 import { emptyHistory, loadReportHistory, mergeHistories, recordRevision, removeRevision, revisionReport, saveReportHistory, shrinkStoredHistory, specOf, type ReportHistory, type Revision, type RevisionMeta } from '../../lib/evidence/revisions';
 import type { ProposalEvent } from './EvidenceAgent';
@@ -349,6 +350,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     if (id !== url.searchParams.get('evidence_report')) for (const key of [...url.searchParams.keys()]) if (key.startsWith(PARAMETER_URL_PREFIX)) url.searchParams.delete(key);
     if (id) url.searchParams.set('evidence_report', id); else url.searchParams.delete('evidence_report');
     window.history[replace ? 'replaceState' : 'pushState']({}, '', url);
+    window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
     setLibrary(showLibrary);
     if (showLibrary) setFocused(false);
     if (showLibrary) { setRun(null); setRetained(null); reloadList(); }
@@ -941,7 +943,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   const quietStatus = pendingQueries === 0 && status === 'Connected';
 
   const localEntry = remote ? null : localReportEntry(scope, report);
-  const localLocation = remote ? '' : ['On this device', localFolderPath(localEntry?.folderId ?? null, localLibrary(scope).folders)].filter(Boolean).join(' / ');
+  const localLocation = remote ? '' : ['Local', localFolderPath(localEntry?.folderId ?? null, localLibrary(scope).folders)].filter(Boolean).join(' / ');
   function transfer(move: boolean) { const stored = persist(reportRef.current, { kind: 'edit' }); if (stored) onTransfer?.(stored, move); }
   const reportActions: ReportAction[] = [
     reportAction('history', () => { remote?.onHistoryOpen(); setHistoryOpen(true); }),

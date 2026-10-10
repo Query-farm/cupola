@@ -40,14 +40,14 @@ export function TransferDialog({ source, move, locations, scope, serviceUrl, wor
     <form className="space-y-4" onSubmit={async e => {
       e.preventDefault(); if (!writable || !mayRemove || sameFolder || busy || loading) return; setBusy(true); setError('');
       try {
-        const pending = job ?? await prepareTransfer(source, { url: destination === 'local' ? null : destination, folderId: folderId || null, name: destination === 'local' ? 'On this device' : target?.name ?? 'Report storage' }, move, { scope, serviceUrl, workspaceId });
+        const pending = job ?? await prepareTransfer(source, { url: destination === 'local' ? null : destination, folderId: folderId || null, name: destination === 'local' ? 'Local' : target?.name ?? 'Report storage' }, move, { scope, serviceUrl, workspaceId });
         setJob(pending);
         onComplete(await resumeTransfer(pending));
       } catch (e) { setError(reportError(e)); } finally { setBusy(false); }
     }}>
       <div className="space-y-2"><p className="text-sm font-medium">Save in</p><div className="max-h-72 overflow-auto rounded border p-2"><ReportStorageTree picker locations={locations} scope={scope} location={destination} folderId={folderId || null} disabled={busy || Boolean(job)} onSelect={(url, folder) => { setDestination(url); setFolderId(folder ?? ''); }} /></div></div>
       {loading && <p role="status" className="text-sm">Loading folders…</p>}
-      {!writable && !loading && <ReportNotice kind="permission" title="Read-only destination">Choose a writable folder or On this device.</ReportNotice>}
+      {!writable && !loading && <ReportNotice kind="permission" title="Read-only destination">Choose a writable folder or Local.</ReportNotice>}
       {!mayRemove && <ReportNotice kind="permission" title="Move restricted">{sameStore ? 'You cannot move this report between folders here.' : 'You can move this report only within its current library. Save a copy to use another location.'}</ReportNotice>}
       {sameFolder && <p className="text-sm text-muted-foreground">Choose a different folder or location.</p>}
       {error && <ReportNotice kind="error" title="Transfer not confirmed">{error}{job && ' The transfer is saved for retry. Your original is kept until the destination is confirmed.'}</ReportNotice>}

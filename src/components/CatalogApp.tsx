@@ -117,6 +117,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { Header } from "./Header";
 import { BrandMark } from "./BrandMark";
 import { Sidebar, type SidebarCatalogMeta, type SidebarCatalogStatus } from "./Sidebar";
+import { ReportLocationsProvider } from './reporting/ReportLocations';
 import { OPEN_ATTACH_EVENT, type PickerCatalog, type WorkspaceActions } from "./ServiceSwitcher";
 import type { AttachRequest } from "./workspace/AttachCatalogForm";
 import { CatalogOptionsDialog, type OptionsEditTarget } from "./workspace/CatalogOptionsDialog";
@@ -1633,6 +1634,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
 
   return (
     <SettingsProvider>
+    <ReportLocationsProvider serviceUrl={serviceUrl} workspaceId={workspaceId || undefined} catalogs={catalogs}>
     <div className="flex flex-col h-dvh">
       <CommandPalette getCommands={paletteCommands} />
       <AliasRenameHost onRename={renameAlias} />
@@ -1690,6 +1692,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                 serviceUrl={serviceUrl}
                 activeNotebookId={activeNotebookId}
                 notebooksActive={activeTab === "notebooks"}
+                reportsActive={activeTab === "reports"}
                 catalogs={catalogs}
                 defaultCatalogName={defaultAlias ?? data.catalogName}
                 inventoryError={inventoryError}
@@ -1902,6 +1905,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
         <button aria-label="Dismiss" className="opacity-70 hover:opacity-100" onClick={() => setUndo(null)}>×</button>
       </div>
     )}
+    </ReportLocationsProvider>
     </SettingsProvider>
   );
 }

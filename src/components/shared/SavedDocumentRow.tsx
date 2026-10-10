@@ -41,6 +41,7 @@ export function SavedDocumentRow({
   documentKind,
   onNavigate,
   onAction,
+  className = 'ml-5',
 }: {
   item: SavedDocumentItem;
   icon: LucideIcon;
@@ -48,6 +49,7 @@ export function SavedDocumentRow({
   documentKind: 'notebook' | 'report';
   onNavigate: (event: MouseEvent<HTMLAnchorElement>, id?: string) => void;
   onAction: (id: string, action: SavedDocumentAction) => Promise<void>;
+  className?: string;
 }) {
   const link = useRef<HTMLAnchorElement | null>(null);
   const nameInput = useRef<HTMLInputElement | null>(null);
@@ -119,7 +121,7 @@ export function SavedDocumentRow({
     <>
       <ContextMenu.Root open={contextOpen} onOpenChange={setContextOpen}>
         <ContextMenu.Trigger
-          className={`ml-5 flex items-center rounded-md transition-colors hover:bg-muted/60 ${active ? 'bg-muted font-medium' : ''}`}
+          className={`${className} flex items-center rounded-md transition-colors hover:bg-muted/60 ${active ? 'bg-muted font-medium' : ''}`}
           onContextMenu={() => setKeyboardAnchor(null)}
           onKeyDown={(event) => {
             if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {

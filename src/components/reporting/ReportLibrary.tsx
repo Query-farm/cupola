@@ -15,14 +15,14 @@ import { downloadDocumentFile } from '../../lib/saved-document-actions';
 import { ResourceDialog, folderPath, type ResourceAction, type ResourceValues } from './ResourceDialog';
 import { RemoteReport } from './RemoteReport';
 import type { ReportingWorkspaceProps } from './ReportingWorkspace';
-import { ReportBrowserLayout, type ReportBrowserNavigation } from './ReportStorageTree';
 import { ReportFileList, type ReportFileItem } from './ReportFileList';
 import { ReportNotice } from './ReportNotice';
 import { ReportActionMenu, reportAction } from './ReportActionMenu';
 import { ReportDetailsDialog } from './ReportDetailsDialog';
+import { REPORT_ROUTE_CHANGED, REPORT_LIBRARY_CHANGED } from '../../lib/reporting/navigation';
 
 export interface LibrarySession { client: ReportClient; info: ReportsInfo; scope: string; journal: MutationJournal }
-export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: string; navigation: ReportBrowserNavigation; onAllReports: () => void }) {
+export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: string; onAllReports: () => void }) {
   const client = useMemo(() => new ReportClient(props.libraryUrl), [props.libraryUrl]);
   const [session, setSession] = useState<LibrarySession | null>(null);
   const [folderId, setFolderId] = useState<string | null>(() => new URLSearchParams(location.search).get('report_folder'));
@@ -75,7 +75,7 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
     if (id) url.searchParams.set('report_id', id); else url.searchParams.delete('report_id');
     if (folder) url.searchParams.set('report_folder', folder); else url.searchParams.delete('report_folder');
     if (pinned) url.searchParams.set('report_revision', pinned); else url.searchParams.delete('report_revision');
-    history.pushState({}, '', url); setFolderId(folder); setSelected({ id, revision: pinned }); setRecovery(undefined); setError('');
+    history.pushState({}, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED)); setFolderId(folder); setSelected({ id, revision: pinned }); setRecovery(undefined); setError('');
   }
   async function mutate<M extends Method>(method: M, input: Omit<RpcInput<M>, 'request_id'>): Promise<Output<M>> {
     if (!session) throw new Error('The report library is not connected.');
@@ -139,14 +139,13 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
   return <section aria-label="Worker report library" className="flex h-full min-h-0 flex-col">
     <header className="flex flex-wrap items-center gap-3 border-b px-5 py-4">
       <FolderOpen className="size-5" /><h1 className="font-semibold">{session?.info.display_name ?? 'Report library'}</h1>
-      <Button variant="ghost" size="sm" disabled={busy} onClick={() => setGeneration(n => n + 1)}><RefreshCw />Reload library</Button>
+      <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setGeneration(n => n + 1); window.dispatchEvent(new CustomEvent(REPORT_LIBRARY_CHANGED, { detail: { url: client.url } })); }}><RefreshCw />Reload library</Button>
       <div className="ml-auto flex flex-wrap gap-2">
         <Button variant="outline" disabled={blocked || !actions.includes('create_folder')} onClick={() => setDialog({ action: 'folder' })}>New folder</Button>
         <Button disabled={busy || loading} onClick={() => { if (blocked || !actions.includes('create_report')) props.onCreateLocal?.(); else void create(newEvidenceReport(props.serviceUrl, props.catalogName)).catch(e => setError(reportError(e))); }}><Plus />New report</Button>
       </div>
     </header>
-    <ReportBrowserLayout navigation={props.navigation} location={props.libraryUrl} folderId={folderId} refreshKey={generation}>
-    <div className="space-y-4 p-5">
+    <div className="min-h-0 flex-1 space-y-4 overflow-auto p-5">
       {!loading && session && (!actions.includes('create_report') || !session.info.writable) ? <ReportNotice kind="permission" title="Read-only location" action={<Button size="sm" variant="outline" onClick={props.onCreateLocal}><Plus />New local report</Button>}>
         You can view reports here. Save new reports on this device or choose a writable folder.
       </ReportNotice> : !loading && session && !actions.includes('create_folder') && <ReportNotice kind="permission" title="Folder creation restricted">Your current access allows reports here, but not new folders.</ReportNotice>}
@@ -167,7 +166,6 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
       {drafts.length > 0 && <section aria-label="Recovered worker drafts" className="space-y-2 rounded border p-3"><h2 className="text-sm font-semibold">Drafts kept on this device</h2>{drafts.map(draft => <div key={draft.key} className="flex flex-wrap items-center gap-3 text-sm"><span>{draft.value.draft.report.title} · {new Date(draft.value.updatedAt).toLocaleString()}</span><Button size="sm" variant="outline" onClick={() => { navigate(draft.value.base.report_id); setRecovery(draft); }}>Review draft</Button><Button size="sm" variant="ghost" onClick={() => downloadDocumentFile(JSON.stringify(draft.value.draft.report, null, 2), 'recovered-report.json')}>Export draft</Button><Button size="sm" variant="ghost" onClick={async () => { if (confirm('Discard this recovery draft? Any pending worker request may already have succeeded.')) { localStorage.removeItem(draft.key); await new MutationJournal(client, session!.scope, draft.value.journalId).discard(); setDrafts(recoveryDrafts(session!.scope)); } }}>Discard draft…</Button></div>)}</section>}
       <p className="text-xs text-muted-foreground">Folder and report permissions are defined by this worker. Publishing does not itself grant access.</p>
     </div>
-    </ReportBrowserLayout>
     {details && <ReportDetailsDialog initial={{ name: details.envelope?.title ?? '', description: details.envelope?.description ?? '', tags: details.envelope?.tags ?? [] }} location={session?.info.display_name ?? 'Report library'} onClose={() => setDetails(null)} blocked={blocked}
       identity={<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2"><dt>Created by</dt><dd>{details.created_by.display_name || details.created_by.id}</dd><dt>Owner</dt><dd>{details.ownership.owner_ref.display_name || details.ownership.owner_ref.id}</dd></dl>}
       onTransferOwnership={details.allowed_actions.includes('transfer_ownership') ? () => { setDialog({ action: 'ownership', resource: details }); setDetails(null); } : undefined} />}

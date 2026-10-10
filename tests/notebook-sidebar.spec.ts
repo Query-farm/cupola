@@ -159,7 +159,8 @@ test('sidebar creates notebooks, reflects deletion and cross-tab changes, and re
   const sidebar = page.getByRole('navigation', { name: 'Saved notebooks' });
   const local = root.getByRole('region', { name: 'On this device', exact: true });
   await expect(local.getByRole('navigation', { name: 'Saved notebooks' })).toBeVisible();
-  await expect(local.getByRole('navigation', { name: 'Saved reports' })).toBeVisible();
+  await expect(local.getByRole('navigation', { name: 'Saved reports' })).toHaveCount(0);
+  await expect(page.getByTestId('catalog-sidebar').getByRole('navigation', { name: 'Saved reports' })).toBeVisible();
   await expect(root.getByRole('link', { name: /^All (notebooks|reports)$/ })).toHaveCount(0);
   await root.getByRole('button', { name: 'New notebook', exact: true }).click();
   await page.getByRole('textbox', { name: 'Notebook title' }).fill('Created from sidebar');
