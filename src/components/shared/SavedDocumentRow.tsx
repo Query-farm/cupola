@@ -43,6 +43,7 @@ export function SavedDocumentRow({
   onNavigate,
   onAction,
   onMove,
+  actionsOnHover = false,
   className = 'ml-5',
 }: {
   item: SavedDocumentItem;
@@ -50,8 +51,9 @@ export function SavedDocumentRow({
   active: boolean;
   documentKind: 'notebook' | 'report';
   onNavigate: (event: MouseEvent<HTMLAnchorElement>, id?: string) => void;
-  onAction: (id: string, action: SavedDocumentAction) => Promise<void>;
+  onAction?: (id: string, action: SavedDocumentAction) => Promise<void>;
   onMove?: () => void;
+  actionsOnHover?: boolean;
   className?: string;
 }) {
   const link = useRef<HTMLAnchorElement | null>(null);
@@ -70,6 +72,7 @@ export function SavedDocumentRow({
     setDialog(next);
   }
   async function perform(action: SavedDocumentAction) {
+    if (!onAction) return;
     const libraryLink = link.current?.closest('nav')?.querySelector<HTMLAnchorElement>('a');
     setPending(true);
     setError('');
@@ -95,29 +98,37 @@ export function SavedDocumentRow({
         <ExternalLink aria-hidden className="size-4" />
         Open in new tab
       </ContextMenu.LinkItem>
-      <DropdownMenuSeparator />
-      <DropdownMenuItem disabled={pending} onClick={() => showDialog('rename')}>
-        <Pencil aria-hidden />
-        Rename…
-      </DropdownMenuItem>
-      <DropdownMenuItem disabled={pending} onClick={() => void perform({ type: 'duplicate' })}>
-        <Copy aria-hidden />
-        Duplicate
-      </DropdownMenuItem>
+      {(onAction || onMove) && <DropdownMenuSeparator />}
+      {onAction && (
+        <>
+          <DropdownMenuItem disabled={pending} onClick={() => showDialog('rename')}>
+            <Pencil aria-hidden />
+            Rename…
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={pending} onClick={() => void perform({ type: 'duplicate' })}>
+            <Copy aria-hidden />
+            Duplicate
+          </DropdownMenuItem>
+        </>
+      )}
       {onMove && <DropdownMenuItem disabled={pending} onClick={onMove}><FolderInput aria-hidden />Move…</DropdownMenuItem>}
-      <DropdownMenuItem disabled={pending} onClick={() => void perform({ type: 'export' })}>
-        <Download aria-hidden />
-        {documentKind === 'report' ? 'Export report file' : 'Export notebook'}
-      </DropdownMenuItem>
-      <DropdownMenuSeparator />
-      <DropdownMenuItem
-        disabled={pending}
-        variant="destructive"
-        onClick={() => showDialog('delete')}
-      >
-        <Trash2 aria-hidden />
-        Delete…
-      </DropdownMenuItem>
+      {onAction && (
+        <>
+          <DropdownMenuItem disabled={pending} onClick={() => void perform({ type: 'export' })}>
+            <Download aria-hidden />
+            {documentKind === 'report' ? 'Export report file' : 'Export notebook'}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            disabled={pending}
+            variant="destructive"
+            onClick={() => showDialog('delete')}
+          >
+            <Trash2 aria-hidden />
+            Delete…
+          </DropdownMenuItem>
+        </>
+      )}
     </>
   );
 
@@ -125,7 +136,7 @@ export function SavedDocumentRow({
     <>
       <ContextMenu.Root open={contextOpen} onOpenChange={setContextOpen}>
         <ContextMenu.Trigger
-          className={`${className} flex items-center rounded-md transition-colors hover:bg-muted/60 ${active ? 'bg-muted font-medium' : ''}`}
+          className={`${className} group/document-row flex items-center rounded-md transition-colors hover:bg-muted/60 ${active ? 'bg-muted font-medium' : ''}`}
           onContextMenu={() => setKeyboardAnchor(null)}
           onKeyDown={(event) => {
             if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
@@ -150,7 +161,7 @@ export function SavedDocumentRow({
             <DropdownMenuTrigger
               aria-label={`Actions for ${item.title}`}
               title={`Actions for ${item.title}`}
-              className="mr-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-ring"
+              className={`mr-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-ring ${actionsOnHover ? '[@media(hover:hover)_and_(pointer:fine)]:opacity-0 group-hover/document-row:opacity-100 group-focus-within/document-row:opacity-100 data-popup-open:opacity-100' : ''}`}
             >
               <MoreHorizontal aria-hidden className="size-4" />
             </DropdownMenuTrigger>

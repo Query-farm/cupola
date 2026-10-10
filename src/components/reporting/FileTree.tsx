@@ -62,6 +62,13 @@ export function FileTree({ nodes, label, selectedId, onSelect, disabled = false,
     });
   }
   function key(event: KeyboardEvent, node: FileTreeNode) {
+    if (event.target === event.currentTarget && (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10')) {
+      // Arrow-key navigation focuses the tree item rather than its link. Expose
+      // the same actions there as the row's right-click and touch menus.
+      const menu = event.currentTarget.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]');
+      if (menu) { event.preventDefault(); event.stopPropagation(); menu.focus(); menu.click(); }
+      return;
+    }
     const index = visible.findIndex(n => n.id === node.id);
     if (event.key === 'ArrowDown') focus(visible[index + 1]?.id);
     else if (event.key === 'ArrowUp') focus(visible[index - 1]?.id);

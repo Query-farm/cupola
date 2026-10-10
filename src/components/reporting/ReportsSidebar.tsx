@@ -1,5 +1,5 @@
 import { useEffect, useState, type MouseEvent } from 'react';
-import { FileChartColumn, FileText, FolderPlus, FolderInput } from 'lucide-react';
+import { FileChartColumn, FileText, FolderPlus } from 'lucide-react';
 import { SavedDocumentsSidebar } from '../shared/SavedDocumentsSidebar';
 import { SavedDocumentRow } from '../shared/SavedDocumentRow';
 import { FileTree, type FileTreeNode } from './FileTree';
@@ -102,8 +102,8 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
     destinations.set(entry.id, entry.destination);
     return { ...entry, href: href(entry.destination), children: entry.children && nodes(entry.children, isLocal),
       readOnly: entry.kind === 'folder' && !allowed(entry.destination, 'create_report') && !allowed(entry.destination, 'create_folder'),
-      actions: entry.kind === 'folder' ? folderAction(entry.destination, entry.name) : !isLocal && canDrag(entry.id) ? <button type="button" aria-label={`Move ${entry.name}`} title="Move report…" className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-ring" onClick={() => void move(entry.id)}><FolderInput aria-hidden className="size-4" /></button> : undefined,
-      content: isLocal && entry.kind === 'report' ? <SavedDocumentRow className="min-w-0 flex-1" item={{ id: entry.destination.reportId!, title: entry.name, href: href(entry.destination) }} icon={FileText} active={Boolean(active && selected === entry.id)} documentKind="report" onAction={act} onMove={canDrag(entry.id) ? () => void move(entry.id) : undefined} onNavigate={event => navigate(event, entry.destination)} /> : undefined };
+      actions: entry.kind === 'folder' ? folderAction(entry.destination, entry.name) : undefined,
+      content: entry.kind === 'report' ? <SavedDocumentRow className="min-w-0 flex-1" item={{ id: entry.destination.reportId!, title: entry.name, href: href(entry.destination) }} icon={FileText} active={Boolean(active && selected === entry.id)} documentKind="report" actionsOnHover onAction={isLocal ? act : undefined} onMove={canDrag(entry.id) ? () => void move(entry.id) : undefined} onNavigate={event => navigate(event, entry.destination)} /> : undefined };
   });
   const root = (location: string, name: string, children: FileTreeNode[], detail?: string): FileTreeNode => {
     const destination = { location }, id = reportNodeKey(destination); destinations.set(id, destination);

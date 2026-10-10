@@ -688,28 +688,99 @@ test('sidebar rejects read-only and same-folder drops and protects an unconfirme
   expect(await c.call('list_reports', { query: 'Read-only drop source' })).toHaveLength(0);
 });
 
-test('mobile sidebar folder and move actions survive closing the catalog drawer', async ({ page, reporting }) => {
-  const initial = await seed(reporting, 'Mobile move report');
-  await page.setViewportSize({ width: 390, height: 844 });
+test.describe('touch sidebar actions', () => {
+  test.use({ hasTouch: true, isMobile: true });
+  test('mobile sidebar folder and move actions survive closing the catalog drawer', async ({ page, reporting }) => {
+    const initial = await seed(reporting, 'Mobile move report');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(path(reporting.url, initial.report_id)); await saved(page);
+    await page.getByRole('button', { name: 'Show catalog sidebar', exact: true }).click();
+    let drawer = page.getByRole('dialog', { name: 'Catalog sidebar', exact: true });
+    await drawer.getByRole('button', { name: 'New folder in Finance report library', exact: true }).click();
+    const folder = page.getByRole('dialog', { name: 'New folder', exact: true });
+    await expect(drawer).toHaveCount(0);
+    await folder.getByRole('textbox', { name: 'Name', exact: true }).fill('Mobile destination');
+    await folder.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(folder).toHaveCount(0);
+    await page.getByRole('button', { name: 'Show catalog sidebar', exact: true }).click();
+    drawer = page.getByRole('dialog', { name: 'Catalog sidebar', exact: true });
+    await drawer.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
+    const actions = drawer.getByRole('button', { name: 'Actions for Mobile move report', exact: true });
+    await expect(actions).toHaveCSS('opacity', '1');
+    await actions.tap();
+    await page.getByRole('menuitem', { name: 'Move…', exact: true }).tap();
+    const dialog = page.getByRole('dialog', { name: 'Move report', exact: true });
+    await expect(drawer).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
+    await dialog.getByRole('treeitem', { name: 'Mobile destination', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Move report', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect((await reporting.client().call('get_report', { report_id: initial.report_id })).folder_id).toBe((await reporting.client().call('list_folders', {})).find(f => f.name === 'Mobile destination')!.folder_id);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+});
+
+test('worker sidebar menus support right click, keyboard and hover without navigating', async ({ page, reporting }) => {
+  const c = reporting.client(), initial = await seed(reporting, 'Context menu report');
+  const destination = await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Context menu destination' });
   await page.goto(path(reporting.url, initial.report_id)); await saved(page);
-  await page.getByRole('button', { name: 'Show catalog sidebar', exact: true }).click();
-  let drawer = page.getByRole('dialog', { name: 'Catalog sidebar', exact: true });
-  await drawer.getByRole('button', { name: 'New folder in Finance report library', exact: true }).click();
-  const folder = page.getByRole('dialog', { name: 'New folder', exact: true });
-  await expect(drawer).toHaveCount(0);
-  await folder.getByRole('textbox', { name: 'Name', exact: true }).fill('Mobile destination');
-  await folder.getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect(folder).toHaveCount(0);
-  await page.getByRole('button', { name: 'Show catalog sidebar', exact: true }).click();
-  drawer = page.getByRole('dialog', { name: 'Catalog sidebar', exact: true });
-  await drawer.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
-  await drawer.getByRole('button', { name: 'Move Mobile move report', exact: true }).click();
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  const row = tree.getByRole('treeitem', { name: 'Context menu report', exact: true });
+  const link = row.getByRole('link', { name: 'Context menu report', exact: true });
+  const actions = row.getByRole('button', { name: 'Actions for Context menu report', exact: true });
+  // The dropdown is labelled by its trigger; the context menu has its own label.
+  const menu = page.getByRole('menu');
+  const startingUrl = page.url();
+  const reportHref = await link.getAttribute('href');
+  await page.mouse.move(1500, 1000);
+  await expect(actions).toHaveCSS('opacity', '0');
+  await expect(row.getByRole('button', { name: 'Move Context menu report', exact: true })).toHaveCount(0);
+  await link.hover();
+  await expect(actions).toHaveCSS('opacity', '1');
+  await link.click({ button: 'right' });
+  await expect(menu).toBeVisible();
+  expect(page.url()).toBe(startingUrl);
+  await expect(menu.getByRole('menuitem', { name: 'Open in new tab', exact: true })).toHaveAttribute('href', reportHref!);
+  await expect(menu.getByRole('menuitem', { name: 'Move…', exact: true })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: /Rename|Delete|Export/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await link.focus();
+  await page.mouse.move(1500, 1000);
+  await expect(actions).toHaveCSS('opacity', '1');
+  await page.keyboard.press('Shift+F10');
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(link).toBeFocused();
+  // Arrow navigation focuses the tree item instead of the link.
+  await row.focus();
+  await page.keyboard.press('Shift+F10');
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(actions).toBeFocused();
+  await actions.click();
+  await expect(menu).toBeVisible();
+  expect(page.url()).toBe(startingUrl);
+  await menu.getByRole('menuitem', { name: 'Move…', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Move report', exact: true });
-  await expect(drawer).toHaveCount(0);
   await dialog.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
-  await dialog.getByRole('treeitem', { name: 'Mobile destination', exact: true }).click();
+  await dialog.getByRole('treeitem', { name: 'Context menu destination', exact: true }).click();
   await dialog.getByRole('button', { name: 'Move report', exact: true }).click();
   await expect(dialog).toHaveCount(0);
-  expect((await reporting.client().call('get_report', { report_id: initial.report_id })).folder_id).toBe((await reporting.client().call('list_folders', {})).find(f => f.name === 'Mobile destination')!.folder_id);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect((await c.call('get_report', { report_id: initial.report_id })).folder_id).toBe(destination.folder_id);
+  expect(await c.call('list_revisions', { report_id: initial.report_id })).toHaveLength(1);
+});
+
+test('read-only worker sidebar menu offers navigation without move or local mutations', async ({ page, reporting }) => {
+  const c = reporting.client(), initial = await seed(reporting, 'Read-only context report');
+  await c.call('publish', { request_id: crypto.randomUUID(), report_id: initial.report_id, revision_id: initial.head_revision_id, expected_published_revision_id: null });
+  await page.goto(path(reporting.url, initial.report_id, null));
+  await expect(page.getByRole('status', { name: 'Save status', exact: true })).toHaveText('Read only');
+  const row = page.getByTestId('catalog-sidebar').getByRole('treeitem', { name: 'Read-only context report', exact: true });
+  await row.getByRole('link', { name: 'Read-only context report', exact: true }).click({ button: 'right' });
+  const menu = page.getByRole('menu', { name: 'Read-only context report actions', exact: true });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('menuitem')).toHaveCount(1);
+  await expect(menu.getByRole('menuitem', { name: 'Open in new tab', exact: true })).toBeVisible();
+  await expect(menu.getByRole('separator')).toHaveCount(0);
+  expect((await c.call('get_report', { report_id: initial.report_id })).folder_id).toBeNull();
 });
