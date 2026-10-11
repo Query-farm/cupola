@@ -1,7 +1,7 @@
 import { Field, Schema, Utf8 } from '@query-farm/apache-arrow';
 import { serializeBatch, singleRowBatch } from '@query-farm/vgi-rpc/arrow';
 import { ReportClient, serviceLocation } from './client';
-import type { DataSource, DelegationKey, DelegationRecord, DelegationWrite, ReportResult, Schedule, Trigger } from './contracts.generated';
+import type { DataSource, DelegationKey, DelegationRecord, DelegationWrite, ReportResult, Schedule, ScheduleRecord, ScheduleIssue, Trigger } from './contracts.generated';
 import type { CatalogData } from '../service';
 import { getWorkspace } from '../workspace/store';
 import { catalogSecrets, secretsFor } from '../attach/secret-store';
@@ -21,9 +21,9 @@ export function requiredDelegations(url: string, sources: readonly DataSource[])
 export function newSchedule(report: ReportResult, url: string, pinned = false, htmlBody = true): Schedule {
   return { title: report.envelope?.title ?? 'Report', enabled: false,
     trigger: { kind: 'cron', cron: '0 9 * * 1-5', run_at: null, time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', start_at: null, end_at: null },
-    action: { kind: 'render_report', render_report: { report: { service_url: serviceLocation(url), report_id: report.report_id, revision_id: pinned || !report.published_revision_id ? report.revision_served : null },
-      track: pinned || !report.published_revision_id ? 'pinned' : 'published', outputs: htmlBody ? [PDF, HTML] : [PDF] }, run_query: null, data_sources: [], custom_json: null },
-    condition_sql: '', parameter_values: [], deliveries: [],
+    action: { kind: 'render_report', render_report: { report: { service_url: serviceLocation(url), report_id: report.report_id, revision_id: pinned ? report.revision_served : null },
+      track: pinned ? 'pinned' : report.published_revision_id ? 'published' : 'head', outputs: htmlBody ? [PDF, HTML] : [PDF] }, run_query: null, data_sources: [], custom_json: null },
+    condition_sql: '', parameter_values: [], deliveries: [], alerts: null,
   };
 }
 
@@ -54,12 +54,32 @@ export function validateSchedule(schedule: Schedule): void {
   if (schedule.trigger.kind === 'once' && (schedule.trigger.run_at == null || !Number.isFinite(schedule.trigger.run_at) || schedule.trigger.run_at <= Date.now())) throw new Error('Choose a future date and time.');
   if (schedule.trigger.kind === 'cron' && !schedule.trigger.cron?.trim()) throw new Error('Enter a cron expression.');
   try { new Intl.DateTimeFormat(undefined, { timeZone: schedule.trigger.time_zone }); } catch { throw new Error('Choose a valid IANA time zone, such as America/New_York.'); }
+  if (schedule.alerts && (!schedule.alerts.events.length || !schedule.alerts.destinations.length)) throw new Error('Choose at least one alert event and recipient.');
   for (const delivery of schedule.deliveries) {
     if (!delivery.destinations.length) throw new Error('Enter at least one email address.');
     if (delivery.inline === 'none' && !delivery.attach.length) throw new Error('Choose at least one attachment, or include report content in the email.');
     if (delivery.inline === 'report' && !action.outputs.includes(HTML)) throw new Error('Report content in email requires HTML output.');
     if (delivery.attach.some(format => !action.outputs.includes(format))) throw new Error('An attachment format is missing from the report outputs.');
   }
+}
+
+/** New workers own attention policy. Older workers expose enough state for a fallback. */
+export function scheduleIssues(record: ScheduleRecord): ScheduleIssue[] {
+  if (Array.isArray(record.issues)) return record.issues;
+  const issues: ScheduleIssue[] = [];
+  if (record.last_run?.status === 'failed') issues.push({ kind: 'run_failed', message: record.last_run.error?.message ?? 'A report run failed.', run_id: record.last_run.run_id, expires_at: null });
+  if (record.definition.enabled && record.credentials.some(c => ['missing', 'expired'].includes(c.state))) issues.push({ kind: 'access_expired', message: 'Scheduled access needs renewal.', run_id: null, expires_at: null });
+  else if (record.definition.enabled && record.credentials.some(c => c.state === 'expiring')) issues.push({ kind: 'access_expiring', message: 'Scheduled access expires soon.', run_id: null, expires_at: null });
+  return issues;
+}
+
+export async function checkEmailRecipients(client: ReportClient, text: string) {
+  const addresses = emailDestinations(text);
+  const checks = await client.call('notify.check_destinations', { destinations: addresses });
+  if (checks.results.length !== addresses.length || checks.results.some((r, i) => r.address !== addresses[i].address || r.kind !== 'email')) throw new Error('The worker returned an incomplete recipient check.');
+  const refused = checks.results.filter(r => !r.allowed);
+  if (refused.length) throw new Error(refused.map(r => `${r.address}: ${r.reason || 'not allowed by this worker'}`).join('\n'));
+  return addresses;
 }
 
 /** Attach with the exact options of the matching connection. Never silently use defaults for a missing connection. */

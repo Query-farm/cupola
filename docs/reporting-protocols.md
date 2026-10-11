@@ -280,6 +280,26 @@ additional delivery kinds as read-only definitions rather than rewriting them.
 Worker-side retention, retries, supported formats, destination policy, grants,
 execution-account assignment, and provider reconciliation remain worker policy.
 
+Schedules & alerts combines scheduling workers from connected catalogs and report
+libraries. Needs attention shows worker-reported failed runs, missing or expiring
+access, and alert-delivery problems, with links to the run or access-renewal page.
+Unreachable workers are shown as unknown. The page polls and refreshes on focus
+and the shared sidebar refresh event. Last email accepted means provider
+acceptance, not confirmed inbox delivery.
+
+The schedule editor offers separate recipients for failure alerts and access
+reminders when the worker advertises those events. Recipients are checked by the
+worker before saving. Existing schedules remain unchanged; subscriptions are
+explicit. New schedules follow the latest saved revision of unpublished reports,
+or the latest published revision when one exists. Creating a schedule from a
+specific historical revision keeps it pinned. Each run records its exact resolved
+revision.
+
+Browser coverage uses real worker failures, captures grouped alerts locally,
+verifies a later floating revision succeeds, combines two scheduling workers, and
+renews missing/expiring grants through the attention page. It sends no external
+email.
+
 To run the scheduling browser test with a real isolated execution host:
 
 ```sh

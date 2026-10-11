@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { ReportClient } from '../../src/lib/reporting/client';
@@ -25,6 +25,7 @@ export async function startReportingWorker(displayName = "Finance report library
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   return { url, client: (token: string | null = 'test-alice') => new ReportClient(url, { token: async () => token }),
+    async capturedMail() { return Promise.all((await readdir(directory, { recursive: true })).filter(name => name.endsWith('.eml')).map(name => readFile(join(directory, name), 'utf8'))); },
     async capturedMailCount() { return (await readdir(directory, { recursive: true })).filter(name => name.endsWith('.eml')).length; },
     async stop() { processWorker.kill('SIGTERM'); await new Promise<void>(resolve => { if (processWorker.exitCode != null || processWorker.signalCode != null) resolve(); else processWorker.once('exit', () => resolve()); }); await rm(directory, { recursive: true, force: true }); },
   };

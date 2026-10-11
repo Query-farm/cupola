@@ -6,10 +6,10 @@ import { decodeRecord, encodeRecord, ReportClient } from '../../src/lib/reportin
 import type { CatalogData } from '../../src/lib/service';
 import { memoryStorage, record } from '../reporting/fixtures';
 
-test('schedule defaults pin unpublished reports, remain paused, and retain timezone-aware triggers on the wire', () => {
+test('schedule defaults follow unpublished reports, remain paused, and retain timezone-aware triggers on the wire', () => {
   const draft = newSchedule(record(), 'https://reports.test/');
-  expect(draft.enabled).toBe(false); expect(draft.action.render_report!.track).toBe('pinned');
-  expect(draft.action.render_report!.report.revision_id).toBe('head');
+  expect(draft.enabled).toBe(false); expect(draft.action.render_report!.track).toBe('head');
+  expect(draft.action.render_report!.report.revision_id).toBeNull();
   expect(decodeRecord(encodeRecord('Schedule', draft))).toEqual(draft);
   const published = newSchedule({ ...record(), published_revision_id: 'published' }, 'https://reports.test');
   expect(published.action.render_report!.track).toBe('published'); expect(published.action.render_report!.report.revision_id).toBeNull();

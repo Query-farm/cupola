@@ -1,21 +1,16 @@
-import { Children, cloneElement, isValidElement, useEffect, useId, useState, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { CalendarClock, Mail, Play, Save, ShieldCheck } from 'lucide-react';
 import { Button } from '../ui/button';
 import { ReportNotice } from './ReportNotice';
 import { ReportClient, reportError, errorCode } from '../../lib/reporting/client';
 import type { NotifyInfo, ParameterSpec, ParamValue, ReportResult, RevisionRow, Schedule, ScheduleRecord, SchedulerInfo, ScheduleTest, TriggerPreview } from '../../lib/reporting/contracts.generated';
-import { cronFor, dateLabel, emailDestinations, HTML, newSchedule, PDF, triggerFields, validateSchedule, type Frequency } from '../../lib/reporting/schedules';
+import { cronFor, dateLabel, checkEmailRecipients, HTML, newSchedule, PDF, triggerFields, validateSchedule, type Frequency } from '../../lib/reporting/schedules';
+import { ScheduleAlertsEditor, alertEventLabels } from './ScheduleAlertsEditor';
+import { scheduleInput, ScheduleField, ScheduleSection } from './ScheduleFields';
 import { ScheduleArtifacts } from './ScheduleRunDetails';
 import { parseJournal, serializeJournal } from '../../lib/reporting/journal';
 
-export const scheduleInput = 'w-full rounded-md border bg-background px-3 py-2 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
-export function ScheduleField({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
-  const id = useId();
-  return <div className="space-y-1.5 text-sm"><label htmlFor={id} className="block font-medium">{label}</label>{Children.map(children, child => isValidElement(child) && ['input', 'select', 'textarea'].includes(String(child.type)) ? cloneElement(child as ReactElement<{ id?: string; 'aria-describedby'?: string }>, { id, 'aria-describedby': hint ? `${id}-hint` : undefined }) : child)}{hint && <p id={`${id}-hint`} className="text-xs text-muted-foreground">{hint}</p>}</div>;
-}
-export function ScheduleSection({ title, icon: Icon, children }: { title: string; icon?: typeof Mail; children: ReactNode }) {
-  return <section className="rounded-lg border bg-card"><h2 className="flex items-center gap-2 border-b bg-muted/30 px-5 py-3 text-sm font-semibold">{Icon && <Icon className="size-4" />}{title}</h2><div className="space-y-4 p-5">{children}</div></section>;
-}
+export { scheduleInput, ScheduleField, ScheduleSection } from './ScheduleFields';
 
 export function ScheduleForm({ initial, draftKey, report, reportClient, client, scheduler, notify, pinned, busy, access, onSources, onSave, onReload }: {
   initial?: ScheduleRecord; draftKey: string; report: ReportResult; reportClient: ReportClient; client: ReportClient; scheduler: SchedulerInfo; notify: NotifyInfo | null; pinned: boolean;
@@ -39,7 +34,7 @@ export function ScheduleForm({ initial, draftKey, report, reportClient, client, 
   const [destinations, setDestinations] = useState<string[]>([]), [recipientStatus, setRecipientStatus] = useState('');
   const [conflict, setConflict] = useState(false);
   const action = draft.action.render_report!;
-  const restricted = draft.deliveries.length > 1 || draft.deliveries.some(d => d.destinations.some(x => x.kind !== 'email') || !['none', 'summary', 'report'].includes(d.inline));
+  const restricted = draft.deliveries.length > 1 || draft.deliveries.some(d => d.destinations.some(x => x.kind !== 'email') || !['none', 'summary', 'report'].includes(d.inline)) || Boolean(draft.alerts?.destinations.some(d => d.kind !== 'email') || draft.alerts?.events.some(e => !(e in alertEventLabels)));
   const disabled = busy || working || !scheduler.writable || Boolean(initial && !initial.allowed_actions.includes('update')) || restricted;
   const patch = (value: Partial<Schedule>) => { setDraft(old => ({ ...old, ...value })); setPreview(null); };
   useEffect(() => {
@@ -79,16 +74,16 @@ export function ScheduleForm({ initial, draftKey, report, reportClient, client, 
     if (email) {
       if (!notify?.channels.some(c => c.kind === 'email' && c.enabled)) throw new Error('Email is not enabled on this scheduling worker.');
       if (inline === 'report' && !htmlBody) throw new Error('This worker does not support report content in email. Choose a summary.');
-      const addresses = emailDestinations(recipients);
-      const checks = await client.call('notify.check_destinations', { destinations: addresses });
-      if (checks.results.length !== addresses.length || checks.results.some((r, i) => r.address !== addresses[i].address || r.kind !== 'email')) throw new Error('The worker returned an incomplete recipient check.');
-      const refused = checks.results.filter(r => !r.allowed);
-      if (refused.length) throw new Error(refused.map(r => `${r.address}: ${r.reason || 'not allowed by this worker'}`).join('\n'));
+      const addresses = await checkEmailRecipients(client, recipients);
       next.deliveries = [{ destinations: addresses, inline, attach: [...(attachPdf ? [PDF] : []), ...(attachHtml ? [HTML] : [])] }];
       next.action.render_report!.outputs = [...new Set([...(inline === 'report' || attachHtml ? [HTML] : []), ...(attachPdf ? [PDF] : [])])];
       if (!next.action.render_report!.outputs.length) next.action.render_report!.outputs = [PDF];
       setRecipientStatus(`${addresses.length} recipient${addresses.length === 1 ? '' : 's'} allowed by the worker.`);
     } else next.deliveries = [];
+    if (next.alerts) {
+      if (next.alerts.events.some(event => !(scheduler.alert_events ?? []).includes(event))) throw new Error('This worker does not support the selected alert events.');
+      next.alerts.destinations = await checkEmailRecipients(client, next.alerts.destinations.map(d => d.address).join(', '));
+    }
     validateSchedule(next);
     // Validate timing on the authoritative worker before admitting a mutation.
     await client.call('schedules.preview_trigger', { trigger: next.trigger, after: Date.now(), count: 1n });
@@ -145,6 +140,7 @@ export function ScheduleForm({ initial, draftKey, report, reportClient, client, 
           <div className="flex flex-wrap gap-5 text-sm"><label className="flex items-center gap-2"><input type="checkbox" checked={attachPdf} onChange={e => { setAttachPdf(e.target.checked); setPreview(null); }} />Attach PDF</label><label className="flex items-center gap-2"><input type="checkbox" checked={attachHtml} onChange={e => { setAttachHtml(e.target.checked); setPreview(null); }} />Attach HTML</label></div>
         </> : <ScheduleField label="Generated format"><select className={scheduleInput} value={action.outputs.includes(PDF) && action.outputs.includes(HTML) ? 'both' : action.outputs[0]} onChange={e => patch({ action: { ...draft.action, render_report: { ...action, outputs: e.target.value === 'both' ? [PDF, HTML] : [e.target.value] } } })}><option value={PDF}>PDF</option><option value={HTML}>HTML</option><option value="both">PDF and HTML</option></select></ScheduleField>}
       </ScheduleSection>
+      <ScheduleAlertsEditor value={draft.alerts ?? null} onChange={alerts => patch({ alerts })} client={client} scheduler={scheduler} emailEnabled={Boolean(notify?.channels.some(c => c.kind === 'email' && c.enabled))} disabled={disabled} />
       <details className="rounded-lg border p-4 text-sm"><summary className="cursor-pointer font-medium">Advanced settings</summary><div className="mt-4"><ScheduleField label="Only run when this SQL returns true" hint="Optional read-only condition, evaluated with the report’s data sources and parameters."><textarea className={`${scheduleInput} font-mono`} value={draft.condition_sql} onChange={e => patch({ condition_sql: e.target.value })} rows={3} /></ScheduleField></div></details>
     </fieldset>
     <ScheduleSection title="Scheduled access" icon={ShieldCheck}>{access}</ScheduleSection>

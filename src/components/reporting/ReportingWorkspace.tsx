@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/button';
 import { EvidenceWorkspace } from '../evidence/EvidenceWorkspace';
 import { ReportLibrary } from './ReportLibrary';
+import { ScheduleActivity } from './ScheduleActivity';
 import { ReportOverview } from './ReportOverview';
 import { TransferDialog } from './TransferDialog';
 import { reportError } from '../../lib/reporting/client';
@@ -22,9 +23,9 @@ export interface ReportingWorkspaceProps {
 }
 const route = () => {
   const search = new URLSearchParams(location.search);
-  if (hasReportPromotion()) return { selected: 'local', localEditor: true, localFolder: null };
+  if (hasReportPromotion()) return { selected: 'local', localEditor: true, localFolder: null, activity: false };
   return { selected: search.get('report_service') ?? (search.has('evidence_report') || search.has('evidence_new') ? 'local' : 'all'),
-    localEditor: search.has('evidence_report') || search.has('evidence_new'), localFolder: search.get('local_report_folder') };
+    activity: search.get('report_view') === 'activity', localEditor: search.has('evidence_report') || search.has('evidence_new'), localFolder: search.get('local_report_folder') };
 };
 export function ReportingWorkspace(props: ReportingWorkspaceProps) {
   const [view, setView] = useState(() => {
@@ -51,10 +52,16 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     read(); window.addEventListener(REPORT_TRANSFERS_CHANGED, read); window.addEventListener('storage', read);
     return () => { window.removeEventListener(REPORT_TRANSFERS_CHANGED, read); window.removeEventListener('storage', read); };
   }, [scope, generation]);
-  const routeIdentity = () => { const url = new URL(location.href); for (const key of ['report_view', 'report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit']) url.searchParams.delete(key); return url.pathname + url.search; };
+  const routeIdentity = () => { const url = new URL(location.href); for (const key of ['report_view', 'report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit', 'report_schedule_access']) url.searchParams.delete(key); return url.pathname + url.search; };
   const activeRoute = useRef(routeIdentity());
   useEffect(() => {
-    const track = () => { activeRoute.current = routeIdentity(); };
+    const track = () => {
+      activeRoute.current = routeIdentity();
+      const next = route();
+      // Nested report pages manage their own state. Only the activity page
+      // changes the workspace view through this notification.
+      setView(current => current.activity !== next.activity ? next : current);
+    };
     const pop = () => { const next = routeIdentity(); setView(route()); if (activeRoute.current !== next) setEditorKey(n => n + 1); activeRoute.current = next; };
     const local = (event: Event) => {
       const detail = (event as CustomEvent<OpenReportDetail>).detail;
@@ -80,7 +87,7 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     const url = new URL(location.href);
     url.pathname = `${appBase.replace(/\/$/, '')}/reports${value === 'local' && !reportId ? '/saved' : ''}`;
     url.searchParams.set('report_service', value);
-    for (const key of ['report_view', 'report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit', 'report_id', 'report_revision', 'report_folder', 'evidence_report', 'evidence_new', 'evidence_view', 'evidence_edit', 'local_report_folder']) url.searchParams.delete(key);
+    for (const key of ['report_view', 'report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit', 'report_schedule_access', 'report_id', 'report_revision', 'report_folder', 'evidence_report', 'evidence_new', 'evidence_view', 'evidence_edit', 'local_report_folder']) url.searchParams.delete(key);
     for (const key of [...url.searchParams.keys()]) if (key.startsWith('p.')) url.searchParams.delete(key);
     if (reportId) url.searchParams.set('report_id', reportId);
     if (value === 'local' && folderId) url.searchParams.set('local_report_folder', folderId);
@@ -113,7 +120,7 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     {notice && <p role="status" className="shrink-0 px-5 py-2 text-sm">{notice}</p>}
     {error && <p role="alert" className="shrink-0 px-5 py-2 text-sm text-destructive">{error}</p>}
     {jobs.length > 0 && <section aria-label="Pending report transfers" className="shrink-0 space-y-2 border-b px-5 py-3 text-sm">{jobs.map(job => <div key={job.id} className="flex flex-wrap items-center gap-2"><span>Unconfirmed {job.move ? 'move' : 'copy'}: {job.envelope.title} → {job.destination.name}</span><Button size="sm" disabled={retrying} onClick={async () => { setRetrying(true); setError(''); try { completed(await resumeTransfer(job)); } catch (e) { setError(reportError(e)); } finally { setRetrying(false); } }}>Retry transfer</Button><Button size="sm" variant="ghost" disabled={retrying} onClick={() => { if (confirm('Stop retrying this transfer? Its copy or move may already have completed. Check both locations before deleting anything.')) { forgetTransfer(job); refresh(); } }}>Stop retrying…</Button></div>)}</section>}
-    <div className="min-h-0 flex-1">{view.selected === 'all' || view.selected === 'local' && !view.localEditor
+    <div className="min-h-0 flex-1">{view.activity ? <ScheduleActivity serviceUrl={props.serviceUrl} catalogs={props.catalogs} onBack={() => choose('all')} /> : view.selected === 'all' || view.selected === 'local' && !view.localEditor
       ? <ReportOverview key={`${view.selected}:${view.localFolder ?? ''}:${editorKey}`} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} localOnly={view.selected === 'local'} folderId={view.localFolder} onAllReports={() => choose('all')} onFolder={id => choose('local', undefined, id)} onNew={createLocal} onLocal={openLocal} onWorker={(url, id) => choose(url, id)} onTransfer={transferReport} onRefresh={refresh} />
       : view.selected === 'local'
         ? <EvidenceWorkspace key={editorKey} {...props} onLibrary={() => choose('local')} onTransfer={(report, move) => transferReport({ kind: 'local', report }, move)} />

@@ -19,7 +19,7 @@ export function useReportPage() {
   }, []);
   function navigate(value: ReportPageName | null) {
     const url = new URL(location.href);
-    for (const key of ['report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit']) url.searchParams.delete(key);
+    for (const key of ['report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit', 'report_schedule_access']) url.searchParams.delete(key);
     if (value) url.searchParams.set('report_view', value); else url.searchParams.delete('report_view');
     if (!value && history.state?.reportPageFrom === url.href) { history.back(); return; }
     if (url.href !== location.href) {

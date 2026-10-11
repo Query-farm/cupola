@@ -1,3 +1,4 @@
+import { ScheduleActivityButton } from './ScheduleActivity';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FolderOpen, Plus, RefreshCw, MoreHorizontal } from 'lucide-react';
 import { Button, buttonVariants } from '../ui/button';
@@ -163,7 +164,7 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
     <header className="flex flex-wrap items-center gap-3 border-b bg-card px-5 py-4">
       <FolderOpen aria-hidden className="size-5 shrink-0 text-primary" /><div className="min-w-0 flex-1 basis-48"><h1 className="break-words text-lg font-semibold">{parent?.name ?? session?.info.display_name ?? 'Report library'}</h1><p className="break-words text-xs text-muted-foreground">{parent && <>{session?.info.display_name} · </>}Worker: {props.catalogs.filter(c => c.sourceUrl === client.url || !c.sourceUrl && props.serviceUrl === client.url).map(c => c.catalogName).map((name, index, names) => name + (index === names.length - 1 ? ' · ' : ' / ')).join('')}{new URL(client.url).host}</p></div>
       <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setGeneration(n => n + 1); window.dispatchEvent(new CustomEvent(REPORT_LIBRARY_CHANGED, { detail: { url: client.url } })); }}><RefreshCw />Reload library</Button>
-      <div className="ml-auto flex flex-wrap gap-2">
+      <div className="ml-auto flex flex-wrap gap-2"><ScheduleActivityButton serviceUrl={props.serviceUrl} />
         <Button variant="outline" disabled={blocked || !actions.includes('create_folder')} onClick={() => setDialog({ action: 'folder' })}>New folder</Button>
         <Button disabled={busy || loading} onClick={() => { if (blocked || !actions.includes('create_report')) props.onCreateLocal?.(); else void create(newEvidenceReport(props.serviceUrl, props.catalogName)).catch(e => setError(reportError(e))); }}><Plus />New report</Button>
       </div>

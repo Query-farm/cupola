@@ -1,3 +1,4 @@
+import { ScheduleActivityButton } from './ScheduleActivity';
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -100,7 +101,7 @@ export function ReportOverview({ locations, scope, localOnly, folderId, onAllRep
   ];
   return <section className="flex h-full min-h-0 flex-col" aria-label="Report browser">
     <header className="flex flex-wrap items-center gap-3 border-b bg-card px-5 py-4"><FolderOpen aria-hidden className="size-5 shrink-0 text-primary" /><div className="min-w-0 flex-1 basis-48"><h1 className="break-words text-lg font-semibold">{localOnly ? library.folders.find(f => f.id === folderId)?.name ?? 'Local' : 'All reports'}</h1>{localOnly && folderId && <p className="text-xs text-muted-foreground">Local · On this device</p>}</div><Button variant="ghost" size="sm" onClick={() => { reloadLocal(); onRefresh(); }}><RefreshCw />Refresh</Button>
-      <div className="ml-auto flex flex-wrap gap-2"><Button variant="outline" onClick={() => { setName(''); setError(''); setNewFolder(true); }}>New folder</Button><Button onClick={onNew}><Plus />New report</Button></div>
+      <div className="ml-auto flex flex-wrap gap-2"><ScheduleActivityButton serviceUrl={serviceUrl} /><Button variant="outline" onClick={() => { setName(''); setError(''); setNewFolder(true); }}>New folder</Button><Button onClick={onNew}><Plus />New report</Button></div>
     </header>
     <div className="min-h-0 flex-1 space-y-5 overflow-auto bg-background p-4 sm:p-5">
       <p className="text-sm text-muted-foreground">{localOnly ? 'Reports in this workspace saved in this browser. Copy or move them to a named location to save them on a worker.' : 'Reports from this browser and connected workers. New reports start on this device; use the report’s action menu to save a copy or move it elsewhere.'}</p>
