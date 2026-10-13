@@ -1,5 +1,5 @@
-import { DocumentSave } from "../reporting/DocumentSave";
-import { documentBinding, documentLink, openDocumentConnection } from "../../lib/reporting/documents";
+import { DocumentSave, type DocumentSaveHandle } from "../reporting/DocumentSave";
+import { documentBinding, documentLink, documentExecutionBinding, DocumentQuerySession } from "../../lib/reporting/documents";
 import { catalogInventory } from "@/lib/catalog-store";
 /**
  * DBeaver-style SQL editor surface: a tab strip of named query documents, a
@@ -63,6 +63,7 @@ export interface PendingEditorSql {
 
 interface Props {
   libraryScope?: string;
+  managed?: boolean;
   catalogData: CatalogData;
   attachedCatalogs?: CatalogData[];
   serviceUrl: string;
@@ -90,7 +91,7 @@ interface Props {
 
 const INSPECTABLE = new Set(["function", "macro", "table", "view"]);
 
-export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, workspaceId, libraryScope, attachOptions, shareWorkspaceToken, pendingSql, onPendingConsumed, onAiBusyChange, selection = null, inspectRequest = 0, onOpenFullPage }: Props) {
+export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, workspaceId, libraryScope, managed, attachOptions, shareWorkspaceToken, pendingSql, onPendingConsumed, onAiBusyChange, selection = null, inspectRequest = 0, onOpenFullPage }: Props) {
   // Tabs and history are kept per workspace (multi-catalog phase 2); without one, per service.
   const storageScope = workspaceId ?? serviceUrl;
   const { settings } = useSettings();
@@ -143,6 +144,9 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   const queryReady = engineLifecycle.status === "ready";
 
   const editorRef = useRef<CodeMirrorSqlHandle | null>(null);
+  const documentSave = useRef<DocumentSaveHandle>(null);
+  const documentSessions = useRef(new Map<string, DocumentQuerySession>());
+  useEffect(() => () => { for (const session of documentSessions.current.values()) void session.close(); documentSessions.current.clear(); }, [storageScope]);
   const editorSessions = useRef(new Map<string, SqlEditorSession>());
   const runIdRef = useRef(0);
   // One manual run owns the connection until completion or an explicit Stop.
@@ -245,6 +249,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       ++runIdRef.current;
       setRunningDocId(null);
     }
+    void documentSessions.current.get(id)?.close(); documentSessions.current.delete(id);
     editorSessions.current.delete(id);
     deleteTabRevisions(storageScope, id);
     persist(removeDoc(docStateRef.current, id));
@@ -321,11 +326,11 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     try {
       // With a signal the engine runs this as a pending query it can cancel
       // between polls; without one it is a single blocking call Stop can't reach.
-      const saved = documentBinding(storageScope, 'query', docId);
+      const saved = documentExecutionBinding(storageScope, 'query', docId);
       if (saved) {
-        const connection = await openDocumentConnection(saved);
-        try { res = await connection.query(trimmed, { signal: controller.signal }); }
-        finally { await connection.close(); }
+        let session = documentSessions.current.get(docId);
+        if (!session) { session = new DocumentQuerySession(); documentSessions.current.set(docId, session); }
+        res = await session.query(saved, trimmed, { signal: controller.signal });
       } else res = await q(trimmed, { signal: controller.signal });
     } catch (e) {
       release();
@@ -484,7 +489,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     setPivotError(null);
     setPivotBusy(mode);
     try {
-      if (activeId && documentBinding(storageScope, "query", activeId)) throw new Error("Run this saved query first, then open its result as a snapshot in Perspective. Live views use workspace context and cannot preserve this document’s isolated context.");
+      if (activeId && documentExecutionBinding(storageScope, "query", activeId)) throw new Error("Run this saved query first, then open its result as a snapshot in Perspective. Live views use workspace context and cannot preserve this document’s isolated context.");
       await waitForEngineReady();
       // The Perspective host is a lazily loaded chunk; a click right after
       // page load can beat it to registering this bridge.
@@ -708,13 +713,13 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   );
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-background" data-testid="sql-editor-view">
+    <div className="flex flex-col h-full min-h-0 bg-background" data-testid="sql-editor-view" onKeyDownCapture={event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); event.stopPropagation(); documentSave.current?.save(); } }}>
       <ConfirmCloseQueryDialog
         pending={pendingClose}
         onCancel={() => setPendingClose(null)}
         onConfirm={(id) => { setPendingClose(null); closeTab(id); }}
       />
-      <SqlEditorTabs
+      {!managed && <SqlEditorTabs
         docs={docState.docs}
         activeId={activeId}
         busyDocIds={aiBusyDocs}
@@ -722,9 +727,12 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
         onAdd={() => handleAddTab("")}
         onClose={handleCloseTab}
         onRename={handleRename}
-      />
-      {activeDoc && <DocumentSave key={activeDoc.id} kind="query" doc={activeDoc} scope={storageScope} libraryScope={libraryScope} onTitleSaved={title => { if (title !== activeDoc.name) persist(renameDoc(docState, activeDoc.id, title)); }} workspaceId={workspaceId} catalogs={attachedCatalogs.length ? attachedCatalogs : [catalogData]} disabled={Boolean(runningDocId)} />}
+      />}
+
       <EditorToolbar
+        managed={managed}
+        saveControls={activeDoc && <DocumentSave ref={documentSave} managed={managed} key={activeDoc.id} kind="query" doc={activeDoc} scope={storageScope} libraryScope={libraryScope} onTitleSaved={title => { if (title !== activeDoc.name) persist(renameDoc(docStateRef.current, activeDoc.id, title)); }} workspaceId={workspaceId} catalogs={attachedCatalogs.length ? attachedCatalogs : [catalogData]} disabled={Boolean(runningDocId)} />}
+        onResetSession={activeDoc && documentExecutionBinding(storageScope, 'query', activeDoc.id) ? () => { if (activeId) { void documentSessions.current.get(activeId)?.close(); documentSessions.current.delete(activeId); setActiveResult(activeId, emptyResult); } } : undefined}
         running={activeResult.running}
         queryReady={queryReady}
         runBlocked={!!backgroundRun}

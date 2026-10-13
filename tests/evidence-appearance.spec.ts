@@ -51,7 +51,7 @@ test('report appearance updates without queries and survives save, copy and reop
   await panel.getByRole('tab', { name: 'Appearance', exact: true }).click();
   await expect(panel.getByLabel('Report theme', { exact: true })).toHaveValue('forest');
   await expect(panel.getByLabel('Report accent color')).toHaveValue('#8844aa');
-  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to library', exact: true }).click();
   await panel.getByRole('button', { name: 'Copy Theme test', exact: true }).click();
   await panel.getByRole('row').filter({ hasText: 'Theme test (copy)' }).getByRole('button', { name: 'Open report' }).click();
   await panel.getByRole('button', { name: 'Edit report', exact: true }).click();

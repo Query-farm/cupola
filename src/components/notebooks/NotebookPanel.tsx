@@ -4,8 +4,8 @@ import {
   type NotebookInsertion,
 } from '../../lib/notebooks/navigation';
 import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
-import { DocumentSave } from '../reporting/DocumentSave';
-import { documentBinding } from '../../lib/reporting/documents';
+import { DocumentSave, type DocumentSaveHandle } from '../reporting/DocumentSave';
+import { documentExecutionBinding, documentSessionKey } from '../../lib/reporting/documents';
 import { Button } from '../ui/button';
 import { PanelResizeHandle, usePanelWidth } from '../shared/PanelResizeHandle';
 import {
@@ -17,7 +17,7 @@ import {
   DialogFooter,
 } from '../ui/dialog';
 import { Input } from '../ui/input';
-import { MoreHorizontal, Plus, Undo2, Redo2, ChevronLeft, Check, Loader2, AlertCircle } from 'lucide-react';
+import { MoreHorizontal, Plus, Undo2, Redo2, ChevronLeft } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -325,6 +325,7 @@ export function NotebookWorkspace({
   onClose,
   onBusyChange,
   libraryScope,
+  managed,
 }: {
   beforeLeave: RefObject<(() => boolean) | null>;
   initial: Notebook;
@@ -334,7 +335,9 @@ export function NotebookWorkspace({
   onClose: () => void;
   onBusyChange?: (busy: boolean) => void;
   libraryScope?: string;
+  managed?: boolean;
 }) {
+  const documentSave = useRef<DocumentSaveHandle>(null);
   const [doc, setDoc] = useState(initial);
   const latest = useRef(doc);
   latest.current = doc;
@@ -343,7 +346,14 @@ export function NotebookWorkspace({
   const [batch, setBatch] = useState<string[]>([]);
   const sessionId = useRef(uid());
   const session = useRef<NotebookSession | null>(null);
-  const getSession = () => (session.current ??= new NotebookSession(documentBinding(notebookScope(initial), 'notebook', initial.id)));
+  const sourceKey = useRef('');
+  const getSession = () => {
+    const binding = documentExecutionBinding(notebookScope(initial), 'notebook', initial.id);
+    const key = binding ? documentSessionKey(binding) : '';
+    if (session.current && sourceKey.current !== key) { void session.current.close(); session.current = null; sessionId.current = uid(); runner.current?.reset(); setResults({}); }
+    sourceKey.current = key;
+    return session.current ??= new NotebookSession(binding);
+  };
   const [resetting, setResetting] = useState(false);
   const [sessionMessage, setSessionMessage] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
@@ -368,7 +378,6 @@ export function NotebookWorkspace({
     null,
   );
   const handledInsertion = useRef<number | null>(null);
-  const [saved, setSaved] = useState('');
   const [storageError, setStorageError] = useState('');
   const [insertionError, setInsertionError] = useState('');
   const [discardRequested, setDiscardRequested] = useState(false);
@@ -434,7 +443,6 @@ export function NotebookWorkspace({
         );
       saveNotebook(latest.current);
       baseline.current = localStorage.getItem(storageKey(notebookScope(doc), doc.id));
-      setSaved(fingerprint(latest.current));
       setStorageError('');
       return true;
     } catch (e) {
@@ -447,12 +455,13 @@ export function NotebookWorkspace({
     return () => clearTimeout(timer);
   }, [doc]);
   useEffect(() => {
-    const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (fingerprint(latest.current) !== saved) event.preventDefault();
-    };
-    window.addEventListener('beforeunload', beforeUnload);
-    return () => window.removeEventListener('beforeunload', beforeUnload);
-  }, [saved]);
+    // Flush the recovery draft before a reload can bypass the debounce.
+    const beforeUnload = (event: BeforeUnloadEvent) => { if (!persist()) event.preventDefault(); };
+    const flush = () => { persist(); };
+    const hidden = () => { if (document.visibilityState === 'hidden') flush(); };
+    window.addEventListener('beforeunload', beforeUnload); window.addEventListener('pagehide', flush); document.addEventListener('visibilitychange', hidden);
+    return () => { window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('pagehide', flush); document.removeEventListener('visibilitychange', hidden); flush(); };
+  }, []);
   function change(next: Notebook) {
     if (fingerprint(latest.current) === fingerprint(next)) return;
     undo.current = [...undo.current.slice(-99), latest.current];
@@ -514,6 +523,7 @@ export function NotebookWorkspace({
     setRunning(true);
     setBatch(cells.map((cell) => cell.id));
     try {
+      getSession(); // Apply source changes before the runner captures provenance or setup dependencies.
       await runner.current!.run(cells as Extract<NotebookCell, { type: 'sql' }>[], {
         cells: latest.current.cells.filter(cell => cell.type === 'sql'),
         parameters: latest.current.parameters,
@@ -523,7 +533,7 @@ export function NotebookWorkspace({
         engineVersion: engine.workerReadyData?.wasmVersion,
         mode,
       });
-    } finally {
+    } catch (error) { setSessionMessage(String(error)); } finally {
       if (alive.current) setRunning(false);
     }
   }
@@ -605,7 +615,7 @@ export function NotebookWorkspace({
       onKeyDown={(event) => {
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
           event.preventDefault();
-          persist();
+          documentSave.current?.save();
         }
         if (
           (event.metaKey || event.ctrlKey) &&
@@ -618,9 +628,9 @@ export function NotebookWorkspace({
         }
       }}
     >
-      <DocumentSave kind="notebook" doc={doc} scope={notebookScope(doc)} libraryScope={libraryScope} onTitleSaved={title => { if (title !== doc.title) change({ ...doc, title }); }} workspaceId={doc.workspaceId} catalogs={catalogs} disabled={busy} />
+
       <header className="border-b p-2 flex flex-wrap gap-2 items-center">
-        <Button
+        {!managed && <Button
           size="sm"
           variant="ghost"
           disabled={busy}
@@ -632,32 +642,15 @@ export function NotebookWorkspace({
         >
           <ChevronLeft className="size-4 sm:hidden" />
           <span className="hidden sm:inline">Notebooks</span>
-        </Button>
-        <Input
+        </Button>}
+        {!managed && <Input
           className="flex-1 min-w-40 max-w-md font-medium"
           aria-label="Notebook title"
           value={doc.title}
           maxLength={200}
           onChange={(event) => change({ ...doc, title: event.target.value })}
-        />
-        <span
-          className="text-xs text-muted-foreground"
-          role="status"
-          title={
-            storageError ? 'Not saved' : saved === fingerprint(doc) ? 'Saved in this browser' : 'Saving…'
-          }
-        >
-          <span className="sr-only sm:not-sr-only">
-            {storageError ? 'Not saved' : saved === fingerprint(doc) ? 'Saved in this browser' : 'Saving…'}
-          </span>
-          {storageError ? (
-            <AlertCircle className="size-4 text-destructive sm:hidden" />
-          ) : saved === fingerprint(doc) ? (
-            <Check className="size-4 sm:hidden" />
-          ) : (
-            <Loader2 className="size-4 animate-spin sm:hidden" />
-          )}
-        </span>
+        />}
+        <DocumentSave ref={documentSave} onSourcesChange={() => void resetSession()} managed={managed} kind="notebook" doc={doc} scope={notebookScope(doc)} libraryScope={libraryScope} onTitleSaved={title => { if (title !== latest.current.title) change({ ...latest.current, title }); }} workspaceId={doc.workspaceId} catalogs={catalogs} disabled={busy} />
         <DropdownMenu>
           <DropdownMenuTrigger
             render={<Button size="icon-sm" variant="ghost" aria-label="Notebook actions" />}
@@ -665,7 +658,6 @@ export function NotebookWorkspace({
             <MoreHorizontal className="size-4" />
           </DropdownMenuTrigger>
           <DropdownMenuContent className="w-48">
-            <DropdownMenuItem onClick={persist}>Save</DropdownMenuItem>
             <DropdownMenuItem onClick={() => download(doc)}>Export notebook</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem disabled={busy || !Object.keys(results).length} onClick={() => setResults({})}>

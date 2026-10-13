@@ -24,7 +24,7 @@ test('Reports starts at the list and preserves an opened report across tab switc
   await expect(title).toHaveValue('Session report');
   await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   await expect(page).toHaveURL(/evidence_report=/);
-  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to library', exact: true }).click();
   await expect(list).toBeVisible();
   await panel.getByRole('button', { name: 'Session report', exact: true }).click();
   await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
@@ -133,7 +133,7 @@ test('sidebar report links open reports without reloading the page', async ({ pa
   await sidebar.getByRole('link', { name: 'Reports', exact: true }).click();
   await expect(panel.getByRole('region', { name: 'Report browser' })).toBeVisible();
   await expect(sidebar.getByRole('button', { name: 'Expand reports', exact: true })).toBeVisible();
-  await page.getByRole('navigation', { name: 'Saved notebooks' }).getByRole('link', { name: 'Notebooks', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Saved notebook drafts' }).getByRole('link', { name: 'Notebook drafts', exact: true }).click();
   await expect(page.getByTestId('notebook-library')).toBeVisible();
   await sidebar.getByRole('link', { name: 'Reports', exact: true }).click();
   await expect(page).toHaveURL(/reports(?:\/saved)?/);

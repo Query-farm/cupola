@@ -34,3 +34,63 @@ test('a shared query uses its declared default and refuses another service under
     expect(statements).toEqual(['USE "memory"."main"']);
   } finally { engine.catalogStatuses = before.statuses; engine.lifecycleStatus = before.status; engine.openConnection = before.connection; engine.defaultCatalog = before.default; }
 });
+
+test('optional absent sources do not block execution, but an attached alias cannot silently change identity', () => {
+  const before = engine.catalogStatuses;
+  const source = { alias: 'unused', attachment_id: 'unused', location: 'https://source.test', catalog_name: 'sales', label: '', required: false };
+  try {
+    engine.catalogStatuses = new Map();
+    expect(() => assertDocumentSources([source], { default_source_alias: null, default_schema: null })).not.toThrow();
+    expect(() => assertDocumentSources([source], { default_source_alias: 'unused', default_schema: 'main' })).toThrow('Connect sales');
+    engine.catalogStatuses.set('unused', { alias: 'unused', url: 'https://different.test', catalogName: 'sales', state: 'attached' });
+    expect(() => assertDocumentSources([source], { default_source_alias: null, default_schema: null })).toThrow('Connect sales');
+  } finally { engine.catalogStatuses = before; }
+});
+
+test('saved query sessions retain connection state across revisions and reset only for execution context changes', async () => {
+  const { DocumentQuerySession } = await import('../../src/lib/reporting/documents');
+  const before = { statuses: engine.catalogStatuses, status: engine.lifecycleStatus, connection: engine.openConnection };
+  let opens = 0, closes = 0;
+  const statements: string[] = [];
+  try {
+    engine.lifecycleStatus = 'ready'; engine.catalogStatuses = new Map();
+    engine.openConnection = async () => { opens++; return { query: async (sql: string) => { statements.push(sql); return { ok: true }; }, close: async () => { closes++; } } as any; };
+    const binding = { url: 'https://example.test', record: { ...record(), envelope: { ...record().envelope!, data_sources: [] } }, original: { setup_sql: 'CREATE TEMP TABLE setup AS SELECT 1' }, context: { default_source_alias: null, default_schema: null } };
+    const session = new DocumentQuerySession();
+    await session.query(binding, 'CREATE TEMP TABLE work AS SELECT 2');
+    await session.query({ ...binding, record: { ...binding.record, revision_number: 2n } }, 'SELECT * FROM work');
+    expect(opens).toBe(1); expect(closes).toBe(0);
+    expect(statements).toEqual(['USE "memory"."main"', 'CREATE TEMP TABLE setup AS SELECT 1', 'CREATE TEMP TABLE work AS SELECT 2', 'SELECT * FROM work']);
+    await session.query({ ...binding, original: { setup_sql: 'SELECT 3' } }, 'SELECT 4');
+    expect(opens).toBe(2); expect(closes).toBe(1);
+    await session.close(); expect(closes).toBe(2);
+    await expect(session.query(binding, 'SELECT 5')).rejects.toThrow('closed');
+  } finally { engine.catalogStatuses = before.statuses; engine.lifecycleStatus = before.status; engine.openConnection = before.connection; }
+});
+
+test('acknowledged query content becomes dirty again on further edits or a source change', async () => {
+  const { documentIsDirty } = await import('../../src/lib/reporting/documents');
+  const binding = { url: 'https://example.test', record: { ...record(), envelope: { ...record().envelope!, title: 'Sales' } }, original: { query: 'SELECT 1' }, context: { default_source_alias: null, default_schema: null } };
+  const doc = { id: 'query', name: 'Sales', sql: 'SELECT 1', createdAt: 0, updatedAt: 0 };
+  expect(documentIsDirty('query', doc, binding)).toBe(false);
+  expect(documentIsDirty('query', { ...doc, sql: 'SELECT 2' }, binding)).toBe(true);
+  expect(documentIsDirty('query', doc, { ...binding, configurationDraft: { sources: [], context: { default_source_alias: 'sales', default_schema: 'main' } } })).toBe(true);
+});
+
+test('closing during a source reset cannot open or leak another connection', async () => {
+  const { DocumentQuerySession } = await import('../../src/lib/reporting/documents');
+  const before = { statuses: engine.catalogStatuses, status: engine.lifecycleStatus, connection: engine.openConnection };
+  let opens = 0, finishClose!: () => void;
+  try {
+    engine.lifecycleStatus = 'ready'; engine.catalogStatuses = new Map();
+    engine.openConnection = async () => { opens++; return { query: async () => ({ ok: true }), close: () => new Promise<void>(resolve => { finishClose = resolve; }) } as any; };
+    const binding = { url: 'https://example.test', record: { ...record(), envelope: { ...record().envelope!, data_sources: [] } }, original: {}, context: { default_source_alias: null, default_schema: null } };
+    const session = new DocumentQuerySession();
+    await session.query(binding, 'SELECT 1');
+    const resetting = session.query({ ...binding, original: { setup_sql: 'SELECT 2' } }, 'SELECT 3');
+    await Promise.resolve();
+    await session.close(); finishClose();
+    await expect(resetting).rejects.toThrow('closed');
+    expect(opens).toBe(1);
+  } finally { engine.catalogStatuses = before.statuses; engine.lifecycleStatus = before.status; engine.openConnection = before.connection; }
+});

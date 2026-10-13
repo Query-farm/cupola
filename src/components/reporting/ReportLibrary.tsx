@@ -1,3 +1,5 @@
+import { LibraryNewMenu, type LibraryDocumentKind } from './LibraryNewMenu';
+import { newLibraryDocument } from '../../lib/reporting/documents';
 import { documentKind } from '../../lib/reporting/object-adapter';
 import { ScheduleActivityButton } from './ScheduleActivity';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -10,7 +12,7 @@ import { ReportClient, reportError, type Input as RpcInput, type Method, type Ou
 import type { FolderRecord, ReportResult, ReportRow, ReportsInfo } from '../../lib/reporting/contracts.generated';
 import { MutationJournal } from '../../lib/reporting/journal';
 import { recoveryDrafts, type RecoveryDraft } from '../../lib/reporting/save-controller';
-import { encodeReport } from '../../lib/reporting/body';
+import { encodeReport, BODY_FORMAT } from '../../lib/reporting/body';
 import { listEvidenceReports, type EvidenceReport } from '../../lib/evidence/reports';
 import { newEvidenceReport } from '../../lib/evidence/templates';
 import { parseReportFile } from '../../lib/evidence/report-file';
@@ -104,6 +106,12 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
     const result = await mutate('create_report', { envelope, body, folder_id: folderId, message: imported ? 'Imported into Cupola; source history remains in the original file or browser.' : '' });
     navigate(result.report_id);
   }
+  async function createDocument(kind: LibraryDocumentKind) {
+    if (kind === 'report') return create(newEvidenceReport(props.serviceUrl, props.catalogName));
+    const { envelope, body } = newLibraryDocument(kind, props.serviceUrl, props.workspaceId, props.catalogs);
+    const result = await mutate('create_report', { envelope, body, folder_id: folderId, message: `Created ${kind}` });
+    navigate(result.report_id);
+  }
   async function apply(values: ResourceValues) {
     const target = dialog?.resource, action = dialog?.action;
     if (action === 'folder') await mutate('create_folder', { name: values.name, parent_folder_id: values.folderId });
@@ -154,7 +162,7 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
       onOpen: () => navigate(report.report_id), detail: report.ownership.owner_ref.display_name || report.ownership.owner_ref.id, state: `${report.published_revision_id ? 'Published' : 'Draft'} · revision ${String(report.revision_number)}`,
       actions: <ReportActionMenu label={`Actions for ${report.envelope?.title ?? 'report'}`} actions={[
         reportAction('details', () => navigate(report.report_id, folderId, null, 'details')),
-        ...(!report.redacted ? [reportAction('schedules', () => navigate(report.report_id, folderId, null, 'schedules'), blocked)] : []),
+        ...(!report.redacted && documentKind(report) === 'report' ? [reportAction('schedules', () => navigate(report.report_id, folderId, null, 'schedules'), blocked)] : []),
         ...(report.allowed_actions.includes('transfer_ownership') ? [reportAction('ownership', () => navigate(report.report_id, folderId, null, 'ownership'), blocked)] : []),
         ...(props.onTransferReport && !report.redacted ? [reportAction('copy', () => props.onTransferReport?.({ kind: 'worker', url: client.url, record: report }, false), busy || Boolean(pending)),
           ...(report.allowed_actions.some(a => a === 'move' || a === 'delete') ? [reportAction('move', () => props.onTransferReport?.({ kind: 'worker', url: client.url, record: report }, true), blocked)] : [])] : []),
@@ -167,19 +175,18 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
       <FolderOpen aria-hidden className="size-5 shrink-0 text-primary" /><div className="min-w-0 flex-1 basis-48"><h1 className="break-words text-lg font-semibold">{parent?.name ?? session?.info.display_name ?? 'Report library'}</h1><p className="break-words text-xs text-muted-foreground">{parent && <>{session?.info.display_name} · </>}Worker: {props.catalogs.filter(c => c.sourceUrl === client.url || !c.sourceUrl && props.serviceUrl === client.url).map(c => c.catalogName).map((name, index, names) => name + (index === names.length - 1 ? ' · ' : ' / ')).join('')}{new URL(client.url).host}</p></div>
       <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setGeneration(n => n + 1); window.dispatchEvent(new CustomEvent(REPORT_LIBRARY_CHANGED, { detail: { url: client.url } })); }}><RefreshCw />Reload library</Button>
       <div className="ml-auto flex flex-wrap gap-2"><ScheduleActivityButton serviceUrl={props.serviceUrl} />
-        <Button variant="outline" disabled={blocked || !actions.includes('create_folder')} onClick={() => setDialog({ action: 'folder' })}>New folder</Button>
-        <Button disabled={busy || loading} onClick={() => { if (blocked || !actions.includes('create_report')) props.onCreateLocal?.(); else void create(newEvidenceReport(props.serviceUrl, props.catalogName)).catch(e => setError(reportError(e))); }}><Plus />New report</Button>
+        <LibraryNewMenu disabled={busy || loading || Boolean(pending)} kinds={blocked || !actions.includes('create_report') ? [] : (((parent ?? session?.info) as any)?.creatable_kinds ?? ['report']).filter((kind: string) => session?.info.body_formats.includes(kind === 'report' ? BODY_FORMAT : `cupola.${kind}/1`))} onCreate={kind => void createDocument(kind).catch(e => setError(reportError(e)))} onFolder={!blocked && actions.includes('create_folder') ? () => setDialog({ action: 'folder' }) : undefined} />
       </div>
     </header>
     <div className="min-h-0 flex-1 space-y-5 overflow-auto bg-background p-4 sm:p-5">
       {!loading && session && (!actions.includes('create_report') || !session.info.writable) ? <ReportNotice kind="permission" title="Read-only location" action={<Button size="sm" variant="outline" onClick={props.onCreateLocal}><Plus />New local report</Button>}>
-        You can view reports here. Save new reports on this device or choose a writable folder.
+        You can view documents here. Create documents in Local or choose a writable folder.
       </ReportNotice> : !loading && session && !actions.includes('create_folder') && <ReportNotice kind="permission" title="Folder creation restricted">Your current access allows reports here, but not new folders.</ReportNotice>}
       {error && <ReportNotice kind="error" title="Could not load or update this location">{error}</ReportNotice>}
       {notice && <p role="status" className="text-sm">{notice}</p>}
       {pending && <div className="space-y-2 rounded border border-amber-400 p-3 text-sm"><p>A previous change has not been confirmed. Retry uses the same request ID and content.</p><Button disabled={busy} onClick={() => void retry()}>Retry pending change</Button> <Button variant="outline" disabled={busy} onClick={async () => { if (confirm('This change may already have succeeded. Inspect the worker first. Discard the saved request without retrying?')) { await session.journal.discard(); setGeneration(n => n + 1); } }}>Discard request…</Button></div>}
-      <nav aria-label="Report folders" className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground"><Button variant="ghost" size="sm" onClick={props.onAllReports}>All reports</Button><span aria-hidden>/</span><Button className="h-auto max-w-full whitespace-normal text-left" variant="ghost" size="sm" onClick={() => navigate(null, null)} aria-current={parent ? undefined : 'page'}>{session?.info.display_name || 'Library root'}</Button>{parent && <><span aria-hidden>/</span><span aria-current="page" className="min-w-0 break-words px-2 text-foreground">{folderPath(parent, folders)}</span><Button variant="ghost" size="sm" onClick={() => navigate(null, parent.parent_folder_id)}>Up one folder</Button></>}</nav>
-      <ReportFileList items={items} detailLabel="Owner" heading={query || tag || publishedOnly || ownedByMe ? 'Search results' : 'Folder contents'} emptyMessage={query || tag || publishedOnly || ownedByMe ? 'No reports match these filters.' : 'This folder is empty.'} loadingMessage={loading ? 'Loading report library…' : undefined} filters={<>
+      <nav aria-label="Report folders" className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground"><Button variant="ghost" size="sm" onClick={props.onAllReports}>All documents</Button><span aria-hidden>/</span><Button className="h-auto max-w-full whitespace-normal text-left" variant="ghost" size="sm" onClick={() => navigate(null, null)} aria-current={parent ? undefined : 'page'}>{session?.info.display_name || 'Library root'}</Button>{parent && <><span aria-hidden>/</span><span aria-current="page" className="min-w-0 break-words px-2 text-foreground">{folderPath(parent, folders)}</span><Button variant="ghost" size="sm" onClick={() => navigate(null, parent.parent_folder_id)}>Up one folder</Button></>}</nav>
+      <ReportFileList items={items} detailLabel="Owner" heading={query || tag || publishedOnly || ownedByMe ? 'Search results' : 'Folder contents'} emptyMessage={query || tag || publishedOnly || ownedByMe ? 'No documents match these filters.' : 'This folder is empty.'} loadingMessage={loading ? 'Loading report library…' : undefined} filters={<>
         <ReportSearch kind={kind} onKind={setKind} query={query} onQuery={setQuery} tag={tag} onTag={setTag} tags={reportTags(reports.map(r => r.envelope))} />
         <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3"><label className="flex items-center gap-2 text-sm"><input className="size-4 accent-primary" type="checkbox" checked={publishedOnly} onChange={e => setPublishedOnly(e.target.checked)} />Published only</label><label className="flex items-center gap-2 text-sm"><input className="size-4 accent-primary" type="checkbox" checked={ownedByMe} onChange={e => setOwnedByMe(e.target.checked)} />Owned by me</label></div>
       </>} />

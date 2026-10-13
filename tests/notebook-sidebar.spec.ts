@@ -36,7 +36,7 @@ async function seed(page: Page) {
   await page.goto(`${APP_ORIGIN}${BASE}?service=${encodeURIComponent(SERVICE_URL)}`);
   if ((page.viewportSize()?.width ?? 1000) < 768)
     await page.getByRole('button', { name: 'Show catalog sidebar' }).click();
-  await expect(page.getByRole('navigation', { name: 'Saved notebooks' })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('navigation', { name: 'Saved notebook drafts' })).toBeVisible({ timeout: 30_000 });
 }
 
 /** Write a notebook as another tab would, under the key the app now reads: the
@@ -63,7 +63,7 @@ test('sidebar notebooks navigate in place, update names, filter, and restore dir
   page,
 }) => {
   await seed(page);
-  const sidebar = page.getByRole('navigation', { name: 'Saved notebooks' });
+  const sidebar = page.getByRole('navigation', { name: 'Saved notebook drafts' });
   await expect(sidebar.getByRole('link', { name: 'Other connection notebook' })).toHaveCount(0);
   await page.evaluate(() => {
     (window as any).__notebookDocument = true;
@@ -104,9 +104,9 @@ test('sidebar notebooks navigate in place, update names, filter, and restore dir
   await expect(sidebar.getByRole('link', { name: 'Second notebook' })).toHaveCount(0);
   await expect(sidebar.getByRole('link', { name: 'Renamed notebook' })).toBeVisible();
   await filter.fill('');
-  await sidebar.getByRole('link', { name: 'Notebooks', exact: true }).click();
+  await sidebar.getByRole('link', { name: 'Notebook drafts', exact: true }).click();
   await expect(page.getByTestId('notebook-library')).toBeVisible();
-  await expect(sidebar.getByRole('link', { name: 'Notebooks' })).toHaveAttribute('aria-current', 'page');
+  await expect(sidebar.getByRole('link', { name: 'Notebook drafts' })).toHaveAttribute('aria-current', 'page');
   await page.goBack();
   await expect(title).toHaveValue('Renamed notebook');
   const popupPromise = page.context().waitForEvent('page');
@@ -123,9 +123,9 @@ test('sidebar notebooks navigate in place, update names, filter, and restore dir
 
 test('notebook links restore the URL when the requested workspace is already mounted', async ({ page }) => {
   await seed(page);
-  const sidebar = page.getByRole('navigation', { name: 'Saved notebooks' });
+  const sidebar = page.getByRole('navigation', { name: 'Saved notebook drafts' });
   const library = page.getByTestId('notebook-library');
-  await sidebar.getByRole('link', { name: 'Notebooks', exact: true }).click();
+  await sidebar.getByRole('link', { name: 'Notebook drafts', exact: true }).click();
   await expect(library).toBeVisible();
   await expect(page).toHaveURL(/\/notebooks\?service=/);
   await page.reload();
@@ -156,16 +156,16 @@ test('sidebar creates notebooks, reflects deletion and cross-tab changes, and re
 }) => {
   await seed(page);
   const root = page.getByTestId('catalog-sidebar');
-  const sidebar = page.getByRole('navigation', { name: 'Saved notebooks' });
+  const sidebar = page.getByRole('navigation', { name: 'Saved notebook drafts' });
   const local = root.getByRole('region', { name: 'On this device', exact: true });
-  await expect(local.getByRole('navigation', { name: 'Saved notebooks' })).toBeVisible();
+  await expect(local.getByRole('navigation', { name: 'Saved notebook drafts' })).toBeVisible();
   await expect(local.getByRole('navigation', { name: 'Saved reports' })).toHaveCount(0);
   await expect(page.getByTestId('catalog-sidebar').getByRole('navigation', { name: 'Saved reports' })).toBeVisible();
   await expect(root.getByRole('link', { name: /^All (notebooks|reports)$/ })).toHaveCount(0);
   await root.getByRole('button', { name: 'New notebook', exact: true }).click();
   await page.getByRole('textbox', { name: 'Notebook title' }).fill('Created from sidebar');
   await expect(sidebar.getByRole('link', { name: 'Created from sidebar' })).toBeVisible();
-  await sidebar.getByRole('link', { name: 'Notebooks' }).click();
+  await sidebar.getByRole('link', { name: 'Notebook drafts' }).click();
   const library = page.getByTestId('notebook-library');
   await library.getByRole('textbox', { name: 'Search notebooks' }).fill('Created from sidebar');
   await library.getByRole('button', { name: 'Delete', exact: true }).click();
@@ -177,11 +177,11 @@ test('sidebar creates notebooks, reflects deletion and cross-tab changes, and re
   await expect(sidebar.getByRole('link', { name: 'Changed in another tab' })).toBeVisible();
   await other.close();
   await page.getByTestId('sidebar-notebooks-toggle').click();
-  await expect(sidebar.getByRole('link', { name: 'Notebooks', exact: true })).toBeVisible();
+  await expect(sidebar.getByRole('link', { name: 'Notebook drafts', exact: true })).toBeVisible();
   await expect(sidebar.getByRole('link', { name: 'Changed in another tab', exact: true })).toBeHidden();
   await page.reload();
   await expect(page.getByTestId('sidebar-notebooks-toggle')).toHaveAttribute('aria-expanded', 'false');
-  await sidebar.getByRole('link', { name: 'Notebooks', exact: true }).click();
+  await sidebar.getByRole('link', { name: 'Notebook drafts', exact: true }).click();
   await expect(library).toBeVisible();
   await expect(page.getByTestId('sidebar-notebooks-toggle')).toHaveAttribute('aria-expanded', 'false');
   await page.getByRole('textbox', { name: 'Filter catalog' }).fill('Changed in another');
@@ -191,7 +191,7 @@ test('sidebar creates notebooks, reflects deletion and cross-tab changes, and re
 test('sidebar navigation preserves the active notebook while running or unable to save', async ({ page }) => {
   await seed(page);
   await waitForShellBridge(page, 30_000);
-  const sidebar = page.getByRole('navigation', { name: 'Saved notebooks' });
+  const sidebar = page.getByRole('navigation', { name: 'Saved notebook drafts' });
   await sidebar.getByRole('link', { name: 'First notebook' }).click();
   const cell = page.getByTestId('notebook-cell').first();
   await cell.locator('.cm-content').fill('SELECT count(*) FROM cupola_test.edge.slow_rows(100000, 2000)');
@@ -205,7 +205,7 @@ test('sidebar navigation preserves the active notebook while running or unable t
   await expect(cell.getByText('Cancelled', { exact: true })).toBeVisible({ timeout: 15_000 });
   await sidebar.getByRole('link', { name: 'Second notebook' }).click();
   await expect(page.getByRole('textbox', { name: 'Notebook title' })).toHaveValue('Second notebook');
-  await expect(page.getByText('Saved in this browser', { exact: true })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: /^Local draft$/ })).toBeVisible();
   await editInOtherTab(page, 'second', 'Other tab wins');
   await sidebar.getByRole('link', { name: 'First notebook' }).click();
   await expect(page.getByText(/Notebook was kept open/)).toBeVisible();
@@ -217,7 +217,7 @@ test('mobile sidebar closes when opening a notebook', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await seed(page);
   await page
-    .getByRole('navigation', { name: 'Saved notebooks' })
+    .getByRole('navigation', { name: 'Saved notebook drafts' })
     .getByRole('link', { name: 'First notebook' })
     .click();
   await expect(page.getByTestId('catalog-sidebar')).toHaveCount(0);
@@ -233,7 +233,7 @@ test('missing notebook links show a recoverable message and preserve saved docum
     'unavailable in this browser',
   );
   await page
-    .getByRole('navigation', { name: 'Saved notebooks' })
+    .getByRole('navigation', { name: 'Saved notebook drafts' })
     .getByRole('link', { name: 'First notebook' })
     .click();
   await expect(page.getByRole('textbox', { name: 'Notebook title' })).toHaveValue('First notebook');

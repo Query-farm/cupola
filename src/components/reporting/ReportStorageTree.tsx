@@ -37,7 +37,7 @@ export function ReportStorageTree({ locations, scope, location, folderId, onSele
     return convert(folderBranches(url, folders));
   };
   const nodes: FileTreeNode[] = [
-    ...(!picker ? [{ id: directoryKey('all'), name: 'All reports', kind: 'collection' as const }] : []),
+    ...(!picker ? [{ id: directoryKey('all'), name: 'All documents', kind: 'collection' as const }] : []),
     { id: directoryKey('local'), name: 'Local', kind: 'location', children: branches('local', local) },
     ...locations.filter(l => l.info).map(l => ({ id: directoryKey(l.url), name: locationLabel(l, locations), kind: 'location' as const,
       children: branches(l.url, remote[l.url] ?? []), readOnly: picker && (!l.info?.writable || !l.info.root_allowed_actions.includes('create_report') || Boolean(objectKind && 'creatable_kinds' in l.info && !(l.info as any).creatable_kinds.includes(objectKind))), detail: errors[l.url] || (!l.info?.root_allowed_actions.includes('create_report') ? 'Read-only root; folders may allow writes' : undefined) })),

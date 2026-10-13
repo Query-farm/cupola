@@ -1,4 +1,4 @@
-import { openDocumentConnection, type DocumentBinding } from '../reporting/documents';
+import { openDocumentConnection, assertDocumentSources, type DocumentBinding } from '../reporting/documents';
 import { engine, waitForEngineReady, type EngineConnection } from '../shell-bridge';
 import { quoteIdent, decodeArrowBuffer } from '../duckdb-query';
 import { parseCellSql, validateSelectQuery, type NotebookQueryContext } from './execution';
@@ -59,12 +59,14 @@ export class NotebookSession {
   }
 
   async query(sql: string, params: unknown[] = [], options: QueryExecutionOptions = {}) {
+    if (this.binding) assertDocumentSources(this.binding.record.envelope?.data_sources ?? [], this.binding.context);
     const connection = await this.ready(options.signal);
     return connection.queryPrepared(sql, params, { timeoutMs: TIMEOUT_MS, ...options });
   }
 
   async runCell(sql: string, signal: AbortSignal, context: NotebookQueryContext) {
     const parsed = parseCellSql(sql);
+    if (this.binding) assertDocumentSources(this.binding.record.envelope?.data_sources ?? [], this.binding.context);
     const connection = await this.ready(signal);
     signal.throwIfAborted();
     context.phase('queued');

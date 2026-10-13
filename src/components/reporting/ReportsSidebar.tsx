@@ -1,4 +1,7 @@
-import { listLocalObjects, deleteLocalObject, type LocalObject } from '../../lib/reporting/local-objects';
+import { LibraryNewMenu } from './LibraryNewMenu';
+import { newLibraryDocument } from '../../lib/reporting/documents';
+import { catalogInventory } from '../../lib/catalog-store';
+import { listLocalObjects, deleteLocalObject, saveLocalObject, type LocalObject } from '../../lib/reporting/local-objects';
 import { transferLocation, transferId, transferFolder } from '../../lib/reporting/transfers';
 import { useEffect, useState, type MouseEvent } from 'react';
 import { documentKind } from '../../lib/reporting/object-adapter';
@@ -173,7 +176,10 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
     <SavedDocumentsSidebar title="Library" documentKind="report" icon={FileChartColumn} itemIcon={FileText} openKey="cupola.sidebar.reports-open" testId="sidebar-reports-toggle"
       items={items}
       search={search} libraryHref={href({ location: 'all' })} libraryActive={active && selected === reportNodeKey({ location: 'all' })} onNavigate={event => navigate(event, { location: 'all' })} onAction={act}
-      onCreate={() => window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId, create: true, href: reportHref(serviceUrl, undefined, true) } }))} createLabel="New report" error={localError || undefined}>
+      createControl={<LibraryNewMenu compact onFolder={() => open({ location: 'local' }, 'folder')} onCreate={kind => {
+        if (kind === 'report') { window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId, create: true, href: reportHref(serviceUrl, undefined, true) } })); return; }
+        try { const document = newLibraryDocument(kind, serviceUrl, workspaceId, catalogInventory.getSnapshot().catalogs); saveLocalObject(scope, document); open({ location: 'local', reportId: document.id }); } catch (error) { setActionError(reportError(error)); }
+      }} />} error={localError || undefined}>
       <FileTree nodes={search ? filter(allNodes) : allNodes} label="Library" selectedId={active ? selected : undefined} initialExpandedIds={[reportNodeKey({ location: 'local' })]} expandAll={Boolean(search)} autoFocusSelection={false}
         dragDrop={{ canDrag, canDrop, onDrop: (source, destination) => void move(source, destination) }}
         onSelect={id => { const destination = destinations.get(id); if (destination) open(destination); }} onNavigate={(event, id) => { const destination = destinations.get(id); if (destination) navigate(event, destination); }} />

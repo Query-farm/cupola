@@ -32,8 +32,10 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false);
   const [documentDirty, setDocumentDirty] = useState(false);
   useEffect(() => {
-    const changed = (event: Event) => { const detail = (event as CustomEvent).detail; if (detail.url === session.client.url && detail.id === reportId) { setDocumentDirty(detail.dirty); setOpened(previous => previous ? { ...previous, record: detail.record } : previous); } };
-    window.addEventListener("cupola:document-edit-state", changed); return () => window.removeEventListener("cupola:document-edit-state", changed);
+    const changed = (event: Event) => { const detail = (event as CustomEvent).detail; if (detail.url === session.client.url && detail.id === reportId) { setDocumentDirty(detail.dirty); setOpened(previous => previous && detail.record.revision_number >= previous.record.revision_number && detail.record.version >= previous.record.version ? { ...previous, record: detail.record } : previous); } };
+    const newer = (event: Event) => { const detail = (event as CustomEvent).detail; if (detail.url === session.client.url && detail.record.report_id === reportId) setOpened(previous => previous ? { ...previous, record: detail.record } : previous); };
+    window.addEventListener("cupola:document-edit-state", changed); window.addEventListener('cupola:document-newer-version', newer);
+    return () => { window.removeEventListener("cupola:document-edit-state", changed); window.removeEventListener('cupola:document-newer-version', newer); };
   }, [session.client.url, reportId]);
   const [generation, setGeneration] = useState(0), [editorGeneration, setEditorGeneration] = useState(0);
   const [folders, setFolders] = useState<FolderRecord[]>([]), [revisions, setRevisions] = useState<RevisionRow[]>([]);
@@ -149,7 +151,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     reportAction('details', () => showPage('details')),
     ...(!record.redacted && documentKind(record) === 'report' ? [reportAction('schedules', () => showPage('schedules'), blocked)] : []),
     ...(can('transfer_ownership') ? [reportAction('ownership', () => showPage('ownership'), blocked)] : []),
-    ...(props.onTransferReport && !record.redacted ? [reportAction('copy', () => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, false), blocked),
+    ...(props.onTransferReport && !record.redacted ? [...(documentKind(record) === 'report' ? [reportAction('copy', () => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, false), blocked)] : []),
       ...(!revisionId && (can('move') || can('delete')) ? [reportAction('move', () => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, true), blocked)] : [])] : []),
     ...(can('delete') ? [reportAction('delete', () => setDialog({ action: 'delete' }), blocked)] : []),
   ] : [];
@@ -174,8 +176,9 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
       onDraft: report => controller?.capture(report), onSave: (report, meta) => controller?.stage(report, meta),
       onLeave: props.onLeave, onCopy: report => void attempt(() => copy(report)), historyContent,
     }} /></div>}
+    {page === 'schedules' && record && documentKind(record) !== 'report' && <ReportPage title="Scheduling is for reports" onBack={() => showPage(null)}><p>Queries and notebooks can be saved and shared. To schedule emailed results, create a report using this query.</p></ReportPage>}
     {page === 'schedules' && record && documentKind(record) === 'report' && <ReportSchedulesPage report={record} reportClient={session.client} catalogs={props.catalogs} workspaceId={props.workspaceId} pinned={Boolean(revisionId)} onBack={() => showPage(null)} />}
-    {page === 'details' && record && <ReportDetailsPage key={String(record.version)} initial={{ name: record.envelope?.title ?? '', description: record.envelope?.description ?? '', tags: record.envelope?.tags ?? [] }} location={reportLocation} blocked={blocked}
+    {page === 'details' && record && <ReportDetailsPage documentLabel={record && documentKind(record) !== 'report' ? documentKind(record) : 'report'} key={String(record.version)} initial={{ name: record.envelope?.title ?? '', description: record.envelope?.description ?? '', tags: record.envelope?.tags ?? [] }} location={reportLocation} blocked={blocked}
       onClose={() => showPage(null)} onSave={!revisionId && !opened?.recoveryOnly && can('edit') && record.envelope && record.body ? async values => {
         if (!controller) {
           await session.journal.run('commit_revision', { report_id: reportId, expected_revision_id: record.head_revision_id, envelope: { ...record.envelope!, title: values.name, description: values.description, tags: values.tags }, body: record.body!, message: 'Updated document details' });
@@ -192,7 +195,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
       if (blocked) throw new Error('Finish saving before publishing.');
       setBusy(true); try { await session.journal.run('publish', { report_id: reportId, revision_id: revision, expected_published_revision_id: record.published_revision_id }); await refreshRecord(); } finally { setBusy(false); }
     }} />}
-    {page === 'history' && !opened?.report && <ReportPage title="Report history" description={record?.envelope?.title} onBack={() => showPage(null)}>{historyContent}</ReportPage>}
+    {page === 'history' && !opened?.report && <ReportPage title="Version history" backLabel="Back to document" description={record?.envelope?.title} onBack={() => showPage(null)}>{historyContent}</ReportPage>}
     {page === 'ownership' && record && <OwnershipPage client={session.client} resourceKind="report" resourceId={reportId} name={record.envelope?.title ?? 'Report'} current={record.ownership} blocked={blocked || !can('transfer_ownership')} onBack={() => showPage(null)} onApply={async ownership => {
       setBusy(true); try { await session.journal.run('set_ownership', { report_id: reportId, expected_version: record.version, ownership }); props.onLeave(); } finally { setBusy(false); }
     }} />}

@@ -137,3 +137,10 @@ export async function chooseReportAction(page: Page, name: string, row?: Locator
   await (row ? row.getByRole('button', { name: /^Actions for / }) : page.getByRole('button', { name: 'More report actions', exact: true })).click();
   await page.getByRole('menuitem', { name, exact: true }).click();
 }
+
+/** Library creation uses the shared New menu; legacy report-only lists retain their button. */
+export async function chooseLibraryNew(page: import('@playwright/test').Page, scope: import('@playwright/test').Locator, label: 'New report' | 'New query' | 'New notebook' | 'New folder') {
+  const menu = scope.getByRole('button', { name: /^(New|New document)$/ });
+  await menu.click();
+  await page.getByRole('menuitem', { name: label, exact: true }).click();
+}

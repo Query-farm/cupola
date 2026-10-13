@@ -1,4 +1,6 @@
-import { listLocalObjects, localObjectRecord } from '../../lib/reporting/local-objects';
+import { newLibraryDocument } from '../../lib/reporting/documents';
+import type { LibraryDocumentKind } from './LibraryNewMenu';
+import { listLocalObjects, localObjectRecord, saveLocalObject } from '../../lib/reporting/local-objects';
 import { RemoteDocumentEditor } from './RemoteDocumentEditor';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/button';
@@ -13,7 +15,7 @@ import { REPORT_ROUTE_CHANGED } from '../../lib/reporting/navigation';
 import { OPEN_REPORT_EVENT, reportHref, type OpenReportDetail } from '../../lib/evidence/open-report';
 import { saveEvidenceReport, type EvidenceReport } from '../../lib/evidence/reports';
 import { newEvidenceReport } from '../../lib/evidence/templates';
-import { placeLocalReport } from '../../lib/reporting/local-library';
+import { placeLocalReport, localLibrary } from '../../lib/reporting/local-library';
 import { forgetTransfer, resumeTransfer, transferJobs, REPORT_TRANSFERS_CHANGED, type TransferJob, type TransferSource } from '../../lib/reporting/transfers';
 import type { CatalogData } from '../../lib/service';
 import { hasReportPromotion } from '../../lib/reports/events';
@@ -101,8 +103,13 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     if (editing) url.searchParams.set('evidence_edit', '1');
     history.pushState({}, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED)); setView(route()); setEditorKey(n => n + 1);
   }
-  function createLocal() {
+  function createLocal(kind: LibraryDocumentKind = 'report') {
     try {
+      if (kind !== 'report') {
+        const object = newLibraryDocument(kind, props.serviceUrl, props.workspaceId, props.catalogs);
+        saveLocalObject(scope, object); placeLocalReport(scope, object.id, view.selected === 'local' ? view.localFolder : null);
+        const url = reportHref(props.serviceUrl, object.id); history.pushState({}, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED)); setView(route()); setEditorKey(n => n + 1); return;
+      }
       const report = saveEvidenceReport({ ...newEvidenceReport(props.serviceUrl, props.catalogName), workspaceId: props.workspaceId });
       if (view.selected === 'local' && view.localFolder) placeLocalReport(scope, report.id, view.localFolder);
       openLocal(report, true);
@@ -126,8 +133,8 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     <div className="min-h-0 flex-1">{view.activity ? <ScheduleActivity serviceUrl={props.serviceUrl} catalogs={props.catalogs} onBack={() => choose('all')} /> : view.selected === 'all' || view.selected === 'local' && !view.localEditor
       ? <ReportOverview key={`${view.selected}:${view.localFolder ?? ''}:${editorKey}`} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} localOnly={view.selected === 'local'} folderId={view.localFolder} onAllReports={() => choose('all')} onFolder={id => choose('local', undefined, id)} onNew={createLocal} onLocal={openLocal} onWorker={(url, id) => choose(url, id)} onTransfer={transferReport} onRefresh={refresh} />
       : view.selected === 'local'
-        ? localObject ? <RemoteDocumentEditor key={editorKey} {...props} record={localObjectRecord(localObject)} libraryUrl="local" localScope={scope} pinned={false} onLeave={() => choose('local')} /> : <EvidenceWorkspace key={editorKey} {...props} onLibrary={() => choose('local')} onTransfer={(report, move) => transferReport({ kind: 'local', report }, move)} />
-        : <ReportLibrary key={view.selected + ':' + editorKey} {...props} libraryUrl={view.selected} onAllReports={() => choose('all')} onCreateLocal={createLocal} onTransferReport={transferReport} />}</div>
+        ? localObject ? <RemoteDocumentEditor key={editorKey} {...props} record={{ ...localObjectRecord(localObject), folder_id: localLibrary(scope).entries[localObject.id]?.folderId ?? null }} libraryUrl="local" localScope={scope} pinned={false} onLeave={() => choose('local')} /> : <EvidenceWorkspace key={editorKey} {...props} onLibrary={() => choose('local')} onTransfer={(report, move) => transferReport({ kind: 'local', report }, move)} />
+        : <ReportLibrary key={view.selected + ':' + editorKey} {...props} libraryUrl={view.selected} onAllReports={() => choose('all')} onCreateLocal={() => createLocal()} onTransferReport={transferReport} />}</div>
     {transfer && <TransferDialog {...transfer} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} onClose={() => { setTransfer(null); refresh(); }} onComplete={completed} />}
   </div>;
 }

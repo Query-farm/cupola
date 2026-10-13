@@ -16,6 +16,7 @@ export function SavedDocumentsSidebar({
   libraryHref,
   onNavigate,
   onCreate,
+  createControl,
   createLabel = 'New document',
   activeId,
   libraryActive,
@@ -34,6 +35,7 @@ export function SavedDocumentsSidebar({
   libraryHref: string;
   onNavigate: (event: MouseEvent<HTMLAnchorElement>, id?: string) => void;
   onCreate?: () => void;
+  createControl?: ReactNode;
   createLabel?: string;
   activeId?: string | null;
   libraryActive?: boolean;
@@ -90,7 +92,8 @@ export function SavedDocumentsSidebar({
           <span className="truncate">{title}</span>
           <span aria-hidden className="ml-1.5 text-xs font-normal text-muted-foreground">{items.length}</span>
         </a>
-        {onCreate && (
+        {createControl}
+        {!createControl && onCreate && (
           <button
             type="button"
             onClick={onCreate}

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Play, Square, Sparkles, WandSparkles, Loader2, FileChartColumn, Info, History, ChevronDown, ListOrdered, Route, Radio, Database, Share2, Download, Link2, Check, Keyboard } from "lucide-react";
 import { Popover as BaseUIPopover } from "@base-ui/react/popover";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -6,6 +7,9 @@ import type { PerspectivePivotMode, QueryPivotMode } from "@/lib/pivot-source";
 import { withShortcut } from "@/lib/keys";
 
 interface Props {
+  saveControls?: ReactNode;
+  managed?: boolean;
+  onResetSession?: () => void;
   running: boolean;
   /** DuckDB booted, required extensions loaded, and the catalog attached. */
   queryReady: boolean;
@@ -68,6 +72,9 @@ const panelToggle = (active?: boolean) => `h-7 gap-1.5 ${active ? "bg-muted text
  * platform's terms, never on the buttons.
  */
 export function EditorToolbar({
+  saveControls,
+  managed,
+  onResetSession,
   running,
   queryReady,
   runBlocked,
@@ -94,7 +101,7 @@ export function EditorToolbar({
 }: Props) {
   const canRun = queryReady && !running && !runBlocked;
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0">
+    <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0">
       {running ? (
         <>
           <Button size="sm" variant="destructive" onClick={onStop} className="h-7 gap-1.5" data-testid="editor-stop">
@@ -157,6 +164,7 @@ export function EditorToolbar({
         </div>
       )}
 
+      {saveControls}
       <Button
         size="sm"
         onClick={onAskAI}
@@ -174,21 +182,21 @@ export function EditorToolbar({
 
       <Button size="sm" variant="ghost" onClick={onFormat} className="h-7 gap-1.5" title="Format this tab's SQL" data-testid="editor-format">
         <WandSparkles className="h-3.5 w-3.5" />
-        <span className="hidden md:inline">Format</span>
+        <span className="hidden lg:inline">Format</span>
       </Button>
 
       <Popover>
         <PopoverTrigger
           className="flex h-7 items-center gap-1.5 rounded px-2 text-xs hover:bg-foreground/5"
-          title="Share this query: a link, a .sql file, or a report"
+          title={managed ? "Query tools" : "Share this query: a link, a .sql file, or a report"}
           data-testid="editor-share-menu"
         >
           <Share2 className="h-3.5 w-3.5" />
-          <span className="hidden md:inline">Share</span>
+          <span className="hidden lg:inline">{managed ? "Tools" : "Share"}</span>
           <ChevronDown className="h-3 w-3 text-muted-foreground" />
         </PopoverTrigger>
         <PopoverContent align="start" className="w-60 p-1">
-          <BaseUIPopover.Close onClick={onShareLink} className={menuItem} data-testid="editor-share-link">
+          <BaseUIPopover.Close onClick={onShareLink} hidden={managed} className={menuItem} data-testid="editor-share-link">
             {shareCopied ? <Check className="h-3.5 w-3.5 text-accent" /> : <Link2 className="h-3.5 w-3.5" />}
             <span>{shareCopied ? "Link copied" : "Copy link to this query"}</span>
           </BaseUIPopover.Close>
@@ -201,6 +209,7 @@ export function EditorToolbar({
             <span>Add to report</span>
           </BaseUIPopover.Close>
           <div className="my-1 border-t border-border" />
+          {onResetSession && <BaseUIPopover.Close disabled={running} onClick={onResetSession} className={menuItem}>Reset query session</BaseUIPopover.Close>}
           <BaseUIPopover.Close onClick={onShowShortcuts} className={menuItem} data-testid="editor-shortcuts">
             <Keyboard className="h-3.5 w-3.5" />
             <span>Keyboard shortcuts</span>
@@ -232,7 +241,7 @@ export function EditorToolbar({
         data-testid="editor-history"
       >
         <History className="h-3.5 w-3.5" />
-        <span className="hidden lg:inline">History</span>
+        <span className="hidden lg:inline">Run history</span>
       </Button>
     </div>
   );

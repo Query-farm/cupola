@@ -75,7 +75,7 @@ test('live Evidence report reuses the shell worker across refresh, editing and t
   await expect(report).not.toContainText(/Attribute .* must|Binder Error|Parser Error|Required:/);
   await page.evaluate(() => { (window as any).__evidenceTestWorker = (window as any).__bridge.worker; });
   await page.getByRole('tab', { name: 'Query Editor', exact: true }).click();
-  await page.getByRole('tab', { name: 'Reports', exact: true }).click();
+  await page.getByRole('tab', { name: 'Library', exact: true }).click();
   await panel.getByRole('button', { name: 'Refresh report', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Refresh report', exact: true })).toBeEnabled({ timeout: 30_000 });
   await expect(report).toContainText('Glen Allen');
@@ -179,7 +179,7 @@ test('saved report library restores typed parameters, source and selected values
   await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
   await expect(panel.getByText('Saved in this browser.', { exact: true })).toHaveCount(0);
   await page.evaluate(() => { (window as any).__savedReportWorker = (window as any).__bridge.worker; });
-  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to library', exact: true }).click();
   await expect(page).toHaveURL(/reports\/saved/);
   await expect(panel.getByRole('row').filter({ hasText: 'Parameter round trip' })).toContainText('City, Amount, As of, Include');
   await panel.getByRole('button', { name: 'Parameter round trip', exact: true }).click();
@@ -197,7 +197,7 @@ test('saved report library restores typed parameters, source and selected values
   await expect(panel.getByLabel('Parameter 1 default', { exact: true })).toHaveValue('Glen Allen');
   await expect(panel.getByTestId('evidence-document')).toContainText(city, { timeout: 30_000 });
   await expect(panel.getByRole('alert')).toHaveCount(0);
-  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to library', exact: true }).click();
   await panel.getByRole('button', { name: 'Copy Parameter round trip', exact: true }).click();
   await expect(page).toHaveURL(/reports\/saved/);
   await expect(panel.getByRole('row').filter({ hasText: 'Parameter round trip' })).toHaveCount(2);
@@ -267,7 +267,7 @@ test('reports export to a file and import, from another worker, into the saved r
   // Saved against this worker, so it opens here.
   await panel.getByRole('button', { name: 'Open report', exact: true }).click();
   await expect(panel.getByTestId('evidence-document')).toContainText('Shared report', { timeout: 60_000 });
-  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to library', exact: true }).click();
 
   // The same file again changes nothing; a changed one replaces it, or is kept beside it.
   await input.setInputFiles({ name: 'shared.cupola-reports.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(fromElsewhere)) });
@@ -370,7 +370,7 @@ test('saving keeps revisions: who changed what, a diff, restore, and the history
   await expect(revisions.getByRole('listitem').nth(0)).toContainText(/Restored the version of .*\(Saved before revision history began\)/);
 
   // The file carries the history, and importing it elsewhere brings the history back.
-  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to library', exact: true }).click();
   const [download] = await Promise.all([page.waitForEvent('download'), panel.getByRole('button', { name: 'Export Revised report', exact: true }).click()]);
   const file = testInfo.outputPath('revised.cupola-reports.json');
   await download.saveAs(file);
@@ -499,7 +499,7 @@ test('a new report that never saved comes back after its tab closes', async ({ p
   await expect(status).toHaveText('Saved');
   expect(await savedKeys()).toHaveLength(1);
   expect(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('cupola.evidence.draft.v1:')))).toEqual([]);
-  await panel.getByRole('button', { name: 'Back to reports', exact: true }).click();
+  await panel.getByRole('button', { name: 'Back to library', exact: true }).click();
   await expect(panel.getByRole('region', { name: 'Unsaved reports' })).toHaveCount(0);
   await expect(panel.getByRole('button', { name: 'Open report', exact: true })).toHaveCount(1);
   expect(errors).toEqual([]);

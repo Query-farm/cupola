@@ -5,19 +5,19 @@ import { ReportPage } from './ReportPage';
 import { reportError } from '../../lib/reporting/client';
 
 export interface ReportDetailsValues { name: string; description: string; tags: string[] }
-export function ReportDetailsPage({ initial, location, identity, blocked, onSave, onTransferOwnership, onClose }: {
-  initial: ReportDetailsValues; location: string; identity?: ReactNode; blocked?: boolean;
+export function ReportDetailsPage({ documentLabel = 'report', initial, location, identity, blocked, onSave, onTransferOwnership, onClose }: {
+  documentLabel?: string; initial: ReportDetailsValues; location: string; identity?: ReactNode; blocked?: boolean;
   onSave?: (values: ReportDetailsValues) => void | Promise<void>; onTransferOwnership?: () => void; onClose: () => void;
 }) {
   const [name, setName] = useState(initial.name), [description, setDescription] = useState(initial.description), [tags, setTags] = useState(initial.tags.join(', '));
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
-  return <ReportPage title="Report details" description={location} onBack={onClose}>
+  return <ReportPage title={`${documentLabel[0].toUpperCase()}${documentLabel.slice(1)} details`} backLabel={`Back to ${documentLabel}`} description={location} onBack={onClose}>
     <form className="space-y-4" onSubmit={async e => { e.preventDefault(); if (!onSave || blocked || busy) return; setBusy(true); setError(''); try { await onSave({ name: name.trim(), description, tags: tags.split(',').map(t => t.trim()).filter(Boolean) }); onClose(); } catch (e) { setError(reportError(e)); } finally { setBusy(false); } }}>
       <label className="block space-y-1 text-sm">Name<Input aria-label="Name" required readOnly={!onSave} disabled={Boolean(onSave && blocked) || busy} value={name} onChange={e => setName(e.target.value)} /></label>
       <label className="block space-y-1 text-sm">Description<textarea aria-label="Description" readOnly={!onSave} disabled={Boolean(onSave && blocked) || busy} className="min-h-20 w-full rounded border bg-background p-2 disabled:opacity-50" value={description} onChange={e => setDescription(e.target.value)} /></label>
       <label className="block space-y-1 text-sm">Tags, separated by commas<Input aria-label="Tags" readOnly={!onSave} disabled={Boolean(onSave && blocked) || busy} value={tags} onChange={e => setTags(e.target.value)} /></label>
       {identity && <section aria-label="Report ownership" className="space-y-2 border-t pt-3 text-sm">{identity}{onTransferOwnership && <Button type="button" size="sm" variant="outline" disabled={blocked || busy} onClick={onTransferOwnership}>Transfer ownership…</Button>}</section>}
-      {blocked && onSave && <p role="status" className="text-sm text-muted-foreground">Finish saving or resolve pending changes before changing report details.</p>}
+      {blocked && onSave && <p role="status" className="text-sm text-muted-foreground">Finish saving or resolve pending changes before changing details.</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <div className="flex gap-2"><Button type="button" variant="outline" disabled={busy} onClick={onClose}>Close</Button>{onSave && <Button type="submit" disabled={blocked || busy || !name.trim()}>{busy ? 'Saving…' : 'Save changes'}</Button>}</div>
     </form>

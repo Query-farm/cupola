@@ -35,15 +35,15 @@ export function WorkerReportSharing({ record, url, pinned, blocked, canPublish, 
     setBusy(true); setError('');
     try { await onPublish(revision); setConfirmUnpublish(false); } catch (e) { setError(reportError(e)); } finally { setBusy(false); }
   }
-  return <ReportPage title={`Share ${documentKind(record)}`} description={record.envelope?.title} onBack={onClose}>
-    <p className="text-sm text-muted-foreground">Share with people who have access to this report library. Copying a link does not change access.</p>
+  return <ReportPage title={`Share ${documentKind(record)}`} description={record.envelope?.title} onBack={onClose} backLabel={`Back to ${documentKind(record)}`}>
+    <p className="text-sm text-muted-foreground">Share with people who have access to this library. Copying a link does not change access.</p>
     <section className="space-y-3"><label className="block space-y-1 text-sm"><span>Link to</span><select aria-label="Link to" value={specific ? 'version' : 'latest'} onChange={e => { setSpecific(e.target.value === 'version'); setCopied(false); }} className="w-full rounded border bg-background p-2 [appearance:auto]"><option value="latest">Latest available version</option><option value="version">This version ({String(record.revision_number)})</option></select></label>
       <p className="text-xs text-muted-foreground">{specific ? 'This link stays on the selected saved version.' : 'The library determines which version each recipient can see.'}</p>
-      <input aria-label="Report link" readOnly value={link} onFocus={e => e.target.select()} className="w-full rounded border bg-background p-2 text-xs" />
+      <input aria-label={documentKind(record) === 'report' ? 'Report link' : 'Document link'} readOnly value={link} onFocus={e => e.target.select()} className="w-full rounded border bg-background p-2 text-xs" />
       <Button disabled={documentKind(record) !== 'report' && !portableLink} onClick={async () => { try { await navigator.clipboard.writeText(link); setCopied(true); } catch (e) { setError(reportError(e)); } }}>{copied ? <Check /> : <Copy />}{copied ? 'Link copied' : 'Copy link'}</Button>
     </section>
     {canPublish && <section aria-label="Report publishing" className="space-y-3 border-t pt-4 text-sm"><h3 className="flex items-center gap-2 font-medium"><Link className="size-4" />Publishing</h3>
-      <p>{!record.published_revision_id ? 'This report has not been published.' : record.published_revision_id === record.revision_served ? 'This saved version is published.' : 'A different saved version is published.'} Publish a saved version when it is ready for readers. Library permissions still apply.</p>
+      <p>{!record.published_revision_id ? 'This document has not been published.' : record.published_revision_id === record.revision_served ? 'This saved version is published.' : 'A different saved version is published.'} Publish a saved version when it is ready for readers. Library permissions still apply.</p>
       {blocked && <ReportNotice title="Changes are pending">Finish saving or resolve pending changes before publishing.</ReportNotice>}
       <div className="flex flex-wrap gap-2"><Button disabled={blocked || busy || record.published_revision_id === record.revision_served} onClick={() => void publish(record.revision_served)}>{busy ? 'Updating…' : pinned ? 'Publish this version' : 'Publish changes'}</Button>
         {record.published_revision_id && <Button variant="ghost" disabled={blocked || busy} onClick={() => setConfirmUnpublish(true)}>Unpublish…</Button>}</div>

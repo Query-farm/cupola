@@ -1,3 +1,4 @@
+import { documentBinding, DOCUMENT_BINDING_CHANGED } from '../../lib/reporting/documents';
 import { useEffect, useState, type MouseEvent } from 'react';
 import { NotebookPen, FileText } from 'lucide-react';
 import { SavedDocumentsSidebar } from '../shared/SavedDocumentsSidebar';
@@ -27,7 +28,7 @@ export function SavedNotebooksSidebar({
     const reload = () => {
       try {
         const { documents, unreadable } = listNotebooks(scope);
-        setDocuments(documents);
+        setDocuments(documents.filter(doc => !documentBinding(scope, 'notebook', doc.id)));
         setError(
           unreadable ? `${unreadable} saved notebook(s) could not be read. Their data is preserved.` : '',
         );
@@ -41,9 +42,11 @@ export function SavedNotebooksSidebar({
     };
     reload();
     window.addEventListener(NOTEBOOKS_CHANGED, reload);
+    window.addEventListener(DOCUMENT_BINDING_CHANGED, reload);
     window.addEventListener('storage', onStorage);
     return () => {
       window.removeEventListener(NOTEBOOKS_CHANGED, reload);
+      window.removeEventListener(DOCUMENT_BINDING_CHANGED, reload);
       window.removeEventListener('storage', onStorage);
     };
   }, [scope]);
@@ -66,7 +69,7 @@ export function SavedNotebooksSidebar({
   };
   return (
     <SavedDocumentsSidebar
-      title="Notebooks"
+      title="Notebook drafts"
       documentKind="notebook"
       onAction={(id, action) => requestSavedDocumentAction({ kind: 'notebook', scope, id, action }, () => actOnSavedNotebook(scope, id, action))}
       icon={NotebookPen}

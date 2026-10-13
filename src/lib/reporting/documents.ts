@@ -1,10 +1,11 @@
+import { localObjectRecord } from './local-objects';
 import { appBase } from '../app-base';
 import { engine, waitForEngineReady, type EngineConnection } from '../shell-bridge';
 import { quoteIdent } from '../duckdb-query';
 import { serviceLocation } from './client';
 import { parseJournal, serializeJournal } from './journal';
 import { getWorkspace } from '../workspace/store';
-import { notebookSchema, type Notebook } from '../notebooks/model';
+import { notebookSchema, newNotebook, type Notebook } from '../notebooks/model';
 import type { EditorDoc } from '../editor/editor-store';
 import type { CatalogData } from '../service';
 import type { DataSource, ExecutionContext, ReportEnvelope, ReportResult } from './contracts.generated';
@@ -12,7 +13,8 @@ import { reportLink } from './body';
 import { encodeWorkspaceToken } from '../workspace/codec';
 
 export type DocumentKind = 'notebook' | 'query';
-export interface DocumentBinding { localScope?: string; url: string; record: ReportResult; original: Record<string, any>; context: ExecutionContext; readOnly?: boolean }
+export interface DocumentConfiguration { sources: DataSource[]; context: ExecutionContext }
+export interface DocumentBinding { localScope?: string; url: string; record: ReportResult; original: Record<string, any>; context: ExecutionContext; readOnly?: boolean; configurationDraft?: DocumentConfiguration }
 const key = (scope: string, kind: DocumentKind, id: string) => `cupola.objects.binding.v1:${JSON.stringify([scope, kind, id])}`;
 export const DOCUMENT_BINDING_CHANGED = 'cupola:document-binding-changed';
 export function documentBinding(scope: string, kind: DocumentKind, id: string): DocumentBinding | null {
@@ -22,6 +24,29 @@ export function bindDocument(scope: string, kind: DocumentKind, id: string, bind
   localStorage.setItem(key(scope, kind, id), serializeJournal(binding));
   window.dispatchEvent(new Event(DOCUMENT_BINDING_CHANGED));
 }
+/** Compare editable content, excluding run results, timestamps and unknown extension fields. */
+export function documentIsDirty(kind: DocumentKind, doc: Notebook | EditorDoc, binding: DocumentBinding): boolean {
+  if (binding.configurationDraft && JSON.stringify(binding.configurationDraft) !== JSON.stringify({ sources: binding.record.envelope?.data_sources ?? [], context: portableContext(binding.original) })) return true;
+  if (kind === 'query') return (doc as EditorDoc).sql !== binding.original.query || (doc as EditorDoc).name !== binding.record.envelope?.title;
+  const original = decodeNotebook(binding.record, '', undefined, doc.id), current = doc as Notebook;
+  return current.title !== original.title || JSON.stringify(current.cells) !== JSON.stringify(original.cells) || JSON.stringify(current.parameters ?? []) !== JSON.stringify(original.parameters ?? []);
+}
+export function effectiveDocumentBinding(binding: DocumentBinding): DocumentBinding {
+  const draft = binding.configurationDraft;
+  return draft ? { ...binding, context: draft.context, record: { ...binding.record, envelope: { ...binding.record.envelope!, data_sources: draft.sources } } } : binding;
+}
+export const documentConfigurationKey = (scope: string, kind: DocumentKind, id: string) => `cupola.objects.configuration:${JSON.stringify([scope, kind, id])}`;
+/** Draft source choices affect Run before the document's first library save. */
+export function documentExecutionBinding(scope: string, kind: DocumentKind, id: string): DocumentBinding | null {
+  const binding = documentBinding(scope, kind, id);
+  const raw = localStorage.getItem(documentConfigurationKey(scope, kind, id));
+  const configuration: DocumentConfiguration | undefined = raw ? JSON.parse(raw) : undefined;
+  if (binding) return effectiveDocumentBinding(configuration ? { ...binding, configurationDraft: configuration } : binding);
+  if (!configuration) return null;
+  const record = localObjectRecord({ id, kind, envelope: { title: 'Local draft', description: '', tags: [], body_format: `cupola.${kind}/1`, data_sources: configuration.sources, parameters: [] }, body: new TextEncoder().encode('{}'), updatedAt: 0 });
+  return { url: 'local', record, original: {}, context: configuration.context };
+}
+export const documentSaveIntentKey = (scope: string, kind: DocumentKind, id: string) => `cupola.objects.save-intent:${JSON.stringify([scope, kind, id])}`;
 export function portableBody(record: ReportResult): Record<string, any> {
   if (record.redacted || !record.envelope || !record.body) throw new Error('This revision is unavailable.');
   const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(record.body));
@@ -40,13 +65,13 @@ export function captureSources(catalogs: readonly CatalogData[], workspaceId?: s
   const workspace = workspaceId ? getWorkspace(workspaceId) : null;
   return catalogs.map(c => ({ ...c, sourceUrl: c.sourceUrl ?? engine.catalogStatuses.get(c.catalogName)?.url })).filter(c => c.sourceUrl).map(c => {
     const saved = workspace?.catalogs.find(s => s.alias === c.catalogName && serviceLocation(s.url) === serviceLocation(c.sourceUrl!));
-    return { alias: c.catalogName, attachment_id: saved?.id ?? c.catalogName, location: serviceLocation(c.sourceUrl!), catalog_name: c.serverCatalogName ?? c.catalogName, label: '', required: true };
+    return { alias: c.catalogName, attachment_id: saved?.id ?? c.catalogName, location: serviceLocation(c.sourceUrl!), catalog_name: c.serverCatalogName ?? c.catalogName, label: '', required: c.catalogName === captureContext().default_source_alias };
   });
 }
 export function encodeDocument(kind: DocumentKind, doc: Notebook | EditorDoc, catalogs: readonly CatalogData[], workspaceId?: string, binding?: DocumentBinding | null): { envelope: ReportEnvelope; body: Uint8Array } {
   const previous = binding?.original ?? {};
-  const context = { ...previous.context, ...(binding?.context ?? captureContext()) };
-  const sources = binding?.record.envelope?.data_sources ?? captureSources(catalogs, workspaceId);
+  const context = { ...previous.context, ...(binding?.configurationDraft?.context ?? binding?.context ?? captureContext()) };
+  const sources = binding?.configurationDraft?.sources ?? binding?.record.envelope?.data_sources ?? captureSources(catalogs, workspaceId);
   if (context.default_source_alias && !sources.some(s => s.alias === context.default_source_alias)) throw new Error('The default catalog is not available. Connect it before saving this document.');
   const envelope: ReportEnvelope = { title: 'title' in doc ? doc.title : doc.name, description: binding?.record.envelope?.description ?? '', tags: binding?.record.envelope?.tags ?? [], body_format: `cupola.${kind}/1`, data_sources: sources, parameters: binding?.record.envelope?.parameters ?? [] };
   let body: Record<string, any>;
@@ -79,8 +104,9 @@ export function decodeNotebook(record: ReportResult, serviceUrl: string, workspa
     createdAt: record.created_at, updatedAt: record.updated_at });
 }
 export function assertDocumentSources(sources: DataSource[], context: ExecutionContext) {
-  for (const source of sources.filter(s => s.required || s.alias === context.default_source_alias)) {
+  for (const source of sources) {
     const connected = engine.catalogStatuses.get(source.alias);
+    if (!source.required && source.alias !== context.default_source_alias && (!connected || connected.state !== 'attached')) continue;
     if (!connected || connected.state !== 'attached' || serviceLocation(connected.url) !== serviceLocation(source.location) || connected.catalogName !== source.catalog_name)
       throw new Error(`Connect ${source.catalog_name} from ${source.location} as “${source.alias}” before running this document. Its source will not be replaced with another catalog.`);
   }
@@ -125,5 +151,40 @@ export function resetDocumentDraft(url: string, id: string, kind: DocumentKind, 
     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i)!; if (k.includes(scope) || k.includes(encodeURIComponent(scope))) entries[k] = localStorage.getItem(k)!; }
     localStorage.setItem(`cupola.objects.recovery.v1:${Date.now()}:${id}`, JSON.stringify(entries));
     localStorage.removeItem(bindingKey);
+    localStorage.removeItem(documentConfigurationKey(scope, kind, id));
   }
+}
+
+export function documentSessionKey(binding: DocumentBinding): string {
+  return JSON.stringify([binding.record.envelope?.data_sources ?? [], binding.context, binding.original.setup_sql ?? '']);
+}
+
+/** A query tab keeps temporary tables and USE state until closed or reset. */
+export class DocumentQuerySession {
+  private pending?: Promise<EngineConnection>;
+  private configuration?: string;
+  private closed = false;
+  private closing?: Promise<void>;
+  async query(binding: DocumentBinding, sql: string, options?: Parameters<EngineConnection['query']>[1]) {
+    if (this.closed) throw new Error('This query session is closed.');
+    // Recheck identities on every run, including after disconnect/reconnect.
+    assertDocumentSources(binding.record.envelope?.data_sources ?? [], binding.context);
+    const configuration = documentSessionKey(binding);
+    if (this.pending && configuration !== this.configuration) { const old = this.pending; this.pending = undefined; await old.then(c => c.close(), () => {}); }
+    if (this.closed) throw new Error('This query session is closed.');
+    options?.signal?.throwIfAborted();
+    if (!this.pending) { this.configuration = configuration; this.pending = openDocumentConnection(binding); }
+    const pending = this.pending;
+    let connection: EngineConnection;
+    try { connection = await pending; } catch (error) { if (this.pending === pending) this.pending = undefined; throw error; }
+    if (this.closed) throw new Error('This query session is closed.');
+    options?.signal?.throwIfAborted();
+    return connection.query(sql, options);
+  }
+  close(): Promise<void> { this.closed = true; return this.closing ??= this.pending?.then(c => c.close(), () => {}) ?? Promise.resolve(); }
+}
+
+export function newLibraryDocument(kind: DocumentKind, serviceUrl: string, workspaceId: string | undefined, catalogs: readonly CatalogData[]) {
+  const doc = kind === 'notebook' ? newNotebook(serviceUrl, workspaceId) : { id: crypto.randomUUID(), name: 'Untitled query', sql: '', createdAt: Date.now(), updatedAt: Date.now() };
+  return { id: doc.id, kind, ...encodeDocument(kind, doc, catalogs, workspaceId), updatedAt: Date.now() };
 }

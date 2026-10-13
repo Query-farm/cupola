@@ -50,7 +50,7 @@ async function seed(page: Page) {
     }
   }, SERVICE_URL);
   await page.goto(`${APP_ORIGIN}${BASE}?service=${encodeURIComponent(SERVICE_URL)}`);
-  await expect(page.getByRole('navigation', { name: 'Saved notebooks' })).toBeVisible({
+  await expect(page.getByRole('navigation', { name: 'Saved notebook drafts' })).toBeVisible({
     timeout: 30_000,
   });
 }
@@ -103,7 +103,7 @@ test('right-click, keyboard and visible action menus preserve sidebar navigation
   page,
 }) => {
   await seed(page);
-  const sidebar = page.getByRole('navigation', { name: 'Saved notebooks' });
+  const sidebar = page.getByRole('navigation', { name: 'Saved notebook drafts' });
   const link = sidebar.getByRole('link', { name: 'Notebook one', exact: true });
   const startingUrl = page.url();
   await contextMenu(page, 'notebooks', 'Notebook one');
@@ -188,7 +188,7 @@ test('open notebook actions retain current edits and deletion cannot be undone b
   page,
 }) => {
   await seed(page);
-  const sidebar = page.getByRole('navigation', { name: 'Saved notebooks' });
+  const sidebar = page.getByRole('navigation', { name: 'Saved notebook drafts' });
   await sidebar.getByRole('link', { name: 'Notebook one', exact: true }).click();
   const editor = page.getByTestId('notebook-cell').first().locator('.cm-content');
   await editor.fill('select 123 as latest_edit');

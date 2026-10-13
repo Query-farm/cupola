@@ -1,9 +1,10 @@
+import { LibraryNewMenu, type LibraryDocumentKind } from './LibraryNewMenu';
 import { listLocalObjects, deleteLocalObject, type LocalObject } from '../../lib/reporting/local-objects';
 import { reportHref } from '../../lib/evidence/open-report';
 import { documentKind } from '../../lib/reporting/object-adapter';
 import { ScheduleActivityButton } from './ScheduleActivity';
 import { useEffect, useRef, useState } from 'react';
-import { FolderOpen, Plus, RefreshCw } from 'lucide-react';
+import { FolderOpen, RefreshCw } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { ReportSearch } from './ReportSearch';
@@ -30,7 +31,7 @@ interface WorkerRows { url: string; reports: ReportRow[]; folders: FolderRecord[
 export function ReportOverview({ locations, scope, localOnly, folderId, onAllReports, onFolder, onNew, onLocal, onWorker, onTransfer, onRefresh, serviceUrl, workspaceId }: {
   locations: ReportLocation[]; scope: string; serviceUrl: string; workspaceId?: string; localOnly: boolean; folderId: string | null;
   onAllReports: () => void;
-  onFolder: (id: string | null) => void; onNew: () => void; onLocal: (report: EvidenceReport) => void;
+  onFolder: (id: string | null) => void; onNew: (kind: LibraryDocumentKind) => void; onLocal: (report: EvidenceReport) => void;
   onWorker: (url: string, id: string) => void; onTransfer: (source: TransferSource, move: boolean) => void; onRefresh: () => void;
 }) {
   const { refreshVersion } = useReportLocations();
@@ -112,17 +113,17 @@ export function ReportOverview({ locations, scope, localOnly, folderId, onAllRep
   ];
   return <section className="flex h-full min-h-0 flex-col" aria-label="Report browser">
     <header className="flex flex-wrap items-center gap-3 border-b bg-card px-5 py-4"><FolderOpen aria-hidden className="size-5 shrink-0 text-primary" /><div className="min-w-0 flex-1 basis-48"><h1 className="break-words text-lg font-semibold">{localOnly ? library.folders.find(f => f.id === folderId)?.name ?? 'Local' : 'Library'}</h1>{localOnly && folderId && <p className="text-xs text-muted-foreground">Local · On this device</p>}</div><Button variant="ghost" size="sm" onClick={() => { reloadLocal(); onRefresh(); }}><RefreshCw />Refresh</Button>
-      <div className="ml-auto flex flex-wrap gap-2"><ScheduleActivityButton serviceUrl={serviceUrl} /><Button variant="outline" onClick={() => { setName(''); setError(''); setNewFolder(true); }}>New folder</Button><Button onClick={onNew}><Plus />New report</Button></div>
+      <div className="ml-auto flex flex-wrap gap-2"><ScheduleActivityButton serviceUrl={serviceUrl} /><LibraryNewMenu onCreate={onNew} onFolder={() => { setName(''); setError(''); setNewFolder(true); }} /></div>
     </header>
     <div className="min-h-0 flex-1 space-y-5 overflow-auto bg-background p-4 sm:p-5">
-      <p className="text-sm text-muted-foreground">{localOnly ? 'Reports in this workspace saved in this browser. Copy or move them to a named location to save them on a worker.' : 'Reports from this browser and connected workers. New reports start on this device; use the report’s action menu to save a copy or move it elsewhere.'}</p>
-      {localOnly && <nav aria-label="Local report folders" className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground"><Button variant="ghost" size="sm" onClick={onAllReports}>All reports</Button><span aria-hidden>/</span><Button variant="ghost" size="sm" onClick={() => onFolder(null)} aria-current={folderId ? undefined : 'page'}>Local</Button>{folderId && <><span aria-hidden>/</span><span aria-current="page" className="min-w-0 break-words px-2 text-foreground">{localFolderPath(folderId, library.folders)}</span><Button variant="ghost" size="sm" onClick={() => onFolder(library.folders.find(f => f.id === folderId)?.parentId ?? null)}>Up one folder</Button></>}</nav>}
+      <p className="text-sm text-muted-foreground">{localOnly ? 'Queries, notebooks, and reports saved on this device. Use Save or the action menu to copy them to a worker library.' : 'Search queries, notebooks, and reports across your connected libraries. New documents start on this device; choose a worker library to create them there.'}</p>
+      {localOnly && <nav aria-label="Local report folders" className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground"><Button variant="ghost" size="sm" onClick={onAllReports}>All documents</Button><span aria-hidden>/</span><Button variant="ghost" size="sm" onClick={() => onFolder(null)} aria-current={folderId ? undefined : 'page'}>Local</Button>{folderId && <><span aria-hidden>/</span><span aria-current="page" className="min-w-0 break-words px-2 text-foreground">{localFolderPath(folderId, library.folders)}</span><Button variant="ghost" size="sm" onClick={() => onFolder(library.folders.find(f => f.id === folderId)?.parentId ?? null)}>Up one folder</Button></>}</nav>}
       {notice && <p role="status" className="text-sm">{notice}</p>}
       {drafts.length > 0 && <section aria-label="Unsaved local drafts" className="rounded border p-3"><h2 className="font-medium">Recovered local drafts</h2>{drafts.map(d => <Button key={d.report.id} variant="link" onClick={() => onLocal(d.report)}>{d.report.title}</Button>)}</section>}
       {(localError || error) && <p role="alert" className="text-sm text-destructive">{localError || error}</p>}
       {!localOnly && locations.filter(l => l.error || l.loading).map(l => <p key={l.url} role={l.error ? 'alert' : 'status'} className="text-sm text-muted-foreground">{locationLabel(l, locations)}: {l.error || 'Checking for report storage…'}</p>)}
-      {workers.filter(w => w.error || w.loading).map(w => <p key={w.url} role={w.error ? 'alert' : 'status'} className="text-sm text-muted-foreground">{locations.find(l => l.url === w.url)?.name}: {w.error || 'Loading reports…'}</p>)}
-      <ReportFileList items={items} heading={query || tag ? 'Search results' : localOnly ? 'Folder contents' : 'Reports'} emptyMessage={workers.some(w => w.loading) ? 'Loading reports…' : query || tag ? 'No reports match these filters.' : 'No reports found.'} filters={<ReportSearch kind={kind} onKind={setKind} query={query} onQuery={setQuery} tag={tag} onTag={setTag} tags={tags} />} />
+      {workers.filter(w => w.error || w.loading).map(w => <p key={w.url} role={w.error ? 'alert' : 'status'} className="text-sm text-muted-foreground">{locations.find(l => l.url === w.url)?.name}: {w.error || 'Loading documents…'}</p>)}
+      <ReportFileList items={items} heading={query || tag ? 'Search results' : localOnly ? 'Folder contents' : 'Documents'} emptyMessage={workers.some(w => w.loading) ? 'Loading documents…' : query || tag ? 'No documents match these filters.' : 'No documents found.'} filters={<ReportSearch kind={kind} onKind={setKind} query={query} onQuery={setQuery} tag={tag} onTag={setTag} tags={tags} />} />
       <section aria-label="Import and export reports" className="space-y-3 rounded-lg border bg-muted/30 p-4"><h2 className="text-sm font-medium">Import and export</h2><div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => fileInput.current?.click()}>Import report file</Button><Button size="sm" variant="outline" disabled={!local.length} onClick={exportAll}>Export local reports</Button><input ref={fileInput} hidden type="file" multiple accept=".json" aria-label="Import local report files" onChange={e => { const files = Array.from(e.target.files ?? []); e.target.value = ''; void importFiles(files); }} /></div></section>
     </div>
     {folderAction && <Dialog open onOpenChange={open => { if (!open) setFolderAction(null); }}><DialogContent><DialogHeader><DialogTitle>{folderAction === 'rename' ? 'Rename folder' : 'Delete folder'}</DialogTitle><DialogDescription>{folderAction === 'rename' ? 'Choose a new name for this folder.' : 'Only empty folders can be deleted.'}</DialogDescription></DialogHeader><form className="space-y-3" onSubmit={e => {

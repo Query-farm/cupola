@@ -503,7 +503,7 @@ test('AI reads the notebook, updates existing SQL and appends Markdown, then per
     'select 42 as answer',
   );
   await expect(page.getByRole('heading', { name: 'Answer', exact: true })).toBeVisible();
-  await expect(page.getByText('Saved in this browser', { exact: true })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: /^Local draft$/ })).toBeVisible();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(page.getByTestId('notebook-cell')).toHaveCount(1);
   await expect(page.getByTestId('notebook-cell').first().locator('.cm-content')).toHaveText('select 1');
