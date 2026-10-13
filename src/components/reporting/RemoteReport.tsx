@@ -1,5 +1,5 @@
 import { resetDocumentDraft, documentDraftScope, documentBinding } from '../../lib/reporting/documents';
-import { RemoteDocumentEditor } from './RemoteDocumentEditor';
+import { LibraryDocumentOpener } from './LibraryDocumentOpener';
 import { documentKind } from '../../lib/reporting/object-adapter';
 import { documentLink, portableBody, portableContext } from '../../lib/reporting/documents';
 import { useEffect, useState } from 'react';
@@ -156,7 +156,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     ...(can('delete') ? [reportAction('delete', () => setDialog({ action: 'delete' }), blocked)] : []),
   ] : [];
   return <section className="flex h-full min-h-0 flex-col" aria-label="Worker report">
-    {!opened?.report && !page && <ReportHeader title={record?.envelope?.title ?? 'Report'} location={reportLocation} onBack={props.onLeave} actions={reportActions}>{record && <Button size="sm" variant="outline" onClick={() => showPage('share')}>Share</Button>}</ReportHeader>}
+    {!opened?.report && !page && (!record || record.redacted || opened?.bodyError || !['query', 'notebook'].includes(documentKind(record))) && <ReportHeader title={record?.envelope?.title ?? 'Opening document…'} location={reportLocation} onBack={props.onLeave} actions={reportActions}>{record && <Button size="sm" variant="outline" onClick={() => showPage('share')}>Share</Button>}</ReportHeader>}
     {loading && <p role="status" className="p-5">Opening worker report…</p>}
     {error && <div role="alert" className="flex flex-wrap items-center gap-3 p-3 text-sm text-destructive"><span>{error}</span><Button variant="outline" disabled={busy} onClick={() => { if (!pending || confirm('Your draft will remain in recovery. Load the current worker version?')) setGeneration(n => n + 1); }}>Reload from worker</Button></div>}
     {notice && <p role="status" className="px-5 py-2 text-sm">{notice}</p>}
@@ -166,7 +166,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
       <div className="flex flex-wrap gap-2"><Button disabled={busy || save.status === 'conflict'} onClick={() => void controller.retry()}>Retry save</Button><Button variant="outline" disabled={busy} onClick={() => setGeneration(n => n + 1)}>Load latest from worker</Button><Button variant="outline" disabled={busy || managementPending || !session.info.root_allowed_actions.includes('create_report')} onClick={() => void attempt(() => copy(controller.current.report))}>Save draft as a copy</Button><Button variant="ghost" onClick={() => downloadDocumentFile(JSON.stringify(controller.current.report, null, 2), 'report-draft.json')}>Export draft</Button></div>
     </div>}
     {opened?.bodyError && <div className="space-y-3 p-5"><p role="alert">{opened.bodyError}</p>{record?.body && <Button variant="outline" onClick={downloadBody}><Download />Download original body</Button>}</div>}
-    {record && !record.redacted && ['notebook', 'query'].includes(documentKind(record)) && <div hidden={Boolean(page)} className="min-h-0 flex-1"><RemoteDocumentEditor key={`${record.report_id}:${revisionId ?? 'head'}:${generation}`} {...props} record={record} libraryUrl={session.client.url} authScope={session.scope} recoveryOnly={opened?.recoveryOnly} pinned={Boolean(revisionId)} /></div>}
+    {record && !record.redacted && !page && ['notebook', 'query'].includes(documentKind(record)) && <LibraryDocumentOpener key={`${record.report_id}:${revisionId ?? 'head'}:${generation}`} record={record} libraryUrl={session.client.url} authScope={session.scope} recoveryOnly={opened?.recoveryOnly} pinned={Boolean(revisionId)} />}
     {opened?.report && <div className="min-h-0 flex-1" hidden={page === 'details' || page === 'share' || page === 'ownership' || page === 'schedules'}><EvidenceWorkspace key={editorGeneration} {...props} remote={{
       report: opened.report, canEdit: Boolean(controller), status: !controller ? 'Read only' : save?.status === 'error' || save?.status === 'conflict' ? 'Not saved' : pending ? 'Saving…' : 'Saved', pending: Boolean(blocked),
       location: reportLocation, actions: reportActions, onShare: () => showPage('share'), onHistoryOpen: () => setHistoryReload(n => n + 1),

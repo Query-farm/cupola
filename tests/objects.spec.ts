@@ -1,7 +1,7 @@
 import { withExtensions } from './extensions';
 import { test as base, expect, chromium, webkit } from '@playwright/test';
 import { startReportingWorker } from './reporting/worker';
-import { chooseReportAction, waitForShellBridge } from './helpers';
+import { waitForShellBridge } from './helpers';
 const test = base.extend<{}, { reporting: Awaited<ReturnType<typeof startReportingWorker>> }>({
   reporting: [async ({}, use) => { const worker = await startReportingWorker(); try { await use(worker); } finally { await worker.stop(); } }, { scope: 'worker' }],
 });
@@ -32,7 +32,8 @@ for (const kind of ['query', 'notebook'] as const) test(`${kind} opens without e
   expect(JSON.parse(new TextDecoder().decode(saved.body!)).vendor.keep).toBe(7);
   expect(await reporting.client().call('list_revisions', { report_id: record.report_id })).toHaveLength(2);
   await page.keyboard.press('Escape');
-  await chooseReportAction(page, 'Version history');
+  await page.getByRole('button', { name: 'Save options', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Version history', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Version history' })).toContainText('Revision 2');
   await page.getByRole('button', { name: 'Back to document', exact: true }).click();
   await page.getByRole('button', { name: 'Save options', exact: true }).click();
@@ -53,7 +54,8 @@ test('a fresh browser opens a portable query with its declared catalog and schem
   }, body: new TextEncoder().encode(JSON.stringify({ query: 'SELECT current_database() AS chosen_catalog, current_schema() AS chosen_schema', context: { default_source_alias: 'finance_shared', default_schema: 'main' } })) });
   await client.call('publish', { request_id: crypto.randomUUID(), report_id: saved.report_id, revision_id: saved.head_revision_id, expected_published_revision_id: null });
   await page.goto(`reports?service=${encodeURIComponent(reporting.url)}&report_service=${encodeURIComponent(reporting.url)}&report_id=${saved.report_id}#token=test-alice`);
-  await page.getByLabel('Report toolbar').getByRole('button', { name: 'Share', exact: true }).click();
+  await page.getByRole('button', { name: 'Save options', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Share', exact: true }).click();
   const link = page.getByRole('textbox', { name: 'Document link', exact: true });
   await expect(link).toHaveValue(/#ws=/);
   const context = await browser.newContext();
@@ -101,6 +103,12 @@ for (const kind of ['query', 'notebook'] as const) test(`${kind} adopts a clean 
   await expect(page.locator('.cm-content').first()).toContainText('222', { timeout: 40_000 });
   await page.locator('.cm-content').first().fill('SELECT 333 AS answer');
   await expect(page.getByRole('status').filter({ hasText: 'Changes to save' })).toBeVisible();
+  if (kind === 'query') {
+    await page.getByRole('button', { name: 'Save options', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Data sources…' }).click();
+    const sources = page.getByRole('dialog', { name: 'Data sources' });
+    await sources.getByRole('button', { name: 'Apply to draft' }).click();
+  }
   record = await client.call('commit_revision', { request_id: crypto.randomUUID(), report_id: record.report_id, expected_revision_id: record.head_revision_id, envelope: record.envelope!, body: body('SELECT 444 AS answer') });
   await page.reload();
   await expect(page.locator('.cm-content').first()).toContainText('333', { timeout: 40_000 });
@@ -113,6 +121,7 @@ for (const kind of ['query', 'notebook'] as const) test(`${kind} adopts a clean 
   await conflict.getByRole('button', { name: 'Load latest version' }).click();
   await expect(page.locator('.cm-content').first()).toContainText('444', { timeout: 40_000 });
   await expect(conflict).not.toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
   await page.locator('.cm-content').first().fill('SELECT 555 AS answer');
   await page.locator('.cm-content').first().press('ControlOrMeta+s');
   await expect(page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
@@ -223,7 +232,7 @@ test('Library New and sidebar New create all supported document types', async ({
     await library.getByRole('button', { name: 'New', exact: true }).click();
     await page.getByRole('menuitem', { name: `New ${kind}`, exact: true }).click();
     await expect(page.getByTestId(kind === 'query' ? 'sql-editor-view' : 'notebook-workspace')).toBeVisible();
-    await page.getByRole('button', { name: 'Back to library', exact: true }).click();
+    await page.getByTestId('catalog-sidebar').getByRole('link', { name: 'Finance report library', exact: true }).click();
   }
   const rows = await reporting.client().call('list_reports', {});
   expect(rows.filter(r => ['cupola.query/1', 'cupola.notebook/1'].includes(r.envelope?.body_format ?? '')).length).toBeGreaterThanOrEqual(2);
@@ -231,4 +240,78 @@ test('Library New and sidebar New create all supported document types', async ({
   await page.getByRole('menuitem', { name: 'New query', exact: true }).click();
   await expect(page.getByTestId('sql-editor-view')).toBeVisible();
   expect(new URL(page.url()).searchParams.get('report_service')).toBe('local');
+});
+
+for (const browserName of ['chromium', 'webkit'] as const) test(`saved queries use ordinary tabs and rename in ${browserName}`, async ({ reporting, baseURL }) => {
+  const client = reporting.client();
+  const query = await client.call('create_report', { request_id: crypto.randomUUID(), envelope: { title: `Tabbed ${browserName}`, description: 'Keep this description', tags: ['tabs'], body_format: 'cupola.query/1', data_sources: [], parameters: [] }, body: new TextEncoder().encode(JSON.stringify({ query: 'SELECT 246 AS saved_value', context: {}, vendor: { keep: true } })) });
+  const browser = await ({ chromium, webkit })[browserName].launch();
+  const context = await browser.newContext({ baseURL, viewport: { width: 1400, height: 1000 }, storageState: withExtensions() });
+  const page = await context.newPage(), errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  try {
+    await page.addInitScript(({ url }) => sessionStorage.setItem('vgi.oauth.tokens.' + url, JSON.stringify({ access_token: 'test-alice', expires_at: Math.floor(Date.now() / 1000) + 3600, use_id_token: false })), { url: reporting.url });
+    await page.goto(`?service=${encodeURIComponent(reporting.url)}`);
+    await waitForShellBridge(page, 40_000);
+    await page.getByTestId('tab-editor').click();
+    await page.locator('.cm-content:visible').fill('SELECT 13579 AS scratch');
+    await page.getByRole('button', { name: 'Run', exact: true }).click();
+    await expect(page.getByRole('table')).toContainText('13579');
+    const sidebar = page.getByTestId('catalog-sidebar');
+    await sidebar.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
+    await sidebar.getByRole('link', { name: `Tabbed ${browserName}`, exact: true }).click();
+    await expect(page.getByTestId('tab-editor')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.cm-content:visible')).toContainText('246');
+    const tabs = page.getByTestId('editor-tabs');
+    await expect(tabs.getByTestId('editor-tab')).toHaveCount(2);
+    await sidebar.getByRole('link', { name: `Tabbed ${browserName}`, exact: true }).click();
+    await expect(page.getByTestId('tab-editor')).toHaveAttribute('aria-selected', 'true');
+    await expect(tabs.getByTestId('editor-tab')).toHaveCount(2);
+    await tabs.getByRole('button', { name: `Tabbed ${browserName}`, exact: true }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Rename…', exact: true }).click();
+    const name = tabs.getByRole('textbox', { name: `Rename Tabbed ${browserName}` });
+    await name.fill(`Renamed ${browserName}`); await name.press('Enter');
+    await page.locator('.cm-content:visible').press('ControlOrMeta+s');
+    await expect(page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
+    const saved = await client.call('get_report', { report_id: query.report_id });
+    expect(saved.envelope?.title).toBe(`Renamed ${browserName}`);
+    expect(saved.envelope?.description).toBe('Keep this description');
+    expect(JSON.parse(new TextDecoder().decode(saved.body!)).vendor.keep).toBe(true);
+    await tabs.getByRole('button', { name: 'Query 1', exact: true }).click();
+    await expect(page.locator('.cm-content:visible')).toContainText('13579');
+    await expect(page.getByRole('table')).toContainText('13579');
+    await tabs.getByRole('button', { name: `Renamed ${browserName}`, exact: true }).click();
+    await page.locator('.cm-content:visible').fill('SELECT 9876 AS recovery');
+    await tabs.getByRole('button', { name: `Close Renamed ${browserName}`, exact: true }).click();
+    const close = page.getByTestId('editor-close-confirm');
+    await expect(close).toContainText('does not delete the saved query');
+    await close.getByRole('button', { name: 'Close tab', exact: true }).click();
+    await expect(tabs.getByTestId('editor-tab')).toHaveCount(1);
+    await sidebar.getByRole('link', { name: `Renamed ${browserName}`, exact: true }).click();
+    await expect(page.locator('.cm-content:visible')).toContainText('9876');
+    await expect(tabs.getByTestId('editor-tab')).toHaveCount(2);
+    await page.getByTestId('tab-reports').click();
+    await expect(page.getByTestId('tab-reports')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('status').filter({ hasText: 'Opening document…' })).not.toBeVisible();
+    await page.getByTestId('tab-editor').click();
+    await expect(page.locator('.cm-content:visible')).toContainText('9876');
+    await page.reload();
+    await expect(page.locator('.cm-content:visible')).toContainText('9876');
+    await expect(page.getByTestId('editor-tabs').getByTestId('editor-tab')).toHaveCount(2);
+    expect(errors).toEqual([]);
+    await page.screenshot({ path: `/tmp/cupola-query-tabs-${browserName}.png` });
+  } finally { await browser.close(); }
+});
+
+test('saved notebooks open in Notebooks with an editable title and normal navigation', async ({ page, reporting }) => {
+  const client = reporting.client();
+  const record = await client.call('create_report', { request_id: crypto.randomUUID(), envelope: { title: 'Ordinary saved notebook', description: '', tags: [], body_format: 'cupola.notebook/1', data_sources: [], parameters: [] }, body: new TextEncoder().encode(JSON.stringify({ version: 1, cells: [{ id: 'cell', type: 'sql', title: 'Query', source: 'SELECT 808', collapsed: false, charts: [] }], context: {} })) });
+  await page.goto(`reports?service=${encodeURIComponent(reporting.url)}&report_service=${encodeURIComponent(reporting.url)}&report_id=${record.report_id}#token=test-alice`);
+  await expect(page.getByTestId('tab-notebooks')).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('textbox', { name: 'Notebook title', exact: true }).fill('Renamed notebook');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
+  expect((await client.call('get_report', { report_id: record.report_id })).envelope?.title).toBe('Renamed notebook');
+  await page.getByRole('button', { name: 'Notebooks', exact: true }).click();
+  await expect(page.getByTestId('notebook-library')).toBeVisible();
 });

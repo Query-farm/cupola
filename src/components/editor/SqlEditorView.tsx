@@ -1,5 +1,10 @@
+import { openLibraryQuery, queryBinding, queryDraft, queryScope, querySavePending, retainClosedQuery, saveQueryTabs, showQueryTab } from "../../lib/editor/library-queries";
+import type { LibraryDocumentNavigation, LibraryDocumentRequest } from "../../lib/reporting/open-document";
+import type { ReportResult } from "../../lib/reporting/contracts.generated";
+import { ReportClient, reportError } from "../../lib/reporting/client";
+import { QueryRevisionNotice } from "../reporting/QueryRevisionNotice";
 import { DocumentSave, type DocumentSaveHandle } from "../reporting/DocumentSave";
-import { documentBinding, documentLink, documentExecutionBinding, DocumentQuerySession } from "../../lib/reporting/documents";
+import { bindDocument, DOCUMENT_BINDING_CHANGED, documentConfigurationKey, documentIsDirty, portableBody, portableContext, documentLink, documentExecutionBinding, DocumentQuerySession } from "../../lib/reporting/documents";
 import { catalogInventory } from "@/lib/catalog-store";
 /**
  * DBeaver-style SQL editor surface: a tab strip of named query documents, a
@@ -18,7 +23,6 @@ import { useSettings } from "@/lib/settings";
 import type { CatalogData } from "@/lib/service";
 import {
   loadEditorState,
-  saveEditorState,
   addDoc,
   removeDoc,
   renameDoc,
@@ -62,8 +66,9 @@ export interface PendingEditorSql {
 }
 
 interface Props {
+  active?: boolean;
   libraryScope?: string;
-  managed?: boolean;
+  libraryDocument?: LibraryDocumentNavigation | null;
   catalogData: CatalogData;
   attachedCatalogs?: CatalogData[];
   serviceUrl: string;
@@ -91,7 +96,7 @@ interface Props {
 
 const INSPECTABLE = new Set(["function", "macro", "table", "view"]);
 
-export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, workspaceId, libraryScope, managed, attachOptions, shareWorkspaceToken, pendingSql, onPendingConsumed, onAiBusyChange, selection = null, inspectRequest = 0, onOpenFullPage }: Props) {
+export function SqlEditorView({ active = true, catalogData, attachedCatalogs = [], serviceUrl, workspaceId, libraryScope, libraryDocument, attachOptions, shareWorkspaceToken, pendingSql, onPendingConsumed, onAiBusyChange, selection = null, inspectRequest = 0, onOpenFullPage }: Props) {
   // Tabs and history are kept per workspace (multi-catalog phase 2); without one, per service.
   const storageScope = workspaceId ?? serviceUrl;
   const { settings } = useSettings();
@@ -176,9 +181,74 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     ? docState.docs.find((doc) => doc.id === runningDocId) : null;
 
   const persist = useCallback((next: EditorDocState) => {
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+    docStateRef.current = next;
     setDocState(next);
-    saveEditorState(next, storageScope);
+    saveQueryTabs(next, storageScope);
   }, [storageScope]);
+
+  const [libraryError, setLibraryError] = useState('');
+  const [latestRecords, setLatestRecords] = useState<Record<string, ReportResult>>({});
+  const [, bindingChanged] = useState(0);
+  const handledLibrary = useRef<number | null>(null);
+  const receiveLibraryQuery = useCallback((request: LibraryDocumentRequest, activate = true) => {
+    const previous = docStateRef.current;
+    let next = openLibraryQuery(previous, request, storageScope);
+    const id = next.activeId!, opened = next.docs.find(d => d.id === id)!;
+    const old = previous.docs.find(d => d.id === id);
+    if (old && old.sql !== opened.sql) {
+      editorSessions.current.delete(id);
+      if (previous.activeId === id) editorRef.current?.setDoc(opened.sql);
+    }
+    if (!activate) next = { ...next, activeId: previous.activeId };
+    persist(next);
+    setLatestRecords(records => ({ ...records, [id]: request.record }));
+    setLibraryError(request.recoveryOnly ? 'The worker could not be opened. This is your local recovery draft; save a copy to keep working.' : '');
+  }, [persist, storageScope]);
+  useEffect(() => {
+    if (!libraryDocument || handledLibrary.current === libraryDocument.token) return;
+    handledLibrary.current = libraryDocument.token;
+    try { receiveLibraryQuery(libraryDocument); } catch (e) { setLibraryError(reportError(e)); }
+  }, [libraryDocument, receiveLibraryQuery]);
+  useEffect(() => {
+    const doc = docStateRef.current.docs.find(d => d.id === docStateRef.current.activeId);
+    if (active && doc) showQueryTab(doc, storageScope);
+  }, [active, storageScope]);
+  useEffect(() => {
+    const changed = () => bindingChanged(n => n + 1);
+    const newer = (event: Event) => {
+      const { url, record } = (event as CustomEvent<{ url: string; record: ReportResult }>).detail;
+      setLatestRecords(records => {
+        const next = { ...records };
+        for (const doc of docStateRef.current.docs) {
+          const binding = queryBinding(doc, storageScope);
+          if (binding?.url === url && binding.record.report_id === record.report_id && !doc.library?.revision) next[doc.id] = record;
+        }
+        return next;
+      });
+    };
+    window.addEventListener(DOCUMENT_BINDING_CHANGED, changed);
+    window.addEventListener('cupola:document-newer-version', newer);
+    return () => { window.removeEventListener(DOCUMENT_BINDING_CHANGED, changed); window.removeEventListener('cupola:document-newer-version', newer); };
+  }, [storageScope]);
+  // Reopening a persisted tab validates its revision and access with the worker.
+  useEffect(() => {
+    const doc = docStateRef.current.docs.find(d => d.id === activeId);
+    if (!doc) return;
+    const binding = queryBinding(doc, storageScope);
+    if (!binding || binding.localScope) return;
+    const abort = new AbortController(), client = new ReportClient(binding.url);
+    void client.recoveryScope().then(async authScope => {
+      if (abort.signal.aborted) return;
+      if (binding.authScope && authScope !== binding.authScope) {
+        bindDocument(queryScope(doc, storageScope), 'query', queryDraft(doc).id, { ...binding, readOnly: true });
+        throw new Error('This draft belongs to a different worker account. Reopen the query from the library with your current account.');
+      }
+      const record = await client.call('get_report', { report_id: binding.record.report_id, revision_id: doc.library?.revision ?? null }, abort.signal);
+      if (!abort.signal.aborted) receiveLibraryQuery({ record, libraryUrl: binding.url, authScope, pinned: Boolean(doc.library?.revision) }, false);
+    }).catch(e => { if (!abort.signal.aborted) setLibraryError(reportError(e)); });
+    return () => abort.abort();
+  }, [activeId, storageScope, receiveLibraryQuery]);
 
   // Flush any pending debounced save when the page is hidden/closed or the
   // editor unmounts. CatalogApp keeps this view mounted across tab switches
@@ -187,7 +257,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   useEffect(() => {
     const flush = () => {
       if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
-      saveEditorState(docStateRef.current, storageScope);
+      saveQueryTabs(docStateRef.current, storageScope);
     };
     window.addEventListener("pagehide", flush);
     document.addEventListener("visibilitychange", flush);
@@ -215,7 +285,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
       if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
       docStateRef.current = next;
       setDocState(next);
-      saveEditorState(next, storageScope);
+      saveQueryTabs(next, storageScope);
       const activeSql = next.docs.find((d) => d.id === next.activeId)?.sql;
       if (activeSql !== undefined && editorRef.current && editorRef.current.getDoc() !== activeSql) editorRef.current.setDoc(activeSql);
     };
@@ -233,16 +303,19 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     setDocState((prev) => {
       const next = updateDocSql(prev, activeId, sql);
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => saveEditorState(next, storageScope), 400);
+      saveTimer.current = setTimeout(() => saveQueryTabs(next, storageScope), 400);
       return next;
     });
   }, [activeId, storageScope]);
 
   const handleAddTab = useCallback((sql = "") => {
-    persist(addDoc(docState, sql));
+    const next = addDoc(docStateRef.current, sql);
+    persist(next); showQueryTab(next.docs.find(d => d.id === next.activeId)!, storageScope);
   }, [docState, persist]);
 
   const closeTab = useCallback((id: string) => {
+    try { const doc = docStateRef.current.docs.find(d => d.id === id); if (doc) retainClosedQuery(doc, storageScope); }
+    catch (e) { setLibraryError(reportError(e)); return; }
     if (activeRunRef.current?.docId === id) {
       activeRunRef.current.controller.abort();
       activeRunRef.current = null;
@@ -252,27 +325,33 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     void documentSessions.current.get(id)?.close(); documentSessions.current.delete(id);
     editorSessions.current.delete(id);
     deleteTabRevisions(storageScope, id);
-    persist(removeDoc(docStateRef.current, id));
+    // Closing a saved tab keeps its recovery draft, including an interrupted save.
+    saveQueryTabs(docStateRef.current, storageScope);
+    const next = removeDoc(docStateRef.current, id);
+    persist(next); showQueryTab(next.docs.find(d => d.id === next.activeId)!, storageScope);
     setResults((prev) => { const { [id]: _drop, ...rest } = prev; return rest; });
   }, [persist, storageScope]);
 
-  // Closing a tab deletes its query, so one with SQL in it asks first.
+  // Scratch tabs confirm deletion; saved tabs retain their library object and recovery draft.
   const [pendingClose, setPendingClose] = useState<PendingClose | null>(null);
   const handleCloseTab = useCallback((id: string) => {
     const doc = docState.docs.find((d) => d.id === id);
     if (!doc) return;
     // The active tab's text is in CodeMirror; the stored copy lags by the save debounce.
     const sql = id === docState.activeId && editorRef.current ? editorRef.current.getDoc() : doc.sql;
-    if (!sql.trim()) { closeTab(id); return; }
-    setPendingClose({ id, name: doc.name, sql });
+    const binding = queryBinding(doc, storageScope);
+    if (binding && !documentIsDirty('query', { ...queryDraft(doc), sql }, binding) && !querySavePending(doc, storageScope)) { closeTab(id); return; }
+    if (!sql.trim() && !binding) { closeTab(id); return; }
+    setPendingClose({ id, name: doc.name, sql, saved: Boolean(binding) });
   }, [docState, closeTab]);
 
   const handleRename = useCallback((id: string, name: string) => {
-    persist(renameDoc(docState, id, name));
+    persist(renameDoc(docStateRef.current, id, name));
   }, [docState, persist]);
 
   const handleSelectTab = useCallback((id: string) => {
-    persist(setActive(docState, id));
+    const next = setActive(docStateRef.current, id);
+    persist(next); showQueryTab(next.docs.find(d => d.id === next.activeId)!, storageScope);
   }, [docState, persist]);
 
   // ---- execution ----------------------------------------------------------
@@ -326,7 +405,8 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     try {
       // With a signal the engine runs this as a pending query it can cancel
       // between polls; without one it is a single blocking call Stop can't reach.
-      const saved = documentExecutionBinding(storageScope, 'query', docId);
+      const doc = docStateRef.current.docs.find(d => d.id === docId);
+      const saved = doc ? documentExecutionBinding(queryScope(doc, storageScope), 'query', queryDraft(doc).id) : null;
       if (saved) {
         let session = documentSessions.current.get(docId);
         if (!session) { session = new DocumentQuerySession(); documentSessions.current.set(docId, session); }
@@ -489,7 +569,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     setPivotError(null);
     setPivotBusy(mode);
     try {
-      if (activeId && documentExecutionBinding(storageScope, "query", activeId)) throw new Error("Run this saved query first, then open its result as a snapshot in Perspective. Live views use workspace context and cannot preserve this document’s isolated context.");
+      if (activeDoc && documentExecutionBinding(queryScope(activeDoc, storageScope), "query", queryDraft(activeDoc).id)) throw new Error("Run this saved query first, then open its result as a snapshot in Perspective. Live views use workspace context and cannot preserve this document’s isolated context.");
       await waitForEngineReady();
       // The Perspective host is a lazily loaded chunk; a click right after
       // page load can beat it to registering this bridge.
@@ -533,7 +613,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   // context (service + ATTACH options) so the recipient lands on the same
   // catalog; the SQL opens staged but unexecuted.
   const handleShareLink = useCallback(async () => {
-    const binding = activeId ? documentBinding(storageScope, "query", activeId) : null;
+    const binding = activeDoc ? queryBinding(activeDoc, storageScope) : null;
     if (binding && !binding.localScope) { await navigator.clipboard.writeText(await documentLink(binding)); setShareCopied(true); return; }
     const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";
     if (!sql.trim()) return;
@@ -691,7 +771,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   const openInNewTab = useCallback((sql: string, autoRun: boolean) => {
     setDocState((prev) => {
       const next = addDoc(prev, sql);
-      saveEditorState(next, storageScope);
+      saveQueryTabs(next, storageScope);
       const newId = next.activeId!;
       // Run once the editor remounts with the new active doc.
       if (autoRun) setTimeout(() => runSql(sql, newId), 60);
@@ -711,6 +791,8 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     () => (settings.editorAutocomplete === false ? null : sqlAutoCompleteSource),
     [settings.editorAutocomplete],
   );
+  const activeBinding = activeDoc ? queryBinding(activeDoc, storageScope) : null;
+  const latestRecord = activeId ? latestRecords[activeId] : undefined;
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-background" data-testid="sql-editor-view" onKeyDownCapture={event => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); event.stopPropagation(); documentSave.current?.save(); } }}>
@@ -719,7 +801,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
         onCancel={() => setPendingClose(null)}
         onConfirm={(id) => { setPendingClose(null); closeTab(id); }}
       />
-      {!managed && <SqlEditorTabs
+      <SqlEditorTabs
         docs={docState.docs}
         activeId={activeId}
         busyDocIds={aiBusyDocs}
@@ -727,12 +809,23 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
         onAdd={() => handleAddTab("")}
         onClose={handleCloseTab}
         onRename={handleRename}
-      />}
+      />
+
+      {libraryError && <p role="alert" className="border-b p-3 text-sm text-destructive">{libraryError}</p>}
+      {activeDoc && activeBinding && latestRecord && latestRecord.revision_number > activeBinding.record.revision_number && !activeDoc.library?.revision && <QueryRevisionNotice
+        key={activeDoc.id} doc={queryDraft(activeDoc)} scope={queryScope(activeDoc, storageScope)} binding={activeBinding} latest={latestRecord}
+        pending={querySavePending(activeDoc, storageScope)} catalogs={attachedCatalogs.length ? attachedCatalogs : [catalogData]} libraryScope={libraryScope ?? storageScope} workspaceId={workspaceId}
+        onLoad={() => {
+          const body = portableBody(latestRecord);
+          localStorage.removeItem(documentConfigurationKey(queryScope(activeDoc, storageScope), 'query', queryDraft(activeDoc).id));
+          bindDocument(queryScope(activeDoc, storageScope), 'query', queryDraft(activeDoc).id, { ...activeBinding, record: latestRecord, original: body, context: portableContext(body), configurationDraft: undefined });
+          persist({ ...docStateRef.current, docs: docStateRef.current.docs.map(doc => doc.id === activeDoc.id ? { ...doc, sql: body.query, name: latestRecord.envelope!.title } : doc) });
+          editorRef.current?.setDoc(body.query);
+        }} />}
 
       <EditorToolbar
-        managed={managed}
-        saveControls={activeDoc && <DocumentSave ref={documentSave} managed={managed} key={activeDoc.id} kind="query" doc={activeDoc} scope={storageScope} libraryScope={libraryScope} onTitleSaved={title => { if (title !== activeDoc.name) persist(renameDoc(docStateRef.current, activeDoc.id, title)); }} workspaceId={workspaceId} catalogs={attachedCatalogs.length ? attachedCatalogs : [catalogData]} disabled={Boolean(runningDocId)} />}
-        onResetSession={activeDoc && documentExecutionBinding(storageScope, 'query', activeDoc.id) ? () => { if (activeId) { void documentSessions.current.get(activeId)?.close(); documentSessions.current.delete(activeId); setActiveResult(activeId, emptyResult); } } : undefined}
+        saveControls={activeDoc && <DocumentSave ref={documentSave} key={activeDoc.id} kind="query" doc={queryDraft(activeDoc)} scope={queryScope(activeDoc, storageScope)} libraryScope={libraryScope ?? storageScope} onTitleSaved={title => { if (title !== activeDoc.name) persist(renameDoc(docStateRef.current, activeDoc.id, title)); }} workspaceId={workspaceId} catalogs={attachedCatalogs.length ? attachedCatalogs : [catalogData]} disabled={Boolean(runningDocId)} />}
+        onResetSession={activeDoc && documentExecutionBinding(queryScope(activeDoc, storageScope), 'query', queryDraft(activeDoc).id) ? () => { if (activeId) { void documentSessions.current.get(activeId)?.close(); documentSessions.current.delete(activeId); setActiveResult(activeId, emptyResult); } } : undefined}
         running={activeResult.running}
         queryReady={queryReady}
         runBlocked={!!backgroundRun}

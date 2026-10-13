@@ -14,7 +14,7 @@ import { encodeWorkspaceToken } from '../workspace/codec';
 
 export type DocumentKind = 'notebook' | 'query';
 export interface DocumentConfiguration { sources: DataSource[]; context: ExecutionContext }
-export interface DocumentBinding { localScope?: string; url: string; record: ReportResult; original: Record<string, any>; context: ExecutionContext; readOnly?: boolean; configurationDraft?: DocumentConfiguration }
+export interface DocumentBinding { localScope?: string; authScope?: string; pinnedRevision?: string; url: string; record: ReportResult; original: Record<string, any>; context: ExecutionContext; readOnly?: boolean; configurationDraft?: DocumentConfiguration }
 const key = (scope: string, kind: DocumentKind, id: string) => `cupola.objects.binding.v1:${JSON.stringify([scope, kind, id])}`;
 export const DOCUMENT_BINDING_CHANGED = 'cupola:document-binding-changed';
 export function documentBinding(scope: string, kind: DocumentKind, id: string): DocumentBinding | null {
@@ -126,7 +126,7 @@ export async function openDocumentConnection(binding: Pick<DocumentBinding, 'con
   } catch (e) { await connection.close(); throw e; }
 }
 export async function documentLink(binding: DocumentBinding): Promise<string> {
-  const url = new URL(reportLink(binding.url, binding.record.report_id));
+  const url = new URL(reportLink(binding.url, binding.record.report_id, binding.pinnedRevision));
   url.pathname = `${(appBase ?? "/").replace(/\/$/, "")}/reports`;
   const sources = binding.record.envelope?.data_sources ?? [];
   if (sources.length) {
@@ -144,6 +144,9 @@ export async function documentLink(binding: DocumentBinding): Promise<string> {
 export const documentDraftScope = (url: string, id: string, revision: string | null, authScope?: string) => `cupola.saved-object:${JSON.stringify([url, authScope ?? null, id, revision ?? 'head'])}`;
 export function resetDocumentDraft(url: string, id: string, kind: DocumentKind, authScope?: string) {
   const scope = documentDraftScope(url, id, null, authScope);
+  resetDocumentBinding(scope, kind, id);
+}
+export function resetDocumentBinding(scope: string, kind: DocumentKind, id: string) {
   const bindingKey = key(scope, kind, id), old = localStorage.getItem(bindingKey);
   if (old) {
     // Retain both binding and editor storage before replacing the draft on reopen.

@@ -1,3 +1,4 @@
+import { appBase } from '../../lib/app-base';
 import { listLocalObjects, saveLocalObject, localObjectRecord } from '../../lib/reporting/local-objects';
 import { placeLocalReport, localLibrary, localFolderPath } from '../../lib/reporting/local-library';
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
@@ -11,7 +12,7 @@ import { ReportStorageTree } from './ReportStorageTree';
 import { useReportLocations } from './ReportLocations';
 import { ReportClient, reportError, errorCode } from '../../lib/reporting/client';
 import { MutationJournal } from '../../lib/reporting/journal';
-import { bindDocument, documentBinding, documentLink, documentIsDirty, documentSaveIntentKey, documentConfigurationKey, DOCUMENT_BINDING_CHANGED, captureSources, captureContext, encodeDocument, portableBody, portableContext, type DocumentKind, type DocumentConfiguration } from '../../lib/reporting/documents';
+import { bindDocument, documentBinding, documentIsDirty, documentSaveIntentKey, documentConfigurationKey, DOCUMENT_BINDING_CHANGED, captureSources, captureContext, encodeDocument, portableBody, portableContext, type DocumentKind, type DocumentConfiguration } from '../../lib/reporting/documents';
 import type { Notebook } from '../../lib/notebooks/model';
 import type { EditorDoc } from '../../lib/editor/editor-store';
 import type { CatalogData } from '../../lib/service';
@@ -19,8 +20,8 @@ import type { CatalogData } from '../../lib/service';
 /** Shared durable save workflow for the Notebook and Query editors. */
 export interface DocumentSaveHandle { save: () => void }
 export const DocumentSave = forwardRef<DocumentSaveHandle, {
-  kind: DocumentKind; doc: Notebook | EditorDoc; scope: string; catalogs: readonly CatalogData[]; workspaceId?: string; libraryScope?: string; onTitleSaved?: (title: string) => void; disabled?: boolean; managed?: boolean; onSourcesChange?: () => void;
-}>(function DocumentSave({ kind, doc, scope, catalogs, workspaceId, libraryScope = scope, onTitleSaved, disabled, managed, onSourcesChange }, ref) {
+  kind: DocumentKind; doc: Notebook | EditorDoc; scope: string; catalogs: readonly CatalogData[]; workspaceId?: string; libraryScope?: string; onTitleSaved?: (title: string) => void; disabled?: boolean; onSourcesChange?: () => void;
+}>(function DocumentSave({ kind, doc, scope, catalogs, workspaceId, libraryScope = scope, onTitleSaved, disabled, onSourcesChange }, ref) {
   const { locations, refresh } = useReportLocations();
   const [binding, setBinding] = useState(() => documentBinding(scope, kind, doc.id));
   const [sourcesOpen, setSourcesOpen] = useState(false);
@@ -55,7 +56,10 @@ export const DocumentSave = forwardRef<DocumentSaveHandle, {
     } catch (e) { setError(reportError(e)); }
   }, [scope, kind, doc.id]);
   useEffect(() => {
-    const changed = () => setBinding(documentBinding(scope, kind, doc.id));
+    const changed = () => {
+      setBinding(documentBinding(scope, kind, doc.id));
+      setConfiguration(JSON.parse(localStorage.getItem(configurationKey) ?? 'null') ?? undefined);
+    };
     const copy = (event: Event) => { const detail = (event as CustomEvent).detail; if (detail.scope === scope && detail.id === doc.id) chooseCopy(); };
     window.addEventListener(DOCUMENT_BINDING_CHANGED, changed); window.addEventListener('cupola:document-save-copy', copy);
     return () => { window.removeEventListener(DOCUMENT_BINDING_CHANGED, changed); window.removeEventListener('cupola:document-save-copy', copy); };
@@ -74,9 +78,17 @@ export const DocumentSave = forwardRef<DocumentSaveHandle, {
     if (editable) { if (dirty) void save(); } else chooseCopy();
   }
   useImperativeHandle(ref, () => ({ save: requestSave }));
-  async function openPage(page: 'details' | 'history') {
+  async function openPage(page: 'details' | 'history' | 'share' | 'ownership') {
     if (!binding) return;
-    try { const url = new URL(await documentLink(binding)); url.searchParams.set('report_view', page); location.href = url.href; }
+    try {
+      // Management stays in this workspace; portable sharing links are for recipients.
+      const url = new URL(location.href);
+      url.pathname = `${appBase.replace(/\/$/, '')}/reports`;
+      for (const key of ['evidence_report', 'evidence_new', 'report_revision', 'report_folder', 'notebook', 'report_scheduler', 'report_schedule', 'report_run']) url.searchParams.delete(key);
+      url.searchParams.set('report_service', binding.url); url.searchParams.set('report_id', binding.record.report_id); url.searchParams.set('report_view', page);
+      if (binding.pinnedRevision) url.searchParams.set('report_revision', binding.pinnedRevision);
+      location.href = url.href;
+    }
     catch (e) { setError(reportError(e)); }
   }
   const supported = locations.filter(l => l.info?.body_formats.includes(`cupola.${kind}/1`));
@@ -127,7 +139,7 @@ export const DocumentSave = forwardRef<DocumentSaveHandle, {
           : await journal.run('create_report', { ...encoded, folder_id: folder, message: `Saved ${kind}` });
       }
       const body = portableBody(result);
-      const next = { url, record: result, original: body, context: portableContext(body) };
+      const next = { url, authScope: auth, record: result, original: body, context: portableContext(body) };
       if (!(intent?.copy ?? copy) || !binding) { bindDocument(scope, kind, doc.id, next); setBinding(next); acknowledgeTitle(result.envelope!.title); setConfiguration(undefined); localStorage.removeItem(configurationKey); } localStorage.removeItem(intentKey); setPending(null); setChoosing(false); setNotice((intent?.copy ?? copy) && binding ? `Copy saved as “${result.envelope!.title}”.` : ''); refresh();
     } catch (e) {
       if (activeJournal && !activeJournal.pending) { localStorage.removeItem(intentKey); setPending(null); }
@@ -146,7 +158,7 @@ export const DocumentSave = forwardRef<DocumentSaveHandle, {
         <DropdownMenu><DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" className="h-7 w-6 rounded-l-none border-l" aria-label="Save options" disabled={busy} />}><ChevronDown /></DropdownMenuTrigger><DropdownMenuContent align="start">
           <DropdownMenuItem disabled={disabled || busy || Boolean(pending?.pending)} onClick={chooseCopy}>{binding ? 'Save a copy…' : 'Save as…'}</DropdownMenuItem>
           <DropdownMenuItem disabled={disabled || Boolean(pending?.pending)} onClick={() => setSourcesOpen(true)}>Data sources…</DropdownMenuItem>
-          {binding && !binding.localScope && !managed && <><DropdownMenuSeparator /><DropdownMenuItem onClick={() => void openPage('details')}>Details</DropdownMenuItem><DropdownMenuItem onClick={() => void openPage('history')}>Version history</DropdownMenuItem></>}
+          {binding && !binding.localScope && <><DropdownMenuSeparator /><DropdownMenuItem onClick={() => void openPage('details')}>Details</DropdownMenuItem><DropdownMenuItem onClick={() => void openPage('history')}>Version history</DropdownMenuItem><DropdownMenuItem onClick={() => void openPage('share')}>Share</DropdownMenuItem>{binding.record.allowed_actions.includes('transfer_ownership') && <DropdownMenuItem disabled={dirty || Boolean(pending?.pending)} onClick={() => void openPage('ownership')}>Transfer ownership…</DropdownMenuItem>}</>}
         </DropdownMenuContent></DropdownMenu>
       </div>
       <PopoverContent align="start" className="w-[min(28rem,calc(100vw-2rem))] max-h-[min(36rem,80dvh)] overflow-auto p-4">
@@ -167,7 +179,7 @@ export const DocumentSave = forwardRef<DocumentSaveHandle, {
       {pending?.pending && <Button size="sm" disabled={busy} onClick={() => void save(false, true)}>Retry pending save</Button>}
       {error && !pending?.pending && <Button size="sm" disabled={busy} onClick={requestSave}>Try again</Button>}
     </PopoverContent></Popover>
-    {binding && !managed && <span className="hidden max-w-40 truncate text-xs text-muted-foreground xl:inline" title={`${destination}${folderPath ? ` / ${folderPath}` : ''}`}>{destination}{folderPath && ` / ${folderPath}`}</span>}
+    {binding && <span className="hidden max-w-40 truncate text-xs text-muted-foreground xl:inline" title={`${destination}${folderPath ? ` / ${folderPath}` : ''}`}>{destination}{folderPath && ` / ${folderPath}`}</span>}
     {notice && <div role="status" className="fixed bottom-5 right-5 z-50 flex max-w-[calc(100vw-2.5rem)] items-center gap-3 rounded-lg border bg-popover p-3 text-sm shadow-lg"><Check aria-hidden className="size-4 shrink-0" /><span>{notice}</span><Button size="sm" variant="ghost" onClick={() => setNotice('')}>Dismiss</Button></div>}
     {sourcesOpen && <DocumentSources configuration={configuration ?? binding?.configurationDraft ?? { sources: binding?.record.envelope?.data_sources ?? captureSources(catalogs, workspaceId), context: binding?.context ?? captureContext() }} catalogs={catalogs} workspaceId={workspaceId} onClose={() => setSourcesOpen(false)} onApply={value => {
       localStorage.setItem(configurationKey, JSON.stringify(value)); setConfiguration(value);

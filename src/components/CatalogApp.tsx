@@ -1,4 +1,5 @@
 import { OPEN_NOTEBOOK_EVENT, type OpenNotebookDetail, type NotebookNavigation, type NotebookInsertion } from '../lib/notebooks/navigation';
+import { OPEN_LIBRARY_DOCUMENT, type LibraryDocumentNavigation, type LibraryDocumentRequest } from '../lib/reporting/open-document';
 import { useEffect, useState, useMemo, useCallback, useRef, useSyncExternalStore, forwardRef, useImperativeHandle, type PointerEvent as ReactPointerEvent } from "react";
 import { buildCallText } from "@/lib/editor/call-snippet";
 import { type CatalogData } from "@/lib/service";
@@ -9,7 +10,7 @@ import { appBase } from "@/lib/app-base";
 import { toLatestBaseUrl } from "@/lib/share-query";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { OPEN_REPORT_EVENT, reportHref, type OpenReportDetail } from "@/lib/evidence/open-report";
-import { REPORT_ROUTE_CHANGED } from "@/lib/reporting/navigation";
+import { REPORT_ROUTE_CHANGED, reportNavigationHref } from "@/lib/reporting/navigation";
 import {
   getServiceUrl,
   hasExplicitService,
@@ -502,6 +503,20 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // shared query links). `autoRun` is false for shared links: the recipient
   // gets the query staged and ready, but chooses when to execute it.
   const [pendingEditorSql, setPendingEditorSql] = useState<PendingEditorSql | null>(null);
+  const [libraryQuery, setLibraryQuery] = useState<LibraryDocumentNavigation | null>(null);
+  const [libraryNotebook, setLibraryNotebook] = useState<LibraryDocumentNavigation | null>(null);
+  const libraryNavigationToken = useRef(0);
+  useEffect(() => {
+    const open = (event: Event) => {
+      const request = (event as CustomEvent<LibraryDocumentRequest>).detail;
+      const navigation = { ...request, token: ++libraryNavigationToken.current };
+      if (request.record.envelope?.body_format === 'cupola.query/1') { setLibraryQuery(navigation); setActiveTab('editor'); }
+      else { setLibraryNotebook(navigation); setActiveTab('notebooks'); }
+      setMobileSidebarOpen(false);
+    };
+    window.addEventListener(OPEN_LIBRARY_DOCUMENT, open);
+    return () => window.removeEventListener(OPEN_LIBRARY_DOCUMENT, open);
+  }, []);
   // Field by field, not the whole snapshot: this is the app root, and the
   // snapshot changes on every refresh even when the catalogs do not.
   const catalogs = useCatalogInventory(s => s.catalogs);
@@ -669,6 +684,8 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     const fromUrl = () => {
       const path = window.location.pathname.replace(/\/$/, "");
       if (!path.endsWith("/notebooks")) {
+        if (path.includes('/reports')) { setActiveTab('reports'); return; }
+        if (path.endsWith('/editor')) { setActiveTab('editor'); return; }
         if (lastTabRef.current === "notebooks") setActiveTab(path.includes("/reports") ? "reports" : path.endsWith("/editor") ? "editor" : path.endsWith("/shell") ? "shell" : "catalog");
         return;
       }
@@ -1651,7 +1668,18 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       />
       <AppTabBar
         activeTab={activeTab}
-        onSelect={setActiveTab}
+        onSelect={tab => {
+          if (tab === 'reports' && (libraryQuery || libraryNotebook)) {
+            window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId: workspaceId || undefined, href: reportNavigationHref(serviceUrl, { location: 'all' }, location.href, appBase) } }));
+          } else {
+            if (!['editor', 'notebooks', 'reports', 'evidence'].includes(tab)) {
+              const url = new URL(location.href); url.pathname = appBase;
+              for (const key of [...url.searchParams.keys()]) if (key.startsWith('report_') || key.startsWith('evidence_') || key === 'notebook' || key === 'local_report_folder') url.searchParams.delete(key);
+              history.replaceState(history.state, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
+            }
+            setActiveTab(tab);
+          }
+        }}
         busyTabs={{ notebooks: notebookBusy, askai: askAiBusy, editor: editorAiBusy }}
         sidebarCollapsed={!sidebarVisible}
         onToggleSidebar={() => isNarrow ? setMobileSidebarOpen((open) => !open) : setSidebarCollapsed((c) => !c)}
@@ -1698,7 +1726,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                 serviceUrl={serviceUrl}
                 activeNotebookId={activeNotebookId}
                 notebooksActive={activeTab === "notebooks"}
-                reportsActive={activeTab === "reports"}
+                reportsActive={['reports', 'editor', 'notebooks'].includes(activeTab)}
                 catalogs={catalogs}
                 defaultCatalogName={defaultAlias ?? data.catalogName}
                 inventoryError={inventoryError}
@@ -1800,6 +1828,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
               <ErrorBoundary>
                 <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading editor…</div>}>
                   <SqlEditorView
+                    active={activeTab === 'editor'}
                     catalogData={data}
                     attachedCatalogs={attachedCatalogs}
                     serviceUrl={serviceUrl}
@@ -1807,6 +1836,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                     attachOptions={workspace.source === "service" ? shareAttachOptions : undefined}
                     shareWorkspaceToken={workspace.source === "link" ? shareWorkspaceToken : undefined}
                     pendingSql={pendingEditorSql}
+                    libraryDocument={libraryQuery}
                     onPendingConsumed={() => { setPendingEditorSql(null); clearSharedSql(); }}
                     onAiBusyChange={setEditorAiBusy}
                     selection={selection}
@@ -1820,7 +1850,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
           {notebooksMounted && (
             <div className="absolute inset-0 overflow-hidden" style={activeTab === "notebooks" ? undefined : { visibility: "hidden", zIndex: -1 }}>
               <ErrorBoundary><Suspense fallback={<div className="p-6">Loading notebooks…</div>}>
-                <NotebookPanel key={workspaceId || serviceUrl} serviceUrl={serviceUrl} workspaceId={workspaceId || undefined} catalogs={catalogs} onBusyChange={setNotebookBusy} navigation={notebookNavigation} insertion={notebookInsertion} onActiveChange={setActiveNotebookId} />
+                <NotebookPanel key={workspaceId || serviceUrl} visible={activeTab === 'notebooks'} libraryDocument={libraryNotebook} serviceUrl={serviceUrl} workspaceId={workspaceId || undefined} catalogs={catalogs} onBusyChange={setNotebookBusy} navigation={notebookNavigation} insertion={notebookInsertion} onActiveChange={setActiveNotebookId} />
               </Suspense></ErrorBoundary>
             </div>
           )}

@@ -1,7 +1,7 @@
 import { newLibraryDocument } from '../../lib/reporting/documents';
 import type { LibraryDocumentKind } from './LibraryNewMenu';
 import { listLocalObjects, localObjectRecord, saveLocalObject } from '../../lib/reporting/local-objects';
-import { RemoteDocumentEditor } from './RemoteDocumentEditor';
+import { LibraryDocumentOpener } from './LibraryDocumentOpener';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/button';
 import { EvidenceWorkspace } from '../evidence/EvidenceWorkspace';
@@ -72,8 +72,8 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
       if ((detail.workspaceId ?? detail.serviceUrl) !== scope) return;
       detail.handled = true;
       const next = new URL(detail.href, location.href);
-      if (location.pathname + location.search === next.pathname + next.search) return;
-      history.pushState({}, '', next); pop(); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
+      if (location.pathname + location.search === next.pathname + next.search) { setEditorKey(n => n + 1); return; }
+      history.pushState({}, '', next); activeRoute.current = routeIdentity(); setView(route()); setEditorKey(n => n + 1); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
     };
     window.addEventListener('popstate', pop); window.addEventListener(OPEN_REPORT_EVENT, local); window.addEventListener(REPORT_ROUTE_CHANGED, track);
     return () => { window.removeEventListener('popstate', pop); window.removeEventListener(OPEN_REPORT_EVENT, local); window.removeEventListener(REPORT_ROUTE_CHANGED, track); };
@@ -133,7 +133,7 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     <div className="min-h-0 flex-1">{view.activity ? <ScheduleActivity serviceUrl={props.serviceUrl} catalogs={props.catalogs} onBack={() => choose('all')} /> : view.selected === 'all' || view.selected === 'local' && !view.localEditor
       ? <ReportOverview key={`${view.selected}:${view.localFolder ?? ''}:${editorKey}`} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} localOnly={view.selected === 'local'} folderId={view.localFolder} onAllReports={() => choose('all')} onFolder={id => choose('local', undefined, id)} onNew={createLocal} onLocal={openLocal} onWorker={(url, id) => choose(url, id)} onTransfer={transferReport} onRefresh={refresh} />
       : view.selected === 'local'
-        ? localObject ? <RemoteDocumentEditor key={editorKey} {...props} record={{ ...localObjectRecord(localObject), folder_id: localLibrary(scope).entries[localObject.id]?.folderId ?? null }} libraryUrl="local" localScope={scope} pinned={false} onLeave={() => choose('local')} /> : <EvidenceWorkspace key={editorKey} {...props} onLibrary={() => choose('local')} onTransfer={(report, move) => transferReport({ kind: 'local', report }, move)} />
+        ? localObject ? <LibraryDocumentOpener key={editorKey} record={{ ...localObjectRecord(localObject), folder_id: localLibrary(scope).entries[localObject.id]?.folderId ?? null }} libraryUrl="local" localScope={scope} pinned={false} /> : <EvidenceWorkspace key={editorKey} {...props} onLibrary={() => choose('local')} onTransfer={(report, move) => transferReport({ kind: 'local', report }, move)} />
         : <ReportLibrary key={view.selected + ':' + editorKey} {...props} libraryUrl={view.selected} onAllReports={() => choose('all')} onCreateLocal={() => createLocal()} onTransferReport={transferReport} />}</div>
     {transfer && <TransferDialog {...transfer} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} onClose={() => { setTransfer(null); refresh(); }} onComplete={completed} />}
   </div>;

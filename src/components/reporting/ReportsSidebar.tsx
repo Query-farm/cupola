@@ -34,10 +34,11 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
   const [local, setLocal] = useState<EvidenceReport[]>([]), [library, setLibrary] = useState<ReturnType<typeof localLibrary>>({ folders: [], entries: {} });
   const [localObjects, setLocalObjects] = useState<LocalObject[]>([]);
   const [localError, setLocalError] = useState(''), [remote, setRemote] = useState<Record<string, LibraryRows>>({});
-  const [selected, setSelected] = useState(currentReportNode);
+  const selectedNode = () => /\/(reports|evidence)(\/|$)/.test(location.pathname) ? currentReportNode() : '';
+  const [selected, setSelected] = useState(selectedNode);
   const [actionError, setActionError] = useState(''), [preparing, setPreparing] = useState(false);
   useEffect(() => {
-    const read = () => queueMicrotask(() => setSelected(currentReportNode()));
+    const read = () => queueMicrotask(() => setSelected(selectedNode()));
     for (const event of ['popstate', OPEN_REPORT_EVENT, REPORT_ROUTE_CHANGED]) window.addEventListener(event, read);
     return () => { for (const event of ['popstate', OPEN_REPORT_EVENT, REPORT_ROUTE_CHANGED]) window.removeEventListener(event, read); };
   }, []);

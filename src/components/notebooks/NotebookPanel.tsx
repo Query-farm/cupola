@@ -6,6 +6,10 @@ import {
 import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { DocumentSave, type DocumentSaveHandle } from '../reporting/DocumentSave';
 import { documentExecutionBinding, documentSessionKey } from '../../lib/reporting/documents';
+import type { LibraryDocumentNavigation } from '../../lib/reporting/open-document';
+import { LibraryNotebookEditor } from '../reporting/LibraryNotebookEditor';
+import { REPORT_ROUTE_CHANGED, reportNavigationHref } from '../../lib/reporting/navigation';
+import { appBase } from '../../lib/app-base';
 import { Button } from '../ui/button';
 import { PanelResizeHandle, usePanelWidth } from '../shared/PanelResizeHandle';
 import {
@@ -63,7 +67,11 @@ export function NotebookPanel({
   navigation,
   insertion,
   onActiveChange,
+  libraryDocument,
+  visible = true,
 }: {
+  visible?: boolean;
+  libraryDocument?: LibraryDocumentNavigation | null;
   navigation?: NotebookNavigation | null;
   insertion?: NotebookInsertion | null;
   onActiveChange?: (id: string | null) => void;
@@ -76,6 +84,8 @@ export function NotebookPanel({
 }) {
   const scope = workspaceId ?? serviceUrl;
   const [active, setActive] = useState<Notebook | null>(null);
+  const [activeLibrary, setActiveLibrary] = useState<LibraryDocumentNavigation | null>(null);
+  const handledLibrary = useRef<number | null>(null);
   const [navigationError, setNavigationError] = useState('');
   const beforeLeave = useRef<(() => boolean) | null>(null);
   const handledNavigation = useRef<number | null>(null);
@@ -86,11 +96,21 @@ export function NotebookPanel({
   function openDocument(doc: Notebook | null, fromHistory = false) {
     setNavigationError('');
     setActive(doc);
+    setActiveLibrary(null);
     onActiveChange?.(doc?.id ?? null);
     const href = notebookHref(serviceUrl, doc?.id) + window.location.hash;
     if (!fromHistory && href !== window.location.pathname + window.location.search + window.location.hash)
       window.history.pushState(window.history.state, '', href);
   }
+  useEffect(() => {
+    if (!libraryDocument || handledLibrary.current === libraryDocument.token) return;
+    handledLibrary.current = libraryDocument.token;
+    if (beforeLeave.current && !beforeLeave.current()) {
+      setNavigationError('Stop the running query or AI response, or resolve the save error, before switching notebooks.'); return;
+    }
+    setActiveLibrary(libraryDocument); setActive(null); setNavigationError('');
+    onActiveChange?.(libraryDocument.record.report_id);
+  }, [libraryDocument]);
   useEffect(() => {
     if (!navigation || navigation.serviceUrl !== serviceUrl || handledNavigation.current === navigation.token)
       return;
@@ -130,9 +150,19 @@ export function NotebookPanel({
     }
   }, [navigation, serviceUrl, scope]);
   useEffect(() => {
+    if (!visible) return;
+    const url = activeLibrary
+      ? new URL(reportNavigationHref(serviceUrl, { location: activeLibrary.libraryUrl, reportId: activeLibrary.record.report_id }, location.href, appBase), location.href)
+      : new URL(notebookHref(serviceUrl, active?.id), location.href);
+    url.hash = location.hash;
+    if (activeLibrary?.pinned) url.searchParams.set('report_revision', activeLibrary.record.revision_served);
+    history.replaceState(history.state, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
+  }, [visible, activeLibrary, active?.id, serviceUrl]);
+  useEffect(() => {
     if (!insertion || insertion.serviceUrl !== serviceUrl || handledInsertion.current === insertion.token)
       return;
     handledInsertion.current = insertion.token;
+    if (activeLibrary) return;
     const target = active ?? newNotebook(serviceUrl, workspaceId);
     if (!active) openDocument(target);
     setCellInsertion({ ...insertion, notebookId: target.id });
@@ -166,6 +196,12 @@ export function NotebookPanel({
       window.removeEventListener(NOTEBOOKS_CHANGED, handler);
     };
   }, [scope]);
+  if (activeLibrary) return <div className="flex h-full min-h-0 flex-col">
+    {navigationError && <p role="alert" className="border-b px-4 py-2 text-sm text-destructive">{navigationError}</p>}
+    <LibraryNotebookEditor key={activeLibrary.token} {...activeLibrary} beforeLeaveRef={beforeLeave} onBusyChange={onBusyChange}
+      insertion={insertion} serviceUrl={serviceUrl} workspaceId={workspaceId} catalogs={catalogs} catalogName={catalogs[0]?.catalogName ?? ''}
+      onLeave={() => { openDocument(null); refresh(); }} />
+  </div>;
   if (active)
     return (
       <div className="h-full flex flex-col min-h-0">
@@ -325,7 +361,6 @@ export function NotebookWorkspace({
   onClose,
   onBusyChange,
   libraryScope,
-  managed,
 }: {
   beforeLeave: RefObject<(() => boolean) | null>;
   initial: Notebook;
@@ -335,7 +370,6 @@ export function NotebookWorkspace({
   onClose: () => void;
   onBusyChange?: (busy: boolean) => void;
   libraryScope?: string;
-  managed?: boolean;
 }) {
   const documentSave = useRef<DocumentSaveHandle>(null);
   const [doc, setDoc] = useState(initial);
@@ -630,7 +664,7 @@ export function NotebookWorkspace({
     >
 
       <header className="border-b p-2 flex flex-wrap gap-2 items-center">
-        {!managed && <Button
+        <Button
           size="sm"
           variant="ghost"
           disabled={busy}
@@ -642,15 +676,15 @@ export function NotebookWorkspace({
         >
           <ChevronLeft className="size-4 sm:hidden" />
           <span className="hidden sm:inline">Notebooks</span>
-        </Button>}
-        {!managed && <Input
+        </Button>
+        <Input
           className="flex-1 min-w-40 max-w-md font-medium"
           aria-label="Notebook title"
           value={doc.title}
           maxLength={200}
           onChange={(event) => change({ ...doc, title: event.target.value })}
-        />}
-        <DocumentSave ref={documentSave} onSourcesChange={() => void resetSession()} managed={managed} kind="notebook" doc={doc} scope={notebookScope(doc)} libraryScope={libraryScope} onTitleSaved={title => { if (title !== latest.current.title) change({ ...latest.current, title }); }} workspaceId={doc.workspaceId} catalogs={catalogs} disabled={busy} />
+        />
+        <DocumentSave ref={documentSave} onSourcesChange={() => void resetSession()} kind="notebook" doc={doc} scope={notebookScope(doc)} libraryScope={libraryScope} onTitleSaved={title => { if (title !== latest.current.title) change({ ...latest.current, title }); }} workspaceId={doc.workspaceId} catalogs={catalogs} disabled={busy} />
         <DropdownMenu>
           <DropdownMenuTrigger
             render={<Button size="icon-sm" variant="ghost" aria-label="Notebook actions" />}

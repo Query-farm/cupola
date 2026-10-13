@@ -12,6 +12,7 @@ export interface PendingClose {
   id: string;
   name: string;
   sql: string;
+  saved?: boolean;
 }
 
 const PREVIEW_LINES = 6;
@@ -28,9 +29,9 @@ export function ConfirmCloseQueryDialog({ pending, onCancel, onConfirm }: {
     <Dialog open={!!pending} onOpenChange={(open) => { if (!open) onCancel(); }}>
       <DialogContent className="sm:max-w-md" initialFocus={cancelRef} data-testid="editor-close-confirm">
         <DialogHeader>
-          <DialogTitle>Delete “{pending?.name}”?</DialogTitle>
+          <DialogTitle>{pending?.saved ? 'Close' : 'Delete'} “{pending?.name}”?</DialogTitle>
           <DialogDescription>
-            Closing this tab deletes its query. This can't be undone, though queries you ran stay in History.
+            {pending?.saved ? 'Your changes are not saved to the library. They will remain as a recovery draft on this device when you reopen this query. Closing the tab does not delete the saved query.' : "Closing this tab deletes its query. This can't be undone, though queries you ran stay in History."}
           </DialogDescription>
         </DialogHeader>
         {preview && (
@@ -41,7 +42,7 @@ export function ConfirmCloseQueryDialog({ pending, onCancel, onConfirm }: {
         )}
         <DialogFooter>
           <Button ref={cancelRef} variant="outline" onClick={onCancel} data-testid="editor-close-cancel">Keep query</Button>
-          <Button variant="destructive" onClick={() => pending && onConfirm(pending.id)} data-testid="editor-close-delete">Delete query</Button>
+          <Button variant={pending?.saved ? 'default' : 'destructive'} onClick={() => pending && onConfirm(pending.id)} data-testid="editor-close-delete">{pending?.saved ? 'Close tab' : 'Delete query'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

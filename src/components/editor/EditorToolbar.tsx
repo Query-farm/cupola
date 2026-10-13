@@ -8,7 +8,6 @@ import { withShortcut } from "@/lib/keys";
 
 interface Props {
   saveControls?: ReactNode;
-  managed?: boolean;
   onResetSession?: () => void;
   running: boolean;
   /** DuckDB booted, required extensions loaded, and the catalog attached. */
@@ -73,7 +72,6 @@ const panelToggle = (active?: boolean) => `h-7 gap-1.5 ${active ? "bg-muted text
  */
 export function EditorToolbar({
   saveControls,
-  managed,
   onResetSession,
   running,
   queryReady,
@@ -188,15 +186,15 @@ export function EditorToolbar({
       <Popover>
         <PopoverTrigger
           className="flex h-7 items-center gap-1.5 rounded px-2 text-xs hover:bg-foreground/5"
-          title={managed ? "Query tools" : "Share this query: a link, a .sql file, or a report"}
+          title="Share this query: a link, a .sql file, or a report"
           data-testid="editor-share-menu"
         >
           <Share2 className="h-3.5 w-3.5" />
-          <span className="hidden lg:inline">{managed ? "Tools" : "Share"}</span>
+          <span className="hidden lg:inline">Share</span>
           <ChevronDown className="h-3 w-3 text-muted-foreground" />
         </PopoverTrigger>
         <PopoverContent align="start" className="w-60 p-1">
-          <BaseUIPopover.Close onClick={onShareLink} hidden={managed} className={menuItem} data-testid="editor-share-link">
+          <BaseUIPopover.Close onClick={onShareLink} className={menuItem} data-testid="editor-share-link">
             {shareCopied ? <Check className="h-3.5 w-3.5 text-accent" /> : <Link2 className="h-3.5 w-3.5" />}
             <span>{shareCopied ? "Link copied" : "Copy link to this query"}</span>
           </BaseUIPopover.Close>

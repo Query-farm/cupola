@@ -12,6 +12,8 @@ export interface EditorDoc {
   sql: string;
   createdAt: number;
   updatedAt: number;
+  /** A library draft keeps its original, authentication-partitioned recovery scope. */
+  library?: { scope: string; id: string; url: string; authScope?: string; localScope?: string; revision?: string };
 }
 
 export interface EditorState {

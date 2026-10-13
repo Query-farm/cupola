@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { ContextMenu } from "@base-ui/react/context-menu";
+import { DropdownMenuItem } from "../ui/dropdown-menu";
 import { Plus, X } from "lucide-react";
 import type { EditorDoc } from "@/lib/editor/editor-store";
 import { cn } from "@/lib/utils";
@@ -17,6 +19,8 @@ interface Props {
 
 export function SqlEditorTabs({ docs, activeId, busyDocIds, onSelect, onAdd, onClose, onRename }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [contextId, setContextId] = useState<string | null>(null);
+  const [keyboardAnchor, setKeyboardAnchor] = useState<HTMLElement | null>(null);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -66,8 +70,13 @@ export function SqlEditorTabs({ docs, activeId, busyDocIds, onSelect, onAdd, onC
       {docs.map((doc) => {
         const active = doc.id === activeId;
         return (
-          <div
-            key={doc.id}
+          <ContextMenu.Root key={doc.id} open={contextId === doc.id} onOpenChange={open => setContextId(open ? doc.id : null)}>
+          <ContextMenu.Trigger
+            onContextMenu={() => setKeyboardAnchor(null)}
+            onKeyDown={event => {
+              if (event.key === 'F2') { event.preventDefault(); startRename(doc); }
+              if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); setKeyboardAnchor(event.currentTarget); setContextId(doc.id); }
+            }}
             data-testid="editor-tab"
             className={cn(
               "relative group flex items-center text-xs rounded-t-md whitespace-nowrap border border-b-0 transition-colors max-w-[200px]",
@@ -132,7 +141,12 @@ export function SqlEditorTabs({ docs, activeId, busyDocIds, onSelect, onAdd, onC
             >
               <X className="h-3 w-3" />
             </button>
-          </div>
+          </ContextMenu.Trigger>
+          <ContextMenu.Portal><ContextMenu.Positioner anchor={keyboardAnchor ?? undefined} className="isolate z-50 outline-none"><ContextMenu.Popup finalFocus={editingId === doc.id ? inputRef : undefined} aria-label={`${doc.name} actions`} className="min-w-40 rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none">
+            <DropdownMenuItem onClick={() => startRename(doc)}>Rename…</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onClose(doc.id)}>Close tab</DropdownMenuItem>
+          </ContextMenu.Popup></ContextMenu.Positioner></ContextMenu.Portal>
+          </ContextMenu.Root>
         );
       })}
       <button

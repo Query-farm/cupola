@@ -8,7 +8,9 @@ Run remains the primary editor action. A compact Save control belongs in the exi
 
 Save state is derived from the current content and acknowledged revision: Local draft, Changes to save, Saving, Saved, Read-only, Save failed, or Save unconfirmed. A successful save never marks edits made during that save as saved. A browser recovery draft is distinct from a saved library document. Keep the destination visible; expose error details and exact-request retry through the status control.
 
-The destination picker is temporary and does not push SQL or results down the page. Enter submits its form. Details, version history, sharing, and ownership are normal navigable pages. Run history is labeled separately from saved version history. Library documents use one title/navigation header.
+The destination picker is temporary and does not push SQL or results down the page. Enter submits its form. Details, version history, sharing, and ownership are normal navigable pages. Run history is labeled separately from saved version history. Library documents use their ordinary editors. Saved queries open beside scratch queries in the Query Editor tab strip; reopening the same worker, identity and revision focuses its existing tab. Double-click, F2, or the tab context menu renames a query; Save commits that title with the query. Saved notebooks open in Notebooks with the normal editable title and navigation. Storage location does not choose a different editing surface.
+
+Closing a saved query tab leaves the library object intact. An unsaved edit prompts before closing and remains recoverable when the query is reopened. Worker locations, authenticated identities, and explicitly pinned revisions have distinct draft identities. Switching query tabs preserves query results and execution sessions. Legacy library document URLs still open the appropriate editor; management pages stay in the current workspace.
 
 ## Reopening and conflicts
 
@@ -28,4 +30,4 @@ Scheduling and email actions apply to reports. Query and notebook URLs requestin
 
 ## Regression journeys
 
-Cover create → save → edit → reopen → share for queries and notebooks; clean newer revisions; concurrent edits; exact-request replay after a lost response; read-only saves; failed destination changes; edits during a save; default source changes; retained SQL temporary tables; keyboard submission; and narrow Chromium/WebKit layouts. Use isolated workers and databases; never send email from these UI tests.
+Cover create → save → edit → reopen → share for queries and notebooks; clean newer revisions; concurrent edits; exact-request replay after a lost response; read-only saves; failed destination changes; edits during a save; default source changes; retained SQL temporary tables; keyboard submission; tab reuse and same-ID isolation across workers/accounts/revisions; tab rename and close/reopen recovery; notebook title editing; and narrow Chromium/WebKit layouts. Use isolated workers and databases; never send email from these UI tests.
