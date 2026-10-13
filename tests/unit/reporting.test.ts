@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { decodeRecord, encodeRecord, ReportClient, serviceLocation } from '../../src/lib/reporting/client';
+import { deserializeSchema, serializeBatch, singleRowBatch } from '@query-farm/vgi-rpc/arrow';
+import { bytesFromBase64, decodeRecord, ReportClient, serviceLocation } from '../../src/lib/reporting/client';
+import { resultSchemas } from '../../src/lib/reporting/contracts.generated';
 import { decodeReport, encodeReport } from '../../src/lib/reporting/body';
 import { MutationJournal, parseJournal, serializeJournal } from '../../src/lib/reporting/journal';
 import { SaveController, recoveryDrafts } from '../../src/lib/reporting/save-controller';
@@ -16,7 +18,8 @@ describe('reporting wire and documents', () => {
   });
   test('nested Arrow records preserve binary64 defaults, nulls, Unicode and exact int64 versions', () => {
     const r = record(); r.version = 9223372036854775806n; r.envelope!.title = '市場 📊';
-    expect(decodeRecord(encodeRecord('ReportResult', r))).toEqual(r);
+    const schema = deserializeSchema(bytesFromBase64(resultSchemas.ReportResult));
+    expect(decodeRecord(serializeBatch(singleRowBatch(schema, r)))).toEqual(r);
   });
   test('preserves native controls and excludes local identities, selected values and credentials', () => {
     const r = report(); r.workspaceId = 'private-workspace'; r.values = { city: 'Private view' };

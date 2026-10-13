@@ -92,13 +92,17 @@ for prefix, protocol, name, method in methods:
     out += [f'  "{key}": {{ input: {{ {"; ".join(inputs)} }}; output: {result}{"[]" if row else ""} }};']
     config[key] = dict(name=name, protocol=protocol.protocol_name, defaults=defaults, structured=structured, result=result, stream=bool(row))
 # Nested dataclass schemas are already embedded in their enclosing RPC schema.
-# Only top-level parameters/results need entries in the runtime lookup table.
-# Keep TypeScript interfaces for every record without shipping duplicate schemas.
+# Only structured inputs need schemas at runtime: Arrow IPC responses carry
+# their own schema. Keep result schemas separately for wire-format tests so
+# production builds can tree-shake them without losing any TypeScript types.
 runtime_records = {name for method in config.values() for name in method["structured"].values()}
-runtime_records.update(method["result"] for method in config.values())
+result_records = {method["result"] for method in config.values()}
 out += ["}", "export const methodConfig = " + json.dumps(config, indent=2) + " as const;",
         "export const recordSchemas: Record<string, string> = " + json.dumps({
             r.__name__: base64.b64encode(r.ARROW_SCHEMA.serialize().to_pybytes()).decode() for r in records if r.__name__ in runtime_records
+        }, indent=2) + ";",
+        "export const resultSchemas: Record<string, string> = " + json.dumps({
+            r.__name__: base64.b64encode(r.ARROW_SCHEMA.serialize().to_pybytes()).decode() for r in records if r.__name__ in result_records
         }, indent=2) + ";"]
 # Known Identity schemas let clients call without method-level capability probes.
 identity_methods = rpc_methods(Identity)
