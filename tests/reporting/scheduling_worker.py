@@ -24,6 +24,10 @@ os.environ.update(REPORTING_PUBLIC_URL=url, REPORTING_ALLOWED_SOURCES=url, REPOR
                   VGI_NOTIFY_SENDERS="reporting-scheduler", REPORTING_NOTIFY_DELEGATES="reporting-scheduler")
 os.environ.pop("RESEND_API_KEY", None)
 os.environ.pop("REPORTING_SMTP_HOST", None)
+if os.getenv("REPORTING_TEST_LEGACY_IDENTITY") == "1":
+    from vgi_rpc.rpc._token_identity import IdentityImpl
+    original_methods = IdentityImpl.offered_methods
+    IdentityImpl.offered_methods = lambda self: original_methods(self) - {"get_current_identity", "get_grant_policy"}
 server.set_app(app())
 
 

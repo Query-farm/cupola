@@ -66,6 +66,7 @@ export class ReportClient {
     this.url = serviceLocation(url);
   }
   private advertised?: Promise<Set<string>>;
+  private advertisedMethods = new Map<string, Promise<Set<string>>>();
   private token() { return this.options.token ? this.options.token() : getAuthTokenForService(this.url); }
   /** Partition local recovery by credentials, without persisting the credential itself. */
   async recoveryScope(): Promise<string> {
@@ -104,6 +105,21 @@ export class ReportClient {
   async discover(signal?: AbortSignal, protocol: string = REPORTS_PROTOCOL): Promise<boolean> {
     const protocols = await this.protocols(signal);
     return protocols.has(protocol) || protocol === REPORTS_PROTOCOL && protocols.has('vgi.objects.v1') || protocol === 'vgi.schedules.v1' && protocols.has('vgi.schedules.v2') || protocol === 'vgi.reports.ownership.v1' && protocols.has('vgi.ownership.v1');
+  }
+  /** Optional additions to a protocol must be discovered by method, including on older workers. */
+  async supports(method: Method, signal?: AbortSignal): Promise<boolean> {
+    const { protocol, name } = methodConfig[method];
+    if (!await this.discover(signal, protocol)) return false;
+    let methods = this.advertisedMethods.get(protocol);
+    if (!methods) {
+      methods = (async () => {
+        const rpc = await this.connection(protocol, signal);
+        try { return new Set((await rpc.describe()).methods.map(m => m.name)); }
+        finally { rpc.close(); }
+      })().catch(error => { this.advertisedMethods.delete(protocol); throw error; });
+      this.advertisedMethods.set(protocol, methods);
+    }
+    return (await methods).has(name);
   }
   async protocolFor(method: Method, signal?: AbortSignal): Promise<string> {
     const original = methodConfig[method].protocol;

@@ -5,14 +5,14 @@ import { resolve, join } from 'node:path';
 import { ReportClient } from '../../src/lib/reporting/client';
 
 /** A real reference worker with an isolated database. No Yahoo/network dependency in these tests. */
-export async function startReportingWorker(displayName = "Finance report library", rendererUrl?: string, legacyOnly = false) {
+export async function startReportingWorker(displayName = "Finance report library", rendererUrl?: string, legacyOnly = false, access: { maximum?: number; legacyIdentity?: boolean } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'cupola-reporting-'));
   const python = process.env.CUPOLA_REPORTING_PYTHON ?? resolve('../vgi-reporting-protocol-reference/.venv/bin/python');
   const processWorker = spawn(python, rendererUrl ? [resolve('tests/reporting/scheduling_worker.py')] : legacyOnly ? ['-c', `from vgi_reporting_reference.worker import ReportStoreWorker, ReportingWorker
 original = ReportStoreWorker.hosted_protocols
 ReportStoreWorker.hosted_protocols = classmethod(lambda cls: [(p, i) for p, i in original() if p.protocol_name.startswith('vgi.reports.')])
 ReportingWorker.main()`, '--http', '--host', '127.0.0.1', '--port', '0'] : ['-m', 'vgi_reporting_reference.worker', '--http', '--host', '127.0.0.1', '--port', '0'], {
-    env: { ...process.env, REPORTING_RENDERER_URL: rendererUrl ?? '', REPORTING_EXTENSION_DIR: '/tmp/reporting-execution-extensions', REPORTING_LOGIN_TOKENS: JSON.stringify({ 'test-alice': { principal: 'alice', auth_time: Date.now() / 1000 }, 'test-admin': { principal: 'operator', auth_time: Date.now() / 1000 } }), REPORTING_DB: join(directory, 'reports.sqlite'), REPORTING_DISPLAY_NAME: displayName, REPORTING_IDENTITIES: JSON.stringify({ bob: { name: "Bob Finance", email: "bob@example.test" } }), REPORTING_TOKENS: JSON.stringify({ 'test-alice': 'alice', 'test-bob': 'bob', 'test-admin': 'operator' }), VGI_INTROSPECT_PRINCIPALS: 'operator', VGI_SIGNING_KEY: 'isolated-reporting-test-key' }, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, REPORTING_GRANT_MAX_TTL_SECONDS: String(access.maximum ?? 31536000), REPORTING_TEST_LEGACY_IDENTITY: access.legacyIdentity ? '1' : '', REPORTING_RENDERER_URL: rendererUrl ?? '', REPORTING_EXTENSION_DIR: '/tmp/reporting-execution-extensions', REPORTING_LOGIN_TOKENS: JSON.stringify({ 'test-alice': { principal: 'alice', auth_time: Date.now() / 1000 }, 'test-admin': { principal: 'operator', auth_time: Date.now() / 1000 } }), REPORTING_DB: join(directory, 'reports.sqlite'), REPORTING_DISPLAY_NAME: displayName, REPORTING_IDENTITIES: JSON.stringify({ alice: { name: 'Alice Finance', email: 'alice@example.test' }, bob: { name: "Bob Finance", email: "bob@example.test" } }), REPORTING_TOKENS: JSON.stringify({ 'test-alice': 'alice', 'test-bob': 'bob', 'test-admin': 'operator' }), VGI_INTROSPECT_PRINCIPALS: 'operator', VGI_SIGNING_KEY: 'isolated-reporting-test-key' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   const url = await new Promise<string>((resolve, reject) => {
     let log = '';

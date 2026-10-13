@@ -3,6 +3,7 @@ import { Bell } from 'lucide-react';
 import { Button } from '../ui/button';
 import { ScheduleSection, ScheduleField, scheduleInput } from './ScheduleFields';
 import { ReportNotice } from './ReportNotice';
+import { UseMyEmail, addRecipient } from './UseMyEmail';
 import { ReportClient, reportError } from '../../lib/reporting/client';
 import { checkEmailRecipients } from '../../lib/reporting/schedules';
 import type { ScheduleAlerts, SchedulerInfo } from '../../lib/reporting/contracts.generated';
@@ -29,6 +30,7 @@ export function ScheduleAlertsEditor({ value, onChange, client, scheduler, email
     {!supported && <p className="text-sm text-muted-foreground">This worker does not offer email alerts for schedules.</p>}
     {value && <>
       <ScheduleField label="Alert recipients" hint="Separate email addresses with commas, semicolons, or new lines."><textarea className={scheduleInput} value={recipients} disabled={disabled || checking} rows={2} onChange={e => { setRecipients(e.target.value); update({ ...value, destinations: destinations(e.target.value) }); }} /></ScheduleField>
+      <UseMyEmail client={client} disabled={disabled || checking} onSelect={address => { const next = addRecipient(recipients, address); setRecipients(next); update({ ...value, destinations: destinations(next) }); }} />
       <div className="space-y-2">{events.map(event => <label key={event} className="flex items-center gap-2 text-sm"><input type="checkbox" disabled={disabled || checking} checked={value.events.includes(event)} onChange={e => update({ ...value, events: e.target.checked ? [...value.events, event] : value.events.filter(v => v !== event) })} />{alertEventLabels[event]}</label>)}</div>
       <Button type="button" variant="outline" disabled={disabled || checking} onClick={async () => { setChecking(true); setError(''); setStatus(''); try { const allowed = await checkEmailRecipients(client, recipients); setStatus(`${allowed.length} alert recipient${allowed.length === 1 ? '' : 's'} allowed. No email was sent.`); } catch (e) { setError(reportError(e)); } finally { setChecking(false); } }}>Check alert recipients</Button>
       {status && <p role="status" className="text-sm">{status}</p>}

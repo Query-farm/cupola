@@ -104,20 +104,23 @@ export class AuthorizationError extends Error {
 }
 /** Opaque credentials live only in this call. Metadata is the only return value or persisted state. */
 export async function authorizeSchedules(scheduler: ReportClient, keys: DelegationKey[], title: string,
-  attach: (key: DelegationKey) => ReturnType<typeof sourceAttach>, days: number,
+  attach: (key: DelegationKey) => ReturnType<typeof sourceAttach>, days: number | 'worker',
   makeClient: (url: string) => ReportClient = url => new ReportClient(url)): Promise<DelegationRecord[]> {
   const scope = await scheduler.recoveryScope();
   const existing = await scheduler.call('delegations.list_delegations', {});
-  const ttl = BigInt(days * 86400), writes: DelegationWrite[] = [];
+  if (days !== 'worker' && (!Number.isFinite(days) || Math.round(days * 86400) < 1 || !Number.isSafeInteger(Math.round(days * 86400)))) throw new Error('Enter an access duration of at least one second.');
+  const ttl = days === 'worker' ? 0n : BigInt(Math.round(days * 86400)), writes: DelegationWrite[] = [];
   for (const key of keys) {
     try {
       const options = key.kind === 'catalog' ? attach(key) : null;
       const client = makeClient(key.location);
+      if (days === 'worker' && !await client.supports('identity.get_grant_policy')) throw new Error('This worker does not publish its access policy. Choose a custom duration.');
       const grant = await client.call('identity.issue_grant', { purpose: `Cupola scheduled report: ${title}`, scopes: [], ttl_seconds: ttl });
       registerSecretValues([grant.token]);
       const ticket = options ? await client.call('tickets.seal_attach', { request: { catalog_name: key.catalog_name, ...options, ttl_seconds: ttl } }) : null;
       if (ticket) registerSecretValues([ticket.ticket]);
       const expires = Math.min(grant.expires_at, ticket?.expires_at ?? Infinity);
+      if (Number.isNaN(expires) || expires <= Date.now() / 1000) throw new Error('The worker returned expired access.');
       writes.push({ expected_version: existing.find(item => delegationId(item) === delegationId(key))?.version ?? 0n,
         delegation: { ...key, grant: grant.token, ticket: ticket?.ticket ?? '', expires_at: Number.isFinite(expires) ? expires * 1000 : null } });
     } catch (error) {

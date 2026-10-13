@@ -16,13 +16,13 @@ import pyarrow as pa
 from vgi.reporting import common, reports, ownership, schedules, delegations, notify, objects, sources, resource_ownership, schedules_v2
 from vgi.reporting._metadata import read_annotation
 from vgi.attach_ticket import AttachTickets, SealAttachRequest, AttachTicket
-from vgi_rpc.rpc._token_identity import Identity, IssuedGrant
+from vgi_rpc.rpc._token_identity import Identity, IssuedGrant, CurrentIdentity, GrantPolicy
 
 records = list({record.__name__: record
     for module in (common, reports, ownership, schedules, delegations, notify, objects, sources, resource_ownership, schedules_v2)
     for record in vars(module).values()
     if isinstance(record, type) and dataclasses.is_dataclass(record) and hasattr(record, "ARROW_SCHEMA")
-}.values()) + [IssuedGrant, SealAttachRequest, AttachTicket]
+}.values()) + [IssuedGrant, CurrentIdentity, GrantPolicy, SealAttachRequest, AttachTicket]
 
 
 def unwrap(t):
@@ -64,7 +64,7 @@ protocols = [("objects.", objects.ObjectsProtocol), ("ownership.", resource_owne
              ("notify.", notify.NotifyProtocol), ("identity.", Identity), ("tickets.", AttachTickets)]
 methods = [(prefix, p, name, method) for prefix, p in protocols
            for name, method in inspect.getmembers(p, inspect.isfunction)
-           if (prefix != "identity." or name == "issue_grant") and (prefix != "notify." or name != "send")]
+           if (prefix != "identity." or name in {"issue_grant", "get_current_identity", "get_grant_policy"}) and (prefix != "notify." or name != "send")]
 for prefix, protocol, name, method in methods:
     if name.startswith("_"):
         continue

@@ -6,6 +6,7 @@ import { ReportClient, reportError, errorCode } from '../../lib/reporting/client
 import type { NotifyInfo, ParameterSpec, ParamValue, ReportResult, RevisionRow, Schedule, ScheduleRecord, SchedulerInfo, ScheduleTest, TriggerPreview } from '../../lib/reporting/contracts.generated';
 import { cronFor, dateLabel, checkEmailRecipients, HTML, newSchedule, PDF, triggerFields, validateSchedule, type Frequency } from '../../lib/reporting/schedules';
 import { ScheduleAlertsEditor, alertEventLabels } from './ScheduleAlertsEditor';
+import { UseMyEmail, addRecipient } from './UseMyEmail';
 import { scheduleInput, ScheduleField, ScheduleSection } from './ScheduleFields';
 import { ScheduleArtifacts } from './ScheduleRunDetails';
 import { parseJournal, serializeJournal } from '../../lib/reporting/journal';
@@ -133,6 +134,7 @@ export function ScheduleForm({ initial, draftKey, report, reportClient, client, 
         {!notify?.channels.some(c => c.kind === 'email' && c.enabled) && <p className="text-sm text-muted-foreground">Email delivery is not available on this worker. You can still schedule report generation.</p>}
         {email ? <>
           <ScheduleField label="Recipients" hint="Separate email addresses with commas or new lines."><textarea className={scheduleInput} value={recipients} rows={2} onChange={e => { setRecipients(e.target.value); setRecipientStatus(''); setPreview(null); }} /></ScheduleField>
+          <UseMyEmail client={client} disabled={disabled} onSelect={address => { setRecipients(old => addRecipient(old, address)); setRecipientStatus(''); setPreview(null); }} />
           {destinations.length > 0 && <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>Suggested:</span>{destinations.slice(0, 8).map(address => <button type="button" key={address} className="rounded border px-2 py-1 hover:bg-muted" onClick={() => { setRecipients(old => old ? `${old}, ${address}` : address); setRecipientStatus(''); }}>{address}</button>)}</div>}
           <p className="text-xs text-muted-foreground">{notify?.destination_policy_summary}</p>
           <Button type="button" variant="outline" size="sm" onClick={() => void perform('recipients')}>Check recipients</Button>{recipientStatus && <p role="status" className="text-sm">{recipientStatus}</p>}
