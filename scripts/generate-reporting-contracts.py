@@ -89,8 +89,13 @@ for prefix, protocol, name, method in methods:
     key = prefix + name
     out += [f'  "{key}": {{ input: {{ {"; ".join(inputs)} }}; output: {result}{"[]" if row else ""} }};']
     config[key] = dict(name=name, protocol=protocol.protocol_name, defaults=defaults, structured=structured, result=result, stream=bool(row))
+# Nested dataclass schemas are already embedded in their enclosing RPC schema.
+# Only top-level parameters/results need entries in the runtime lookup table.
+# Keep TypeScript interfaces for every record without shipping duplicate schemas.
+runtime_records = {name for method in config.values() for name in method["structured"].values()}
+runtime_records.update(method["result"] for method in config.values())
 out += ["}", "export const methodConfig = " + json.dumps(config, indent=2) + " as const;",
         "export const recordSchemas: Record<string, string> = " + json.dumps({
-            r.__name__: base64.b64encode(r.ARROW_SCHEMA.serialize().to_pybytes()).decode() for r in records
+            r.__name__: base64.b64encode(r.ARROW_SCHEMA.serialize().to_pybytes()).decode() for r in records if r.__name__ in runtime_records
         }, indent=2) + ";"]
 Path("src/lib/reporting/contracts.generated.ts").write_text("\n".join(out) + "\n")
