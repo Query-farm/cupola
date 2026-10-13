@@ -10,8 +10,7 @@ export function UseMyEmail({ client, onSelect, disabled }: { client: ReportClien
   useEffect(() => {
     const abort = new AbortController(); setIdentity(null);
     void (async () => {
-      if (!await client.supports('identity.get_current_identity', abort.signal)) return;
-      const profile = await client.call('identity.get_current_identity', {}, abort.signal);
+      const profile = await client.identityInfo('identity.get_current_identity', abort.signal);
       if (!abort.signal.aborted) setIdentity(profile);
     })().catch(() => { /* Optional metadata must not prevent manual recipient entry. */ });
     return () => abort.abort();

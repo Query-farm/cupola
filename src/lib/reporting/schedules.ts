@@ -114,7 +114,7 @@ export async function authorizeSchedules(scheduler: ReportClient, keys: Delegati
     try {
       const options = key.kind === 'catalog' ? attach(key) : null;
       const client = makeClient(key.location);
-      if (days === 'worker' && !await client.supports('identity.get_grant_policy')) throw new Error('This worker does not publish its access policy. Choose a custom duration.');
+      if (days === 'worker' && !await client.identityInfo('identity.get_grant_policy')) throw new Error('This worker does not publish its access policy. Choose a custom duration.');
       const grant = await client.call('identity.issue_grant', { purpose: `Cupola scheduled report: ${title}`, scopes: [], ttl_seconds: ttl });
       registerSecretValues([grant.token]);
       const ticket = options ? await client.call('tickets.seal_attach', { request: { catalog_name: key.catalog_name, ...options, ttl_seconds: ttl } }) : null;

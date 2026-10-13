@@ -25,9 +25,28 @@ os.environ.update(REPORTING_PUBLIC_URL=url, REPORTING_ALLOWED_SOURCES=url, REPOR
 os.environ.pop("RESEND_API_KEY", None)
 os.environ.pop("REPORTING_SMTP_HOST", None)
 if os.getenv("REPORTING_TEST_LEGACY_IDENTITY") == "1":
+    from typing import ClassVar, Protocol
+    from vgi_rpc.rpc import RpcServer
+    from vgi_rpc.rpc._token_identity import Identity, TokenIdentity, IssuedGrant
+
+    class LegacyIdentity(Protocol):
+        protocol_name: ClassVar[str] = Identity.protocol_name
+
+        def introspect_token(self, token: str) -> TokenIdentity: ...
+        def issue_grant(self, purpose: str, scopes: list[str], ttl_seconds: int) -> IssuedGrant: ...
+
+    original_binding = RpcServer._build_binding
+    def legacy_binding(self, proto, impl, *, allow_reserved=False):
+        return original_binding(self, LegacyIdentity if proto is Identity else proto, impl, allow_reserved=allow_reserved)
+    RpcServer._build_binding = legacy_binding
+elif os.getenv("REPORTING_TEST_UNSUPPORTED_IDENTITY") == "1":
     from vgi_rpc.rpc._token_identity import IdentityImpl
-    original_methods = IdentityImpl.offered_methods
-    IdentityImpl.offered_methods = lambda self: original_methods(self) - {"get_current_identity", "get_grant_policy"}
+    from vgi_rpc.rpc._common import MethodNotImplementedError
+
+    def unsupported(self, ctx):
+        raise MethodNotImplementedError("profile and policy reads are not implemented")
+    IdentityImpl.get_current_identity = unsupported
+    IdentityImpl.get_grant_policy = unsupported
 server.set_app(app())
 
 

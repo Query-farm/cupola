@@ -1,9 +1,9 @@
 import { httpConnect } from '@query-farm/vgi-rpc/connect';
 import { deserializeSchema, serializeBatch, singleRowBatch } from '@query-farm/vgi-rpc/arrow';
-import { tableFromIPC } from '@query-farm/apache-arrow';
+import { tableFromIPC, type Schema } from '@query-farm/apache-arrow';
 import { getAuthTokenForService } from '../auth';
 import { connectionErrorMessage } from '../connection-errors';
-import { methodConfig, recordSchemas, REPORTS_PROTOCOL, type ReportMethods } from './contracts.generated';
+import { identityDescription, methodConfig, recordSchemas, REPORTS_PROTOCOL, type ReportMethods } from './contracts.generated';
 import { fromObject, fromScheduleV2, kindForFormat, toScheduleV2 } from './object-adapter';
 import { REPORT_LIBRARY_CHANGED } from './navigation';
 
@@ -16,6 +16,19 @@ export function bytesToBase64(value: Uint8Array): string {
   for (let offset = 0; offset < value.length; offset += 8192) result += String.fromCharCode(...value.subarray(offset, offset + 8192));
   return btoa(result);
 }
+
+// Generated from the Python protocol. Known schemas allow calls to older workers
+// to return their real UNIMPLEMENTED error without per-method discovery.
+const identityWireDescription = {
+  ...identityDescription,
+  hostedProtocols: [...identityDescription.hostedProtocols],
+  methods: identityDescription.methods.map(method => ({
+    ...method,
+    // The RPC SDK types still name Arrow JS schemas; runtime uses its selected backend.
+    paramsSchema: deserializeSchema(bytesFromBase64(method.paramsSchema)) as unknown as Schema,
+    resultSchema: deserializeSchema(bytesFromBase64(method.resultSchema)) as unknown as Schema,
+  })),
+};
 
 /** Only credential-free HTTP endpoints may become portable attachment/share references. */
 export function serviceLocation(value: string): string {
@@ -66,7 +79,6 @@ export class ReportClient {
     this.url = serviceLocation(url);
   }
   private advertised?: Promise<Set<string>>;
-  private advertisedMethods = new Map<string, Promise<Set<string>>>();
   private token() { return this.options.token ? this.options.token() : getAuthTokenForService(this.url); }
   /** Partition local recovery by credentials, without persisting the credential itself. */
   async recoveryScope(): Promise<string> {
@@ -92,7 +104,7 @@ export class ReportClient {
         throw error;
       }
     }) as typeof fetch;
-    return httpConnect(this.url, { protocol, fetch: scopedFetch });
+    return httpConnect(this.url, { protocol, fetch: scopedFetch, description: protocol === identityDescription.protocolName ? identityWireDescription : undefined });
   }
   private protocols(signal?: AbortSignal): Promise<Set<string>> {
     if (!this.advertised) this.advertised = (async () => {
@@ -106,20 +118,13 @@ export class ReportClient {
     const protocols = await this.protocols(signal);
     return protocols.has(protocol) || protocol === REPORTS_PROTOCOL && protocols.has('vgi.objects.v1') || protocol === 'vgi.schedules.v1' && protocols.has('vgi.schedules.v2') || protocol === 'vgi.reports.ownership.v1' && protocols.has('vgi.ownership.v1');
   }
-  /** Optional additions to a protocol must be discovered by method, including on older workers. */
-  async supports(method: Method, signal?: AbortSignal): Promise<boolean> {
-    const { protocol, name } = methodConfig[method];
-    if (!await this.discover(signal, protocol)) return false;
-    let methods = this.advertisedMethods.get(protocol);
-    if (!methods) {
-      methods = (async () => {
-        const rpc = await this.connection(protocol, signal);
-        try { return new Set((await rpc.describe()).methods.map(m => m.name)); }
-        finally { rpc.close(); }
-      })().catch(error => { this.advertisedMethods.delete(protocol); throw error; });
-      this.advertisedMethods.set(protocol, methods);
+  /** Unsupported metadata is optional; authentication and transport failures remain errors. */
+  async identityInfo<M extends 'identity.get_current_identity' | 'identity.get_grant_policy'>(method: M, signal?: AbortSignal): Promise<Output<M> | null> {
+    try { return await this.call(method, {}, signal); }
+    catch (error) {
+      if (errorCode(error) === 'UNIMPLEMENTED') return null;
+      throw error;
     }
-    return (await methods).has(name);
   }
   async protocolFor(method: Method, signal?: AbortSignal): Promise<string> {
     const original = methodConfig[method].protocol;

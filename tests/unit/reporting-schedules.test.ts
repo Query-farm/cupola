@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, test, spyOn } from 'bun:test';
 import { tableFromIPC } from '@query-farm/apache-arrow';
 import { artifactUrl, authorizeSchedules, cronFor, delegationId, emailDestinations, newSchedule, requiredDelegations, sourceAttach, triggerFields, validateSchedule } from '../../src/lib/reporting/schedules';
 import { MutationJournal } from '../../src/lib/reporting/journal';
@@ -73,3 +73,21 @@ test('artifact links reject active schemes and credentials', () => {
   expect(artifactUrl('javascript:alert(1)')).toBeNull(); expect(artifactUrl('https://token:secret@example.test/file')).toBeNull();
   expect(artifactUrl('https://reports.test/file?signature=abc')).toBe('https://reports.test/file?signature=abc');
 });
+
+for (const method of ['identity.get_current_identity', 'identity.get_grant_policy'] as const) {
+  test(`${method} falls back only on UNIMPLEMENTED`, async () => {
+    const client = new ReportClient('https://identity.test');
+    const call = spyOn(client, 'call');
+    try {
+      call.mockRejectedValueOnce({ errorCode: 'UNIMPLEMENTED' });
+      expect(await client.identityInfo(method)).toBeNull();
+      for (const error of [
+        { errorCode: 'PERMISSION_DENIED' }, { errorCode: 'UNAUTHENTICATED' },
+        { errorCode: 'UNAVAILABLE' }, new TypeError('Network failed'),
+      ]) {
+        call.mockRejectedValueOnce(error);
+        await expect(client.identityInfo(method)).rejects.toBe(error);
+      }
+    } finally { call.mockRestore(); }
+  });
+}

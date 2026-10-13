@@ -17,6 +17,8 @@ from vgi.reporting import common, reports, ownership, schedules, delegations, no
 from vgi.reporting._metadata import read_annotation
 from vgi.attach_ticket import AttachTickets, SealAttachRequest, AttachTicket
 from vgi_rpc.rpc._token_identity import Identity, IssuedGrant, CurrentIdentity, GrantPolicy
+from vgi_rpc.rpc._types import rpc_methods
+from vgi_rpc.rpc._protocol_hash import compute_protocol_hash
 
 records = list({record.__name__: record
     for module in (common, reports, ownership, schedules, delegations, notify, objects, sources, resource_ownership, schedules_v2)
@@ -98,4 +100,17 @@ out += ["}", "export const methodConfig = " + json.dumps(config, indent=2) + " a
         "export const recordSchemas: Record<string, string> = " + json.dumps({
             r.__name__: base64.b64encode(r.ARROW_SCHEMA.serialize().to_pybytes()).decode() for r in records if r.__name__ in runtime_records
         }, indent=2) + ";"]
+# Known Identity schemas let clients call without method-level capability probes.
+identity_methods = rpc_methods(Identity)
+out += ["export const identityDescription = " + json.dumps({
+    "protocolName": Identity.protocol_name,
+    "protocolVersion": "",
+    "protocolHash": compute_protocol_hash(Identity.protocol_name, identity_methods),
+    "hostedProtocols": [],
+    "methods": [{
+        "name": name, "type": "unary", "hasReturn": method.has_return,
+        "paramsSchema": base64.b64encode(method.params_schema.serialize().to_pybytes()).decode(),
+        "resultSchema": base64.b64encode(method.result_schema.serialize().to_pybytes()).decode(),
+    } for name, method in identity_methods.items()],
+}, indent=2) + " as const;"]
 Path("src/lib/reporting/contracts.generated.ts").write_text("\n".join(out) + "\n")

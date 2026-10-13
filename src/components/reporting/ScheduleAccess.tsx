@@ -25,7 +25,7 @@ export function ScheduleAccess({ client, requirements, catalogs, workspaceId, ti
     const abort = new AbortController(); setPolicyLoading(true);
     void Promise.all(locations.map(async url => {
       const source = new ReportClient(url);
-      const policy = await source.supports('identity.get_grant_policy', abort.signal) ? await source.call('identity.get_grant_policy', {}, abort.signal) : null;
+      const policy = await source.identityInfo('identity.get_grant_policy', abort.signal);
       return [url, policy] as const;
     })).then(entries => {
       if (abort.signal.aborted) return;
