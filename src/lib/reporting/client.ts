@@ -4,6 +4,7 @@ import { tableFromIPC } from '@query-farm/apache-arrow';
 import { getAuthTokenForService } from '../auth';
 import { connectionErrorMessage } from '../connection-errors';
 import { methodConfig, recordSchemas, REPORTS_PROTOCOL, type ReportMethods } from './contracts.generated';
+import { fromObject, fromScheduleV2, kindForFormat, toScheduleV2 } from './object-adapter';
 import { REPORT_LIBRARY_CHANGED } from './navigation';
 
 export type Method = keyof ReportMethods;
@@ -64,6 +65,7 @@ export class ReportClient {
   constructor(url: string, private options: { token?: () => Promise<string | null>; fetch?: typeof fetch; timeoutMs?: number } = {}) {
     this.url = serviceLocation(url);
   }
+  private advertised?: Promise<Set<string>>;
   private token() { return this.options.token ? this.options.token() : getAuthTokenForService(this.url); }
   /** Partition local recovery by credentials, without persisting the credential itself. */
   async recoveryScope(): Promise<string> {
@@ -91,12 +93,68 @@ export class ReportClient {
     }) as typeof fetch;
     return httpConnect(this.url, { protocol, fetch: scopedFetch });
   }
-  async discover(signal?: AbortSignal, protocol: string = REPORTS_PROTOCOL): Promise<boolean> {
-    const rpc = await this.connection(undefined, signal);
-    try { const info = await rpc.describe(); return info.protocolName === protocol || info.hostedProtocols?.includes(protocol) === true; }
-    finally { rpc.close(); }
+  private protocols(signal?: AbortSignal): Promise<Set<string>> {
+    if (!this.advertised) this.advertised = (async () => {
+      const rpc = await this.connection(undefined, signal);
+      try { const info = await rpc.describe(); return new Set([info.protocolName, ...(info.hostedProtocols ?? [])]); }
+      finally { rpc.close(); }
+    })().catch(error => { this.advertised = undefined; throw error; });
+    return this.advertised;
   }
-  async call<M extends Method>(method: M, input: Input<M>, signal?: AbortSignal): Promise<Output<M>> {
+  async discover(signal?: AbortSignal, protocol: string = REPORTS_PROTOCOL): Promise<boolean> {
+    const protocols = await this.protocols(signal);
+    return protocols.has(protocol) || protocol === REPORTS_PROTOCOL && protocols.has('vgi.objects.v1') || protocol === 'vgi.schedules.v1' && protocols.has('vgi.schedules.v2') || protocol === 'vgi.reports.ownership.v1' && protocols.has('vgi.ownership.v1');
+  }
+  async protocolFor(method: Method, signal?: AbortSignal): Promise<string> {
+    const original = methodConfig[method].protocol;
+    if (!['vgi.reports.v1', 'vgi.reports.ownership.v1', 'vgi.schedules.v1'].includes(original)) return original;
+    const protocols = await this.protocols(signal);
+    const preferred = original === 'vgi.reports.v1' ? 'vgi.objects.v1' : original === 'vgi.schedules.v1' ? 'vgi.schedules.v2' : 'vgi.ownership.v1';
+    return protocols.has(preferred) ? preferred : original;
+  }
+  async canFindOwners(resourceKind: 'report' | 'folder', signal?: AbortSignal): Promise<boolean> {
+    if (!await this.discover(signal, 'vgi.reports.ownership.v1')) return false;
+    if (await this.protocolFor('find_owners', signal) !== 'vgi.ownership.v1') return true;
+    const protocol = await this.protocolFor('get_report', signal);
+    const kind = protocol === 'vgi.objects.v1' && resourceKind === 'report' ? 'object' : resourceKind;
+    const info = await this.rawCall('ownership.get_ownership_info', {}, signal);
+    return info.resources.some(r => r.protocol === protocol && r.resource_kind === kind);
+  }
+  async call<M extends Method>(method: M, input: Input<M>, signal?: AbortSignal, wireProtocol?: string): Promise<Output<M>> {
+    const selected = wireProtocol ?? await this.protocolFor(method, signal);
+    const original = methodConfig[method].protocol;
+    if (selected === original) return this.rawCall(method, input, signal);
+    let args: any = { ...input }, translated: string = method;
+    if (selected === 'vgi.objects.v1') {
+      const names: Record<string, string> = { get_report_service_info: 'get_objects_info', get_report: 'get_object', list_reports: 'list_objects', create_report: 'create_object', move_report: 'move_object', delete_report: 'delete_object' };
+      translated = 'objects.' + (names[method] ?? method);
+      if ('report_id' in args) { args.object_id = args.report_id; delete args.report_id; }
+      if (method === 'create_report') args.object_kind = kindForFormat(args.envelope.body_format);
+      return fromObject(await this.rawCall(translated as Method, args, signal));
+    }
+    if (selected === 'vgi.ownership.v1') {
+      const protocol = await this.protocolFor('get_report', signal);
+      return this.rawCall('ownership.find_owners', { ...args, protocol, resource_kind: protocol === 'vgi.objects.v1' && args.resource_kind === 'report' ? 'object' : args.resource_kind }, signal) as Promise<Output<M>>;
+    }
+    if (selected === 'vgi.schedules.v2') {
+      translated = method.replace('schedules.', 'schedules2.');
+      if (args.schedule) args.schedule = toScheduleV2(args.schedule);
+      if ('report_id' in args) {
+        // Use the service-qualified objects API for associated schedules.
+        if (args.report_id) throw new Error('A schedule source filter requires both library URL and object ID.');
+        delete args.report_id;
+      }
+      return fromScheduleV2(await this.rawCall(translated as Method, args, signal));
+    }
+    throw new Error('Unsupported protocol for this saved request.');
+  }
+  async listSchedulesForSource(url: string, id: string, signal?: AbortSignal) {
+    if (await this.protocolFor('schedules.list_schedules', signal) === 'vgi.schedules.v2') {
+      return fromScheduleV2(await this.rawCall('schedules2.list_schedules', { source: { service_url: serviceLocation(url), object_id: id }, action_kind: 'render_report' }, signal)) as Output<'schedules.list_schedules'>;
+    }
+    return (await this.rawCall('schedules.list_schedules', { report_id: id, action_kind: 'render_report' }, signal)).filter(s => Boolean(s.definition.action.render_report && serviceLocation(s.definition.action.render_report.report.service_url) === serviceLocation(url)));
+  }
+  private async rawCall<M extends Method>(method: M, input: Input<M>, signal?: AbortSignal): Promise<Output<M>> {
     const config = methodConfig[method];
     const params: Record<string, any> = { ...config.defaults, ...input };
     for (const [key, name] of Object.entries(config.structured)) if (params[key] != null) params[key] = encodeRecord(name, params[key]);

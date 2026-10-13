@@ -1,3 +1,4 @@
+import { listLocalObjects } from './local-objects';
 import { EVIDENCE_REPORTS_CHANGED, listEvidenceReports, type EvidenceReport } from '../evidence/reports';
 import type { ReportMetadata } from './body';
 
@@ -43,7 +44,7 @@ export function renameLocalFolder(scope: string, id: string, name: string, stora
 }
 export function deleteLocalFolder(scope: string, id: string, storage: Storage = localStorage) {
   const library = localLibrary(scope, storage);
-  if (library.folders.some(f => f.parentId === id) || listEvidenceReports(scope, storage).some(r => library.entries[r.id]?.folderId === id)) throw new Error('Empty this folder before deleting it.');
+  if (library.folders.some(f => f.parentId === id) || [...listEvidenceReports(scope, storage), ...listLocalObjects(scope, storage)].some(r => library.entries[r.id]?.folderId === id)) throw new Error('Empty this folder before deleting it.');
   write(scope, { ...library, folders: library.folders.filter(f => f.id !== id) }, storage);
 }
 export function placeLocalReport(scope: string, reportId: string, folderId: string | null, metadata?: ReportMetadata, storage: Storage = localStorage) {

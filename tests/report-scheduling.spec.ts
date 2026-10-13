@@ -37,7 +37,7 @@ test('schedule drafts survive reload and status polling never overwrites a concu
   await page.getByRole('button', { name: 'Back to schedule', exact: true }).click();
   await page.getByRole('button', { name: 'Delete schedule', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm deletion', exact: true }).click();
-  await expect.poll(async () => (await c.call('schedules.list_schedules', { report_id: saved.report_id })).length).toBe(0);
+  await expect.poll(async () => (await c.listSchedulesForSource(scheduler.url, saved.report_id)).length).toBe(0);
 });
 
 test('saved reports remain usable when their worker does not implement schedules', async ({ page }) => {
@@ -72,7 +72,7 @@ test('floating schedules send grouped failure alerts and surface recovery in the
   await expect(page.getByText('Authorized until', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: 'Create schedule', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Edit schedule', exact: true })).toBeVisible();
-  const [schedule] = await c.call('schedules.list_schedules', { report_id: saved.report_id });
+  const [schedule] = await c.listSchedulesForSource(scheduler.url, saved.report_id);
   expect(schedule.definition.alerts?.destinations).toEqual([{ kind: 'email', address: 'owner@example.test' }]);
   expect(await scheduler.capturedMailCount()).toBe(beforeMail);
   // The schedule was created before this saved revision; head tracking must pick it up.
@@ -175,7 +175,7 @@ test('create, authorize, preview without mail, send once after a lost reply, edi
   expect(await scheduler.capturedMailCount()).toBe(beforeMail);
   await page.getByRole('button', { name: 'Create schedule', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Edit schedule', exact: true })).toBeVisible();
-  const schedules = await c.call('schedules.list_schedules', { report_id: saved.report_id });
+  const schedules = await c.listSchedulesForSource(scheduler.url, saved.report_id);
   expect(schedules).toHaveLength(1); const scheduleId = schedules[0].schedule_id;
   expect(schedules[0].definition.enabled).toBe(false);
   expect(schedules[0].definition.deliveries[0].inline).toBe('report');

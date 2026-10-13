@@ -1,3 +1,6 @@
+import { listLocalObjects, deleteLocalObject, type LocalObject } from '../../lib/reporting/local-objects';
+import { reportHref } from '../../lib/evidence/open-report';
+import { documentKind } from '../../lib/reporting/object-adapter';
 import { ScheduleActivityButton } from './ScheduleActivity';
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Plus, RefreshCw } from 'lucide-react';
@@ -31,9 +34,10 @@ export function ReportOverview({ locations, scope, localOnly, folderId, onAllRep
   onWorker: (url: string, id: string) => void; onTransfer: (source: TransferSource, move: boolean) => void; onRefresh: () => void;
 }) {
   const { refreshVersion } = useReportLocations();
+  const [localObjects, setLocalObjects] = useState<LocalObject[]>([]);
   const [local, setLocal] = useState<EvidenceReport[]>([]), [localError, setLocalError] = useState('');
   const [library, setLibrary] = useState(() => localLibrary(scope)), [workers, setWorkers] = useState<WorkerRows[]>([]);
-  const [tag, setTag] = useState('');
+  const [tag, setTag] = useState(''), [kind, setKind] = useState('');
   const [query, setQuery] = useState(''), [newFolder, setNewFolder] = useState(() => localOnly && reportFolderCreationRequested()), [name, setName] = useState('');
   const [folderAction, setFolderAction] = useState<'rename' | 'delete' | null>(() => { const action = new URLSearchParams(location.search).get('report_folder_action'); return action === 'rename' || action === 'delete' ? action : null; });
   const [folderTarget, setFolderTarget] = useState(folderId);
@@ -43,7 +47,7 @@ export function ReportOverview({ locations, scope, localOnly, folderId, onAllRep
   const [drafts, setDrafts] = useState<ReturnType<typeof listUnsavedDrafts>>([]);
   useEffect(clearReportFolderCreation, []);
   const fileInput = useRef<HTMLInputElement>(null);
-  const reloadLocal = () => { try { const reports = listEvidenceReports(scope); setLocal(reports); setDrafts(listUnsavedDrafts(scope, new Set(reports.map(r => r.id)))); setLibrary(localLibrary(scope)); setLocalError(''); } catch (e) { setLocalError(reportError(e)); } };
+  const reloadLocal = () => { try { const reports = listEvidenceReports(scope); setLocal(reports); setLocalObjects(listLocalObjects(scope)); setDrafts(listUnsavedDrafts(scope, new Set(reports.map(r => r.id)))); setLibrary(localLibrary(scope)); setLocalError(''); } catch (e) { setLocalError(reportError(e)); } };
   function exportAll() {
     try { downloadDocumentFile(serializeReportFile(local.map(report => ({ report, history: loadReportHistory(scope, report.id) }))), reportFileName(local)); }
     catch (e) { setError(reportError(e)); }
@@ -84,23 +88,30 @@ export function ReportOverview({ locations, scope, localOnly, folderId, onAllRep
     }
     return () => abort.abort();
   }, [locations, localOnly]);
-  const tags = reportTags([...local.map(r => library.entries[r.id]?.metadata), ...workers.flatMap(w => w.reports.map(r => r.envelope))]);
-  const localRows = local.filter(r => matchesReport(r.title, library.entries[r.id]?.metadata, query, tag) && (!localOnly || query || tag || (library.entries[r.id]?.folderId ?? null) === folderId));
-  const remoteRows = workers.flatMap(w => w.reports.filter(r => matchesReport(r.envelope?.title ?? '', r.envelope, query, tag)).map(report => ({ worker: w, report })));
+  const tags = reportTags([...localObjects.map(d => d.envelope), ...local.map(r => library.entries[r.id]?.metadata), ...workers.flatMap(w => w.reports.map(r => r.envelope))]);
+  const localRows = local.filter(r => (!kind || kind === 'report') && matchesReport(r.title, library.entries[r.id]?.metadata, query, tag) && (!localOnly || query || tag || (library.entries[r.id]?.folderId ?? null) === folderId));
+  const remoteRows = workers.flatMap(w => w.reports.filter(r => (!kind || documentKind(r) === kind) && matchesReport(r.envelope?.title ?? '', r.envelope, query, tag)).map(report => ({ worker: w, report })));
   const items: ReportFileItem[] = [
     ...(localOnly && !query && !tag ? library.folders.filter(f => f.parentId === folderId).map(f => ({ id: f.id, name: f.name, kind: 'folder' as const, onOpen: () => onFolder(f.id), detail: 'Local', state: 'Folder', actions: <ReportActionMenu label={`Actions for ${f.name}`} actions={[reportAction('rename', () => { setFolderTarget(f.id); setFolderName(f.name); setError(''); setFolderAction('rename'); }), { ...reportAction('delete', () => { try { deleteLocalFolder(scope, f.id); } catch (e) { setError(reportError(e)); } }), label: 'Delete empty folder' }]} /> })) : []),
+    ...localObjects.filter(d => (!kind || kind === d.kind) && matchesReport(d.envelope.title, d.envelope, query, tag) && (!localOnly || query || tag || (library.entries[d.id]?.folderId ?? null) === folderId)).map(document => ({
+      id: `local:${document.id}`, name: document.envelope.title, description: document.envelope.description, kind: 'report' as const, documentKind: document.kind, detail: 'Local', state: 'Local',
+      onOpen: () => { location.href = reportHref(serviceUrl, document.id); }, actions: <ReportActionMenu label={`Actions for ${document.envelope.title}`} actions={[
+        reportAction('copy', () => onTransfer({ kind: 'document', scope, document }, false)), reportAction('move', () => onTransfer({ kind: 'document', scope, document }, true)),
+        reportAction('delete', () => { if (confirm(`Delete “${document.envelope.title}” from this device?`)) deleteLocalObject(scope, document.id); }),
+      ]} />,
+    })),
     ...localRows.map(report => ({ id: `local:${report.id}`, name: report.title, description: library.entries[report.id]?.metadata?.description, kind: 'report' as const, onOpen: () => onLocal(report), detail: `Local${library.entries[report.id]?.folderId ? ` / ${localFolderPath(library.entries[report.id].folderId, library.folders)}` : ''}`, state: 'Local', actions: <ReportActionMenu label={`Actions for ${report.title}`} actions={[
       reportAction('copy', () => onTransfer({ kind: 'local', report }, false)), reportAction('move', () => onTransfer({ kind: 'local', report }, true)),
       reportAction('export', () => { try { exportSavedReport(report); } catch (e) { setError(reportError(e)); } }),
       reportAction('delete', () => { if (confirm(`Delete “${report.title}” from this browser?`)) { try { deleteEvidenceReport(scope, report.id); } catch (e) { setError(reportError(e)); } } }),
     ]} /> })),
-    ...remoteRows.map(({ worker, report }) => ({ id: `${worker.url}:${report.report_id}`, name: report.envelope?.title ?? 'Redacted report', description: report.envelope?.description, kind: 'report' as const, onOpen: () => onWorker(worker.url, report.report_id), detail: <span title={worker.url}>{locationLabel(locations.find(l => l.url === worker.url)!, locations)}{report.folder_id && ` / ${folderPath(worker.folders.find(f => f.folder_id === report.folder_id) ?? { name: 'Folder', parent_folder_id: null } as FolderRecord, worker.folders)}`}</span>, state: report.published_revision_id ? 'Published' : 'Draft', actions: <ReportActionMenu label={`Actions for ${report.envelope?.title ?? 'report'}`} actions={[
+    ...remoteRows.map(({ worker, report }) => ({ id: `${worker.url}:${report.report_id}`, name: report.envelope?.title ?? 'Redacted document', documentKind: documentKind(report), description: report.envelope?.description, kind: 'report' as const, onOpen: () => onWorker(worker.url, report.report_id), detail: <span title={worker.url}>{locationLabel(locations.find(l => l.url === worker.url)!, locations)}{report.folder_id && ` / ${folderPath(worker.folders.find(f => f.folder_id === report.folder_id) ?? { name: 'Folder', parent_folder_id: null } as FolderRecord, worker.folders)}`}</span>, state: report.published_revision_id ? 'Published' : 'Draft', actions: <ReportActionMenu label={`Actions for ${report.envelope?.title ?? 'report'}`} actions={[
       ...(!report.redacted ? [reportAction('copy', () => onTransfer({ kind: 'worker', url: worker.url, record: report }, false))] : []),
       ...(report.allowed_actions.some(a => a === 'move' || a === 'delete') ? [reportAction('move', () => onTransfer({ kind: 'worker', url: worker.url, record: report }, true))] : []),
     ]} /> })),
   ];
   return <section className="flex h-full min-h-0 flex-col" aria-label="Report browser">
-    <header className="flex flex-wrap items-center gap-3 border-b bg-card px-5 py-4"><FolderOpen aria-hidden className="size-5 shrink-0 text-primary" /><div className="min-w-0 flex-1 basis-48"><h1 className="break-words text-lg font-semibold">{localOnly ? library.folders.find(f => f.id === folderId)?.name ?? 'Local' : 'All reports'}</h1>{localOnly && folderId && <p className="text-xs text-muted-foreground">Local · On this device</p>}</div><Button variant="ghost" size="sm" onClick={() => { reloadLocal(); onRefresh(); }}><RefreshCw />Refresh</Button>
+    <header className="flex flex-wrap items-center gap-3 border-b bg-card px-5 py-4"><FolderOpen aria-hidden className="size-5 shrink-0 text-primary" /><div className="min-w-0 flex-1 basis-48"><h1 className="break-words text-lg font-semibold">{localOnly ? library.folders.find(f => f.id === folderId)?.name ?? 'Local' : 'Library'}</h1>{localOnly && folderId && <p className="text-xs text-muted-foreground">Local · On this device</p>}</div><Button variant="ghost" size="sm" onClick={() => { reloadLocal(); onRefresh(); }}><RefreshCw />Refresh</Button>
       <div className="ml-auto flex flex-wrap gap-2"><ScheduleActivityButton serviceUrl={serviceUrl} /><Button variant="outline" onClick={() => { setName(''); setError(''); setNewFolder(true); }}>New folder</Button><Button onClick={onNew}><Plus />New report</Button></div>
     </header>
     <div className="min-h-0 flex-1 space-y-5 overflow-auto bg-background p-4 sm:p-5">
@@ -111,7 +122,7 @@ export function ReportOverview({ locations, scope, localOnly, folderId, onAllRep
       {(localError || error) && <p role="alert" className="text-sm text-destructive">{localError || error}</p>}
       {!localOnly && locations.filter(l => l.error || l.loading).map(l => <p key={l.url} role={l.error ? 'alert' : 'status'} className="text-sm text-muted-foreground">{locationLabel(l, locations)}: {l.error || 'Checking for report storage…'}</p>)}
       {workers.filter(w => w.error || w.loading).map(w => <p key={w.url} role={w.error ? 'alert' : 'status'} className="text-sm text-muted-foreground">{locations.find(l => l.url === w.url)?.name}: {w.error || 'Loading reports…'}</p>)}
-      <ReportFileList items={items} heading={query || tag ? 'Search results' : localOnly ? 'Folder contents' : 'Reports'} emptyMessage={workers.some(w => w.loading) ? 'Loading reports…' : query || tag ? 'No reports match these filters.' : 'No reports found.'} filters={<ReportSearch query={query} onQuery={setQuery} tag={tag} onTag={setTag} tags={tags} />} />
+      <ReportFileList items={items} heading={query || tag ? 'Search results' : localOnly ? 'Folder contents' : 'Reports'} emptyMessage={workers.some(w => w.loading) ? 'Loading reports…' : query || tag ? 'No reports match these filters.' : 'No reports found.'} filters={<ReportSearch kind={kind} onKind={setKind} query={query} onQuery={setQuery} tag={tag} onTag={setTag} tags={tags} />} />
       <section aria-label="Import and export reports" className="space-y-3 rounded-lg border bg-muted/30 p-4"><h2 className="text-sm font-medium">Import and export</h2><div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => fileInput.current?.click()}>Import report file</Button><Button size="sm" variant="outline" disabled={!local.length} onClick={exportAll}>Export local reports</Button><input ref={fileInput} hidden type="file" multiple accept=".json" aria-label="Import local report files" onChange={e => { const files = Array.from(e.target.files ?? []); e.target.value = ''; void importFiles(files); }} /></div></section>
     </div>
     {folderAction && <Dialog open onOpenChange={open => { if (!open) setFolderAction(null); }}><DialogContent><DialogHeader><DialogTitle>{folderAction === 'rename' ? 'Rename folder' : 'Delete folder'}</DialogTitle><DialogDescription>{folderAction === 'rename' ? 'Choose a new name for this folder.' : 'Only empty folders can be deleted.'}</DialogDescription></DialogHeader><form className="space-y-3" onSubmit={e => {

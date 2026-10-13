@@ -48,3 +48,11 @@ describe('worker revision comparisons', () => {
     expect(reportRevisionChanges(record(), { ...record(), updated_at: 500, version: 2n, updated_by: { id: 'bob', display_name: 'Bob', email: null } })).toEqual({ fields: [], encodingChanged: false });
   });
 });
+
+for (const format of ['cupola.query/1', 'cupola.notebook/1']) test(`${format} compares fields and preserves unknown metadata`, () => {
+  const before = record(), after = record();
+  before.envelope!.body_format = after.envelope!.body_format = format;
+  before.body = new TextEncoder().encode(JSON.stringify({ query: 'SELECT 1', cells: [], future: { a: 1 } }));
+  after.body = new TextEncoder().encode(JSON.stringify({ future: { a: 2 }, cells: [], query: 'SELECT 2' }));
+  expect(reportRevisionChanges(before, after).fields.map(f => f.label)).toEqual(['Query SQL', 'future']);
+});

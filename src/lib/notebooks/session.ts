@@ -1,3 +1,4 @@
+import { openDocumentConnection, type DocumentBinding } from '../reporting/documents';
 import { engine, waitForEngineReady, type EngineConnection } from '../shell-bridge';
 import { quoteIdent, decodeArrowBuffer } from '../duckdb-query';
 import { parseCellSql, validateSelectQuery, type NotebookQueryContext } from './execution';
@@ -8,6 +9,7 @@ const TIMEOUT_MS = 180_000;
 /** One open notebook owns one lazy connection, including its assistant's reads.
  * Closing during boot still closes the eventual connection; it cannot leak. */
 export class NotebookSession {
+  constructor(private binding?: DocumentBinding | null) {}
   private pending?: Promise<EngineConnection>;
   private lifetime = new AbortController();
   private closing?: Promise<void>;
@@ -19,6 +21,7 @@ export class NotebookSession {
         await waitForEngineReady();
         this.lifetime.signal.throwIfAborted();
         if (!engine.openConnection) throw new Error('Notebook connections are unavailable.');
+        if (this.binding) return openDocumentConnection(this.binding);
         const connection = await engine.openConnection();
         try {
           this.lifetime.signal.throwIfAborted();

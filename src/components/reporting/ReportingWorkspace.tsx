@@ -1,3 +1,5 @@
+import { listLocalObjects, localObjectRecord } from '../../lib/reporting/local-objects';
+import { RemoteDocumentEditor } from './RemoteDocumentEditor';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/button';
 import { EvidenceWorkspace } from '../evidence/EvidenceWorkspace';
@@ -109,13 +111,14 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
   function transferReport(source: TransferSource, move: boolean) {
     // Unmount the editor after its save, before a move can remove its source.
     // Otherwise an editor's unmount autosave could recreate a deleted report.
-    choose(source.kind === 'local' ? 'local' : source.url);
+    choose(source.kind === 'worker' ? source.url : 'local');
     setTransfer({ source, move });
   }
   function completed(job: TransferJob) {
     setTransfer(null); setError(''); setNotice(`${job.move ? 'Moved' : 'Copied'} “${job.envelope.title}” to ${job.destination.name}.`);
     choose(job.destination.url ?? 'local', undefined, job.destination.folderId); refresh();
   }
+  const localObject = listLocalObjects(scope).find(d => d.id === new URLSearchParams(location.search).get('evidence_report'));
   return <div className="flex h-full min-h-0 flex-col">
     {notice && <p role="status" className="shrink-0 px-5 py-2 text-sm">{notice}</p>}
     {error && <p role="alert" className="shrink-0 px-5 py-2 text-sm text-destructive">{error}</p>}
@@ -123,7 +126,7 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     <div className="min-h-0 flex-1">{view.activity ? <ScheduleActivity serviceUrl={props.serviceUrl} catalogs={props.catalogs} onBack={() => choose('all')} /> : view.selected === 'all' || view.selected === 'local' && !view.localEditor
       ? <ReportOverview key={`${view.selected}:${view.localFolder ?? ''}:${editorKey}`} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} localOnly={view.selected === 'local'} folderId={view.localFolder} onAllReports={() => choose('all')} onFolder={id => choose('local', undefined, id)} onNew={createLocal} onLocal={openLocal} onWorker={(url, id) => choose(url, id)} onTransfer={transferReport} onRefresh={refresh} />
       : view.selected === 'local'
-        ? <EvidenceWorkspace key={editorKey} {...props} onLibrary={() => choose('local')} onTransfer={(report, move) => transferReport({ kind: 'local', report }, move)} />
+        ? localObject ? <RemoteDocumentEditor key={editorKey} {...props} record={localObjectRecord(localObject)} libraryUrl="local" localScope={scope} pinned={false} onLeave={() => choose('local')} /> : <EvidenceWorkspace key={editorKey} {...props} onLibrary={() => choose('local')} onTransfer={(report, move) => transferReport({ kind: 'local', report }, move)} />
         : <ReportLibrary key={view.selected + ':' + editorKey} {...props} libraryUrl={view.selected} onAllReports={() => choose('all')} onCreateLocal={createLocal} onTransferReport={transferReport} />}</div>
     {transfer && <TransferDialog {...transfer} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} onClose={() => { setTransfer(null); refresh(); }} onComplete={completed} />}
   </div>;

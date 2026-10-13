@@ -30,7 +30,7 @@ test('folder hierarchy, editing, rendering, worker history and a portable publis
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Quarterly');
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
   await library.getByRole('button', { name: 'Quarterly', exact: true }).click();
-  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true });
   const quarterly = tree.getByRole('treeitem', { name: 'Quarterly', exact: true });
   await expect(quarterly).toHaveAttribute('aria-selected', 'true');
   await quarterly.focus();
@@ -175,11 +175,11 @@ test('switching libraries flushes a local edit before its autosave timer fires',
   }, { url: reporting.url, document: report('Local report') });
   await page.goto(`reports?service=${encodeURIComponent(reporting.url)}&report_service=local&evidence_report=local-report#token=test-alice`);
   await edit(page);
-  await expect(page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true })).toBeVisible();
+  await expect(page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true })).toBeVisible();
   await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Keep this local edit');
-  await page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true }).getByRole('treeitem', { name: 'Finance report library', exact: true }).click();
+  await page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true }).getByRole('treeitem', { name: 'Finance report library', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Worker report library', exact: true })).toBeVisible();
-  await page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true }).getByRole('treeitem', { name: 'Local', exact: true }).click();
+  await page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true }).getByRole('treeitem', { name: 'Local', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Report browser', exact: true }).getByRole('button', { name: 'Keep this local edit', exact: true })).toBeVisible();
 });
 
@@ -250,10 +250,10 @@ test('move local to worker, then copy and move back without resurrecting the loc
   await expect(dialog).toHaveCount(0);
   const workerReport = (await reporting.client().call('list_reports', { query: 'Portable report' }))[0];
   expect(workerReport.envelope?.title).toBe('Portable report');
-  const locations = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  const locations = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true });
   await locations.getByRole('treeitem', { name: 'Local', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Report browser' }).getByRole('button', { name: 'Portable report', exact: true })).toHaveCount(0);
-  await page.getByRole('navigation', { name: 'Saved reports' }).getByRole('link', { name: 'Reports', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Saved library' }).getByRole('link', { name: 'Library', exact: true }).click();
   const row = page.getByRole('row').filter({ has: page.getByRole('button', { name: 'Portable report', exact: true }) });
   await chooseReportAction(page, 'Save a copy…', row);
   await dialog.getByRole('treeitem', { name: 'Local', exact: true }).click();
@@ -301,8 +301,8 @@ test('combines named workers, tolerates an unavailable location, and moves betwe
     const copied = (await second.client().call('list_reports', { query: 'Across workers' }))[0];
     expect(copied.report_id).not.toBe(source.report_id); expect(copied.published_revision_id).toBeNull();
     expect((await second.client().call('get_report', { report_id: other.report_id })).envelope?.title).toBe('Other worker report');
-    await page.route(reporting.url + '/**', route => route.request().url().includes('vgi.reports.v1') ? route.abort() : route.continue());
-    await page.getByRole('navigation', { name: 'Saved reports' }).getByRole('link', { name: 'Reports', exact: true }).click();
+    await page.route(reporting.url + '/**', route => route.request().url().includes('vgi.objects.v1') ? route.abort() : route.continue());
+    await page.getByRole('navigation', { name: 'Saved library' }).getByRole('link', { name: 'Library', exact: true }).click();
     await browser.getByRole('button', { name: 'Refresh', exact: true }).click();
     await expect(browser.getByRole('button', { name: 'Other worker report', exact: true })).toBeVisible();
     await expect(browser.getByRole('alert').first()).toBeVisible();
@@ -318,7 +318,7 @@ test('interrupted transfer survives reload and retries the original copy once', 
   await page.getByRole('region', { name: 'Report browser' }).getByRole('button', { name: 'New report', exact: true }).click();
   await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Retry transfer report');
   let lose = true;
-  await page.route('**/create_report', async route => {
+  await page.route('**/create_object', async route => {
     const response = await route.fetch();
     if (lose) { lose = false; await route.abort(); } else await route.fulfill({ response });
   });
@@ -332,7 +332,7 @@ test('interrupted transfer survives reload and retries the original copy once', 
   await pending.getByRole('button', { name: 'Retry transfer', exact: true }).click();
   await expect(pending).toHaveCount(0);
   expect(await reporting.client().call('list_reports', { query: 'Retry transfer report' })).toHaveLength(1);
-  await page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true }).getByRole('treeitem', { name: 'Local', exact: true }).click();
+  await page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true }).getByRole('treeitem', { name: 'Local', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Report browser' }).getByRole('button', { name: 'Retry transfer report', exact: true })).toHaveCount(0);
 });
 
@@ -424,11 +424,11 @@ test('comparison retries failures and does not retain old content after denied o
   await history.getByRole('button', { name: 'Compare revision 2', exact: true }).click();
   const comparison = history.getByRole('region', { name: 'Revision comparison', exact: true });
   await expect(comparison.getByRole('region', { name: 'Title changes', exact: true })).toContainText('Private original title');
-  await page.route('**/get_report', route => route.fulfill({ status: 403, body: 'Access denied' }));
+  await page.route('**/get_object', route => route.fulfill({ status: 403, body: 'Access denied' }));
   await comparison.getByRole('combobox', { name: 'From revision', exact: true }).selectOption(second.head_revision_id);
   await expect(comparison.getByRole('alert')).toContainText('Could not compare revisions');
   await expect(comparison.getByRole('region', { name: 'Title changes', exact: true })).toHaveCount(0);
-  await page.unroute('**/get_report');
+  await page.unroute('**/get_object');
   await comparison.getByRole('button', { name: 'Retry comparison', exact: true }).click();
   await expect(comparison).toContainText('No definition changes between these revisions.');
   await client.call('redact_revision', { request_id: crypto.randomUUID(), report_id: first.report_id, revision_id: first.head_revision_id, expected_version: second.version, reason: 'Remove old content' });
@@ -506,7 +506,7 @@ test('local Share saves a library copy and keeps local metadata and the original
   const libraryRow = page.getByRole('row').filter({ has: page.getByRole('button', { name: 'Shared local draft (copy)', exact: true }) });
   await expect(libraryRow.getByRole('button', { name: /^Actions for / })).toHaveCount(1);
   await expect(libraryRow.getByRole('button', { name: /Copy|Move/ })).toHaveCount(0);
-  await page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true }).getByRole('treeitem', { name: 'Local', exact: true }).click();
+  await page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true }).getByRole('treeitem', { name: 'Local', exact: true }).click();
   await page.getByRole('region', { name: 'Report browser' }).getByRole('button', { name: 'Shared local draft', exact: true }).click();
   await chooseReportAction(page, 'Version history');
   await expect(page.getByRole('region', { name: 'Report history', exact: true })).toContainText('saved version');
@@ -519,9 +519,9 @@ test('main sidebar opens nested worker reports without reloading and follows sav
   const initial = await seed(reporting, 'Sidebar revenue');
   await client.call('move_report', { request_id: crypto.randomUUID(), report_id: initial.report_id, expected_version: initial.version, folder_id: child.folder_id });
   await page.goto(`?service=${encodeURIComponent(reporting.url)}#token=test-alice`);
-  const sidebar = page.getByTestId('catalog-sidebar'), reports = sidebar.getByRole('navigation', { name: 'Saved reports' });
+  const sidebar = page.getByTestId('catalog-sidebar'), reports = sidebar.getByRole('navigation', { name: 'Saved library' });
   await expect(reports).toBeVisible();
-  await expect(sidebar.getByRole('region', { name: 'On this device', exact: true }).getByRole('navigation', { name: 'Saved reports' })).toHaveCount(0);
+  await expect(sidebar.getByRole('region', { name: 'On this device', exact: true }).getByRole('navigation', { name: 'Saved library' })).toHaveCount(0);
   await reports.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
   await reports.getByRole('button', { name: 'Expand Team navigation', exact: true }).click();
   await reports.getByRole('button', { name: 'Expand Quarter navigation', exact: true }).click();
@@ -531,7 +531,7 @@ test('main sidebar opens nested worker reports without reloading and follows sav
   await expect(page.locator('header[aria-label="Report toolbar"]')).toContainText('Sidebar revenue');
   await expect(page.getByRole('complementary', { name: 'Report storage' })).toHaveCount(0);
   await expect(reports.getByRole('treeitem', { name: 'Sidebar revenue', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await expect(sidebar.locator('[role="tree"]:not([aria-label="Reports"]) [aria-selected="true"]')).toHaveCount(0);
+  await expect(sidebar.locator('[role="tree"]:not([aria-label="Library"]) [aria-selected="true"]')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).__sidebarDocument)).toBe('original');
   await edit(page);
   await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Updated sidebar revenue');
@@ -569,7 +569,7 @@ test('mobile report navigation uses the catalog drawer and closes after opening 
 
 test('sidebar creates nested folders through the worker API, including from a lazy Reports tab', async ({ page, reporting }) => {
   await page.goto(`?service=${encodeURIComponent(reporting.url)}#token=test-alice`);
-  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true });
   let parent: string | null = null;
   for (const [index, name] of ['Sidebar folders', 'FY2026', 'October'].entries()) {
     await tree.getByRole('link', { name: index ? ['Sidebar folders', 'FY2026'][index - 1] : 'Finance report library', exact: true }).click({ button: 'right' });
@@ -615,7 +615,7 @@ test('sidebar drag moves a published report into nested folders and back with it
   await c.call('publish', { request_id: crypto.randomUUID(), report_id: initial.report_id, revision_id: initial.head_revision_id, expected_published_revision_id: null });
   await page.goto(path(reporting.url, initial.report_id));
   await saved(page);
-  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true });
   await tree.getByRole('button', { name: 'Expand Drag destinations', exact: true }).click();
   const source = tree.getByRole('treeitem', { name: 'Drag published report', exact: true });
   await source.locator(':scope > div').dragTo(tree.getByRole('treeitem', { name: 'Nested destination', exact: true }));
@@ -637,7 +637,7 @@ test('sidebar drag saves an open local draft before moving to a worker and suppo
   await page.goto(`reports?service=${encodeURIComponent(reporting.url)}#token=test-alice`);
   await page.getByRole('region', { name: 'Report browser' }).getByRole('button', { name: 'New report', exact: true }).click();
   const id = new URL(page.url()).searchParams.get('evidence_report')!;
-  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true });
   const source = tree.locator('[data-file-node]').filter({ has: page.locator(`a[href*="evidence_report=${id}"]`) });
   await expect(source).toBeVisible();
   await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Unsaved sidebar transfer');
@@ -663,7 +663,7 @@ test('sidebar rejects read-only and same-folder drops and protects an unconfirme
   const c = reporting.client(), initial = await seed(reporting, 'Protected sidebar draft');
   await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Protected destination' });
   await page.goto(path(reporting.url, initial.report_id)); await edit(page);
-  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true });
   const source = tree.getByRole('treeitem', { name: 'Protected sidebar draft', exact: true });
   await source.locator(':scope > div').dragTo(tree.getByRole('treeitem', { name: 'Finance report library', exact: true }));
   await expect(page.getByRole('dialog', { name: 'Move report', exact: true })).toHaveCount(0);
@@ -682,7 +682,7 @@ test('sidebar rejects read-only and same-folder drops and protects an unconfirme
   await expect(destination).toBeVisible();
   await expect(tree.getByRole('button', { name: 'New folder in Finance report library', exact: true })).toHaveCount(0);
   await expect(tree.getByRole('treeitem', { name: 'Protected destination', exact: true })).toHaveCount(0);
-  await page.getByRole('navigation', { name: 'Saved reports' }).getByRole('button', { name: 'New report', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Saved library' }).getByRole('button', { name: 'New report', exact: true }).click();
   await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Read-only drop source');
   await saved(page);
   const local = tree.getByRole('treeitem', { name: 'Read-only drop source', exact: true });
@@ -728,7 +728,7 @@ test('worker sidebar menus support right click, keyboard and hover without navig
   const c = reporting.client(), initial = await seed(reporting, 'Context menu report');
   const destination = await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Context menu destination' });
   await page.goto(path(reporting.url, initial.report_id)); await saved(page);
-  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true });
   const row = tree.getByRole('treeitem', { name: 'Context menu report', exact: true });
   const link = row.getByRole('link', { name: 'Context menu report', exact: true });
   const actions = row.getByRole('button', { name: 'Actions for Context menu report', exact: true });
@@ -796,7 +796,7 @@ test('sidebar refresh discovers external changes in the tree, overview and worke
   const removed = await seed(reporting, 'Removed outside Cupola');
   await page.goto(`reports?service=${encodeURIComponent(reporting.url)}#token=test-alice`);
   const sidebar = page.getByTestId('catalog-sidebar');
-  const tree = sidebar.getByRole('tree', { name: 'Reports', exact: true });
+  const tree = sidebar.getByRole('tree', { name: 'Library', exact: true });
   const overview = page.getByRole('region', { name: 'Report browser', exact: true });
   const refresh = sidebar.getByRole('button', { name: 'Refresh catalogs and reports', exact: true });
   await expect(overview.getByRole('button', { name: 'Before external update', exact: true })).toBeVisible();
@@ -836,7 +836,7 @@ test('remote reports render on sidebar open and sidebar refresh preserves the dr
   const c = reporting.client(), initial = await c.call('create_report', { request_id: crypto.randomUUID(), envelope: definition.envelope, body: definition.body });
   await page.goto(path(reporting.url));
   const sidebar = page.getByTestId('catalog-sidebar');
-  const tree = sidebar.getByRole('tree', { name: 'Reports', exact: true });
+  const tree = sidebar.getByRole('tree', { name: 'Library', exact: true });
   await tree.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
   await tree.getByRole('link', { name: 'Automatic worker report', exact: true }).click();
   await expect(page.getByTestId('evidence-document')).toContainText('Render 1', { timeout: 120_000 });
@@ -846,7 +846,7 @@ test('remote reports render on sidebar open and sidebar refresh preserves the dr
   await page.getByRole('textbox', { name: 'Report title', exact: true }).fill('Keep this unsaved draft');
   await expect(page.getByRole('button', { name: 'Retry save', exact: true })).toBeVisible();
   let reportReads = 0;
-  page.on('request', request => { if (request.url().endsWith('/get_report')) reportReads++; });
+  page.on('request', request => { if (request.url().endsWith('/get_object')) reportReads++; });
   await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Added while editing' });
   const refresh = sidebar.getByRole('button', { name: 'Refresh catalogs and reports', exact: true });
   await refresh.click();
@@ -873,7 +873,7 @@ test('folder context menus rename and show duplicate-name errors inside the nami
   const c = reporting.client(), folder = await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Naming test' });
   const child = await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Child preserved', parent_folder_id: folder.folder_id });
   await page.goto(path(reporting.url));
-  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true });
   await expect(tree.getByRole('button', { name: 'Actions for Finance report library' })).toHaveCSS('opacity', '0');
   await tree.getByRole('link', { name: 'Finance report library', exact: true }).click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'New folder…', exact: true }).click();
@@ -938,7 +938,7 @@ test('management pages preserve drafts and browser navigation; ownership opens f
   await page.getByRole('button', { name: 'Back to report', exact: true }).click();
   await page.unroute('**/commit_revision');
   await page.getByRole('button', { name: 'Retry save', exact: true }).click(); await saved(page);
-  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true });
   await tree.getByRole('link', { name: 'Draft retained on return', exact: true }).click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Transfer ownership…', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Transfer ownership', exact: true })).toBeVisible();
@@ -953,7 +953,7 @@ test('management pages preserve drafts and browser navigation; ownership opens f
 test('folder ownership uses worker choices and local folders rename from the sidebar', async ({ page, reporting }) => {
   const folder = await reporting.client().call('create_folder', { request_id: crypto.randomUUID(), name: 'Ownership folder' });
   await page.goto(path(reporting.url));
-  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Reports', exact: true });
+  const tree = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true });
   await tree.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
   await tree.getByRole('link', { name: 'Ownership folder', exact: true }).click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Transfer ownership…', exact: true }).click();

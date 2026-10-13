@@ -1,3 +1,7 @@
+import { resetDocumentDraft, documentDraftScope, documentBinding } from '../../lib/reporting/documents';
+import { RemoteDocumentEditor } from './RemoteDocumentEditor';
+import { documentKind } from '../../lib/reporting/object-adapter';
+import { documentLink, portableBody, portableContext } from '../../lib/reporting/documents';
 import { useEffect, useState } from 'react';
 import { Download } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -21,11 +25,16 @@ import { ReportSchedulesPage } from './ReportSchedulesPage';
 import { OwnershipPage } from './OwnershipPage';
 import { useTransferSource } from '../../lib/reporting/transfer-source';
 
-interface OpenReport { record: ReportResult; report?: EvidenceReport; controller?: SaveController; bodyError?: string }
+interface OpenReport { recoveryOnly?: boolean; record: ReportResult; report?: EvidenceReport; controller?: SaveController; bodyError?: string }
 export function RemoteReport(props: ReportingWorkspaceProps & { session: LibrarySession; reportId: string; revisionId: string | null; recovery?: { key: string; value: RecoveryDraft }; onLeave: () => void; onOpen: (id: string, revisionId?: string) => void }) {
   const { session, reportId, revisionId, recovery } = props;
   const [opened, setOpened] = useState<OpenReport | null>(null), [save, setSave] = useState<SaveState | null>(null);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false);
+  const [documentDirty, setDocumentDirty] = useState(false);
+  useEffect(() => {
+    const changed = (event: Event) => { const detail = (event as CustomEvent).detail; if (detail.url === session.client.url && detail.id === reportId) { setDocumentDirty(detail.dirty); setOpened(previous => previous ? { ...previous, record: detail.record } : previous); } };
+    window.addEventListener("cupola:document-edit-state", changed); return () => window.removeEventListener("cupola:document-edit-state", changed);
+  }, [session.client.url, reportId]);
   const [generation, setGeneration] = useState(0), [editorGeneration, setEditorGeneration] = useState(0);
   const [folders, setFolders] = useState<FolderRecord[]>([]), [revisions, setRevisions] = useState<RevisionRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true), [historyError, setHistoryError] = useState(''), [historyReload, setHistoryReload] = useState(0);
@@ -36,6 +45,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     setLoading(true); setError(''); setOpened(null); setSave(null);
     void session.client.call('get_report', { report_id: reportId, revision_id: revisionId }, abort.signal).then(record => {
       if (abort.signal.aborted) return;
+      if (['query', 'notebook'].includes(documentKind(record))) { setOpened({ record }); return; }
       let report: EvidenceReport;
       try { report = decodeReport(record, props.serviceUrl, props.workspaceId); }
       catch (e) { setOpened({ record, bodyError: reportError(e) }); return; }
@@ -46,12 +56,19 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
         if (recovery) report = controller.current.report;
       }
       setOpened({ record, report, controller });
-    }).catch(e => { if (!abort.signal.aborted) setError(reportError(e)); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
+    }).catch(e => { if (!abort.signal.aborted) {
+      setError(reportError(e));
+      for (const kind of ['query', 'notebook'] as const) {
+        let recovered;
+        try { recovered = documentBinding(documentDraftScope(session.client.url, reportId, revisionId, session.scope), kind, reportId); } catch { continue; }
+        if (recovered) { setOpened({ record: { ...recovered.record, allowed_actions: [] }, recoveryOnly: true }); setNotice('Local recovery draft. Save a copy on this device or in a library where you have access.'); break; }
+      }
+    } }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => { abort.abort(); controller?.dispose(); };
   }, [session.client, reportId, revisionId, generation]);
   const record = save?.record ?? opened?.record;
   const controller = opened?.controller;
-  const pending = controller?.dirty ?? false;
+  const pending = (controller?.dirty ?? false) || documentDirty;
   const managementPending = Boolean(session.journal.pending);
   const blocked = busy || pending || managementPending;
   useTransferSource(props.workspaceId ?? props.serviceUrl, session.client.url, reportId, () => {
@@ -101,8 +118,13 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     await refreshRecord();
   }
   async function restore(revision: RevisionRow) {
-    if (!controller || !opened) return;
+    if (!opened) return;
     const old = await session.client.call('get_report', { report_id: reportId, revision_id: revision.revision_id });
+    if (!controller) {
+      if (!record || !old.envelope || !old.body) throw new Error('This revision cannot be restored.');
+      await session.journal.run('commit_revision', { report_id: reportId, expected_revision_id: record.head_revision_id, envelope: old.envelope, body: old.body, kind: 'restore', message: `Restored revision ${revision.revision_number}` });
+      resetDocumentDraft(session.client.url, reportId, documentKind(record) as 'query' | 'notebook', session.scope); showPage(null); setGeneration(n => n + 1); return;
+    }
     const report = decodeReport(old, props.serviceUrl, props.workspaceId);
     controller.capture(report, { description: old.envelope?.description ?? '', tags: old.envelope?.tags ?? [], dataSources: old.envelope?.data_sources ?? [] });
     controller.stage(report, { kind: 'restore', label: `Restored revision ${revision.revision_number}` });
@@ -117,14 +139,15 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     blocked={blocked} loading={historyLoading} error={historyError} onRetry={() => setHistoryReload(n => n + 1)}
     onView={id => { if (!blocked) props.onOpen(reportId, id); }}
     onCopyLink={revision => void attempt(async () => { await navigator.clipboard.writeText(reportLink(session.client.url, reportId, revision.revision_id)); setNotice('Revision link copied. Recipients need worker access.'); })}
-    onRestore={controller ? revision => void attempt(() => restore(revision)) : undefined}
+    onRestore={controller || (can('edit') && record && documentKind(record) !== 'report') ? revision => void attempt(() => restore(revision)) : undefined}
     onRedact={can('redact') ? revision => setDialog({ action: 'redact', revision }) : undefined} />;
   const reportFolder = folders.find(f => f.folder_id === record?.folder_id);
   const reportLocation = [session.info.display_name, reportFolder ? folderPath(reportFolder, folders) : record?.folder_id ? 'Folder' : ''].filter(Boolean).join(' / ');
   const reportActions: ReportAction[] = record ? [
     ...(!opened?.report ? [reportAction('history', () => { setHistoryReload(n => n + 1); showPage('history'); })] : []),
+    ...(!opened?.report && record.body ? [{ ...reportAction('export', downloadBody), label: 'Download original document' }] : []),
     reportAction('details', () => showPage('details')),
-    ...(!record.redacted ? [reportAction('schedules', () => showPage('schedules'), blocked)] : []),
+    ...(!record.redacted && documentKind(record) === 'report' ? [reportAction('schedules', () => showPage('schedules'), blocked)] : []),
     ...(can('transfer_ownership') ? [reportAction('ownership', () => showPage('ownership'), blocked)] : []),
     ...(props.onTransferReport && !record.redacted ? [reportAction('copy', () => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, false), blocked),
       ...(!revisionId && (can('move') || can('delete')) ? [reportAction('move', () => props.onTransferReport?.({ kind: 'worker', url: session.client.url, record }, true), blocked)] : [])] : []),
@@ -141,6 +164,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
       <div className="flex flex-wrap gap-2"><Button disabled={busy || save.status === 'conflict'} onClick={() => void controller.retry()}>Retry save</Button><Button variant="outline" disabled={busy} onClick={() => setGeneration(n => n + 1)}>Load latest from worker</Button><Button variant="outline" disabled={busy || managementPending || !session.info.root_allowed_actions.includes('create_report')} onClick={() => void attempt(() => copy(controller.current.report))}>Save draft as a copy</Button><Button variant="ghost" onClick={() => downloadDocumentFile(JSON.stringify(controller.current.report, null, 2), 'report-draft.json')}>Export draft</Button></div>
     </div>}
     {opened?.bodyError && <div className="space-y-3 p-5"><p role="alert">{opened.bodyError}</p>{record?.body && <Button variant="outline" onClick={downloadBody}><Download />Download original body</Button>}</div>}
+    {record && !record.redacted && ['notebook', 'query'].includes(documentKind(record)) && <div hidden={Boolean(page)} className="min-h-0 flex-1"><RemoteDocumentEditor key={`${record.report_id}:${revisionId ?? 'head'}:${generation}`} {...props} record={record} libraryUrl={session.client.url} authScope={session.scope} recoveryOnly={opened?.recoveryOnly} pinned={Boolean(revisionId)} /></div>}
     {opened?.report && <div className="min-h-0 flex-1" hidden={page === 'details' || page === 'share' || page === 'ownership' || page === 'schedules'}><EvidenceWorkspace key={editorGeneration} {...props} remote={{
       report: opened.report, canEdit: Boolean(controller), status: !controller ? 'Read only' : save?.status === 'error' || save?.status === 'conflict' ? 'Not saved' : pending ? 'Saving…' : 'Saved', pending: Boolean(blocked),
       location: reportLocation, actions: reportActions, onShare: () => showPage('share'), onHistoryOpen: () => setHistoryReload(n => n + 1),
@@ -150,9 +174,13 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
       onDraft: report => controller?.capture(report), onSave: (report, meta) => controller?.stage(report, meta),
       onLeave: props.onLeave, onCopy: report => void attempt(() => copy(report)), historyContent,
     }} /></div>}
-    {page === 'schedules' && record && <ReportSchedulesPage report={record} reportClient={session.client} catalogs={props.catalogs} workspaceId={props.workspaceId} pinned={Boolean(revisionId)} onBack={() => showPage(null)} />}
+    {page === 'schedules' && record && documentKind(record) === 'report' && <ReportSchedulesPage report={record} reportClient={session.client} catalogs={props.catalogs} workspaceId={props.workspaceId} pinned={Boolean(revisionId)} onBack={() => showPage(null)} />}
     {page === 'details' && record && <ReportDetailsPage key={String(record.version)} initial={{ name: record.envelope?.title ?? '', description: record.envelope?.description ?? '', tags: record.envelope?.tags ?? [] }} location={reportLocation} blocked={blocked}
-      onClose={() => showPage(null)} onSave={controller ? async values => {
+      onClose={() => showPage(null)} onSave={!revisionId && !opened?.recoveryOnly && can('edit') && record.envelope && record.body ? async values => {
+        if (!controller) {
+          await session.journal.run('commit_revision', { report_id: reportId, expected_revision_id: record.head_revision_id, envelope: { ...record.envelope!, title: values.name, description: values.description, tags: values.tags }, body: record.body!, message: 'Updated document details' });
+          resetDocumentDraft(session.client.url, reportId, documentKind(record) as 'query' | 'notebook', session.scope); setGeneration(n => n + 1); showPage(null); return;
+        }
         if (blocked || !opened?.report) throw new Error('Finish saving before changing report details.');
         const next = { ...controller.current.report, title: values.name };
         controller.capture(next, { description: values.description, tags: values.tags }); controller.stage(next, { kind: 'edit', label: 'Updated report details' });

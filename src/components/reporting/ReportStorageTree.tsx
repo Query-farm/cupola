@@ -10,9 +10,9 @@ import { locationLabel, type ReportLocation } from '../../lib/reporting/location
 interface StorageTreeProps {
   locations: ReportLocation[]; scope: string; location: string; folderId: string | null;
   onSelect: (location: string, folderId: string | null) => void;
-  picker?: boolean; disabled?: boolean; refreshKey?: unknown;
+  objectKind?: string; picker?: boolean; disabled?: boolean; refreshKey?: unknown;
 }
-export function ReportStorageTree({ locations, scope, location, folderId, onSelect, picker, disabled, refreshKey }: StorageTreeProps) {
+export function ReportStorageTree({ locations, scope, location, folderId, onSelect, picker, disabled, refreshKey, objectKind }: StorageTreeProps) {
   const [local, setLocal] = useState<ReportFolderNode[]>([]), [remote, setRemote] = useState<Record<string, ReportFolderNode[]>>({});
   const [errors, setErrors] = useState<Record<string, string>>({}), [loading, setLoading] = useState(false);
   useEffect(() => {
@@ -27,11 +27,11 @@ export function ReportStorageTree({ locations, scope, location, folderId, onSele
     void Promise.allSettled(supported.map(async l => {
       try {
         const folders = await new ReportClient(l.url).call('list_folders', {}, abort.signal);
-        if (!abort.signal.aborted) setRemote(old => ({ ...old, [l.url]: folders.map(f => ({ id: f.folder_id, name: f.name, parentId: f.parent_folder_id, writable: Boolean(l.info?.writable && f.allowed_actions.includes('create_report')) })) }));
+        if (!abort.signal.aborted) setRemote(old => ({ ...old, [l.url]: folders.map(f => ({ id: f.folder_id, name: f.name, parentId: f.parent_folder_id, writable: Boolean(l.info?.writable && f.allowed_actions.includes('create_report') && (!objectKind || !('creatable_kinds' in f) || (f as any).creatable_kinds.includes(objectKind))) })) }));
       } catch (e) { if (!abort.signal.aborted) setErrors(old => ({ ...old, [l.url]: reportError(e) })); }
     })).then(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
-  }, [locations, refreshKey]);
+  }, [locations, refreshKey, objectKind]);
   const branches = (url: string, folders: ReportFolderNode[]): FileTreeNode[] => {
     const convert = (items: ReturnType<typeof folderBranches>): FileTreeNode[] => items.map(f => ({ id: f.id, name: f.name, kind: 'folder', readOnly: picker && f.writable === false, detail: picker && f.writable === false ? 'Read-only folder' : undefined, children: convert(f.children) }));
     return convert(folderBranches(url, folders));
@@ -40,7 +40,7 @@ export function ReportStorageTree({ locations, scope, location, folderId, onSele
     ...(!picker ? [{ id: directoryKey('all'), name: 'All reports', kind: 'collection' as const }] : []),
     { id: directoryKey('local'), name: 'Local', kind: 'location', children: branches('local', local) },
     ...locations.filter(l => l.info).map(l => ({ id: directoryKey(l.url), name: locationLabel(l, locations), kind: 'location' as const,
-      children: branches(l.url, remote[l.url] ?? []), readOnly: picker && (!l.info?.writable || !l.info.root_allowed_actions.includes('create_report')), detail: errors[l.url] || (!l.info?.root_allowed_actions.includes('create_report') ? 'Read-only root; folders may allow writes' : undefined) })),
+      children: branches(l.url, remote[l.url] ?? []), readOnly: picker && (!l.info?.writable || !l.info.root_allowed_actions.includes('create_report') || Boolean(objectKind && 'creatable_kinds' in l.info && !(l.info as any).creatable_kinds.includes(objectKind))), detail: errors[l.url] || (!l.info?.root_allowed_actions.includes('create_report') ? 'Read-only root; folders may allow writes' : undefined) })),
   ];
   return <div className="space-y-2"><FileTree nodes={nodes} label={picker ? 'Destination folder' : 'Report folders and locations'} selectedId={directoryKey(location, folderId)} disabled={disabled}
     onSelect={id => { const [url, folder] = JSON.parse(id); onSelect(url, folder); }} />

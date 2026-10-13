@@ -1,5 +1,8 @@
+import { listLocalObjects, deleteLocalObject, type LocalObject } from '../../lib/reporting/local-objects';
+import { transferLocation, transferId, transferFolder } from '../../lib/reporting/transfers';
 import { useEffect, useState, type MouseEvent } from 'react';
-import { CalendarClock, FileChartColumn, FileText, FolderPlus, Folder, HardDrive, Pencil, UserRound, Copy, History, Info, Trash2 } from 'lucide-react';
+import { documentKind } from '../../lib/reporting/object-adapter';
+import { BookOpen, Code2, CalendarClock, FileChartColumn, FileText, FolderPlus, Folder, HardDrive, Pencil, UserRound, Copy, History, Info, Trash2 } from 'lucide-react';
 import { SavedDocumentsSidebar } from '../shared/SavedDocumentsSidebar';
 import { SavedDocumentRow } from '../shared/SavedDocumentRow';
 import { FileTree, type FileTreeNode } from './FileTree';
@@ -26,6 +29,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
 }) {
   const scope = workspaceId ?? serviceUrl, { locations, refresh, refreshVersion, transfer, setTransfer } = useReportLocations();
   const [local, setLocal] = useState<EvidenceReport[]>([]), [library, setLibrary] = useState<ReturnType<typeof localLibrary>>({ folders: [], entries: {} });
+  const [localObjects, setLocalObjects] = useState<LocalObject[]>([]);
   const [localError, setLocalError] = useState(''), [remote, setRemote] = useState<Record<string, LibraryRows>>({});
   const [selected, setSelected] = useState(currentReportNode);
   const [actionError, setActionError] = useState(''), [preparing, setPreparing] = useState(false);
@@ -35,7 +39,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
     return () => { for (const event of ['popstate', OPEN_REPORT_EVENT, REPORT_ROUTE_CHANGED]) window.removeEventListener(event, read); };
   }, []);
   useEffect(() => {
-    const read = () => { try { setLocal(listEvidenceReports(scope)); setLibrary(localLibrary(scope)); setLocalError(''); } catch (e) { setLocal([]); setLocalError(reportError(e)); } };
+    const read = () => { try { setLocal(listEvidenceReports(scope)); setLocalObjects(listLocalObjects(scope)); setLibrary(localLibrary(scope)); setLocalError(''); } catch (e) { setLocal([]); setLocalError(reportError(e)); } };
     read(); window.addEventListener(EVIDENCE_REPORTS_CHANGED, read); window.addEventListener('storage', read);
     return () => { window.removeEventListener(EVIDENCE_REPORTS_CHANGED, read); window.removeEventListener('storage', read); };
   }, [scope, refreshVersion]);
@@ -72,6 +76,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
   const destinations = new Map<string, ReportDestination>();
   const sources = new Map<string, TransferSource>([
     ...local.map(report => [reportNodeKey({ location: 'local', reportId: report.id }), { kind: 'local', report }] as const),
+    ...localObjects.map(document => [reportNodeKey({ location: 'local', reportId: document.id }), { kind: 'document', scope, document }] as const),
     ...locations.flatMap(l => (remote[l.url]?.reports ?? []).map(record => [reportNodeKey({ location: l.url, reportId: record.report_id }), { kind: 'worker', url: l.url, record }] as const)),
   ]);
   function allowed(destination: ReportDestination, action: string) {
@@ -82,14 +87,14 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
   }
   function canDrag(id: string) {
     const source = sources.get(id);
-    return !preparing && !transfer && Boolean(source && (source.kind === 'local' || locations.find(l => l.url === source.url)?.info?.writable && !source.record.redacted && source.record.allowed_actions.some(a => a === 'move' || a === 'delete')));
+    return !preparing && !transfer && Boolean(source && (source.kind !== 'worker' || locations.find(l => l.url === source.url)?.info?.writable && !source.record.redacted && source.record.allowed_actions.some(a => a === 'move' || a === 'delete')));
   }
   function canDrop(sourceId: string, destinationId: string) {
     const source = sources.get(sourceId), destination = destinations.get(destinationId);
     if (!source || !destination || !canDrag(sourceId) || !allowed(destination, 'create_report')) return false;
-    const sameStore = destination.location === (source.kind === 'local' ? 'local' : source.url);
-    const currentFolder = source.kind === 'local' ? library.entries[source.report.id]?.folderId ?? null : source.record.folder_id;
-    return !(sameStore && currentFolder === (destination.folderId ?? null)) && (source.kind === 'local' || source.record.allowed_actions.includes(sameStore ? 'move' : 'delete'));
+    const sameStore = destination.location === (transferLocation(source));
+    const currentFolder = transferFolder(source, scope);
+    return !(sameStore && currentFolder === (destination.folderId ?? null)) && (source.kind !== 'worker' || source.record.allowed_actions.includes(sameStore ? 'move' : 'delete'));
   }
   async function move(sourceId: string, destinationId?: string) {
     const source = sources.get(sourceId), destination = destinationId ? destinations.get(destinationId) : undefined;
@@ -98,7 +103,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
     try {
       const current = await requestTransferSource(scope, source);
       // Leave the saved editor before a confirmed move can delete its source.
-      open({ location: current.kind === 'local' ? 'local' : current.url, folderId: current.kind === 'local' ? library.entries[current.report.id]?.folderId : current.record.folder_id });
+      open({ location: transferLocation(current), folderId: transferFolder(current, scope) });
       setTransfer({ source: current, move: true, initialDestination: destination ? { url: destination.location === 'local' ? null : destination.location, folderId: destination.folderId ?? null, name: destination.location === 'local' ? 'Local' : locations.find(l => l.url === destination.location)?.name ?? 'Report library' } : undefined });
     } catch (e) { setActionError(reportError(e)); } finally { setPreparing(false); }
   }
@@ -107,7 +112,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
     setPreparing(true); setActionError('');
     try {
       const current = await requestTransferSource(scope, source);
-      open({ location: current.kind === 'local' ? 'local' : current.url });
+      open({ location: transferLocation(current) });
       setTransfer({ source: current, move: false });
     } catch (e) { setActionError(reportError(e)); } finally { setPreparing(false); }
   }
@@ -123,19 +128,24 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
   }
   function reportActions(entry: ReportDirectoryNode) {
     const source = sources.get(entry.id);
+    if (source?.kind === 'document') return [
+      { id: 'copy', label: 'Save a copy…', icon: Copy, onClick: () => void copy(entry.id) },
+      { id: 'delete', label: 'Delete…', icon: Trash2, onClick: () => { if (confirm(`Delete “${source.document.envelope.title}” from this device?`)) deleteLocalObject(scope, source.document.id); } },
+    ];
     return [
       { id: 'history', label: 'Version history', icon: History, onClick: () => open(entry.destination, 'history') },
-      { id: 'schedules', label: 'Schedules & email', icon: CalendarClock, onClick: () => open(entry.destination, 'schedules') },
+      ...(source?.kind !== 'worker' || documentKind(source.record) === 'report' ? [{ id: 'schedules', label: 'Schedules & email', icon: CalendarClock, onClick: () => open(entry.destination, 'schedules') }] : []),
       { id: 'details', label: 'Details', icon: Info, onClick: () => open(entry.destination, 'details') },
       ...(source?.kind === 'worker' && !source.record.redacted ? [{ id: 'copy', label: 'Save a copy…', icon: Copy, disabled: preparing || Boolean(transfer), onClick: () => void copy(entry.id) }] : []),
       ...(source?.kind === 'worker' && locations.find(l => l.url === source.url)?.info?.writable && source.record.allowed_actions.includes('transfer_ownership') ? [{ id: 'ownership', label: 'Transfer ownership…', icon: UserRound, onClick: () => open(entry.destination, 'ownership') }] : []),
     ];
   }
+  const sourceIcon = (id: string) => { const source = sources.get(id); const kind = source?.kind === 'worker' ? documentKind(source.record) : source?.kind === 'document' ? source.document.kind : 'report'; return kind === 'notebook' ? BookOpen : kind === 'query' ? Code2 : FileText; };
   const nodes = (entries: ReportDirectoryNode[], isLocal = false): FileTreeNode[] => entries.map(entry => {
     destinations.set(entry.id, entry.destination);
     return { ...entry, href: href(entry.destination), children: entry.children && nodes(entry.children, isLocal),
       readOnly: entry.kind === 'folder' && !allowed(entry.destination, 'create_report') && !allowed(entry.destination, 'create_folder'),
-      content: entry.kind === 'report' ? <SavedDocumentRow className="min-w-0 flex-1" item={{ id: entry.destination.reportId!, title: entry.name, href: href(entry.destination) }} icon={FileText} active={Boolean(active && selected === entry.id)} documentKind="report" actionsOnHover extraActions={reportActions(entry)} onAction={isLocal ? act : undefined} onMove={canDrag(entry.id) ? () => void move(entry.id) : undefined} onNavigate={event => navigate(event, entry.destination)} /> : directoryRow(entry.destination, entry.name) };
+      content: entry.kind === 'report' ? <SavedDocumentRow className="min-w-0 flex-1" item={{ id: entry.destination.reportId!, title: entry.name, href: href(entry.destination) }} icon={sourceIcon(entry.id)} active={Boolean(active && selected === entry.id)} documentKind="report" actionsOnHover extraActions={reportActions(entry)} onAction={isLocal && sources.get(entry.id)?.kind === 'local' ? act : undefined} onMove={canDrag(entry.id) ? () => void move(entry.id) : undefined} onNavigate={event => navigate(event, entry.destination)} /> : directoryRow(entry.destination, entry.name) };
   });
   const root = (location: string, name: string, children: FileTreeNode[], detail?: string): FileTreeNode => {
     const destination = { location }, id = reportNodeKey(destination); destinations.set(id, destination);
@@ -145,28 +155,29 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
     ...locations.filter(l => l.info).map(l => root(l.url, locationLabel(l, locations), nodes(reportDirectoryNodes(l.url,
       (remote[l.url]?.folders ?? []).map(f => ({ id: f.folder_id, name: f.name, parentId: f.parent_folder_id })),
       (remote[l.url]?.reports ?? []).map(r => ({ id: r.report_id, name: r.envelope?.title ?? 'Redacted report', folderId: r.folder_id })))), `Worker: ${l.url}`)),
-    root('local', 'Local', nodes(reportDirectoryNodes('local', library.folders, local.map(r => ({ id: r.id, name: r.title, folderId: library.entries[r.id]?.folderId ?? null }))), true), 'Saved in this browser'),
+    root('local', 'Local', nodes(reportDirectoryNodes('local', library.folders, [...local.map(r => ({ id: r.id, name: r.title, folderId: library.entries[r.id]?.folderId ?? null })), ...localObjects.map(d => ({ id: d.id, name: d.envelope.title, folderId: library.entries[d.id]?.folderId ?? null }))]), true), 'Saved in this browser'),
   ];
   const filter = (items: FileTreeNode[]): FileTreeNode[] => items.flatMap(node => {
     const source = sources.get(node.id);
-    const metadata = source?.kind === 'worker' ? source.record.envelope : source ? library.entries[source.report.id]?.metadata : undefined;
+    const metadata = source?.kind === 'worker' ? source.record.envelope : source?.kind === 'document' ? source.document.envelope : source ? library.entries[source.report.id]?.metadata : undefined;
     if (matchesReport(node.name, metadata, search)) return [node];
     const children = filter(node.children ?? []); return children.length ? [{ ...node, children }] : [];
   });
   const errors = [...locations.filter(l => l.error).map(l => `${l.name}: ${l.error}`), ...locations.filter(l => remote[l.url]?.error).map(l => `${l.name}: ${remote[l.url].error}`)];
   const items = [
+    ...localObjects.map(d => ({ id: d.id, title: d.envelope.title, href: href({ location: 'local', reportId: d.id }) })),
     ...local.map(r => ({ id: r.id, title: r.title, href: href({ location: 'local', reportId: r.id }) })),
     ...locations.flatMap(l => (remote[l.url]?.reports ?? []).map(r => ({ id: `${l.url}:${r.report_id}`, title: r.envelope?.title ?? 'Redacted report', href: href({ location: l.url, reportId: r.report_id }) }))),
   ];
   return <section className="mt-2 border-t border-border pt-2">
-    <SavedDocumentsSidebar title="Reports" documentKind="report" icon={FileChartColumn} itemIcon={FileText} openKey="cupola.sidebar.reports-open" testId="sidebar-reports-toggle"
+    <SavedDocumentsSidebar title="Library" documentKind="report" icon={FileChartColumn} itemIcon={FileText} openKey="cupola.sidebar.reports-open" testId="sidebar-reports-toggle"
       items={items}
       search={search} libraryHref={href({ location: 'all' })} libraryActive={active && selected === reportNodeKey({ location: 'all' })} onNavigate={event => navigate(event, { location: 'all' })} onAction={act}
       onCreate={() => window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId, create: true, href: reportHref(serviceUrl, undefined, true) } }))} createLabel="New report" error={localError || undefined}>
-      <FileTree nodes={search ? filter(allNodes) : allNodes} label="Reports" selectedId={active ? selected : undefined} initialExpandedIds={[reportNodeKey({ location: 'local' })]} expandAll={Boolean(search)} autoFocusSelection={false}
+      <FileTree nodes={search ? filter(allNodes) : allNodes} label="Library" selectedId={active ? selected : undefined} initialExpandedIds={[reportNodeKey({ location: 'local' })]} expandAll={Boolean(search)} autoFocusSelection={false}
         dragDrop={{ canDrag, canDrop, onDrop: (source, destination) => void move(source, destination) }}
         onSelect={id => { const destination = destinations.get(id); if (destination) open(destination); }} onNavigate={(event, id) => { const destination = destinations.get(id); if (destination) navigate(event, destination); }} />
-      {(locations.some(l => l.loading) || Object.values(remote).some(r => r.loading)) && <p role="status" className="px-2 py-1 text-xs text-muted-foreground">Loading reports…</p>}
+      {(locations.some(l => l.loading) || Object.values(remote).some(r => r.loading)) && <p role="status" className="px-2 py-1 text-xs text-muted-foreground">Loading library…</p>}
       {errors.length > 0 && <div className="px-2 py-1 text-xs text-destructive"><p role="alert">{errors.join(' ')}</p><button className="underline" onClick={refresh}>Retry report libraries</button></div>}
       {actionError && <p role="alert" className="px-2 py-1 text-xs text-destructive">{actionError}</p>}
     </SavedDocumentsSidebar>

@@ -1,3 +1,5 @@
+import { DocumentSave } from "../reporting/DocumentSave";
+import { documentBinding, documentLink, openDocumentConnection } from "../../lib/reporting/documents";
 import { catalogInventory } from "@/lib/catalog-store";
 /**
  * DBeaver-style SQL editor surface: a tab strip of named query documents, a
@@ -60,6 +62,7 @@ export interface PendingEditorSql {
 }
 
 interface Props {
+  libraryScope?: string;
   catalogData: CatalogData;
   attachedCatalogs?: CatalogData[];
   serviceUrl: string;
@@ -87,7 +90,7 @@ interface Props {
 
 const INSPECTABLE = new Set(["function", "macro", "table", "view"]);
 
-export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, workspaceId, attachOptions, shareWorkspaceToken, pendingSql, onPendingConsumed, onAiBusyChange, selection = null, inspectRequest = 0, onOpenFullPage }: Props) {
+export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, workspaceId, libraryScope, attachOptions, shareWorkspaceToken, pendingSql, onPendingConsumed, onAiBusyChange, selection = null, inspectRequest = 0, onOpenFullPage }: Props) {
   // Tabs and history are kept per workspace (multi-catalog phase 2); without one, per service.
   const storageScope = workspaceId ?? serviceUrl;
   const { settings } = useSettings();
@@ -318,7 +321,12 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     try {
       // With a signal the engine runs this as a pending query it can cancel
       // between polls; without one it is a single blocking call Stop can't reach.
-      res = await q(trimmed, { signal: controller.signal });
+      const saved = documentBinding(storageScope, 'query', docId);
+      if (saved) {
+        const connection = await openDocumentConnection(saved);
+        try { res = await connection.query(trimmed, { signal: controller.signal }); }
+        finally { await connection.close(); }
+      } else res = await q(trimmed, { signal: controller.signal });
     } catch (e) {
       release();
       if (myRun !== runIdRef.current) return;
@@ -476,6 +484,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     setPivotError(null);
     setPivotBusy(mode);
     try {
+      if (activeId && documentBinding(storageScope, "query", activeId)) throw new Error("Run this saved query first, then open its result as a snapshot in Perspective. Live views use workspace context and cannot preserve this document’s isolated context.");
       await waitForEngineReady();
       // The Perspective host is a lazily loaded chunk; a click right after
       // page load can beat it to registering this bridge.
@@ -492,7 +501,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     } finally {
       setPivotBusy(null);
     }
-  }, []);
+  }, [storageScope, activeId]);
 
   const handleRunInPerspective = useCallback((mode: QueryPivotMode) => {
     const sql = sqlToRun();
@@ -519,6 +528,8 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
   // context (service + ATTACH options) so the recipient lands on the same
   // catalog; the SQL opens staged but unexecuted.
   const handleShareLink = useCallback(async () => {
+    const binding = activeId ? documentBinding(storageScope, "query", activeId) : null;
+    if (binding && !binding.localScope) { await navigator.clipboard.writeText(await documentLink(binding)); setShareCopied(true); return; }
     const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";
     if (!sql.trim()) return;
     // Always name the service, even when it's the origin fallback (a flat
@@ -535,7 +546,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
     } catch (err) {
       Sentry.captureException(err, { tags: { feature: "share-query-link" } });
     }
-  }, [activeDoc?.sql, serviceUrl, attachOptions, shareWorkspaceToken]);
+  }, [activeId, storageScope, activeDoc?.sql, serviceUrl, attachOptions, shareWorkspaceToken]);
 
   const handleDownloadSql = useCallback(() => {
     const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";
@@ -712,6 +723,7 @@ export function SqlEditorView({ catalogData, attachedCatalogs = [], serviceUrl, 
         onClose={handleCloseTab}
         onRename={handleRename}
       />
+      {activeDoc && <DocumentSave key={activeDoc.id} kind="query" doc={activeDoc} scope={storageScope} libraryScope={libraryScope} onTitleSaved={title => { if (title !== activeDoc.name) persist(renameDoc(docState, activeDoc.id, title)); }} workspaceId={workspaceId} catalogs={attachedCatalogs.length ? attachedCatalogs : [catalogData]} disabled={Boolean(runningDocId)} />}
       <EditorToolbar
         running={activeResult.running}
         queryReady={queryReady}

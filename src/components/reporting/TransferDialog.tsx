@@ -1,3 +1,4 @@
+import { documentKind } from '../../lib/reporting/object-adapter';
 import { useEffect, useState } from 'react';
 import { Input } from '../ui/input';
 import { Button } from '../ui/button';
@@ -5,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { ReportClient, reportError } from '../../lib/reporting/client';
 import type { FolderRecord } from '../../lib/reporting/contracts.generated';
 import type { ReportLocation } from '../../lib/reporting/locations';
-import { prepareTransfer, resumeTransfer, type TransferDestination, type TransferJob, type TransferSource } from '../../lib/reporting/transfers';
+import { prepareTransfer, resumeTransfer, transferLocation, transferFolder, transferTitle, type TransferDestination, type TransferJob, type TransferSource } from '../../lib/reporting/transfers';
 import { ReportStorageTree } from './ReportStorageTree';
 import { ReportNotice } from './ReportNotice';
 import { localReportEntry } from '../../lib/reporting/local-library';
@@ -16,10 +17,11 @@ export function TransferDialog({ source, move, locations, scope, serviceUrl, wor
   initialDestination?: TransferDestination;
 }) {
   const [destination, setDestination] = useState(initialDestination ? initialDestination.url ?? 'local' : source.kind === 'worker' ? source.url : move ? 'local' : locations.find(l => l.info?.writable)?.url ?? 'local');
-  const [folderId, setFolderId] = useState(initialDestination ? initialDestination.folderId ?? '' : source.kind === 'worker' ? source.record.folder_id ?? '' : move ? localReportEntry(scope, source.report).folderId ?? '' : ''), [folders, setFolders] = useState<FolderRecord[]>([]);
+  const [folderId, setFolderId] = useState(initialDestination ? initialDestination.folderId ?? '' : source.kind === 'worker' ? source.record.folder_id ?? '' : move ? transferFolder(source, scope) ?? '' : ''), [folders, setFolders] = useState<FolderRecord[]>([]);
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const [copyName, setCopyName] = useState(`${source.kind === 'local' ? source.report.title : source.record.envelope?.title ?? 'Report'} (copy)`);
+  const [copyName, setCopyName] = useState(`${transferTitle(source)} (copy)`);
   const [job, setJob] = useState<TransferJob | null>(null);
+  const kind = source.kind === 'document' ? source.document.kind : source.kind === 'worker' ? documentKind(source.record) : 'report';
   const target = locations.find(l => l.url === destination);
   useEffect(() => {
     setFolders([]); setError('');
@@ -31,12 +33,12 @@ export function TransferDialog({ source, move, locations, scope, serviceUrl, wor
     return () => abort.abort();
   }, [destination]);
   const writable = destination === 'local' || Boolean(target?.info?.writable && (folderId ? folders.find(f => f.folder_id === folderId)?.allowed_actions : target.info.root_allowed_actions)?.includes('create_report'));
-  const sameStore = source.kind === 'local' ? destination === 'local' : source.url === destination;
-  const mayRemove = !move || source.kind === 'local' || source.record.allowed_actions.includes(sameStore ? 'move' : 'delete');
-  const sameFolder = move && sameStore && (source.kind === 'worker' ? source.record.folder_id : localReportEntry(scope, source.report).folderId) === (folderId || null);
+  const sameStore = transferLocation(source) === destination;
+  const mayRemove = !move || source.kind !== 'worker' || source.record.allowed_actions.includes(sameStore ? 'move' : 'delete');
+  const sameFolder = move && sameStore && (source.kind === 'worker' ? source.record.folder_id : transferFolder(source, scope)) === (folderId || null);
   return <Dialog open onOpenChange={open => { if (!open && !busy) onClose(); }}><DialogContent className="sm:max-w-lg">
-    <DialogHeader><DialogTitle>{move ? 'Move report' : 'Save a copy'}</DialogTitle><DialogDescription>
-      {sameStore && move ? 'Move this report to another folder in this location. Its history stays with it.'
+    <DialogHeader><DialogTitle>{move ? `Move ${kind}` : 'Save a copy'}</DialogTitle><DialogDescription>
+      {sameStore && move ? `Move this ${kind} to another folder in this location. Its history stays with it.`
         : move ? 'Save the current definition at the destination, then remove the original after the copy is confirmed. History and publication are not transferred; the destination starts as a draft under that library’s permissions.'
         : 'Copy the current definition. The original and its history stay here. The copy starts as a draft under the destination’s permissions.'}
     </DialogDescription></DialogHeader>
@@ -55,7 +57,7 @@ export function TransferDialog({ source, move, locations, scope, serviceUrl, wor
       {!mayRemove && <ReportNotice kind="permission" title="Move restricted">{sameStore ? 'You cannot move this report between folders here.' : 'You can move this report only within its current library. Save a copy to use another location.'}</ReportNotice>}
       {sameFolder && <p className="text-sm text-muted-foreground">Choose a different folder or location.</p>}
       {error && <ReportNotice kind="error" title="Transfer not confirmed">{error}{job && ' The transfer is saved for retry. Your original is kept until the destination is confirmed.'}</ReportNotice>}
-      <DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={onClose}>{job ? 'Close; retry later' : 'Cancel'}</Button><Button type="submit" disabled={busy || loading || !writable || !mayRemove || sameFolder || !move && !copyName.trim()}>{busy ? 'Transferring…' : job ? 'Retry transfer' : move ? 'Move report' : 'Save copy'}</Button></DialogFooter>
+      <DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={onClose}>{job ? 'Close; retry later' : 'Cancel'}</Button><Button type="submit" disabled={busy || loading || !writable || !mayRemove || sameFolder || !move && !copyName.trim()}>{busy ? 'Transferring…' : job ? 'Retry transfer' : move ? `Move ${kind}` : 'Save copy'}</Button></DialogFooter>
     </form>
   </DialogContent></Dialog>;
 }

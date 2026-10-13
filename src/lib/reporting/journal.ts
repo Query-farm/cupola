@@ -1,9 +1,10 @@
+import { methodConfig } from './contracts.generated';
 import { bytesFromBase64, bytesToBase64, errorCode, type Input, type Method, type Output, type ReportClient } from './client';
 
 const PREFIX = 'cupola.reporting.mutation.v1:';
 export const serializeJournal = (value: unknown) => JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? { $int64: item.toString() } : item instanceof Uint8Array ? { $bytes: bytesToBase64(item) } : item);
 export const parseJournal = (value: string) => JSON.parse(value, (_key, item) => item && typeof item === 'object' && Object.keys(item).length === 1 ? '$int64' in item ? BigInt(item.$int64) : '$bytes' in item ? bytesFromBase64(item.$bytes) : item : item);
-export interface PendingMutation { method: Method; input: Record<string, any>; createdAt: number; scope: string }
+export interface PendingMutation { method: Method; input: Record<string, any>; createdAt: number; scope: string; protocol?: string }
 // These statuses explicitly refuse admission. Transport/server failures remain ambiguous.
 const REFUSED = new Set(['ABORTED', 'INVALID_ARGUMENT', 'NOT_FOUND', 'PERMISSION_DENIED', 'UNAUTHENTICATED', 'ALREADY_EXISTS', 'FAILED_PRECONDITION', 'RESOURCE_EXHAUSTED']);
 const localLocks = new Map<string, Promise<void>>();
@@ -34,7 +35,8 @@ export class MutationJournal {
     if (method.startsWith('identity.') || method.startsWith('tickets.') || method === 'delegations.put_delegations') throw new Error('Credentials cannot be stored in a browser recovery journal.');
     return this.exclusive(async () => {
       if (this.busy || this.pending) throw new Error('Resolve the pending request before starting another change.');
-      const pending: PendingMutation = { method, input: { ...input, request_id: crypto.randomUUID() }, createdAt: Date.now(), scope: this.scope };
+      const protocol = this.client.protocolFor ? await this.client.protocolFor(method) : undefined;
+      const pending: PendingMutation = { method, protocol, input: { ...input, request_id: crypto.randomUUID() }, createdAt: Date.now(), scope: this.scope };
       this.storage.setItem(this.key, serializeJournal(pending)); // A full disk must prevent dispatch.
       return this.dispatch() as Promise<Output<M>>;
     });
@@ -51,7 +53,7 @@ export class MutationJournal {
     if (await this.client.recoveryScope() !== pending.scope) throw new Error('The signed-in account changed. Return to the original account to retry this request.');
     this.busy = true;
     try {
-      const result = await this.client.call(pending.method, pending.input as never);
+      const result = await this.client.call(pending.method, pending.input as never, undefined, pending.protocol ?? methodConfig[pending.method].protocol);
       this.storage.removeItem(this.key);
       return result;
     } catch (error) {

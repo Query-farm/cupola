@@ -4,6 +4,8 @@ import {
   type NotebookInsertion,
 } from '../../lib/notebooks/navigation';
 import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { DocumentSave } from '../reporting/DocumentSave';
+import { documentBinding } from '../../lib/reporting/documents';
 import { Button } from '../ui/button';
 import { PanelResizeHandle, usePanelWidth } from '../shared/PanelResizeHandle';
 import {
@@ -70,6 +72,7 @@ export function NotebookPanel({
   workspaceId?: string;
   catalogs: readonly CatalogData[];
   onBusyChange?: (busy: boolean) => void;
+  libraryScope?: string;
 }) {
   const scope = workspaceId ?? serviceUrl;
   const [active, setActive] = useState<Notebook | null>(null);
@@ -313,7 +316,7 @@ export function NotebookPanel({
   );
 }
 
-function NotebookWorkspace({
+export function NotebookWorkspace({
   beforeLeave,
   initial,
   insertion,
@@ -321,6 +324,7 @@ function NotebookWorkspace({
   catalogs,
   onClose,
   onBusyChange,
+  libraryScope,
 }: {
   beforeLeave: RefObject<(() => boolean) | null>;
   initial: Notebook;
@@ -329,6 +333,7 @@ function NotebookWorkspace({
   catalogs: readonly CatalogData[];
   onClose: () => void;
   onBusyChange?: (busy: boolean) => void;
+  libraryScope?: string;
 }) {
   const [doc, setDoc] = useState(initial);
   const latest = useRef(doc);
@@ -338,7 +343,7 @@ function NotebookWorkspace({
   const [batch, setBatch] = useState<string[]>([]);
   const sessionId = useRef(uid());
   const session = useRef<NotebookSession | null>(null);
-  const getSession = () => (session.current ??= new NotebookSession());
+  const getSession = () => (session.current ??= new NotebookSession(documentBinding(notebookScope(initial), 'notebook', initial.id)));
   const [resetting, setResetting] = useState(false);
   const [sessionMessage, setSessionMessage] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
@@ -613,6 +618,7 @@ function NotebookWorkspace({
         }
       }}
     >
+      <DocumentSave kind="notebook" doc={doc} scope={notebookScope(doc)} libraryScope={libraryScope} onTitleSaved={title => { if (title !== doc.title) change({ ...doc, title }); }} workspaceId={doc.workspaceId} catalogs={catalogs} disabled={busy} />
       <header className="border-b p-2 flex flex-wrap gap-2 items-center">
         <Button
           size="sm"

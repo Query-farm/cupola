@@ -57,7 +57,7 @@ export function ReportSchedulesPage({ report, reportClient, catalogs, workspaceI
     // Sequential polling avoids overlapping reads and stale responses after navigation.
     async function refresh() {
       try {
-        const list = await client.call('schedules.list_schedules', { report_id: report.report_id, action_kind: 'render_report' }, abort.signal);
+        const list = await client.listSchedulesForSource(reportClient.url, report.report_id, abort.signal);
         if (abort.signal.aborted) return;
         const filtered = list.filter(s => s.definition.action.render_report && sameService(s.definition.action.render_report.report.service_url, reportClient.url));
         setRecords(filtered);

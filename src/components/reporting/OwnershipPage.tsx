@@ -3,7 +3,7 @@ import { Search, UserRound, ArrowRight } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { ReportClient, reportError } from '../../lib/reporting/client';
-import { OWNERSHIP_PROTOCOL, type Ownership, type OwnershipCandidate, type OwnershipOptions } from '../../lib/reporting/contracts.generated';
+import { type Ownership, type OwnershipCandidate, type OwnershipOptions } from '../../lib/reporting/contracts.generated';
 import { ReportPage } from './ReportPage';
 import { ReportNotice } from './ReportNotice';
 
@@ -17,7 +17,7 @@ export function OwnershipPage({ client, resourceKind, resourceId, name, current,
   useEffect(() => {
     const abort = new AbortController(); setLoading(true); setError(''); setOptions(null); setSelected(null);
     const timer = setTimeout(() => void (async () => {
-      const available = await client.discover(abort.signal, OWNERSHIP_PROTOCOL);
+      const available = await client.canFindOwners(resourceKind, abort.signal);
       if (abort.signal.aborted) return;
       setSupported(available);
       if (available) {

@@ -60,7 +60,7 @@ test('a dropped HTTP reply after admission replays the exact create without dupl
   let drop = true;
   const intercepted = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const response = await fetch(input, init);
-    if (String(input).includes('/create_report') && drop) { drop = false; await response.arrayBuffer(); throw new TypeError('Response lost after admission'); }
+    if (String(input).includes('/create_object') && drop) { drop = false; await response.arrayBuffer(); throw new TypeError('Response lost after admission'); }
     return response;
   }) as typeof fetch;
   const c = new ReportClient(worker.url, { token: async () => 'test-alice', fetch: intercepted });

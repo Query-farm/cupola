@@ -1,3 +1,5 @@
+import { documentKind } from '../../lib/reporting/object-adapter';
+import { documentLink, portableBody, portableContext } from '../../lib/reporting/documents';
 import { useEffect, useState } from 'react';
 import { Check, Copy, Link } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -13,19 +15,32 @@ export function WorkerReportSharing({ record, url, pinned, blocked, canPublish, 
 }) {
   const [specific, setSpecific] = useState(pinned), [copied, setCopied] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [confirmUnpublish, setConfirmUnpublish] = useState(false);
-  const link = reportLink(url, record.report_id, specific ? record.revision_served : undefined);
+  const [portableLink, setPortableLink] = useState('');
+  const fallback = reportLink(url, record.report_id, specific ? record.revision_served : undefined);
+  useEffect(() => {
+    let active = true; setPortableLink('');
+    if (documentKind(record) !== 'report' && record.body && !record.redacted) {
+      const body = portableBody(record);
+      void documentLink({ url, record, original: body, context: portableContext(body) }).then(value => {
+        const link = new URL(value); if (specific) link.searchParams.set('report_revision', record.revision_served);
+        if (active) setPortableLink(link.href);
+      }).catch(e => { if (active) setError(reportError(e)); });
+    }
+    return () => { active = false; };
+  }, [url, record, specific]);
+  const link = portableLink || fallback;
   useEffect(() => { setCopied(false); }, [link]);
   async function publish(revision: string | null) {
     if (blocked || busy) return;
     setBusy(true); setError('');
     try { await onPublish(revision); setConfirmUnpublish(false); } catch (e) { setError(reportError(e)); } finally { setBusy(false); }
   }
-  return <ReportPage title="Share report" description={record.envelope?.title} onBack={onClose}>
+  return <ReportPage title={`Share ${documentKind(record)}`} description={record.envelope?.title} onBack={onClose}>
     <p className="text-sm text-muted-foreground">Share with people who have access to this report library. Copying a link does not change access.</p>
     <section className="space-y-3"><label className="block space-y-1 text-sm"><span>Link to</span><select aria-label="Link to" value={specific ? 'version' : 'latest'} onChange={e => { setSpecific(e.target.value === 'version'); setCopied(false); }} className="w-full rounded border bg-background p-2 [appearance:auto]"><option value="latest">Latest available version</option><option value="version">This version ({String(record.revision_number)})</option></select></label>
       <p className="text-xs text-muted-foreground">{specific ? 'This link stays on the selected saved version.' : 'The library determines which version each recipient can see.'}</p>
       <input aria-label="Report link" readOnly value={link} onFocus={e => e.target.select()} className="w-full rounded border bg-background p-2 text-xs" />
-      <Button onClick={async () => { try { await navigator.clipboard.writeText(link); setCopied(true); } catch (e) { setError(reportError(e)); } }}>{copied ? <Check /> : <Copy />}{copied ? 'Link copied' : 'Copy link'}</Button>
+      <Button disabled={documentKind(record) !== 'report' && !portableLink} onClick={async () => { try { await navigator.clipboard.writeText(link); setCopied(true); } catch (e) { setError(reportError(e)); } }}>{copied ? <Check /> : <Copy />}{copied ? 'Link copied' : 'Copy link'}</Button>
     </section>
     {canPublish && <section aria-label="Report publishing" className="space-y-3 border-t pt-4 text-sm"><h3 className="flex items-center gap-2 font-medium"><Link className="size-4" />Publishing</h3>
       <p>{!record.published_revision_id ? 'This report has not been published.' : record.published_revision_id === record.revision_served ? 'This saved version is published.' : 'A different saved version is published.'} Publish a saved version when it is ready for readers. Library permissions still apply.</p>

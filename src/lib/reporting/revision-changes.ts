@@ -6,6 +6,7 @@ export interface RevisionChanges { fields: RevisionFieldChange[]; encodingChange
 const labels: Record<string, string> = {
   title: 'Title', description: 'Description', tags: 'Tags', body_format: 'Body format', data_sources: 'Data sources', parameters: 'Parameters',
   source: 'Document', setupSql: 'Setup SQL', appearance: 'Appearance', semanticDatasets: 'Datasets', pivots: 'Pivot views',
+  query: 'Query SQL', setup_sql: 'Setup SQL', context: 'Execution context', cells: 'Notebook cells', dialect: 'SQL dialect',
   drillPaths: 'Drill paths', requires: 'Required catalogs', version: 'Document version',
 };
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -16,6 +17,9 @@ const text = (value: unknown, quoteString = false): string => value === undefine
 const equalBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((byte, i) => byte === b[i]);
 function utf8(body: Uint8Array): string | null {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(body); } catch { return null; }
+}
+function jsonObject(body: string | null): Record<string, unknown> | null {
+  try { const value: unknown = JSON.parse(body ?? 'null'); return object(value) ? value : null; } catch { return null; }
 }
 function cupola(body: string | null): Record<string, unknown> | null {
   if (body === null) return null;
@@ -48,6 +52,8 @@ export function reportRevisionChanges(before: ReportResult, after: ReportResult)
       compare(oldDocument.document as Record<string, unknown>, newDocument.document as Record<string, unknown>, 'document', { ...labels, parameters: 'Report parameters' });
       const { document: _old, ...oldExtra } = oldDocument, { document: _new, ...newExtra } = newDocument;
       compare(oldExtra, newExtra, 'body', { version: 'Body version' });
+    } else if (before.envelope!.body_format === after.envelope!.body_format && ['cupola.query/1', 'cupola.notebook/1'].includes(before.envelope!.body_format) && jsonObject(oldText) && jsonObject(newText)) {
+      compare(jsonObject(oldText)!, jsonObject(newText)!, 'body');
     } else if (oldText !== null && newText !== null) fields.push({ key: 'body', label: 'Body', before: oldText, after: newText });
     else fields.push({ key: 'body', label: 'Body', binary: true,
       before: `${before.body!.length} bytes\nSHA-256: ${before.body_sha256 ?? 'unavailable'}`,

@@ -1,3 +1,5 @@
+import { documentKind, fromObject } from './object-adapter';
+import { listLocalObjects, saveLocalObject, deleteLocalObject, type LocalObject } from './local-objects';
 import { deleteEvidenceReport, listEvidenceReports, reportScope, saveEvidenceReport, type EvidenceReport } from '../evidence/reports';
 import { BODY_FORMAT, decodeReport, encodeReport } from './body';
 import { ReportClient } from './client';
@@ -5,12 +7,12 @@ import type { ReportEnvelope, ReportRow } from './contracts.generated';
 import { parseJournal, serializeJournal } from './journal';
 import { localReportEntry, placeLocalReport } from './local-library';
 
-export type TransferSource = { kind: 'local'; report: EvidenceReport } | { kind: 'worker'; url: string; record: ReportRow };
+export type TransferSource = { kind: 'local'; report: EvidenceReport } | { kind: 'document'; scope: string; document: LocalObject } | { kind: 'worker'; url: string; record: ReportRow };
 export interface TransferDestination { url: string | null; folderId: string | null; name: string }
 export interface TransferJob {
   id: string; scope: string; createdAt: number; move: boolean; source: TransferSource; destination: TransferDestination;
-  envelope: ReportEnvelope; body: Uint8Array; localReport?: EvidenceReport;
-  sourceAuth?: string; destinationAuth?: string;
+  envelope: ReportEnvelope; body: Uint8Array; localReport?: EvidenceReport; localDocument?: LocalObject;
+  sourceAuth?: string; destinationAuth?: string; sourceProtocol?: string; destinationProtocol?: string; objectKind?: string; copyMessage?: string;
   copied?: { id: string; revision?: string }; phase: 'copy' | 'remove';
   localId: string; serviceUrl: string; workspaceId?: string;
 }
@@ -37,7 +39,7 @@ export async function prepareTransfer(source: TransferSource, destination: Trans
   context: { scope: string; serviceUrl: string; workspaceId?: string; copyName?: string },
   client: ClientFactory = url => new ReportClient(url), storage: Storage = localStorage): Promise<TransferJob> {
   const job: TransferJob = { ...context, id: crypto.randomUUID(), localId: crypto.randomUUID(), createdAt: Date.now(),
-    source, destination, move, phase: 'copy', envelope: null!, body: null! };
+    source, destination, move, copyMessage: 'Transferred document definition. Source history and publication are not transferred.', phase: 'copy', envelope: null!, body: null! };
   if (source.kind === 'local') {
     const report = listEvidenceReports(reportScope(source.report), storage).find(r => r.id === source.report.id);
     if (!report || !sameReport(report, source.report)) throw new Error('The local report changed. Reopen the transfer with its latest version.');
@@ -52,16 +54,24 @@ export async function prepareTransfer(source: TransferSource, destination: Trans
       job.body = new Uint8Array();
     }
     job.localReport = report;
+  } else if (source.kind === 'document') {
+    const current = listLocalObjects(source.scope, storage).find(d => d.id === source.document.id);
+    if (!current || serializeJournal(current) !== serializeJournal(source.document)) throw new Error('The local document changed. Reopen the transfer.');
+    job.objectKind = current.kind; job.envelope = current.envelope; job.body = current.body; job.localDocument = current;
   } else {
     const sourceClient = client(source.url);
     job.sourceAuth = await sourceClient.recoveryScope();
+    job.sourceProtocol = sourceClient.protocolFor ? await sourceClient.protocolFor('move_report') : undefined;
     const record = await sourceClient.call('get_report', { report_id: source.record.report_id, revision_id: source.record.revision_served });
     if (record.version !== source.record.version) throw new Error('The source report changed. Reload it before transferring.');
     if (record.redacted || !record.envelope || record.body === null) throw new Error('This report has no readable content to transfer.');
     if (move && !record.allowed_actions.includes(destination.url === source.url ? 'move' : 'delete')) throw new Error('You can copy this report, but do not have permission to move it from this location.');
     if (move && destination.url !== source.url && record.revision_served !== record.head_revision_id) throw new Error('Open the current report before moving it to another location. A historical revision can be copied.');
-    job.envelope = record.envelope; job.body = record.body;
-    if (!destination.url) job.localReport = decodeReport(record, context.serviceUrl, context.workspaceId);
+    job.objectKind = documentKind(record); job.envelope = record.envelope; job.body = record.body;
+    if (!destination.url) {
+      if (['cupola.query/1', 'cupola.notebook/1'].includes(record.envelope.body_format)) job.localDocument = { id: job.localId, kind: record.envelope.body_format === 'cupola.query/1' ? 'query' : 'notebook', envelope: record.envelope, body: record.body, updatedAt: job.createdAt };
+      else job.localReport = decodeReport(record, context.serviceUrl, context.workspaceId);
+    }
   }
   if (!move) {
     const title = context.copyName?.trim() || `${job.envelope.title} (copy)`;
@@ -73,6 +83,7 @@ export async function prepareTransfer(source: TransferSource, destination: Trans
   if (destination.url) {
     const target = client(destination.url);
     job.destinationAuth = await target.recoveryScope();
+    job.destinationProtocol = target.protocolFor ? await target.protocolFor('create_report') : undefined;
     const info = await target.call('get_report_service_info', {});
     const actions = destination.folderId ? (await target.call('get_folder', { folder_id: destination.folderId })).allowed_actions : info.root_allowed_actions;
     if (!info.writable || !actions.includes('create_report')) throw new Error('You cannot save reports in this destination. Choose another folder or On this device.');
@@ -83,7 +94,7 @@ export async function prepareTransfer(source: TransferSource, destination: Trans
       const max = info.limits.find(limit => limit.name === 'max_body_bytes')?.value;
       if (max != null && BigInt(job.body.length) > max) throw new Error('This report exceeds the destination’s size limit.');
     }
-  } else if (job.envelope.body_format !== BODY_FORMAT) throw new Error('Only Cupola reports can be saved in this browser. Download the original body instead.');
+  } else if (job.envelope.body_format !== BODY_FORMAT && !job.localDocument) throw new Error('Only Cupola reports can be saved in this browser. Download the original body instead.');
   persist(job, storage); // A storage failure must prevent dispatch.
   return job;
 }
@@ -100,7 +111,7 @@ export async function resumeTransfer(input: TransferJob, client: ClientFactory =
     const target = job.destination.url ? client(job.destination.url) : null;
     if (source && await source.recoveryScope() !== job.sourceAuth || target && await target.recoveryScope() !== job.destinationAuth) throw new Error('Return to the accounts that started this transfer before retrying.');
     if (job.move && job.source.kind === 'worker' && job.source.url === job.destination.url) {
-      await source!.call('move_report', { request_id: job.id + '-move', report_id: job.source.record.report_id, expected_version: job.source.record.version, folder_id: job.destination.folderId });
+      await source!.call('move_report', { request_id: job.id + '-move', report_id: job.source.record.report_id, expected_version: job.source.record.version, folder_id: job.destination.folderId }, undefined, job.sourceProtocol ?? 'vgi.reports.v1');
       job.copied = { id: job.source.record.report_id }; forgetTransfer(job, storage); return job;
     }
     if (job.move && job.source.kind === 'local' && !target) {
@@ -110,11 +121,27 @@ export async function resumeTransfer(input: TransferJob, client: ClientFactory =
       placeLocalReport(reportScope(current), current.id, job.destination.folderId, undefined, storage);
       job.copied = { id: current.id }; forgetTransfer(job, storage); return job;
     }
+    if (job.move && job.source.kind === 'document' && !target) {
+      const current = listLocalObjects(job.source.scope, storage).find(d => d.id === transferId(job.source));
+      if (!current || serializeJournal(current) !== serializeJournal(job.source.document)) throw new Error('The local document changed; it has not been moved.');
+      placeLocalReport(job.scope, current.id, job.destination.folderId, undefined, storage);
+      job.copied = { id: current.id }; forgetTransfer(job, storage); return job;
+    }
+    const localCopy = job.localDocument && { ...job.localDocument, id: job.localId, envelope: job.envelope, updatedAt: job.createdAt };
     if (job.phase === 'copy') {
       if (target) {
-        const copied = await target.call('create_report', { request_id: job.id + '-copy', envelope: job.envelope, body: job.body,
-          folder_id: job.destination.folderId, message: 'Transferred report definition. Source history and publication are not transferred.' });
+        const input = { request_id: job.id + '-copy', envelope: job.envelope, body: job.body,
+          folder_id: job.destination.folderId, message: job.copyMessage ?? 'Transferred report definition. Source history and publication are not transferred.' };
+        const copied = job.destinationProtocol === 'vgi.objects.v1' && job.objectKind
+          ? fromObject(await target.call('objects.create_object', { ...input, object_kind: job.objectKind }))
+          : await target.call('create_report', input, undefined, job.destinationProtocol ?? 'vgi.reports.v1');
         job.copied = { id: copied.report_id, revision: copied.head_revision_id };
+      } else if (localCopy) {
+        const existing = listLocalObjects(job.scope, storage).find(d => d.id === job.localId);
+        if (existing && serializeJournal(existing) !== serializeJournal(localCopy)) throw new Error('The local copy changed. The original has been kept.');
+        placeLocalReport(job.scope, job.localId, job.destination.folderId, undefined, storage);
+        if (!existing) saveLocalObject(job.scope, localCopy, storage);
+        job.copied = { id: job.localId };
       } else {
         const existing = listEvidenceReports(job.scope, storage).find(r => r.id === job.localId);
         const next = { ...job.localReport!, id: job.localId, serviceUrl: job.serviceUrl, workspaceId: job.workspaceId, createdAt: job.createdAt };
@@ -129,13 +156,20 @@ export async function resumeTransfer(input: TransferJob, client: ClientFactory =
       if (target) {
         const copied = await target.call('get_report', { report_id: job.copied!.id, revision_id: job.copied!.revision });
         if (!equalBytes(copied.body, job.body) || copied.head_revision_id !== job.copied!.revision) throw new Error('The destination copy changed or is no longer readable. Check both locations before continuing.');
+      } else if (localCopy) {
+        const current = listLocalObjects(job.scope, storage).find(d => d.id === job.localId);
+        if (!current || serializeJournal(current) !== serializeJournal(localCopy)) throw new Error('The local copy changed. The original has been kept.');
       } else {
         const copied = listEvidenceReports(job.scope, storage).find(r => r.id === job.copied!.id);
         const expected = { ...job.localReport!, id: job.localId, serviceUrl: job.serviceUrl, workspaceId: job.workspaceId, createdAt: job.createdAt };
         if (!copied || JSON.stringify({ ...copied, updatedAt: 0 }) !== JSON.stringify({ ...expected, updatedAt: 0 })) throw new Error('The local copy is missing or changed. The original has been kept.');
       }
       if (source && job.source.kind === 'worker') {
-        await source.call('delete_report', { request_id: job.id + '-remove', report_id: job.source.record.report_id, expected_version: job.source.record.version });
+        await source.call('delete_report', { request_id: job.id + '-remove', report_id: job.source.record.report_id, expected_version: job.source.record.version }, undefined, job.sourceProtocol ?? 'vgi.reports.v1');
+      } else if (job.source.kind === 'document') {
+        const current = listLocalObjects(job.source.scope, storage).find(d => d.id === transferId(job.source));
+        if (current && serializeJournal(current) !== serializeJournal(job.source.document)) throw new Error('The original changed. The copy was saved and the original kept.');
+        deleteLocalObject(job.source.scope, job.source.document.id, storage);
       } else if (job.source.kind === 'local') {
         const original = job.source.report;
       const current = listEvidenceReports(reportScope(original), storage).find(r => r.id === original.id);
@@ -147,3 +181,8 @@ export async function resumeTransfer(input: TransferJob, client: ClientFactory =
   };
   return typeof navigator !== 'undefined' && navigator.locks ? navigator.locks.request(jobKey(input), action) : action();
 }
+
+export const transferLocation = (source: TransferSource) => source.kind === 'worker' ? source.url : 'local';
+export const transferId = (source: TransferSource) => source.kind === 'worker' ? source.record.report_id : source.kind === 'local' ? source.report.id : source.document.id;
+export const transferTitle = (source: TransferSource) => source.kind === 'worker' ? source.record.envelope?.title ?? 'Document' : source.kind === 'local' ? source.report.title : source.document.envelope.title;
+export const transferFolder = (source: TransferSource, scope: string) => source.kind === 'worker' ? source.record.folder_id : localReportEntry(scope, { id: transferId(source) } as EvidenceReport).folderId;

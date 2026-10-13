@@ -43,14 +43,14 @@ export function RevisionComparison({ client, reportId, revisions, initialFrom, i
   </select></label>;
   return <section aria-label="Revision comparison" className="space-y-4 py-3 text-sm">
     <Button size="sm" variant="ghost" onClick={onBack}><ArrowLeft />Back to history</Button>
-    <p className="text-muted-foreground">Compare saved report definitions. Queries are not run. Removed lines use −; added lines use +.</p>
+    <p className="text-muted-foreground">Compare saved definitions. Queries are not run. Removed lines use −; added lines use +.</p>
     <div className="flex flex-col gap-3 sm:flex-row">{selector('From revision', from, setFrom)}{selector('To revision', to, setTo)}</div>
     {!result && <p role="status">Loading revision comparison…</p>}
     {result?.error && <ReportNotice kind="error" title="Could not compare revisions" action={<Button variant="outline" size="sm" onClick={() => setRetry(n => n + 1)}>Retry comparison</Button>}>{result.error}</ReportNotice>}
     {result?.changes && <>
       <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={blocked} onClick={() => onView(to)}><Eye />View selected revision</Button><Button size="sm" variant="ghost" onClick={() => download(result.before!)}><Download />Download before body</Button><Button size="sm" variant="ghost" onClick={() => download(result.after!)}><Download />Download after body</Button></div>
       {result.changes.fields.length ? <p>{result.changes.fields.length} changed {result.changes.fields.length === 1 ? 'field' : 'fields'}: {result.changes.fields.map(f => f.label).join(', ')}.</p> : <p>No definition changes between these revisions.</p>}
-      {result.changes.encodingChanged && <ReportNotice title="Body encoding changed">The report body values match; their JSON formatting or property order differs.</ReportNotice>}
+      {result.changes.encodingChanged && <ReportNotice title="Body encoding changed">The document body values match; their JSON formatting or property order differs.</ReportNotice>}
       {result.changes.fields.map(field => <FieldChanges key={field.key} field={field} />)}
     </>}
   </section>;

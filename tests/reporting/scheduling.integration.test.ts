@@ -33,7 +33,7 @@ test('schedule/grant/ticket/recipient contracts cross Python HTTP with CAS and i
   expect(created.version).toBe(1n);
   const changed = await client.call('schedules.update_schedule', { request_id: request(), schedule_id: created.schedule_id, expected_version: created.version, schedule: { ...definition, title: 'Edited' } });
   await expect(client.call('schedules.update_schedule', { request_id: request(), schedule_id: created.schedule_id, expected_version: created.version, schedule: definition })).rejects.toMatchObject({ errorCode: 'ABORTED' });
-  expect((await client.call('schedules.list_schedules', { report_id: saved.report_id }))[0].version).toBe(changed.version);
+  expect((await client.listSchedulesForSource(worker.url, saved.report_id))[0].version).toBe(changed.version);
   let drop = true;
   const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const response = await fetch(input, init);

@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
-import { FileText, FolderOpen } from 'lucide-react';
+import { BookOpen, Code2, FileText, FolderOpen } from 'lucide-react';
 import { Button } from '../ui/button';
 
 export interface ReportFileItem {
-  id: string; name: string; kind: 'folder' | 'report'; description?: string;
+  id: string; name: string; kind: 'folder' | 'report'; documentKind?: string; description?: string;
   detail?: ReactNode; state: ReactNode; actions?: ReactNode; onOpen: () => void;
 }
 /** Common contents view for browser-local and worker-backed directories. */
@@ -27,7 +27,7 @@ export function ReportFileList({ items, detailLabel = 'Location', emptyMessage =
         <tbody>{items.map(item => <tr key={item.id} className="border-b last:border-0 hover:bg-muted/30 focus-within:bg-muted/30">
           <td className="p-4 align-top">
             <div className="flex min-w-0 items-start gap-3">
-              {item.kind === 'folder' ? <FolderOpen aria-hidden className="mt-0.5 size-4 shrink-0 text-primary" /> : <FileText aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />}
+              {item.kind === 'folder' ? <FolderOpen aria-hidden className="mt-0.5 size-4 shrink-0 text-primary" /> : item.documentKind === 'notebook' ? <BookOpen aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" /> : item.documentKind === 'query' ? <Code2 aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" /> : <FileText aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />}
               <div className="min-w-0 flex-1">
                 <Button variant="link" className="h-auto max-w-full justify-start whitespace-normal break-words p-0 text-left leading-5" onClick={item.onOpen}>{item.name}</Button>
                 {item.description && <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{item.description}</p>}

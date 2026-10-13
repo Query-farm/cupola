@@ -22,6 +22,35 @@ Designed to be shared across all VGI server implementations (Python, TypeScript,
 - **OAuth / PKCE** — works with VGI servers that require authentication, including per-catalog identity
 - **Theming** — custom color themes loadable via `?theme=<url>`, with a live editor at `/theme-builder`
 
+## Shared document library
+
+The sidebar Library combines local saved documents and workers advertising `vgi.objects.v1`.
+Reports, notebooks and named queries share folders, search/type filters, revision history,
+ownership, links and copy/move workflows. Query tabs and notebooks retain local recovery
+drafts; **Save to library** writes a versioned object independent of an open tab. Closing a
+query tab does not delete its saved object. Opening shared SQL never executes it.
+
+Cupola prefers objects, generic ownership discovery and schedules v2, and falls back to
+report-only workers. Pending writes and transfers retain their original protocol/request ID
+across upgrades. Copies preserve opaque bytes and unknown fields. CAS conflicts preserve
+the local draft; retry ambiguous saves before starting another mutation.
+
+Saved notebook/query documents carry explicit catalog aliases, locations and default schema.
+Share links provision those catalogs through the normal consent flow; credentials, local
+workspace IDs and result buffers are excluded. Running uses an isolated connection and
+refuses missing or mismatched bindings. Bound query documents support result snapshots in
+Perspective; its live-query mode is disabled until it can carry the isolated context.
+
+Only reports currently support scheduling and PDF/HTML email delivery. Notebook execution
+stays interactive; worker SQL tasks, scheduled queries and data-alert evaluation remain
+unadvertised. Worker permission hints guide the UI and the worker enforces access.
+
+The reporting contracts are generated from the companion `vgi-python` checkout with
+`../vgi-python/.venv/bin/python scripts/generate-reporting-contracts.py`.
+`bun test ./tests/unit`, `bun test tests/reporting/*.integration.test.ts`, and Playwright's
+`tests/objects.spec.ts`, `tests/reporting.spec.ts`, `tests/report-scheduling.spec.ts` exercise
+this integration against isolated real Python HTTP workers; email is captured locally.
+
 ## Stack
 
 - [Astro](https://astro.build) + [React](https://react.dev) — static site with React islands
