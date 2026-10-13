@@ -625,6 +625,7 @@ test('sidebar drag moves a published report into nested folders and back with it
   await expect(dialog).toHaveCount(0);
   const moved = await c.call('get_report', { report_id: initial.report_id });
   expect(moved.folder_id).toBe(child.folder_id); expect(moved.published_revision_id).toBe(initial.head_revision_id); expect(moved.head_revision_id).toBe(initial.head_revision_id);
+  await expect(page.getByText('Moved “Drag published report”', { exact: false })).toHaveCount(0);
   expect(await c.call('list_revisions', { report_id: initial.report_id })).toHaveLength(1);
   await expect(source).toHaveAttribute('aria-level', '4');
   await source.locator(':scope > div').dragTo(tree.getByRole('treeitem', { name: 'Finance report library', exact: true }));

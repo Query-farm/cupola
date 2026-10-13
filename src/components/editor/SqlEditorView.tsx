@@ -614,7 +614,7 @@ export function SqlEditorView({ active = true, catalogData, attachedCatalogs = [
   // catalog; the SQL opens staged but unexecuted.
   const handleShareLink = useCallback(async () => {
     const binding = activeDoc ? queryBinding(activeDoc, storageScope) : null;
-    if (binding && !binding.localScope) { await navigator.clipboard.writeText(await documentLink(binding)); setShareCopied(true); return; }
+    if (binding && !binding.deleted && !binding.localScope) { await navigator.clipboard.writeText(await documentLink(binding)); setShareCopied(true); return; }
     const sql = editorRef.current?.getDoc() ?? activeDoc?.sql ?? "";
     if (!sql.trim()) return;
     // Always name the service, even when it's the origin fallback (a flat

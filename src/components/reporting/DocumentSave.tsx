@@ -1,4 +1,5 @@
 import { appBase } from '../../lib/app-base';
+import { OPEN_REPORT_EVENT, type OpenReportDetail } from '../../lib/evidence/open-report';
 import { listLocalObjects, saveLocalObject, localObjectRecord } from '../../lib/reporting/local-objects';
 import { placeLocalReport, localLibrary, localFolderPath } from '../../lib/reporting/local-library';
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
@@ -35,7 +36,7 @@ export const DocumentSave = forwardRef<DocumentSaveHandle, {
   const configurationKey = documentConfigurationKey(scope, kind, doc.id);
   const [configuration, setConfiguration] = useState<DocumentConfiguration | undefined>(() => { try { return JSON.parse(localStorage.getItem(configurationKey) ?? 'null') ?? undefined; } catch { return undefined; } });
   const dirty = binding ? documentIsDirty(kind, doc, binding) || Boolean(configuration) : true;
-  const editable = binding && !binding.readOnly && binding.record.allowed_actions.includes('edit');
+  const editable = binding && !binding.deleted && !binding.readOnly && binding.record.allowed_actions.includes('edit');
   const destination = binding?.localScope ? 'On this device' : locations.find(l => l.url === binding?.url)?.name ?? 'Library';
   useEffect(() => {
     if (!binding?.record.folder_id) { setFolderPath(''); return; }
@@ -66,7 +67,10 @@ export const DocumentSave = forwardRef<DocumentSaveHandle, {
   }, [scope, kind, doc.id, binding]);
   useEffect(() => {
     if (!binding) return;
-    window.dispatchEvent(new CustomEvent('cupola:document-edit-state', { detail: { url: binding.url, id: binding.record.report_id, dirty: dirty || Boolean(pending?.pending) || busy, record: binding.record, doc } }));
+    const announce = () => window.dispatchEvent(new CustomEvent('cupola:document-edit-state', { detail: { url: binding.url, id: binding.record.report_id, dirty: dirty || Boolean(pending?.pending) || busy, record: binding.record, doc } }));
+    announce();
+    window.addEventListener('cupola:request-document-edit-state', announce);
+    return () => window.removeEventListener('cupola:request-document-edit-state', announce);
   }, [doc, dirty, binding, pending, busy]);
   function chooseCopy() {
     setTarget(binding?.url ?? 'local'); setFolder(binding?.record.folder_id ?? null);
@@ -85,9 +89,16 @@ export const DocumentSave = forwardRef<DocumentSaveHandle, {
       const url = new URL(location.href);
       url.pathname = `${appBase.replace(/\/$/, '')}/reports`;
       for (const key of ['evidence_report', 'evidence_new', 'report_revision', 'report_folder', 'notebook', 'report_scheduler', 'report_schedule', 'report_run']) url.searchParams.delete(key);
-      url.searchParams.set('report_service', binding.url); url.searchParams.set('report_id', binding.record.report_id); url.searchParams.set('report_view', page);
+      url.searchParams.set('report_service', binding.url); url.searchParams.set('report_id', binding.record.report_id); url.searchParams.delete('report_view');
       if (binding.pinnedRevision) url.searchParams.set('report_revision', binding.pinnedRevision);
-      location.href = url.href;
+      // A query first saved from a scratch tab may still have the workspace URL.
+      // Give its editor a document URL so Back can reopen the same tab.
+      history.replaceState(history.state, '', url);
+      const returnTo = url.href;
+      url.searchParams.set('report_view', page);
+      window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, {
+        detail: { serviceUrl: libraryScope, href: url.href, returnTo },
+      }));
     }
     catch (e) { setError(reportError(e)); }
   }
@@ -143,22 +154,22 @@ export const DocumentSave = forwardRef<DocumentSaveHandle, {
       if (!(intent?.copy ?? copy) || !binding) { bindDocument(scope, kind, doc.id, next); setBinding(next); acknowledgeTitle(result.envelope!.title); setConfiguration(undefined); localStorage.removeItem(configurationKey); } localStorage.removeItem(intentKey); setPending(null); setChoosing(false); setNotice((intent?.copy ?? copy) && binding ? `Copy saved as “${result.envelope!.title}”.` : ''); refresh();
     } catch (e) {
       if (activeJournal && !activeJournal.pending) { localStorage.removeItem(intentKey); setPending(null); }
-      setError(reportError(e)); setStatusOpen(true);
+      setError(reportError(e)); if (!choosing) setStatusOpen(true);
       if (errorCode(e) === 'ABORTED' && binding && !binding.localScope) {
         try { const record = await new ReportClient(binding.url).call('get_report', { report_id: binding.record.report_id }); window.dispatchEvent(new CustomEvent('cupola:document-newer-version', { detail: { url: binding.url, record } })); } catch { /* The original error remains actionable. */ }
       }
     } finally { setBusy(false); }
   }
-  const state = busy ? 'Saving…' : pending?.pending ? 'Save unconfirmed' : error ? 'Save failed' : binding && !editable ? 'Read-only' : !binding ? 'Local draft' : dirty ? 'Changes to save' : 'Saved';
+  const state = busy ? 'Saving…' : pending?.pending ? 'Save unconfirmed' : error ? 'Save failed' : binding?.deleted ? 'Deleted from library' : binding && !editable ? 'Read-only' : !binding ? 'Local draft' : dirty ? 'Changes to save' : 'Saved';
   const StatusIcon = busy ? Loader2 : error || pending?.pending ? AlertCircle : binding && !editable ? LockKeyhole : binding && !dirty ? Check : Circle;
   return <div className="flex min-w-0 items-center gap-2" aria-label={`Save ${kind}`}>
-    <Popover open={choosing} onOpenChange={open => { if (!busy) setChoosing(open); }}>
+    <Popover open={choosing} onOpenChange={open => { if (!open && !busy) setChoosing(false); }}>
       <div className="inline-flex shrink-0 items-center rounded-lg border bg-background">
         <PopoverTrigger render={<Button size="sm" variant="ghost" className="h-7 rounded-r-none" disabled={disabled || busy || Boolean(pending?.pending)} />} onClick={event => { event.preventDefault(); requestSave(); }}><Save />Save</PopoverTrigger>
         <DropdownMenu><DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" className="h-7 w-6 rounded-l-none border-l" aria-label="Save options" disabled={busy} />}><ChevronDown /></DropdownMenuTrigger><DropdownMenuContent align="start">
           <DropdownMenuItem disabled={disabled || busy || Boolean(pending?.pending)} onClick={chooseCopy}>{binding ? 'Save a copy…' : 'Save as…'}</DropdownMenuItem>
           <DropdownMenuItem disabled={disabled || Boolean(pending?.pending)} onClick={() => setSourcesOpen(true)}>Data sources…</DropdownMenuItem>
-          {binding && !binding.localScope && <><DropdownMenuSeparator /><DropdownMenuItem onClick={() => void openPage('details')}>Details</DropdownMenuItem><DropdownMenuItem onClick={() => void openPage('history')}>Version history</DropdownMenuItem><DropdownMenuItem onClick={() => void openPage('share')}>Share</DropdownMenuItem>{binding.record.allowed_actions.includes('transfer_ownership') && <DropdownMenuItem disabled={dirty || Boolean(pending?.pending)} onClick={() => void openPage('ownership')}>Transfer ownership…</DropdownMenuItem>}</>}
+          {binding && !binding.deleted && !binding.localScope && <><DropdownMenuSeparator /><DropdownMenuItem onClick={() => void openPage('details')}>Details</DropdownMenuItem><DropdownMenuItem onClick={() => void openPage('history')}>Version history</DropdownMenuItem><DropdownMenuItem onClick={() => void openPage('share')}>Share</DropdownMenuItem>{binding.record.allowed_actions.includes('transfer_ownership') && <DropdownMenuItem disabled={dirty || Boolean(pending?.pending)} onClick={() => void openPage('ownership')}>Transfer ownership…</DropdownMenuItem>}</>}
         </DropdownMenuContent></DropdownMenu>
       </div>
       <PopoverContent align="start" className="w-[min(28rem,calc(100vw-2rem))] max-h-[min(36rem,80dvh)] overflow-auto p-4">

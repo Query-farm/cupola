@@ -75,7 +75,7 @@ test('live Evidence report reuses the shell worker across refresh, editing and t
   await expect(report).not.toContainText(/Attribute .* must|Binder Error|Parser Error|Required:/);
   await page.evaluate(() => { (window as any).__evidenceTestWorker = (window as any).__bridge.worker; });
   await page.getByRole('tab', { name: 'Query Editor', exact: true }).click();
-  await page.getByRole('tab', { name: 'Library', exact: true }).click();
+  await page.getByRole('tab', { name: 'Reports', exact: true }).click();
   await panel.getByRole('button', { name: 'Refresh report', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'Refresh report', exact: true })).toBeEnabled({ timeout: 30_000 });
   await expect(report).toContainText('Glen Allen');

@@ -1,5 +1,7 @@
 import { LibraryNewMenu } from './LibraryNewMenu';
-import { newLibraryDocument } from '../../lib/reporting/documents';
+import { markDocumentDeleted, newLibraryDocument } from '../../lib/reporting/documents';
+import { DeleteWorkerDocumentDialog } from './DeleteWorkerDocumentDialog';
+import { openScheduleActivity } from './ScheduleActivity';
 import { catalogInventory } from '../../lib/catalog-store';
 import { listLocalObjects, deleteLocalObject, saveLocalObject, type LocalObject } from '../../lib/reporting/local-objects';
 import { transferLocation, transferId, transferFolder } from '../../lib/reporting/transfers';
@@ -37,6 +39,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
   const selectedNode = () => /\/(reports|evidence)(\/|$)/.test(location.pathname) ? currentReportNode() : '';
   const [selected, setSelected] = useState(selectedNode);
   const [actionError, setActionError] = useState(''), [preparing, setPreparing] = useState(false);
+  const [deleting, setDeleting] = useState<{ url: string; record: ReportRow } | null>(null);
   useEffect(() => {
     const read = () => queueMicrotask(() => setSelected(selectedNode()));
     for (const event of ['popstate', OPEN_REPORT_EVENT, REPORT_ROUTE_CHANGED]) window.addEventListener(event, read);
@@ -123,6 +126,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
   function directoryRow(destination: ReportDestination, name: string) {
     const id = reportNodeKey(destination);
     const extraActions = [
+      ...(!destination.folderId && destination.location !== 'local' ? [{ id: 'schedules', label: 'Schedules & alerts', icon: CalendarClock, onClick: () => openScheduleActivity(serviceUrl, destination.location) }] : []),
       ...(allowed(destination, 'create_folder') ? [{ id: 'folder', label: 'New folder…', icon: FolderPlus, onClick: () => open(destination, 'folder') }] : []),
       ...(destination.folderId && allowed(destination, 'rename') ? [{ id: 'rename', label: 'Rename…', icon: Pencil, onClick: () => open(destination, 'rename') }] : []),
       ...(destination.folderId && destination.location !== 'local' && allowed(destination, 'transfer_ownership') ? [{ id: 'ownership', label: 'Transfer ownership…', icon: UserRound, onClick: () => open(destination, 'ownership') }] : []),
@@ -142,6 +146,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
       { id: 'details', label: 'Details', icon: Info, onClick: () => open(entry.destination, 'details') },
       ...(source?.kind === 'worker' && !source.record.redacted ? [{ id: 'copy', label: 'Save a copy…', icon: Copy, disabled: preparing || Boolean(transfer), onClick: () => void copy(entry.id) }] : []),
       ...(source?.kind === 'worker' && locations.find(l => l.url === source.url)?.info?.writable && source.record.allowed_actions.includes('transfer_ownership') ? [{ id: 'ownership', label: 'Transfer ownership…', icon: UserRound, onClick: () => open(entry.destination, 'ownership') }] : []),
+      ...(source?.kind === 'worker' && locations.find(l => l.url === source.url)?.info?.writable && source.record.allowed_actions.includes('delete') ? [{ id: 'delete', label: 'Delete…', icon: Trash2, variant: 'destructive' as const, disabled: preparing || Boolean(transfer), onClick: () => setDeleting(source) }] : []),
     ];
   }
   const sourceIcon = (id: string) => { const source = sources.get(id); const kind = source?.kind === 'worker' ? documentKind(source.record) : source?.kind === 'document' ? source.document.kind : 'report'; return kind === 'notebook' ? BookOpen : kind === 'query' ? Code2 : FileText; };
@@ -188,5 +193,12 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
       {errors.length > 0 && <div className="px-2 py-1 text-xs text-destructive"><p role="alert">{errors.join(' ')}</p><button className="underline" onClick={refresh}>Retry report libraries</button></div>}
       {actionError && <p role="alert" className="px-2 py-1 text-xs text-destructive">{actionError}</p>}
     </SavedDocumentsSidebar>
+    {deleting && <DeleteWorkerDocumentDialog {...deleting} libraryName={locations.find(l => l.url === deleting.url)?.name ?? 'this library'} onClose={() => setDeleting(null)} onDeleted={authScope => {
+      const target = deleting;
+      setDeleting(null); setActionError('');
+      try { markDocumentDeleted(target.url, target.record.report_id, authScope); } catch (e) { setActionError(`Deleted from the worker. Could not update the local draft status: ${reportError(e)}`); }
+      if (currentReportNode() === reportNodeKey({ location: target.url, reportId: target.record.report_id })) open({ location: target.url, folderId: target.record.folder_id });
+      refresh();
+    }} />}
   </section>;
 }

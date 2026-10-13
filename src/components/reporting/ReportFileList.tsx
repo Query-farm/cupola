@@ -3,12 +3,12 @@ import { BookOpen, Code2, FileText, FolderOpen } from 'lucide-react';
 import { Button } from '../ui/button';
 
 export interface ReportFileItem {
-  id: string; name: string; kind: 'folder' | 'report'; documentKind?: string; description?: string;
+  id: string; name: string; kind: 'folder' | 'report'; documentKind?: string; description?: string; tags?: string[];
   detail?: ReactNode; state: ReactNode; actions?: ReactNode; onOpen: () => void;
 }
 /** Common contents view for browser-local and worker-backed directories. */
-export function ReportFileList({ items, detailLabel = 'Location', emptyMessage = 'No reports found.', filters, heading = 'Folder contents', loadingMessage }: {
-  items: ReportFileItem[]; detailLabel?: string; emptyMessage?: string; filters?: ReactNode; heading?: string; loadingMessage?: string;
+export function ReportFileList({ items, detailLabel = 'Location', emptyMessage = 'No reports found.', filters, heading = 'Folder contents', loadingMessage, onTag }: {
+  items: ReportFileItem[]; detailLabel?: string; emptyMessage?: string; filters?: ReactNode; heading?: string; loadingMessage?: string; onTag?: (tag: string) => void;
 }) {
   return <section aria-label={heading} className="overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm">
     <header className="flex items-center justify-between gap-3 px-4 py-3">
@@ -31,6 +31,7 @@ export function ReportFileList({ items, detailLabel = 'Location', emptyMessage =
               <div className="min-w-0 flex-1">
                 <Button variant="link" className="h-auto max-w-full justify-start whitespace-normal break-words p-0 text-left leading-5" onClick={item.onOpen}>{item.name}</Button>
                 {item.description && <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{item.description}</p>}
+                {Boolean(item.tags?.length) && <ul aria-label={`Tags for ${item.name}`} className="mt-2 flex flex-wrap gap-1">{[...new Set(item.tags)].map(tag => <li key={tag}>{onTag ? <button type="button" aria-label={`Filter by tag: ${tag}`} className="max-w-full break-words rounded-md border bg-muted/50 px-2 py-0.5 text-xs hover:bg-accent focus-visible:outline focus-visible:outline-ring" onClick={() => onTag(tag)}>{tag}</button> : <span className="rounded-md border px-2 py-0.5 text-xs">{tag}</span>}</li>)}</ul>}
                 <div className="mt-1 space-y-0.5 break-words text-xs text-muted-foreground md:hidden">
                   {item.detail && <p>{detailLabel}: {item.detail}</p>}<p>{item.state}</p>
                 </div>

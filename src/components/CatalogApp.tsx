@@ -9,7 +9,7 @@ import { quoteIdent } from "@/lib/duckdb-query";
 import { appBase } from "@/lib/app-base";
 import { toLatestBaseUrl } from "@/lib/share-query";
 import { useMediaQuery } from "@/lib/use-media-query";
-import { OPEN_REPORT_EVENT, reportHref, type OpenReportDetail } from "@/lib/evidence/open-report";
+import { OPEN_REPORT_EVENT, pushReportRoute, reportHref, type OpenReportDetail } from "@/lib/evidence/open-report";
 import { REPORT_ROUTE_CHANGED, reportNavigationHref } from "@/lib/reporting/navigation";
 import {
   getServiceUrl,
@@ -489,7 +489,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       // listener a chance to handle the route; otherwise leave it in the URL.
       queueMicrotask(() => {
         if (!detail.handled) {
-          window.history.pushState(window.history.state, "", detail.href + window.location.hash);
+          pushReportRoute(detail);
           window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
         }
       });

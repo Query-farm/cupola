@@ -7,6 +7,163 @@ const test = base.extend<{}, { reporting: Awaited<ReturnType<typeof startReporti
 });
 test.use({ viewport: { width: 1600, height: 1150 } });
 test.setTimeout(150_000);
+
+test('sidebar query deletion confirms, retries a lost reply, and retains the open draft', async ({ page, reporting }) => {
+  const c = reporting.client();
+  const saved = await c.call('create_report', { request_id: crypto.randomUUID(), envelope: { title: 'Delete sidebar query', description: '', tags: [], body_format: 'cupola.query/1', data_sources: [], parameters: [] }, body: new TextEncoder().encode('{"query":"SELECT 1"}') });
+  await page.goto(`reports?service=${encodeURIComponent(reporting.url)}&report_service=${encodeURIComponent(reporting.url)}&report_id=${saved.report_id}#token=test-alice`);
+  await expect(page.locator('.cm-content:visible')).toContainText('SELECT 1', { timeout: 40_000 });
+  await page.locator('.cm-content:visible').fill('SELECT 87654 AS preserved_draft');
+  const sidebar = page.getByTestId('catalog-sidebar'), row = sidebar.getByRole('link', { name: 'Delete sidebar query', exact: true });
+  await row.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Delete…', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Delete query?', exact: true });
+  await expect(dialog).toContainText('Finance report library');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  expect((await c.call('get_report', { report_id: saved.report_id })).report_id).toBe(saved.report_id);
+  await row.click({ button: 'right' }); await page.getByRole('menuitem', { name: 'Delete…', exact: true }).click();
+  let drop = true;
+  await page.route('**/delete_object', async route => { const response = await route.fetch(); if (drop) { drop = false; await route.abort('failed'); } else await route.fulfill({ response }); });
+  await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(dialog).toContainText('Deletion is not confirmed');
+  await dialog.getByRole('button', { name: 'Retry delete', exact: true }).click();
+  await expect(dialog).not.toBeVisible(); await expect(row).toHaveCount(0);
+  expect((await c.call('list_reports', {})).some(record => record.report_id === saved.report_id)).toBe(false);
+  await page.getByTestId('tab-editor').click();
+  await expect(page.locator('.cm-content:visible')).toContainText('87654');
+  await expect(page.getByRole('status').filter({ hasText: 'Deleted from library' })).toBeVisible();
+  expect(new URL(page.url()).searchParams.has('report_id')).toBe(false);
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Save destination' })).toContainText('Save a copy');
+});
+
+test('sidebar deletion respects concurrent changes and worker permissions', async ({ page, reporting }) => {
+  const c = reporting.client();
+  let saved = await c.call('create_report', { request_id: crypto.randomUUID(), envelope: { title: 'Protected sidebar query', description: '', tags: [], body_format: 'cupola.query/1', data_sources: [], parameters: [] }, body: new TextEncoder().encode('{"query":"SELECT 1"}') });
+  await page.goto(`reports?service=${encodeURIComponent(reporting.url)}&report_service=${encodeURIComponent(reporting.url)}&report_id=${saved.report_id}#token=test-alice`);
+  const sidebar = page.getByTestId('catalog-sidebar');
+  await sidebar.getByRole('link', { name: 'Protected sidebar query', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Delete…', exact: true }).click();
+  saved = await c.call('commit_revision', { request_id: crypto.randomUUID(), report_id: saved.report_id, expected_revision_id: saved.head_revision_id, envelope: saved.envelope!, body: new TextEncoder().encode('{"query":"SELECT 2"}') });
+  const dialog = page.getByRole('dialog', { name: 'Delete query?', exact: true });
+  await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('changed on the worker');
+  expect((await c.call('get_report', { report_id: saved.report_id })).head_revision_id).toBe(saved.head_revision_id);
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await c.call('publish', { request_id: crypto.randomUUID(), report_id: saved.report_id, revision_id: saved.head_revision_id, expected_published_revision_id: null });
+  await page.evaluate(url => sessionStorage.removeItem('vgi.oauth.tokens.' + url), reporting.url);
+  await page.goto(`reports?service=${encodeURIComponent(reporting.url)}&report_service=${encodeURIComponent(reporting.url)}&report_id=${saved.report_id}`);
+  await sidebar.getByRole('link', { name: 'Protected sidebar query', exact: true }).click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: 'Delete…', exact: true })).toHaveCount(0);
+});
+
+test('saved object tags are visible and filterable, including through the sidebar', async ({ page, reporting }) => {
+  const c = reporting.client();
+  for (const [title, tags] of [['Quarterly revenue', ['board-review']], ['Unrelated query', ['operations']]] as const) {
+    await c.call('create_report', { request_id: crypto.randomUUID(), envelope: { title, description: title === 'Quarterly revenue' ? 'Forecast for directors' : '', tags: [...tags], body_format: 'cupola.query/1', data_sources: [], parameters: [] }, body: new TextEncoder().encode('{"query":"SELECT 1"}') });
+  }
+  await page.goto(`reports?service=${encodeURIComponent(reporting.url)}#token=test-alice`);
+  await expect(page.getByRole('tab', { name: 'Reports', exact: true })).toBeVisible();
+  const overview = page.getByRole('region', { name: 'Report browser', exact: true });
+  await expect(overview.getByRole('list', { name: 'Tags for Quarterly revenue' })).toContainText('board-review');
+  await overview.getByRole('button', { name: 'Filter by tag: board-review', exact: true }).click();
+  await expect(overview.getByLabel('Filter by tag', { exact: true })).toHaveValue('board-review');
+  await expect(overview.getByRole('button', { name: 'Unrelated query', exact: true })).toHaveCount(0);
+  const sidebar = page.getByTestId('catalog-sidebar'), filter = sidebar.getByRole('textbox', { name: 'Filter catalog' });
+  await filter.fill('board-review');
+  await expect(sidebar.getByRole('link', { name: 'Quarterly revenue', exact: true })).toBeVisible();
+  await expect(sidebar.getByRole('link', { name: 'Unrelated query', exact: true })).toHaveCount(0);
+  await filter.fill('directors');
+  await expect(sidebar.getByRole('link', { name: 'Quarterly revenue', exact: true })).toBeVisible();
+  await filter.fill('');
+  await sidebar.getByRole('link', { name: 'Finance report library', exact: true }).click();
+  const library = page.getByRole('region', { name: 'Worker report library', exact: true });
+  await expect(library.getByRole('list', { name: 'Tags for Quarterly revenue' })).toContainText('board-review');
+  await library.getByRole('button', { name: 'Filter by tag: board-review', exact: true }).click();
+  await expect(library.getByRole('button', { name: 'Unrelated query', exact: true })).toHaveCount(0);
+});
+
+for (const browserName of ['chromium', 'webkit'] as const) test(`query history preserves the app, draft, results and SQL session in ${browserName}`, async ({ reporting, baseURL }) => {
+  const browser = await ({ chromium, webkit })[browserName].launch();
+  const context = await browser.newContext({ baseURL, viewport: { width: 1400, height: 1000 }, storageState: withExtensions() });
+  const page = await context.newPage(), errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.addInitScript(({ url }) => sessionStorage.setItem('vgi.oauth.tokens.' + url, JSON.stringify({ access_token: 'test-alice', expires_at: Math.floor(Date.now() / 1000) + 3600, use_id_token: false })), { url: reporting.url });
+    await page.goto(`?service=${encodeURIComponent(reporting.url)}`);
+    await waitForShellBridge(page, 40_000);
+    await page.getByTestId('tab-editor').click();
+    await page.evaluate(() => { (window as any).__historyTest = 'same app'; });
+    const editor = page.locator('.cm-content:visible'), run = page.getByRole('button', { name: 'Run', exact: true });
+    await editor.fill('CREATE TEMP TABLE history_session AS SELECT 314159 AS retained');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    const picker = page.getByRole('region', { name: 'Save destination' });
+    await picker.getByLabel('Name', { exact: true }).fill(`History round trip ${browserName}`);
+    await picker.getByRole('treeitem', { name: 'Finance report library', exact: true }).click();
+    await picker.getByRole('button', { name: 'Save here' }).click();
+    await expect(picker).not.toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
+    await run.click();
+    await expect(page.getByTestId('editor-running')).not.toBeVisible();
+    await editor.fill('SELECT * FROM history_session'); await run.click();
+    await expect(page.getByRole('table')).toContainText('314159');
+    await editor.fill('SELECT retained + 1 AS edited FROM history_session');
+    // First open exercises the lazy Library mount; subsequent opens use its listener.
+    const hash = new URL(page.url()).hash;
+    for (const mounted of [false, true]) {
+      await page.getByRole('button', { name: 'Save options', exact: true }).click();
+      await page.getByRole('menuitem', { name: 'Version history', exact: true }).click();
+      const history = page.getByRole('region', { name: 'Version history' });
+      await expect(history).toContainText('Revision 1');
+      await expect(history).toContainText('Changes are pending');
+      expect(await page.evaluate(() => (window as any).__historyTest)).toBe('same app');
+      expect(new URL(page.url()).hash).toBe(hash);
+      if (mounted) await page.goBack();
+      else await history.getByRole('button', { name: 'Back to document', exact: true }).click();
+      await expect(page.getByTestId('tab-editor')).toHaveAttribute('aria-selected', 'true');
+      await expect(editor).toContainText('retained + 1');
+      await expect(page.getByRole('table')).toContainText('314159');
+      await expect(page.getByTestId('editor-tabs').getByTestId('editor-tab')).toHaveCount(1);
+      if (mounted) {
+        await page.goForward(); await expect(history).toContainText('Revision 1');
+        await page.goBack(); await expect(editor).toContainText('retained + 1');
+      }
+    }
+    await run.click(); await expect(page.getByRole('table')).toContainText('314160');
+    expect(await page.evaluate(() => (window as any).__historyTest)).toBe('same app');
+    expect(errors).toEqual([]);
+  } finally { await browser.close(); }
+});
+
+test('query name conflicts stay in the save form and a corrected name can be saved', async ({ page, reporting }) => {
+  const client = reporting.client();
+  const existing = await client.call('create_report', { request_id: crypto.randomUUID(), envelope: { title: 'Taken query name', description: '', tags: [], body_format: 'cupola.query/1', data_sources: [], parameters: [] }, body: new TextEncoder().encode('{"query":"SELECT 1"}') });
+  await page.goto(`?service=${encodeURIComponent(reporting.url)}#token=test-alice`);
+  await waitForShellBridge(page, 40_000);
+  await page.getByTestId('tab-editor').click();
+  await page.locator('.cm-content:visible').fill('SELECT 987 AS draft');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  const picker = page.getByRole('region', { name: 'Save destination' });
+  await picker.getByLabel('Name', { exact: true }).fill('  Taken query name  ');
+  await picker.getByRole('treeitem', { name: 'Finance report library', exact: true }).click();
+  await picker.getByRole('button', { name: 'Save here' }).click();
+  await expect(picker.getByRole('alert')).toHaveText('A query with this name already exists in this folder. Choose a different name.');
+  await expect(page.locator('.cm-content:visible')).toContainText('987');
+  await picker.getByLabel('Name', { exact: true }).fill('  Corrected query name  ');
+  await picker.getByRole('button', { name: 'Save here' }).click();
+  await expect(picker).not.toBeVisible();
+  const tabs = page.getByTestId('editor-tabs');
+  await expect(tabs.getByRole('button', { name: 'Corrected query name', exact: true })).toBeVisible();
+  await tabs.getByRole('button', { name: 'Corrected query name', exact: true }).dblclick();
+  const name = tabs.getByRole('textbox', { name: 'Rename Corrected query name' });
+  await name.fill('Taken query name'); await name.press('Enter');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(picker).not.toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'A query with this name already exists' })).toBeVisible();
+  expect((await client.call('get_report', { report_id: existing.report_id })).revision_number).toBe(1n);
+  expect((await client.call('list_reports', {})).filter(row => row.envelope?.title === 'Taken query name')).toHaveLength(1);
+});
+
 for (const kind of ['query', 'notebook'] as const) test(`${kind} opens without executing, saves unknown metadata, recovers a lost reply, and copies locally`, async ({ page, reporting }) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
   const original = kind === 'query' ? { query: 'SELECT 424242 AS answer', context: {}, vendor: { keep: 7 } } : { version: 1, cells: [{ id: 'cell', type: 'sql', title: 'Query', source: 'SELECT 424242 AS answer', collapsed: false, charts: [], vendor: { keep: 9 } }], context: {}, vendor: { keep: 7 } };

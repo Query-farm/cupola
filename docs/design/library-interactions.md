@@ -1,6 +1,6 @@
 # Library interactions
 
-Cupola's Library stores reports, queries, and notebooks locally or on workers. The sidebar is quick navigation; the Library page adds cross-library search, descriptions, tags, type filters, and organization. Both use the same creation choices and respect worker capabilities. Routes keep `/reports` for compatibility.
+Cupola's Reports tab opens the library of reports, queries, and notebooks stored locally or on workers. The sidebar is quick navigation; the main listing adds cross-library search, descriptions, tags, type filters, and organization. Both use the same creation choices and respect worker capabilities. Routes keep `/reports` for compatibility.
 
 ## Editing and saving
 
@@ -12,11 +12,23 @@ The destination picker is temporary and does not push SQL or results down the pa
 
 Closing a saved query tab leaves the library object intact. An unsaved edit prompts before closing and remains recoverable when the query is reopened. Worker locations, authenticated identities, and explicitly pinned revisions have distinct draft identities. Switching query tabs preserves query results and execution sessions. Legacy library document URLs still open the appropriate editor; management pages stay in the current workspace.
 
+Opening query version history uses in-app navigation. The query editor, unsaved SQL, results, and execution session survive Back to document and browser Back/Forward. Management pages request the mounted editor's current save state before enabling actions that could replace a draft.
+
 ## Reopening and conflicts
 
 A fresh worker response replaces an unchanged browser recovery draft when a newer revision exists. Unsaved edits or an unconfirmed mutation prevent replacement. Show a comparison of the current draft and latest saved version, with explicit choices to keep a copy or load the latest version. Preserve a usable local recovery copy before replacing edited content. Never silently rebase edits onto another author's revision. Read permissions and edit availability come from the fresh response.
 
 An interrupted mutation keeps its original request ID, worker, authentication scope, and payload. Retry that exact request before issuing another mutation. A refused request must not leave its old worker selected for a later save to a different destination.
+
+Workers decide name uniqueness. When a worker refuses a duplicate name, show its message inside the destination form and keep that form editable for correction. A normal Save on an already bound document does not open the destination picker; errors appear through Save status and leave the draft intact.
+
+The sidebar's Delete action is available when the worker permits deletion. Confirmation names the document and library; version checks protect concurrent changes, and an uncertain response retries the original request. Deletion removes the saved object but retains open query/notebook drafts for Save a copy. Completed moves and copies close their dialog, navigate to the destination, and refresh the listing without an additional success banner. Errors and unconfirmed transfers remain visible.
+
+## Finding objects and schedules
+
+The sidebar filter searches names, descriptions, and tags. Main listings display tags beneath each document; clicking a tag applies the tag filter. The search field and tag selector support broader cross-library searches.
+
+Schedules & alerts defaults to all report schedules the current user can access. Its worker selector narrows the list, and Needs attention remains a separate filter. The same page is reachable from a worker's sidebar context menu, initially filtered to that worker, or from the main listing for all connected workers.
 
 ## Execution and sources
 

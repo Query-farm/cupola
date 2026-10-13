@@ -14,7 +14,7 @@ import { encodeWorkspaceToken } from '../workspace/codec';
 
 export type DocumentKind = 'notebook' | 'query';
 export interface DocumentConfiguration { sources: DataSource[]; context: ExecutionContext }
-export interface DocumentBinding { localScope?: string; authScope?: string; pinnedRevision?: string; url: string; record: ReportResult; original: Record<string, any>; context: ExecutionContext; readOnly?: boolean; configurationDraft?: DocumentConfiguration }
+export interface DocumentBinding { localScope?: string; authScope?: string; pinnedRevision?: string; url: string; record: ReportResult; original: Record<string, any>; context: ExecutionContext; readOnly?: boolean; deleted?: boolean; configurationDraft?: DocumentConfiguration }
 const key = (scope: string, kind: DocumentKind, id: string) => `cupola.objects.binding.v1:${JSON.stringify([scope, kind, id])}`;
 export const DOCUMENT_BINDING_CHANGED = 'cupola:document-binding-changed';
 export function documentBinding(scope: string, kind: DocumentKind, id: string): DocumentBinding | null {
@@ -22,6 +22,18 @@ export function documentBinding(scope: string, kind: DocumentKind, id: string): 
 }
 export function bindDocument(scope: string, kind: DocumentKind, id: string, binding: DocumentBinding) {
   localStorage.setItem(key(scope, kind, id), serializeJournal(binding));
+  window.dispatchEvent(new Event(DOCUMENT_BINDING_CHANGED));
+}
+/** A confirmed deletion removes the saved object, never the user's recovery drafts. */
+export function markDocumentDeleted(url: string, id: string, authScope: string) {
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)!;
+    if (!key.startsWith('cupola.objects.binding.v1:')) continue;
+    const binding: DocumentBinding = parseJournal(localStorage.getItem(key)!);
+    if (binding.url === url && binding.record.report_id === id && binding.authScope === authScope) {
+      localStorage.setItem(key, serializeJournal({ ...binding, deleted: true, readOnly: true, record: { ...binding.record, allowed_actions: [] } }));
+    }
+  }
   window.dispatchEvent(new Event(DOCUMENT_BINDING_CHANGED));
 }
 /** Compare editable content, excluding run results, timestamps and unknown extension fields. */

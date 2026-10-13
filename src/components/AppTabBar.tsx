@@ -25,7 +25,7 @@ const TABS: TabDef[] = [
   { id: "editor", label: "Query Editor", icon: FileCode2, accent: "editor" },
   { id: "askai", label: "Ask AI", icon: Sparkles, accent: "ai" },
   { id: "notebooks", label: "Notebooks", icon: NotebookPen },
-  { id: "reports", label: "Library", icon: FileChartColumn },
+  { id: "reports", label: "Reports", icon: FileChartColumn },
   { id: "shell", label: "SQL Shell", img: true },
   { id: "catalog", label: "Catalog", icon: Database },
   { id: "perspective", label: "Perspective", icon: BarChart3, closable: true },

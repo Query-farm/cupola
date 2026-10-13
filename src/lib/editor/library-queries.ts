@@ -13,8 +13,8 @@ export const queryBinding = (doc: EditorDoc, workspace: string) => documentBindi
 export function showQueryTab(doc: EditorDoc, workspace: string) {
   const binding = queryBinding(doc, workspace), url = new URL(location.href);
   for (const key of [...url.searchParams.keys()]) if (key.startsWith('report_') || key.startsWith('evidence_') || key === 'local_report_folder' || key === 'notebook') url.searchParams.delete(key);
-  url.pathname = `${appBase.replace(/\/$/, '')}/${binding ? 'reports' : ''}`;
-  if (binding) {
+  url.pathname = `${appBase.replace(/\/$/, '')}/${binding && !binding.deleted ? 'reports' : ''}`;
+  if (binding && !binding.deleted) {
     url.searchParams.set('report_service', binding.url);
     url.searchParams.set(binding.localScope ? 'evidence_report' : 'report_id', binding.record.report_id);
     if (doc.library?.revision) url.searchParams.set('report_revision', doc.library.revision);

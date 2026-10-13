@@ -10,15 +10,17 @@ import { dateLabel, scheduleIssues, statusLabel } from '../../lib/reporting/sche
 import { REPORT_LIBRARY_CHANGED, REPORT_ROUTE_CHANGED, reportNavigationHref } from '../../lib/reporting/navigation';
 import { appBase } from '../../lib/app-base';
 import type { CatalogData } from '../../lib/service';
+import { OPEN_REPORT_EVENT, type OpenReportDetail } from '../../lib/evidence/open-report';
 
-export function openScheduleActivity(serviceUrl: string) {
+export function openScheduleActivity(serviceUrl: string, schedulerUrl?: string) {
   const next = new URL(reportNavigationHref(serviceUrl, { location: 'all' }, location.href, appBase), location.origin);
   next.searchParams.set('report_view', 'activity');
-  history.pushState({}, '', next); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
+  if (schedulerUrl) next.searchParams.set('report_scheduler', schedulerUrl);
+  window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId: next.searchParams.get('local_ws') ?? undefined, href: next.href } }));
 }
 
-export function ScheduleActivityButton({ serviceUrl }: { serviceUrl: string }) {
-  return <Button variant="outline" size="sm" onClick={() => openScheduleActivity(serviceUrl)}><Bell />Schedules & alerts</Button>;
+export function ScheduleActivityButton({ serviceUrl, schedulerUrl }: { serviceUrl: string; schedulerUrl?: string }) {
+  return <Button variant="outline" size="sm" onClick={() => openScheduleActivity(serviceUrl, schedulerUrl)}><Bell />Schedules & alerts</Button>;
 }
 
 export function scheduleActivityHref(record: ScheduleRecord, scheduler: string, serviceUrl: string, action: 'schedule' | 'renew' | 'run', current = location.href) {
@@ -41,7 +43,20 @@ export function ScheduleActivity({ serviceUrl, catalogs, onBack }: { serviceUrl:
     })).values()], [serviceUrl, locations, catalogs]);
   const key = JSON.stringify(candidates);
   const [workers, setWorkers] = useState<WorkerSchedules[]>([]), [generation, setGeneration] = useState(0);
-  const [filter, setFilter] = useState<'attention' | 'all'>('attention'), [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<'attention' | 'all'>('all'), [query, setQuery] = useState('');
+  const [workerFilter, setWorkerFilter] = useState(() => new URLSearchParams(location.search).get('report_scheduler') ?? '');
+  useEffect(() => {
+    const read = () => setWorkerFilter(new URLSearchParams(location.search).get('report_scheduler') ?? '');
+    window.addEventListener('popstate', read);
+    window.addEventListener(REPORT_ROUTE_CHANGED, read);
+    return () => { window.removeEventListener('popstate', read); window.removeEventListener(REPORT_ROUTE_CHANGED, read); };
+  }, []);
+  function selectWorker(value: string) {
+    setWorkerFilter(value);
+    const url = new URL(location.href);
+    if (value) url.searchParams.set('report_scheduler', value); else url.searchParams.delete('report_scheduler');
+    history.replaceState(history.state, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
+  }
   useEffect(() => { const refresh = () => setGeneration(n => n + 1); window.addEventListener(REPORT_LIBRARY_CHANGED, refresh); window.addEventListener('focus', refresh); return () => { window.removeEventListener(REPORT_LIBRARY_CHANGED, refresh); window.removeEventListener('focus', refresh); }; }, []);
   useEffect(() => {
     const abort = new AbortController(); let timer: ReturnType<typeof setTimeout>;
@@ -62,12 +77,15 @@ export function ScheduleActivity({ serviceUrl, catalogs, onBack }: { serviceUrl:
     void refresh();
     return () => { abort.abort(); clearTimeout(timer); };
   }, [key, generation, refreshVersion]);
-  const all = workers.flatMap(worker => worker.records.map(record => ({ worker, record, issues: scheduleIssues(record) })));
+  const selectedWorkers = workers.filter(worker => !workerFilter || worker.url === workerFilter);
+  const all = selectedWorkers.flatMap(worker => worker.records.map(record => ({ worker, record, issues: scheduleIssues(record) })));
   const attention = all.filter(row => row.issues.length > 0);
   const rows = (filter === 'attention' ? attention : all).filter(({ record, worker }) => `${record.definition.title} ${worker.name}`.toLowerCase().includes(query.toLowerCase()));
-  const loading = workers.some(w => w.loading), errors = workers.filter(w => w.error);
+  const loading = selectedWorkers.some(w => w.loading), errors = selectedWorkers.filter(w => w.error);
   return <ReportPage title="Schedules & alerts" description="Report schedules across your connected workers" backLabel="Back to reports" onBack={onBack}>
     <div className="flex flex-wrap items-center gap-2"><Button variant={filter === 'attention' ? 'default' : 'outline'} aria-pressed={filter === 'attention'} onClick={() => setFilter('attention')}><TriangleAlert />Needs attention ({attention.length})</Button><Button variant={filter === 'all' ? 'default' : 'outline'} aria-pressed={filter === 'all'} onClick={() => setFilter('all')}><CalendarClock />All schedules ({all.length})</Button><Button variant="ghost" onClick={() => setGeneration(n => n + 1)}><RefreshCw />Refresh schedules</Button></div>
+    <label className="block max-w-lg space-y-1 text-sm"><span className="font-medium">Worker</span><select aria-label="Schedule worker" className="block h-9 w-full rounded-lg border border-input bg-card px-3 text-sm [appearance:auto]" value={workerFilter} onChange={event => selectWorker(event.target.value)}><option value="">All workers</option>{candidates.map(worker => <option key={worker.url} value={worker.url}>{worker.name} · {new URL(worker.url).host}</option>)}</select></label>
+    {workerFilter && selectedWorkers.some(worker => worker.supported === false) && <ReportNotice title="Scheduling is not available on this worker">Choose another worker or All workers to browse report schedules.</ReportNotice>}
     <label className="block max-w-lg space-y-1 text-sm"><span className="font-medium">Find a schedule</span><input className="block w-full rounded border bg-card px-3 py-2" value={query} onChange={e => setQuery(e.target.value)} placeholder="Schedule or worker name" /></label>
     {loading && <p role="status" className="text-sm">Checking workers…</p>}
     {errors.map(w => <ReportNotice key={w.url} title={`Could not check ${w.name}`} kind="error">{w.error} Status for this worker is unknown.</ReportNotice>)}

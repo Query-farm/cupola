@@ -35,6 +35,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     const changed = (event: Event) => { const detail = (event as CustomEvent).detail; if (detail.url === session.client.url && detail.id === reportId) { setDocumentDirty(detail.dirty); setOpened(previous => previous && detail.record.revision_number >= previous.record.revision_number && detail.record.version >= previous.record.version ? { ...previous, record: detail.record } : previous); } };
     const newer = (event: Event) => { const detail = (event as CustomEvent).detail; if (detail.url === session.client.url && detail.record.report_id === reportId) setOpened(previous => previous ? { ...previous, record: detail.record } : previous); };
     window.addEventListener("cupola:document-edit-state", changed); window.addEventListener('cupola:document-newer-version', newer);
+    window.dispatchEvent(new Event('cupola:request-document-edit-state'));
     return () => { window.removeEventListener("cupola:document-edit-state", changed); window.removeEventListener('cupola:document-newer-version', newer); };
   }, [session.client.url, reportId]);
   const [generation, setGeneration] = useState(0), [editorGeneration, setEditorGeneration] = useState(0);
@@ -181,6 +182,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     {page === 'details' && record && <ReportDetailsPage documentLabel={record && documentKind(record) !== 'report' ? documentKind(record) : 'report'} key={String(record.version)} initial={{ name: record.envelope?.title ?? '', description: record.envelope?.description ?? '', tags: record.envelope?.tags ?? [] }} location={reportLocation} blocked={blocked}
       onClose={() => showPage(null)} onSave={!revisionId && !opened?.recoveryOnly && can('edit') && record.envelope && record.body ? async values => {
         if (!controller) {
+          if (blocked) throw new Error('Finish saving before changing document details.');
           await session.journal.run('commit_revision', { report_id: reportId, expected_revision_id: record.head_revision_id, envelope: { ...record.envelope!, title: values.name, description: values.description, tags: values.tags }, body: record.body!, message: 'Updated document details' });
           resetDocumentDraft(session.client.url, reportId, documentKind(record) as 'query' | 'notebook', session.scope); setGeneration(n => n + 1); showPage(null); return;
         }

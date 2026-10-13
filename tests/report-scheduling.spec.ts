@@ -128,6 +128,16 @@ test('attention combines workers and renewal links clear missing and expiring ac
     const activity = page.getByRole('region', { name: 'Schedules & alerts', exact: true });
     await expect(activity.getByRole('heading', { name: 'Access was revoked', exact: true })).toBeVisible();
     await expect(activity.getByRole('heading', { name: 'Access expires soon', exact: true })).toBeVisible();
+    await expect(activity.getByRole('button', { name: /^All schedules/ })).toHaveAttribute('aria-pressed', 'true');
+    await activity.getByLabel('Schedule worker', { exact: true }).selectOption(second.url);
+    await expect(activity.getByRole('heading', { name: 'Access was revoked', exact: true })).toHaveCount(0);
+    await expect(activity.getByRole('heading', { name: 'Access expires soon', exact: true })).toBeVisible();
+    await page.getByTestId('catalog-sidebar').getByRole('link', { name: 'Scheduling test library', exact: true }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Schedules & alerts', exact: true }).click();
+    await expect(activity.getByLabel('Schedule worker', { exact: true })).toHaveValue(scheduler.url);
+    await expect(activity.getByRole('heading', { name: 'Access expires soon', exact: true })).toHaveCount(0);
+    await activity.getByLabel('Schedule worker', { exact: true }).selectOption('');
+    await expect(activity.getByRole('heading', { name: 'Access expires soon', exact: true })).toBeVisible();
     const row = activity.getByRole('listitem').filter({ has: page.getByRole('heading', { name: 'Access expires soon', exact: true }) });
     await row.getByRole('link', { name: 'Renew access', exact: true }).click();
     await expect(page.locator('#scheduled-access')).toHaveAttribute('open', '');
@@ -135,6 +145,9 @@ test('attention combines workers and renewal links clear missing and expiring ac
     await expect.poll(async () => (await second.client().call('schedules.get_schedule', { schedule_id: created[1].id })).issues.length).toBe(0);
     await page.getByRole('button', { name: 'All schedules', exact: true }).click();
     await page.getByRole('button', { name: 'Schedules & alerts', exact: true }).click();
+    await activity.getByLabel('Schedule worker', { exact: true }).selectOption('');
+    await expect(activity.getByRole('heading', { name: 'Access expires soon', exact: true })).toBeVisible();
+    await activity.getByRole('button', { name: /^Needs attention/ }).click();
     await expect(activity.getByRole('heading', { name: 'Access expires soon', exact: true })).toHaveCount(0);
     await expect(activity.getByRole('heading', { name: 'Access was revoked', exact: true })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });

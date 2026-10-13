@@ -12,7 +12,7 @@ import { TransferDialog } from './TransferDialog';
 import { reportError } from '../../lib/reporting/client';
 import { useReportLocations } from './ReportLocations';
 import { REPORT_ROUTE_CHANGED } from '../../lib/reporting/navigation';
-import { OPEN_REPORT_EVENT, reportHref, type OpenReportDetail } from '../../lib/evidence/open-report';
+import { OPEN_REPORT_EVENT, pushReportRoute, reportHref, type OpenReportDetail } from '../../lib/evidence/open-report';
 import { saveEvidenceReport, type EvidenceReport } from '../../lib/evidence/reports';
 import { newEvidenceReport } from '../../lib/evidence/templates';
 import { placeLocalReport, localLibrary } from '../../lib/reporting/local-library';
@@ -40,7 +40,7 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
   });
   const { locations: services, refresh: refreshLocations, transfer, setTransfer } = useReportLocations();
   const [generation, setGeneration] = useState(0);
-  const [jobs, setJobs] = useState<TransferJob[]>([]), [notice, setNotice] = useState(''), [error, setError] = useState(''), [retrying, setRetrying] = useState(false);
+  const [jobs, setJobs] = useState<TransferJob[]>([]), [error, setError] = useState(''), [retrying, setRetrying] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
   const scope = props.workspaceId ?? props.serviceUrl;
   useEffect(() => {
@@ -73,7 +73,7 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
       detail.handled = true;
       const next = new URL(detail.href, location.href);
       if (location.pathname + location.search === next.pathname + next.search) { setEditorKey(n => n + 1); return; }
-      history.pushState({}, '', next); activeRoute.current = routeIdentity(); setView(route()); setEditorKey(n => n + 1); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
+      pushReportRoute(detail); activeRoute.current = routeIdentity(); setView(route()); setEditorKey(n => n + 1); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
     };
     window.addEventListener('popstate', pop); window.addEventListener(OPEN_REPORT_EVENT, local); window.addEventListener(REPORT_ROUTE_CHANGED, track);
     return () => { window.removeEventListener('popstate', pop); window.removeEventListener(OPEN_REPORT_EVENT, local); window.removeEventListener(REPORT_ROUTE_CHANGED, track); };
@@ -122,12 +122,11 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     setTransfer({ source, move });
   }
   function completed(job: TransferJob) {
-    setTransfer(null); setError(''); setNotice(`${job.move ? 'Moved' : 'Copied'} “${job.envelope.title}” to ${job.destination.name}.`);
+    setTransfer(null); setError('');
     choose(job.destination.url ?? 'local', undefined, job.destination.folderId); refresh();
   }
   const localObject = listLocalObjects(scope).find(d => d.id === new URLSearchParams(location.search).get('evidence_report'));
   return <div className="flex h-full min-h-0 flex-col">
-    {notice && <p role="status" className="shrink-0 px-5 py-2 text-sm">{notice}</p>}
     {error && <p role="alert" className="shrink-0 px-5 py-2 text-sm text-destructive">{error}</p>}
     {jobs.length > 0 && <section aria-label="Pending report transfers" className="shrink-0 space-y-2 border-b px-5 py-3 text-sm">{jobs.map(job => <div key={job.id} className="flex flex-wrap items-center gap-2"><span>Unconfirmed {job.move ? 'move' : 'copy'}: {job.envelope.title} → {job.destination.name}</span><Button size="sm" disabled={retrying} onClick={async () => { setRetrying(true); setError(''); try { completed(await resumeTransfer(job)); } catch (e) { setError(reportError(e)); } finally { setRetrying(false); } }}>Retry transfer</Button><Button size="sm" variant="ghost" disabled={retrying} onClick={() => { if (confirm('Stop retrying this transfer? Its copy or move may already have completed. Check both locations before deleting anything.')) { forgetTransfer(job); refresh(); } }}>Stop retrying…</Button></div>)}</section>}
     <div className="min-h-0 flex-1">{view.activity ? <ScheduleActivity serviceUrl={props.serviceUrl} catalogs={props.catalogs} onBack={() => choose('all')} /> : view.selected === 'all' || view.selected === 'local' && !view.localEditor
