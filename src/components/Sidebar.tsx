@@ -223,8 +223,8 @@ export function Sidebar({ activeNotebookId, notebooksActive, reportsActive, serv
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             type="text"
-            placeholder="Names, descriptions, tags…"
-            aria-label="Filter catalog" title="Search catalog names and saved object names, descriptions, and tags"
+            placeholder="Names and descriptions…"
+            aria-label="Filter catalog" title="Search catalog names and saved object names and descriptions"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-8 h-9 text-sm"

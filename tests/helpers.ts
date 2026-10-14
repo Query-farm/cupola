@@ -140,7 +140,9 @@ export async function chooseReportAction(page: Page, name: string, row?: Locator
 
 /** Library creation uses the shared New menu; legacy report-only lists retain their button. */
 export async function chooseLibraryNew(page: import('@playwright/test').Page, scope: import('@playwright/test').Locator, label: 'New report' | 'New query' | 'New notebook' | 'New folder') {
-  const menu = scope.getByRole('button', { name: /^(New|New document)$/ });
-  await menu.click();
+  const trigger = scope.getByRole('button', { name: /^(New|New document)$/ }).or(scope.getByRole('button', { name: label, exact: true }));
+  const menu = await trigger.getAttribute('aria-haspopup') === 'menu';
+  await trigger.click();
+  if (!menu) return;
   await page.getByRole('menuitem', { name: label, exact: true }).click();
 }

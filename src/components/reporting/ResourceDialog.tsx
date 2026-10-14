@@ -30,7 +30,6 @@ export function ResourceDialog({ action, resource, folders, parentId = null, lib
   const [name, setName] = useState(isFolder ? resource.name : resource && 'envelope' in resource ? resource.envelope?.title ?? '' : '');
   const [folderId, setFolderId] = useState<string | null>(isFolder ? resource.parent_folder_id : resource && 'folder_id' in resource ? resource.folder_id : parentId);
   const [description, setDescription] = useState(resource && 'envelope' in resource ? resource.envelope?.description ?? '' : '');
-  const [tags, setTags] = useState(resource && 'envelope' in resource ? resource.envelope?.tags.join(', ') ?? '' : '');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const title = { folder: 'New folder', rename: 'Rename folder', move: 'Move item', delete: 'Delete item', metadata: 'Report details', redact: 'Redact revision' }[action];
@@ -48,14 +47,14 @@ export function ResourceDialog({ action, resource, folders, parentId = null, lib
           : 'Changes are checked against the current worker version and permissions.'}
       </DialogDescription></DialogHeader>
       <form className="space-y-4" onSubmit={async e => { e.preventDefault(); setBusy(true); setError(''); try {
-        await onApply({ name, folderId, description, tags: tags.split(',').map(t => t.trim()).filter(Boolean), reason }); onClose();
+        await onApply({ name, folderId, description, tags: resource && 'envelope' in resource ? resource.envelope?.tags ?? [] : [], reason }); onClose();
       } catch (e) { setError(reportError(e)); } finally { setBusy(false); } }}>
         {(action === 'folder' || action === 'rename' || action === 'metadata') && <label className="block space-y-1">Name<Input required aria-label="Name" value={name} onChange={e => setName(e.target.value)} /></label>}
         {pickingFolder && <div className="space-y-2"><p className="text-sm font-medium">Destination folder</p><div className="max-h-72 overflow-auto rounded border p-2"><FileTree label="Destination folder" selectedId={directoryKey('worker', folderId)} disabled={busy} onSelect={id => setFolderId(JSON.parse(id)[1])}
           nodes={[{ id: directoryKey('worker'), name: libraryName, kind: 'location', readOnly: !writable || !rootActions.includes(requiredAction), children: nodes(branches) }]} /></div>
           {!canSave && <ReportNotice kind="permission" title="Read-only destination">Choose a folder that allows {requiredAction === 'create_folder' ? 'new folders' : 'reports'}.</ReportNotice>}
         </div>}
-        {action === 'metadata' && <><label className="block">Description<textarea aria-label="Description" className="w-full rounded border bg-background p-2" value={description} onChange={e => setDescription(e.target.value)} /></label><label className="block">Tags, separated by commas<Input aria-label="Tags" value={tags} onChange={e => setTags(e.target.value)} /></label></>}
+        {action === 'metadata' && <label className="block">Description (optional)<textarea aria-label="Description" className="w-full rounded border bg-background p-2" value={description} onChange={e => setDescription(e.target.value)} /></label>}
         {action === 'redact' && <label className="block">Reason<Input aria-label="Reason" required value={reason} onChange={e => setReason(e.target.value)} /></label>}
         {error && <p role="alert" className="text-destructive">{error}</p>}
         <DialogFooter><Button variant="outline" type="button" disabled={busy} onClick={onClose}>Cancel</Button><Button disabled={busy || !canSave} type="submit">{busy ? 'Applying…' : action === 'delete' ? 'Delete' : action === 'redact' ? 'Redact permanently' : 'Apply'}</Button></DialogFooter>

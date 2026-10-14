@@ -2,6 +2,9 @@ import { withExtensions } from './extensions';
 import { test as base, expect, chromium, webkit } from '@playwright/test';
 import { startReportingWorker } from './reporting/worker';
 import { waitForShellBridge } from './helpers';
+import { encodeReport } from '../src/lib/reporting/body';
+import { serializeJournal } from '../src/lib/reporting/journal';
+import { report } from './reporting/fixtures';
 const test = base.extend<{}, { reporting: Awaited<ReturnType<typeof startReportingWorker>> }>({
   reporting: [async ({}, use) => { const worker = await startReportingWorker(); try { await use(worker); } finally { await worker.stop(); } }, { scope: 'worker' }],
 });
@@ -57,30 +60,120 @@ test('sidebar deletion respects concurrent changes and worker permissions', asyn
   await expect(page.getByRole('menuitem', { name: 'Delete…', exact: true })).toHaveCount(0);
 });
 
-test('saved object tags are visible and filterable, including through the sidebar', async ({ page, reporting }) => {
+test('saved objects use name and description search without tag controls', async ({ page, reporting }) => {
   const c = reporting.client();
   for (const [title, tags] of [['Quarterly revenue', ['board-review']], ['Unrelated query', ['operations']]] as const) {
-    await c.call('create_report', { request_id: crypto.randomUUID(), envelope: { title, description: title === 'Quarterly revenue' ? 'Forecast for directors' : '', tags: [...tags], body_format: 'cupola.query/1', data_sources: [], parameters: [] }, body: new TextEncoder().encode('{"query":"SELECT 1"}') });
+    const document = title === 'Quarterly revenue'
+      ? encodeReport(report(title), { description: 'Forecast for directors', tags: [...tags] })
+      : { envelope: { title, description: '', tags: [...tags], body_format: 'cupola.query/1', data_sources: [], parameters: [] }, body: new TextEncoder().encode('{"query":"SELECT 1"}') };
+    await c.call('create_report', { request_id: crypto.randomUUID(), ...document });
   }
   await page.goto(`reports?service=${encodeURIComponent(reporting.url)}#token=test-alice`);
   await expect(page.getByRole('tab', { name: 'Reports', exact: true })).toBeVisible();
   const overview = page.getByRole('region', { name: 'Report browser', exact: true });
-  await expect(overview.getByRole('list', { name: 'Tags for Quarterly revenue' })).toContainText('board-review');
-  await overview.getByRole('button', { name: 'Filter by tag: board-review', exact: true }).click();
-  await expect(overview.getByLabel('Filter by tag', { exact: true })).toHaveValue('board-review');
-  await expect(overview.getByRole('button', { name: 'Unrelated query', exact: true })).toHaveCount(0);
+  await expect(overview.getByRole('button', { name: 'Quarterly revenue', exact: true })).toBeVisible();
+  await expect(overview.getByRole('list', { name: /^Tags for/ })).toHaveCount(0);
+  await expect(overview.getByLabel('Filter by tag', { exact: true })).toHaveCount(0);
+  const search = overview.getByRole('textbox', { name: 'Search reports', exact: true });
+  await search.fill('directors');
+  await expect(overview.getByRole('button', { name: 'Quarterly revenue', exact: true })).toBeVisible();
+  await search.fill('board-review');
+  await expect(overview.getByRole('button', { name: 'Quarterly revenue', exact: true })).toHaveCount(0);
   const sidebar = page.getByTestId('catalog-sidebar'), filter = sidebar.getByRole('textbox', { name: 'Filter catalog' });
-  await filter.fill('board-review');
-  await expect(sidebar.getByRole('link', { name: 'Quarterly revenue', exact: true })).toBeVisible();
-  await expect(sidebar.getByRole('link', { name: 'Unrelated query', exact: true })).toHaveCount(0);
   await filter.fill('directors');
   await expect(sidebar.getByRole('link', { name: 'Quarterly revenue', exact: true })).toBeVisible();
+  await expect(sidebar.getByRole('link', { name: 'Unrelated query', exact: true })).toHaveCount(0);
+  await filter.fill('board-review');
+  await expect(sidebar.getByRole('link', { name: 'Quarterly revenue', exact: true })).toHaveCount(0);
   await filter.fill('');
   await sidebar.getByRole('link', { name: 'Finance report library', exact: true }).click();
   const library = page.getByRole('region', { name: 'Worker report library', exact: true });
-  await expect(library.getByRole('list', { name: 'Tags for Quarterly revenue' })).toContainText('board-review');
-  await library.getByRole('button', { name: 'Filter by tag: board-review', exact: true }).click();
+  await expect(library.getByRole('button', { name: 'Unrelated query', exact: true })).toBeVisible();
+  await expect(library.getByRole('list', { name: /^Tags for/ })).toHaveCount(0);
+  await expect(library.getByLabel('Filter by tag', { exact: true })).toHaveCount(0);
+  await library.getByRole('textbox', { name: 'Search library', exact: true }).fill('directors');
+  await expect(library.getByRole('button', { name: 'Quarterly revenue', exact: true })).toBeVisible();
   await expect(library.getByRole('button', { name: 'Unrelated query', exact: true })).toHaveCount(0);
+});
+
+for (const browserName of ['chromium', 'webkit'] as const) test(`Reports overview shows only reports while the sidebar manages every kind in ${browserName}`, async ({ reporting, baseURL }) => {
+  const client = reporting.client();
+  const scope = `overview-${browserName}`;
+  const title = (kind: string) => `Remote ${kind} overview ${browserName}`;
+  const bodies = {
+    query: { query: 'SELECT 731 AS saved_query' },
+    notebook: { version: 1, cells: [{ id: 'cell', type: 'sql', title: 'Query', source: 'SELECT 732 AS saved_notebook', collapsed: false, charts: [] }], context: {} },
+  };
+  const folder = await client.call('create_folder', { request_id: crypto.randomUUID(), name: `Nested reports ${browserName}` });
+  await client.call('create_report', { request_id: crypto.randomUUID(), folder_id: folder.folder_id, ...encodeReport(report(title('report')), { description: 'Executive forecast', tags: ['report-only'] }) });
+  const localEntries: Array<[string, string]> = [];
+  for (const kind of ['query', 'notebook'] as const) {
+    const envelope = { title: title(kind), description: 'Executive forecast', tags: [`${kind}-only`], body_format: `cupola.${kind}/1`, data_sources: [], parameters: [] };
+    const body = new TextEncoder().encode(JSON.stringify(bodies[kind]));
+    await client.call('create_report', { request_id: crypto.randomUUID(), envelope, body });
+    localEntries.push([`cupola.objects.local.v1:${scope}:local-${kind}`, serializeJournal({ id: `local-${kind}`, kind, envelope: { ...envelope, title: `Local ${kind}` }, body, updatedAt: 1 })]);
+  }
+  localEntries.push([`cupola.evidence.report.v2:${scope}:local-report`, JSON.stringify({ ...report('Local report'), id: 'local-report', serviceUrl: reporting.url, workspaceId: scope })]);
+  const browser = await ({ chromium, webkit })[browserName].launch();
+  const context = await browser.newContext({ baseURL, viewport: { width: 1400, height: 1000 }, storageState: withExtensions() });
+  const page = await context.newPage(), errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.addInitScript(({ url, entries, scope }) => {
+      sessionStorage.setItem('vgi.oauth.tokens.' + url, JSON.stringify({ access_token: 'test-alice', expires_at: Math.floor(Date.now() / 1000) + 3600, use_id_token: false }));
+      localStorage.setItem('cupola.workspaces.v1', JSON.stringify({ version: 1, workspaces: [{ id: scope, name: 'Overview test', catalogs: [{ id: 'finance', url, catalogName: 'yfinance', alias: 'finance', options: {} }], defaultCatalogId: 'finance', createdAt: 1, updatedAt: 1, lastOpenedAt: 1 }] }));
+      for (const [key, value] of entries) localStorage.setItem(key, value);
+    }, { url: reporting.url, entries: localEntries, scope });
+    await page.goto(`reports?local_ws=${scope}`);
+    const overview = page.getByRole('region', { name: 'Report browser', exact: true });
+    await expect(overview.getByRole('button', { name: title('report'), exact: true })).toBeVisible({ timeout: 40_000 });
+    await waitForShellBridge(page, 40_000);
+    await expect(overview.getByRole('button', { name: 'Local report', exact: true })).toBeVisible();
+    for (const name of [title('query'), title('notebook'), 'Local query', 'Local notebook']) await expect(overview.getByRole('button', { name, exact: true })).toHaveCount(0);
+    await expect(overview.getByLabel('Document type', { exact: true })).toHaveCount(0);
+    await expect(overview.getByRole('button', { name: 'New report', exact: true })).toBeVisible();
+    await expect(overview.getByRole('button', { name: 'New', exact: true })).toHaveCount(0);
+    await expect(overview.getByRole('button', { name: 'Schedules & alerts', exact: true })).toBeVisible();
+    await expect(overview.getByLabel('Filter by tag', { exact: true })).toHaveCount(0);
+    await overview.getByLabel('Search reports', { exact: true }).fill('Executive forecast');
+    await expect(overview.getByRole('button', { name: title('report'), exact: true })).toBeVisible();
+    await expect(overview.getByRole('button', { name: title('query'), exact: true })).toHaveCount(0);
+    await overview.getByLabel('Search reports', { exact: true }).fill('query-only');
+    await expect(overview).toContainText('No reports match these filters.');
+
+    const sidebar = page.getByTestId('catalog-sidebar');
+    await sidebar.getByRole('link', { name: 'Finance report library', exact: true }).click();
+    const library = page.getByRole('region', { name: 'Worker report library', exact: true });
+    await expect(library.getByRole('button', { name: title('query'), exact: true })).toBeVisible();
+    await expect(library.getByRole('button', { name: title('notebook'), exact: true })).toBeVisible();
+    await expect(library.getByLabel('Document type', { exact: true })).toBeVisible();
+    await library.getByRole('button', { name: `Nested reports ${browserName}`, exact: true }).click();
+    await expect(library.getByRole('button', { name: title('report'), exact: true })).toBeVisible();
+    await page.getByTestId('tab-reports').click();
+    await expect(overview.getByRole('heading', { name: 'Reports', exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/report_service=all/);
+    await sidebar.getByRole('link', { name: 'Local', exact: true }).click();
+    for (const name of ['Local report', 'Local query', 'Local notebook']) await expect(overview.getByRole('button', { name, exact: true })).toBeVisible();
+    await expect(overview.getByLabel('Document type', { exact: true })).toBeVisible();
+    await page.getByTestId('tab-reports').click();
+    await expect(overview.getByRole('heading', { name: 'Reports', exact: true })).toBeVisible();
+    await expect(overview.getByRole('button', { name: 'Local query', exact: true })).toHaveCount(0);
+
+    const filter = sidebar.getByRole('textbox', { name: 'Filter catalog' });
+    for (const kind of ['query', 'notebook'] as const) {
+      await filter.fill(title(kind));
+      await expect(sidebar.getByRole('link', { name: title('report'), exact: true })).toHaveCount(0);
+      await sidebar.getByRole('link', { name: title(kind), exact: true }).click();
+      await expect(page.getByTestId(kind === 'query' ? 'tab-editor' : 'tab-notebooks')).toHaveAttribute('aria-selected', 'true');
+      await expect(page.locator('.cm-content:visible').first()).toContainText(kind === 'query' ? 'saved_query' : 'saved_notebook');
+      await filter.fill('');
+      await page.getByTestId('tab-reports').click();
+      await expect(overview.getByRole('heading', { name: 'Reports', exact: true })).toBeVisible();
+    }
+    await overview.getByRole('button', { name: 'New report', exact: true }).click();
+    await expect(page.getByRole('textbox', { name: 'Report title', exact: true })).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally { await browser.close(); }
 });
 
 for (const browserName of ['chromium', 'webkit'] as const) test(`query history preserves the app, draft, results and SQL session in ${browserName}`, async ({ reporting, baseURL }) => {
@@ -187,6 +280,7 @@ for (const kind of ['query', 'notebook'] as const) test(`${kind} opens without e
   await expect(page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
   const saved = await reporting.client().call('get_report', { report_id: record.report_id });
   expect(JSON.parse(new TextDecoder().decode(saved.body!)).vendor.keep).toBe(7);
+  expect(saved.envelope?.tags).toEqual(['shared']);
   expect(await reporting.client().call('list_revisions', { report_id: record.report_id })).toHaveLength(2);
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Save options', exact: true }).click();
@@ -433,6 +527,7 @@ for (const browserName of ['chromium', 'webkit'] as const) test(`saved queries u
     const saved = await client.call('get_report', { report_id: query.report_id });
     expect(saved.envelope?.title).toBe(`Renamed ${browserName}`);
     expect(saved.envelope?.description).toBe('Keep this description');
+    expect(saved.envelope?.tags).toEqual(['tabs']);
     expect(JSON.parse(new TextDecoder().decode(saved.body!)).vendor.keep).toBe(true);
     await tabs.getByRole('button', { name: 'Query 1', exact: true }).click();
     await expect(page.locator('.cm-content:visible')).toContainText('13579');

@@ -1,6 +1,8 @@
 # Library interactions
 
-Cupola's Reports tab opens the library of reports, queries, and notebooks stored locally or on workers. The sidebar is quick navigation; the main listing adds cross-library search, descriptions, tags, type filters, and organization. Both use the same creation choices and respect worker capabilities. Routes keep `/reports` for compatibility.
+Cupola's Reports overview lists only reports stored locally or on workers. It adds cross-library report search, a direct New report action, and access to schedules. Its search results exclude queries and notebooks; it has no document-type selector.
+
+The sidebar Library is the primary place to organize all saved object types. It supports folders, name and description search, and context-menu actions. Opening a local or worker folder shows all its contents, with type filters and creation choices that respect worker capabilities. The Reports tab returns from a folder listing to the report-only overview. Queries and notebooks open in their ordinary editors. Routes keep `/reports` for compatibility.
 
 ## Editing and saving
 
@@ -26,7 +28,7 @@ The sidebar's Delete action is available when the worker permits deletion. Confi
 
 ## Finding objects and schedules
 
-The sidebar filter searches names, descriptions, and tags. Main listings display tags beneath each document; clicking a tag applies the tag filter. The search field and tag selector support broader cross-library searches.
+The sidebar, folder listings, and Reports overview use a single search field matching names and descriptions. The sidebar searches every object type; the Reports overview searches reports across libraries, including reports in nested folders. Descriptions are optional and editable in document details. Cupola has no tag chips, tag filters, or tag editing fields. Existing tags remain in stored metadata and are preserved when editing details, saving, or transferring documents.
 
 Schedules & alerts defaults to all report schedules the current user can access. Its worker selector narrows the list, and Needs attention remains a separate filter. The same page is reachable from a worker's sidebar context menu, initially filtered to that worker, or from the main listing for all connected workers.
 

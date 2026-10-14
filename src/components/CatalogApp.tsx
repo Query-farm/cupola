@@ -1669,7 +1669,10 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       <AppTabBar
         activeTab={activeTab}
         onSelect={tab => {
-          if (tab === 'reports' && (libraryQuery || libraryNotebook)) {
+          const search = new URLSearchParams(location.search);
+          const folderView = search.has('report_service') && search.get('report_service') !== 'all'
+            && !['report_id', 'evidence_report', 'evidence_new', 'report_view'].some(key => search.has(key));
+          if (tab === 'reports' && (libraryQuery || libraryNotebook || folderView)) {
             window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId: workspaceId || undefined, href: reportNavigationHref(serviceUrl, { location: 'all' }, location.href, appBase) } }));
           } else {
             if (!['editor', 'notebooks', 'reports', 'evidence'].includes(tab)) {
@@ -1855,7 +1858,9 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
             </div>
           )}
           {reportsMounted && (
-            <div className="absolute inset-0 overflow-hidden" style={activeTab === "reports" ? undefined : { visibility: "hidden", zIndex: -1 }}>
+            // Keep report state mounted. WebKit can leave newly mounted report
+            // sections inheriting stale visibility:hidden when returning from an editor.
+            <div className="absolute inset-0 overflow-hidden" style={activeTab === "reports" ? undefined : { display: "none" }}>
               <ErrorBoundary><Suspense fallback={<div className="p-6">Loading reports…</div>}>
                 <EvidencePanel catalogName={plan.catalogName} serviceUrl={serviceUrl} workspaceId={workspaceId || undefined} catalogs={catalogs} defaultToLibrary={initialTab !== "evidence"} />
               </Suspense></ErrorBoundary>

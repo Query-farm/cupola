@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FolderOpen, Plus, RefreshCw, MoreHorizontal } from 'lucide-react';
 import { Button, buttonVariants } from '../ui/button';
 import { ReportSearch } from './ReportSearch';
-import { matchesReport, reportTags } from '../../lib/reporting/search';
+import { matchesReport } from '../../lib/reporting/search';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu';
 import { ReportClient, reportError, type Input as RpcInput, type Method, type Output } from '../../lib/reporting/client';
 import type { FolderRecord, ReportResult, ReportRow, ReportsInfo } from '../../lib/reporting/contracts.generated';
@@ -36,7 +36,6 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
   const [folderId, setFolderId] = useState<string | null>(() => new URLSearchParams(location.search).get('report_folder'));
   const [selected, setSelected] = useState(() => ({ id: new URLSearchParams(location.search).get('report_id'), revision: new URLSearchParams(location.search).get('report_revision') }));
   const [folders, setFolders] = useState<FolderRecord[]>([]), [reports, setReports] = useState<ReportRow[]>([]);
-  const [tag, setTag] = useState('');
   const [kind, setKind] = useState('');
   const [query, setQuery] = useState(''), [publishedOnly, setPublishedOnly] = useState(false), [ownedByMe, setOwnedByMe] = useState(false);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false);
@@ -154,11 +153,11 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
     await mutate('set_folder_ownership', { folder_id: parent.folder_id, expected_version: parent.version, ownership }); navigate(null, parent.parent_folder_id);
   }} />;
   const items: ReportFileItem[] = [
-    ...folders.filter(f => !query && !tag && f.parent_folder_id === folderId).sort((a, b) => a.name.localeCompare(b.name)).map(folder => ({
+    ...folders.filter(f => !query && f.parent_folder_id === folderId).sort((a, b) => a.name.localeCompare(b.name)).map(folder => ({
       id: folder.folder_id, name: folder.name, kind: 'folder' as const, onOpen: () => navigate(null, folder.folder_id), detail: folder.ownership.owner_ref.display_name || folder.ownership.owner_ref.id, state: 'Folder',
       actions: <ResourceMenu resource={folder} disabled={blocked} onAction={action => action === 'ownership' ? navigate(null, folder.folder_id, null, 'ownership') : setDialog({ action, resource: folder })} />,
     })),
-    ...reports.filter(r => (!kind || documentKind(r) === kind) && (Boolean(query || tag) || r.folder_id === folderId) && matchesReport(r.envelope?.title ?? '', r.envelope, query, tag)).map(report => ({ id: report.report_id, documentKind: documentKind(report), name: report.envelope?.title ?? 'Redacted document', description: report.envelope?.description, tags: report.envelope?.tags, kind: 'report' as const,
+    ...reports.filter(r => (!kind || documentKind(r) === kind) && (Boolean(query) || r.folder_id === folderId) && matchesReport(r.envelope?.title ?? '', r.envelope, query)).map(report => ({ id: report.report_id, documentKind: documentKind(report), name: report.envelope?.title ?? 'Redacted document', description: report.envelope?.description, kind: 'report' as const,
       onOpen: () => navigate(report.report_id), detail: report.ownership.owner_ref.display_name || report.ownership.owner_ref.id, state: `${report.published_revision_id ? 'Published' : 'Draft'} · revision ${String(report.revision_number)}`,
       actions: <ReportActionMenu label={`Actions for ${report.envelope?.title ?? 'report'}`} actions={[
         reportAction('details', () => navigate(report.report_id, folderId, null, 'details')),
@@ -185,9 +184,9 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
       {error && <ReportNotice kind="error" title="Could not load or update this location">{error}</ReportNotice>}
       {notice && <p role="status" className="text-sm">{notice}</p>}
       {pending && <div className="space-y-2 rounded border border-amber-400 p-3 text-sm"><p>A previous change has not been confirmed. Retry uses the same request ID and content.</p><Button disabled={busy} onClick={() => void retry()}>Retry pending change</Button> <Button variant="outline" disabled={busy} onClick={async () => { if (confirm('This change may already have succeeded. Inspect the worker first. Discard the saved request without retrying?')) { await session.journal.discard(); setGeneration(n => n + 1); } }}>Discard request…</Button></div>}
-      <nav aria-label="Report folders" className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground"><Button variant="ghost" size="sm" onClick={props.onAllReports}>All documents</Button><span aria-hidden>/</span><Button className="h-auto max-w-full whitespace-normal text-left" variant="ghost" size="sm" onClick={() => navigate(null, null)} aria-current={parent ? undefined : 'page'}>{session?.info.display_name || 'Library root'}</Button>{parent && <><span aria-hidden>/</span><span aria-current="page" className="min-w-0 break-words px-2 text-foreground">{folderPath(parent, folders)}</span><Button variant="ghost" size="sm" onClick={() => navigate(null, parent.parent_folder_id)}>Up one folder</Button></>}</nav>
-      <ReportFileList items={items} onTag={setTag} detailLabel="Owner" heading={query || tag || publishedOnly || ownedByMe ? 'Search results' : 'Folder contents'} emptyMessage={query || tag || publishedOnly || ownedByMe ? 'No documents match these filters.' : 'This folder is empty.'} loadingMessage={loading ? 'Loading report library…' : undefined} filters={<>
-        <ReportSearch kind={kind} onKind={setKind} query={query} onQuery={setQuery} tag={tag} onTag={setTag} tags={reportTags(reports.map(r => r.envelope))} />
+      <nav aria-label="Report folders" className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground"><Button variant="ghost" size="sm" onClick={props.onAllReports}>All reports</Button><span aria-hidden>/</span><Button className="h-auto max-w-full whitespace-normal text-left" variant="ghost" size="sm" onClick={() => navigate(null, null)} aria-current={parent ? undefined : 'page'}>{session?.info.display_name || 'Library root'}</Button>{parent && <><span aria-hidden>/</span><span aria-current="page" className="min-w-0 break-words px-2 text-foreground">{folderPath(parent, folders)}</span><Button variant="ghost" size="sm" onClick={() => navigate(null, parent.parent_folder_id)}>Up one folder</Button></>}</nav>
+      <ReportFileList items={items} detailLabel="Owner" heading={query || publishedOnly || ownedByMe ? 'Search results' : 'Folder contents'} emptyMessage={query || publishedOnly || ownedByMe ? 'No documents match these filters.' : 'This folder is empty.'} loadingMessage={loading ? 'Loading report library…' : undefined} filters={<>
+        <ReportSearch kind={kind} onKind={setKind} query={query} onQuery={setQuery} />
         <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3"><label className="flex items-center gap-2 text-sm"><input className="size-4 accent-primary" type="checkbox" checked={publishedOnly} onChange={e => setPublishedOnly(e.target.checked)} />Published only</label><label className="flex items-center gap-2 text-sm"><input className="size-4 accent-primary" type="checkbox" checked={ownedByMe} onChange={e => setOwnedByMe(e.target.checked)} />Owned by me</label></div>
       </>} />
       <details className="rounded-lg border bg-muted/30 text-sm"><summary className="cursor-pointer px-4 py-3 font-medium">Import reports</summary><div className="space-y-3 border-t p-4"><p className="max-w-2xl text-muted-foreground">Copies the current report definition into this folder. Existing reports and their history remain on this device or in the source file.</p>

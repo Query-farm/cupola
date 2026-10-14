@@ -30,6 +30,10 @@ ownership, links and copy/move workflows. Query tabs and notebooks retain local 
 drafts; **Save to library** writes a versioned object independent of an open tab. Closing a
 query tab does not delete its saved object. Opening shared SQL never executes it.
 
+The Reports overview shows only reports, with name and description search, and schedules.
+Use the sidebar Library to manage all saved object types. Folder contents include queries,
+notebooks, and reports; each opens in its respective editor.
+
 Cupola prefers objects, generic ownership discovery and schedules v2, and falls back to
 report-only workers. Pending writes and transfers retain their original protocol/request ID
 across upgrades. Copies preserve opaque bytes and unknown fields. CAS conflicts preserve

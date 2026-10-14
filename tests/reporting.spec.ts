@@ -184,7 +184,8 @@ test('switching libraries flushes a local edit before its autosave timer fires',
 });
 
 test('report details wait for autosave and preserve the current definition', async ({ page, reporting }) => {
-  const initial = await seed(reporting, 'Before details');
+  const tags = ['legacy', 'north,south'];
+  const initial = await reporting.client().call('create_report', { request_id: crypto.randomUUID(), ...encodeReport(report('Before details'), { description: '', tags }) });
   await page.goto(path(reporting.url, initial.report_id)); await edit(page);
   let releaseSave!: () => void;
   const saving = new Promise<void>(resolve => { releaseSave = resolve; });
@@ -199,11 +200,13 @@ test('report details wait for autosave and preserve the current definition', asy
   await expect(details.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Editor change');
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Updated details');
   await page.getByRole('textbox', { name: 'Description', exact: true }).fill('Description from details');
+  await expect(details.getByLabel('Tags', { exact: true })).toHaveCount(0);
   await details.getByRole('button', { name: 'Save changes', exact: true }).click();
   await saved(page);
   const latest = await reporting.client().call('get_report', { report_id: initial.report_id });
   expect(latest.envelope!.title).toBe('Updated details');
   expect(latest.envelope!.description).toBe('Description from details');
+  expect(latest.envelope!.tags).toEqual(tags);
   expect(JSON.parse(new TextDecoder().decode(latest.body!)).document.source).toBe(report().source);
   await chooseReportAction(page, 'View source');
   await expect(page.getByRole('region', { name: 'Report source' })).toContainText('42');
@@ -902,22 +905,26 @@ test('folder context menus rename and show duplicate-name errors inside the nami
   expect((await c.call('get_folder', { folder_id: child.folder_id })).parent_folder_id).toBe(folder.folder_id);
 });
 
-test('metadata search and tag filters work across reports and inside a library', async ({ page, reporting }) => {
+test('name and description search works across reports and inside a library', async ({ page, reporting }) => {
   const first = encodeReport(report('Metadata only match'), { description: 'Quarterly forecast', tags: ['planning', 'finance'] });
   await reporting.client().call('create_report', { request_id: crypto.randomUUID(), ...first });
   await seed(reporting, 'Other report');
   await page.goto(`reports?service=${encodeURIComponent(reporting.url)}#token=test-alice`);
   const browser = page.getByRole('region', { name: 'Report browser', exact: true });
-  await browser.getByRole('textbox', { name: 'Search library', exact: true }).fill('FORECAST');
+  await browser.getByRole('textbox', { name: 'Search reports', exact: true }).fill('FORECAST');
   await expect(browser.getByRole('button', { name: 'Metadata only match', exact: true })).toBeVisible();
   await expect(browser.getByRole('button', { name: 'Other report', exact: true })).toHaveCount(0);
-  await browser.getByRole('textbox', { name: 'Search library', exact: true }).fill('');
-  await browser.getByRole('combobox', { name: 'Filter by tag', exact: true }).selectOption('planning');
+  await browser.getByRole('textbox', { name: 'Search reports', exact: true }).fill('planning');
+  await expect(browser.getByRole('button', { name: 'Metadata only match', exact: true })).toHaveCount(0);
+  await browser.getByRole('textbox', { name: 'Search reports', exact: true }).fill('Metadata');
+  await expect(browser.getByRole('button', { name: 'Metadata only match', exact: true })).toBeVisible();
   await expect(browser.getByRole('button', { name: 'Other report', exact: true })).toHaveCount(0);
   await page.getByTestId('catalog-sidebar').getByRole('link', { name: 'Finance report library', exact: true }).click();
   const library = page.getByRole('region', { name: 'Worker report library', exact: true });
   await expect(library).toContainText('Worker:');
   await library.getByRole('textbox', { name: 'Search library', exact: true }).fill('planning');
+  await expect(library.getByRole('button', { name: 'Metadata only match', exact: true })).toHaveCount(0);
+  await library.getByRole('textbox', { name: 'Search library', exact: true }).fill('  FORECAST  ');
   await expect(library.getByRole('button', { name: 'Metadata only match', exact: true })).toBeVisible();
   await expect(library.getByRole('button', { name: 'Other report', exact: true })).toHaveCount(0);
 });
