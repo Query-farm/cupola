@@ -31,15 +31,13 @@ HAYBARN_EXT_VERSION="v${HAYBARN_VERSION%%-*}"
 echo "==> Staging Haybarn ${HAYBARN_VERSION} runtime from ${HAYBARN_SRC}..."
 mkdir -p dist/haybarn
 for file in \
-  duckdb-coi.wasm duckdb-eh.wasm duckdb-mvp.wasm \
+  duckdb-coi.wasm duckdb-eh.wasm \
   duckdb-browser-coi.worker.js \
   duckdb-browser-coi.worker.js.map \
   duckdb-browser-coi.pthread.worker.js \
   duckdb-browser-coi.pthread.worker.js.map \
   duckdb-browser-eh.worker.js \
-  duckdb-browser-eh.worker.js.map \
-  duckdb-browser-mvp.worker.js \
-  duckdb-browser-mvp.worker.js.map; do
+  duckdb-browser-eh.worker.js.map; do
   if [ -e "${HAYBARN_SRC}/${file}" ]; then
     cp "${HAYBARN_SRC}/${file}" "dist/haybarn/${file}"
   elif [[ "$file" != *.map ]]; then
@@ -49,7 +47,7 @@ for file in \
 done
 
 echo "==> Fetching VGI extension variants for ${HAYBARN_EXT_VERSION}..."
-for variant in wasm_mvp wasm_eh wasm_threads; do
+for variant in wasm_eh wasm_threads; do
   destination="dist/haybarn/extensions/${HAYBARN_EXT_VERSION}/${variant}/vgi.duckdb_extension.wasm"
   mkdir -p "$(dirname "$destination")"
   curl --retry 3 --retry-all-errors -fsSL \

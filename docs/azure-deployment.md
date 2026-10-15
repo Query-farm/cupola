@@ -68,7 +68,7 @@ strings), so a flat base resolves cleanly at root.
 
 ### The wasm-staging trap
 `astro build` does **not** emit the DuckDB wasm engine. The
-`AsyncDuckDB` sub-worker fetches `duckdb-{coi,eh,mvp}.wasm`, the worker JS
+`AsyncDuckDB` sub-worker fetches `duckdb-{coi,eh}.wasm`, the worker JS
 bundles, and the VGI extension wasm from `${BASE_URL}haybarn/...` at runtime.
 `publish.sh` stages these into `dist/haybarn/` before syncing to R2 — so a
 naive Dockerfile built straight off `astro build` produces a site where the SQL
@@ -77,13 +77,19 @@ shell silently fails to boot.
 `build-image.sh` replicates that staging:
 - copies `duckdb-*.wasm` + worker bundles from
   `node_modules/@haybarn/haybarn-wasm/dist` into `dist/haybarn/`
-- downloads the 3 VGI extension wasm variants (`wasm_mvp`, `wasm_eh`,
-  `wasm_threads`) from `haybarn-extensions.query.farm` into
+- downloads the 2 VGI extension wasm variants (`wasm_eh`, `wasm_threads`)
+  from `haybarn-extensions.query.farm` into
   `dist/haybarn/extensions/` so the shell has a local mirror. The extension
   path is derived from the exact `@haybarn/haybarn-wasm` version in
   `package.json`, which is the single version source for both image and
   Cloudflare builds. Prerelease suffixes are omitted from the compatibility
   path, so package `1.5.5-rc1` resolves to extension path `v1.5.5`.
+
+Browsers must support WebAssembly exception handling. Cupola uses the threaded
+COI build when SIMD, threads, and cross-origin isolation are available, and the
+EH build otherwise. Browsers without exception handling see an update-browser
+error before the engine downloads. The legacy MVP build is not shipped because
+it cannot load the required VGI extension.
 
 ### The `/npm/*` proxy
 `DuckDBShell.tsx` loads `apache-arrow` and `xterm-readline` as jsdelivr `+esm`

@@ -5,8 +5,8 @@ import { createQueryExecutor, type QueryExecutionOptions } from './query-executi
 import { scopedConnection } from './duckdb-scoped-connection';
 // Boot DuckDB on the main thread via @haybarn/haybarn-wasm's AsyncDuckDB.
 //
-// AsyncDuckDB runs its own sub-worker (COI/EH/MVP variant selected by
-// selectBundle). This module owns the lifecycle of that sub-worker and adapts
+// AsyncDuckDB runs its own sub-worker (COI or EH, based on browser support).
+// This module owns the lifecycle of that sub-worker and adapts
 // it to the project's existing `engine.query` contract
 // — no second worker layer, no custom wire protocol. The dependency surface
 // for the rest of the app is unchanged: consumers keep calling
@@ -77,24 +77,24 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
     phaseT = now;
   };
 
-  const BUNDLES: duckdb.DuckDBBundles = {
-    mvp: {
-      mainModule: `${absBase}haybarn/duckdb-mvp.wasm`,
-      mainWorker: `${absBase}haybarn/duckdb-browser-mvp.worker.js`,
-    },
-    eh: {
-      mainModule: `${absBase}haybarn/duckdb-eh.wasm`,
-      mainWorker: `${absBase}haybarn/duckdb-browser-eh.worker.js`,
-    },
-    coi: {
+  setBootPhase("Checking browser support");
+  const platform = await duckdb.getPlatformFeatures();
+  // Haybarn's selectBundle requires an MVP fallback, but MVP cannot load the
+  // required VGI extension. Fail before downloading an unusable engine.
+  if (!platform.wasmExceptions) {
+    throw new Error("Your browser does not support the features required by Cupola's query engine. Update your browser and try again.");
+  }
+  const bundle: duckdb.DuckDBBundle = platform.wasmSIMD && platform.wasmThreads && platform.crossOriginIsolated
+    ? {
       mainModule: `${absBase}haybarn/duckdb-coi.wasm`,
       mainWorker: `${absBase}haybarn/duckdb-browser-coi.worker.js`,
       pthreadWorker: `${absBase}haybarn/duckdb-browser-coi.pthread.worker.js`,
-    },
-  };
-
-  setBootPhase("Checking browser support");
-  const bundle = await duckdb.selectBundle(BUNDLES);
+    }
+    : {
+      mainModule: `${absBase}haybarn/duckdb-eh.wasm`,
+      mainWorker: `${absBase}haybarn/duckdb-browser-eh.worker.js`,
+      pthreadWorker: null,
+    };
   mark("select-bundle");
 
   // Bypass haybarn's `createWorker(url)` which fetches the worker.js and
