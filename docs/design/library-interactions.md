@@ -30,7 +30,9 @@ The sidebar's Delete action is available when the worker permits deletion. Confi
 
 The sidebar, folder listings, and Reports overview use a single search field matching names and descriptions. The sidebar searches every object type; the Reports overview searches reports across libraries, including reports in nested folders. Descriptions are optional and editable in document details. Cupola has no tag chips, tag filters, or tag editing fields. Existing tags remain in stored metadata and are preserved when editing details, saving, or transferring documents.
 
-Schedules & alerts defaults to all report schedules the current user can access. Its worker selector narrows the list, and Needs attention remains a separate filter. The same page is reachable from a worker's sidebar context menu, initially filtered to that worker, or from the main listing for all connected workers.
+Library shows a Scheduled reports entry when connected workers have report schedules the current user can access, including paused schedules. It opens Schedules & alerts across all workers. The sidebar and activity page share discovery and refresh after schedule changes, sidebar refresh, and periodic polling; the entry disappears when no accessible report schedules remain. Workers without scheduling support do not get an empty entry.
+
+Schedules & alerts defaults to all report schedules the current user can access. Its worker selector narrows the list, and Needs attention remains a separate filter. The same page is reachable from a worker's sidebar context menu, initially filtered to that worker, or from the main listing for all connected workers. These alerts concern schedule health. Advanced schedule settings also accept a SQL condition for conditional report delivery; stateful SQL data-alert rules are not yet implemented.
 
 ## Execution and sources
 

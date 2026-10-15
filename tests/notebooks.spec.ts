@@ -594,7 +594,8 @@ test('notebook assistant shares resizing and persists its own width', async ({ p
 
 test('notebook deletion uses a dialog with safe initial focus and cancellation', async ({ page }) => {
   await openNotebook(page);
-  await notebookAction(page, 'Save');
+  const drafts = page.getByRole('navigation', { name: 'Saved notebook drafts' });
+  await expect(drafts.getByRole('link', { name: 'Untitled notebook', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Notebooks', exact: true }).click();
   const library = page.getByTestId('notebook-library');
   await library.getByRole('button', { name: 'Delete', exact: true }).click();
@@ -606,7 +607,8 @@ test('notebook deletion uses a dialog with safe initial focus and cancellation',
   await library.getByRole('button', { name: 'Delete', exact: true }).click();
   await dialog.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   await expect(dialog).toBeHidden();
-  await expect(library.getByRole('heading', { name: 'Start an investigation' })).toBeVisible();
+  await expect(library.getByRole('heading', { name: 'Create a notebook' })).toBeVisible();
+  await expect(drafts).toHaveCount(0);
 });
 
 test('insertion, scoped runs and independent output visibility', async ({ page }) => {

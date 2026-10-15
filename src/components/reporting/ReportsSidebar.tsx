@@ -1,7 +1,7 @@
 import { LibraryNewMenu } from './LibraryNewMenu';
 import { markDocumentDeleted, newLibraryDocument } from '../../lib/reporting/documents';
 import { DeleteWorkerDocumentDialog } from './DeleteWorkerDocumentDialog';
-import { openScheduleActivity } from './ScheduleActivity';
+import { openScheduleActivity, scheduleOverviewHref } from './ScheduleActivity';
 import { catalogInventory } from '../../lib/catalog-store';
 import { listLocalObjects, deleteLocalObject, saveLocalObject, type LocalObject } from '../../lib/reporting/local-objects';
 import { transferLocation, transferId, transferFolder } from '../../lib/reporting/transfers';
@@ -28,15 +28,16 @@ import { requestTransferSource } from '../../lib/reporting/transfer-source';
 import type { TransferSource } from '../../lib/reporting/transfers';
 
 interface LibraryRows { reports: ReportRow[]; folders: FolderRecord[]; loading?: boolean; error?: string }
+const SCHEDULES_NODE = 'scheduled-reports';
 
 export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }: {
   serviceUrl: string; workspaceId?: string; search?: string; active?: boolean;
 }) {
-  const scope = workspaceId ?? serviceUrl, { locations, refresh, refreshVersion, transfer, setTransfer } = useReportLocations();
+  const scope = workspaceId ?? serviceUrl, { locations, refresh, refreshVersion, scheduleWorkers, transfer, setTransfer } = useReportLocations();
   const [local, setLocal] = useState<EvidenceReport[]>([]), [library, setLibrary] = useState<ReturnType<typeof localLibrary>>({ folders: [], entries: {} });
   const [localObjects, setLocalObjects] = useState<LocalObject[]>([]);
   const [localError, setLocalError] = useState(''), [remote, setRemote] = useState<Record<string, LibraryRows>>({});
-  const selectedNode = () => /\/(reports|evidence)(\/|$)/.test(location.pathname) ? currentReportNode() : '';
+  const selectedNode = () => /\/(reports|evidence)(\/|$)/.test(location.pathname) ? new URLSearchParams(location.search).get('report_view') === 'activity' ? SCHEDULES_NODE : currentReportNode() : '';
   const [selected, setSelected] = useState(selectedNode);
   const [actionError, setActionError] = useState(''), [preparing, setPreparing] = useState(false);
   const [deleting, setDeleting] = useState<{ url: string; record: ReportRow } | null>(null);
@@ -78,6 +79,10 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
   function navigate(event: MouseEvent<HTMLAnchorElement>, destination: ReportDestination) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault(); open(destination);
+  }
+  function navigateSchedules(event: MouseEvent<HTMLAnchorElement>) {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault(); openScheduleActivity(serviceUrl);
   }
   const act = (id: string, action: SavedDocumentAction) => requestSavedDocumentAction({ kind: 'report', scope, id, action }, () => actOnSavedReport(scope, id, action));
   const destinations = new Map<string, ReportDestination>();
@@ -160,7 +165,9 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
     const destination = { location }, id = reportNodeKey(destination); destinations.set(id, destination);
     return { id, name, kind: 'location', children, href: href(destination), detail, content: directoryRow(destination, name), readOnly: !allowed(destination, 'create_report') && !allowed(destination, 'create_folder') };
   };
-  const allNodes = [
+  const allNodes: FileTreeNode[] = [
+    ...(scheduleWorkers.some(worker => worker.records.length > 0) ? [{ id: SCHEDULES_NODE, name: 'Scheduled reports', kind: 'collection' as const, href: scheduleOverviewHref(serviceUrl),
+      content: <a href={scheduleOverviewHref(serviceUrl)} onClick={navigateSchedules} aria-current={active && selected === SCHEDULES_NODE ? 'page' : undefined} className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/60 focus-visible:outline focus-visible:outline-ring"><CalendarClock aria-hidden className="size-4 shrink-0 text-muted-foreground" /><span className="truncate">Scheduled reports</span></a> }] : []),
     ...locations.filter(l => l.info).map(l => root(l.url, locationLabel(l, locations), nodes(reportDirectoryNodes(l.url,
       (remote[l.url]?.folders ?? []).map(f => ({ id: f.folder_id, name: f.name, parentId: f.parent_folder_id })),
       (remote[l.url]?.reports ?? []).map(r => ({ id: r.report_id, name: r.envelope?.title ?? 'Redacted report', folderId: r.folder_id })))), `Worker: ${l.url}`)),
@@ -181,6 +188,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
   return <section className="mt-2 border-t border-border pt-2">
     <SavedDocumentsSidebar title="Library" documentKind="report" icon={FileChartColumn} itemIcon={FileText} openKey="cupola.sidebar.reports-open" testId="sidebar-reports-toggle"
       items={items}
+      showCount={false}
       search={search} libraryHref={href({ location: 'all' })} libraryActive={active && selected === reportNodeKey({ location: 'all' })} onNavigate={event => navigate(event, { location: 'all' })} onAction={act}
       createControl={<LibraryNewMenu compact onFolder={() => open({ location: 'local' }, 'folder')} onCreate={kind => {
         if (kind === 'report') { window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId, create: true, href: reportHref(serviceUrl, undefined, true) } })); return; }
@@ -188,7 +196,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
       }} />} error={localError || undefined}>
       <FileTree nodes={search ? filter(allNodes) : allNodes} label="Library" selectedId={active ? selected : undefined} initialExpandedIds={[reportNodeKey({ location: 'local' })]} expandAll={Boolean(search)} autoFocusSelection={false}
         dragDrop={{ canDrag, canDrop, onDrop: (source, destination) => void move(source, destination) }}
-        onSelect={id => { const destination = destinations.get(id); if (destination) open(destination); }} onNavigate={(event, id) => { const destination = destinations.get(id); if (destination) navigate(event, destination); }} />
+        onSelect={id => { if (id === SCHEDULES_NODE) { openScheduleActivity(serviceUrl); return; } const destination = destinations.get(id); if (destination) open(destination); }} onNavigate={(event, id) => { if (id === SCHEDULES_NODE) { navigateSchedules(event); return; } const destination = destinations.get(id); if (destination) navigate(event, destination); }} />
       {(locations.some(l => l.loading) || Object.values(remote).some(r => r.loading)) && <p role="status" className="px-2 py-1 text-xs text-muted-foreground">Loading library…</p>}
       {errors.length > 0 && <div className="px-2 py-1 text-xs text-destructive"><p role="alert">{errors.join(' ')}</p><button className="underline" onClick={refresh}>Retry report libraries</button></div>}
       {actionError && <p role="alert" className="px-2 py-1 text-xs text-destructive">{actionError}</p>}

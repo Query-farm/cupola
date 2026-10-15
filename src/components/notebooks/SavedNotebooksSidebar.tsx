@@ -50,6 +50,8 @@ export function SavedNotebooksSidebar({
       window.removeEventListener('storage', onStorage);
     };
   }, [scope]);
+  if (!documents.length && !error) return null;
+
   const open = (detail: Omit<OpenNotebookDetail, 'serviceUrl'>) =>
     window.dispatchEvent(
       new CustomEvent<OpenNotebookDetail>(OPEN_NOTEBOOK_EVENT, { detail: { serviceUrl, ...detail } }),

@@ -1,21 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Bell, CalendarClock, CheckCircle2, KeyRound, RefreshCw, TriangleAlert } from 'lucide-react';
 import { Button, buttonVariants } from '../ui/button';
 import { ReportPage } from './ReportPage';
 import { ReportNotice } from './ReportNotice';
 import { useReportLocations } from './ReportLocations';
-import { ReportClient, reportError, serviceLocation } from '../../lib/reporting/client';
-import { SCHEDULES_PROTOCOL, type ScheduleRecord } from '../../lib/reporting/contracts.generated';
+import { type ScheduleRecord } from '../../lib/reporting/contracts.generated';
 import { dateLabel, scheduleIssues, statusLabel } from '../../lib/reporting/schedules';
-import { REPORT_LIBRARY_CHANGED, REPORT_ROUTE_CHANGED, reportNavigationHref } from '../../lib/reporting/navigation';
+import { REPORT_ROUTE_CHANGED, reportNavigationHref } from '../../lib/reporting/navigation';
 import { appBase } from '../../lib/app-base';
-import type { CatalogData } from '../../lib/service';
 import { OPEN_REPORT_EVENT, type OpenReportDetail } from '../../lib/evidence/open-report';
 
-export function openScheduleActivity(serviceUrl: string, schedulerUrl?: string) {
+export function scheduleOverviewHref(serviceUrl: string, schedulerUrl?: string) {
   const next = new URL(reportNavigationHref(serviceUrl, { location: 'all' }, location.href, appBase), location.origin);
   next.searchParams.set('report_view', 'activity');
   if (schedulerUrl) next.searchParams.set('report_scheduler', schedulerUrl);
+  return next.href;
+}
+
+export function openScheduleActivity(serviceUrl: string, schedulerUrl?: string) {
+  const next = new URL(scheduleOverviewHref(serviceUrl, schedulerUrl));
   window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId: next.searchParams.get('local_ws') ?? undefined, href: next.href } }));
 }
 
@@ -34,15 +37,8 @@ export function scheduleActivityHref(record: ScheduleRecord, scheduler: string, 
   return next.href;
 }
 
-interface WorkerSchedules { url: string; name: string; records: ScheduleRecord[]; loading?: boolean; error?: string; supported?: boolean }
-export function ScheduleActivity({ serviceUrl, catalogs, onBack }: { serviceUrl: string; catalogs: readonly CatalogData[]; onBack: () => void }) {
-  const { locations, refreshVersion } = useReportLocations();
-  const candidates = useMemo(() => [...new Map([{ url: serviceUrl, name: 'Connected worker' },
-    ...catalogs.filter(c => c.sourceUrl).map(c => ({ url: c.sourceUrl!, name: c.catalogName })), ...locations].flatMap(item => {
-      try { return [[serviceLocation(item.url), { url: serviceLocation(item.url), name: item.name }] as const]; } catch { return []; }
-    })).values()], [serviceUrl, locations, catalogs]);
-  const key = JSON.stringify(candidates);
-  const [workers, setWorkers] = useState<WorkerSchedules[]>([]), [generation, setGeneration] = useState(0);
+export function ScheduleActivity({ serviceUrl, onBack }: { serviceUrl: string; onBack: () => void }) {
+  const { scheduleWorkers: workers, refreshSchedules } = useReportLocations();
   const [filter, setFilter] = useState<'attention' | 'all'>('all'), [query, setQuery] = useState('');
   const [workerFilter, setWorkerFilter] = useState(() => new URLSearchParams(location.search).get('report_scheduler') ?? '');
   useEffect(() => {
@@ -57,34 +53,14 @@ export function ScheduleActivity({ serviceUrl, catalogs, onBack }: { serviceUrl:
     if (value) url.searchParams.set('report_scheduler', value); else url.searchParams.delete('report_scheduler');
     history.replaceState(history.state, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
   }
-  useEffect(() => { const refresh = () => setGeneration(n => n + 1); window.addEventListener(REPORT_LIBRARY_CHANGED, refresh); window.addEventListener('focus', refresh); return () => { window.removeEventListener(REPORT_LIBRARY_CHANGED, refresh); window.removeEventListener('focus', refresh); }; }, []);
-  useEffect(() => {
-    const abort = new AbortController(); let timer: ReturnType<typeof setTimeout>;
-    const hosts: Array<{ url: string; name: string }> = JSON.parse(key);
-    setWorkers(hosts.map(h => ({ ...h, records: [], loading: true })));
-    async function refresh() {
-      await Promise.allSettled(hosts.map(async host => {
-        const client = new ReportClient(host.url);
-        let result: WorkerSchedules;
-        try {
-          const supported = await client.discover(abort.signal, SCHEDULES_PROTOCOL);
-          result = { ...host, supported, records: supported ? await client.call('schedules.list_schedules', { action_kind: 'render_report' }, abort.signal) : [] };
-        } catch (e) { result = { ...host, records: [], error: reportError(e) }; }
-        if (!abort.signal.aborted) setWorkers(old => old.map(w => w.url === host.url ? result : w));
-      }));
-      if (!abort.signal.aborted) timer = setTimeout(refresh, 15_000);
-    }
-    void refresh();
-    return () => { abort.abort(); clearTimeout(timer); };
-  }, [key, generation, refreshVersion]);
   const selectedWorkers = workers.filter(worker => !workerFilter || worker.url === workerFilter);
   const all = selectedWorkers.flatMap(worker => worker.records.map(record => ({ worker, record, issues: scheduleIssues(record) })));
   const attention = all.filter(row => row.issues.length > 0);
   const rows = (filter === 'attention' ? attention : all).filter(({ record, worker }) => `${record.definition.title} ${worker.name}`.toLowerCase().includes(query.toLowerCase()));
   const loading = selectedWorkers.some(w => w.loading), errors = selectedWorkers.filter(w => w.error);
   return <ReportPage title="Schedules & alerts" description="Report schedules across your connected workers" backLabel="Back to reports" onBack={onBack}>
-    <div className="flex flex-wrap items-center gap-2"><Button variant={filter === 'attention' ? 'default' : 'outline'} aria-pressed={filter === 'attention'} onClick={() => setFilter('attention')}><TriangleAlert />Needs attention ({attention.length})</Button><Button variant={filter === 'all' ? 'default' : 'outline'} aria-pressed={filter === 'all'} onClick={() => setFilter('all')}><CalendarClock />All schedules ({all.length})</Button><Button variant="ghost" onClick={() => setGeneration(n => n + 1)}><RefreshCw />Refresh schedules</Button></div>
-    <label className="block max-w-lg space-y-1 text-sm"><span className="font-medium">Worker</span><select aria-label="Schedule worker" className="block h-9 w-full rounded-lg border border-input bg-card px-3 text-sm [appearance:auto]" value={workerFilter} onChange={event => selectWorker(event.target.value)}><option value="">All workers</option>{candidates.map(worker => <option key={worker.url} value={worker.url}>{worker.name} · {new URL(worker.url).host}</option>)}</select></label>
+    <div className="flex flex-wrap items-center gap-2"><Button variant={filter === 'attention' ? 'default' : 'outline'} aria-pressed={filter === 'attention'} onClick={() => setFilter('attention')}><TriangleAlert />Needs attention ({attention.length})</Button><Button variant={filter === 'all' ? 'default' : 'outline'} aria-pressed={filter === 'all'} onClick={() => setFilter('all')}><CalendarClock />All schedules ({all.length})</Button><Button variant="ghost" onClick={refreshSchedules}><RefreshCw />Refresh schedules</Button></div>
+    <label className="block max-w-lg space-y-1 text-sm"><span className="font-medium">Worker</span><select aria-label="Schedule worker" className="block h-9 w-full rounded-lg border border-input bg-card px-3 text-sm [appearance:auto]" value={workerFilter} onChange={event => selectWorker(event.target.value)}><option value="">All workers</option>{workers.map(worker => <option key={worker.url} value={worker.url}>{worker.name} · {new URL(worker.url).host}</option>)}</select></label>
     {workerFilter && selectedWorkers.some(worker => worker.supported === false) && <ReportNotice title="Scheduling is not available on this worker">Choose another worker or All workers to browse report schedules.</ReportNotice>}
     <label className="block max-w-lg space-y-1 text-sm"><span className="font-medium">Find a schedule</span><input className="block w-full rounded border bg-card px-3 py-2" value={query} onChange={e => setQuery(e.target.value)} placeholder="Schedule or worker name" /></label>
     {loading && <p role="status" className="text-sm">Checking workers…</p>}

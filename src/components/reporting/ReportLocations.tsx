@@ -6,9 +6,10 @@ import type { ReportLocation } from '../../lib/reporting/locations';
 import { OPEN_REPORT_EVENT } from '../../lib/evidence/open-report';
 import { REPORT_ROUTE_CHANGED } from '../../lib/reporting/navigation';
 import type { TransferDestination, TransferSource } from '../../lib/reporting/transfers';
+import { useScheduleInventory, type WorkerSchedules } from '../../lib/reporting/use-schedule-inventory';
 
 interface TransferRequest { source: TransferSource; move: boolean; initialDestination?: TransferDestination }
-const Context = createContext<{ locations: ReportLocation[]; refresh: () => void; refreshVersion: number; transfer: TransferRequest | null; setTransfer: (request: TransferRequest | null) => void } | null>(null);
+const Context = createContext<{ locations: ReportLocation[]; refresh: () => void; refreshVersion: number; scheduleWorkers: WorkerSchedules[]; refreshSchedules: () => void; transfer: TransferRequest | null; setTransfer: (request: TransferRequest | null) => void } | null>(null);
 
 /** The sidebar and report pages discover the same libraries, including a shared-link target. */
 export function ReportLocationsProvider({ serviceUrl, workspaceId, catalogs, children }: {
@@ -18,15 +19,17 @@ export function ReportLocationsProvider({ serviceUrl, workspaceId, catalogs, chi
   // A sidebar action survives closing the mobile drawer and lazy mounting Reports.
   const [transfer, setTransfer] = useState<TransferRequest | null>(null);
   const [linked, setLinked] = useState(() => new URLSearchParams(location.search).get('report_service'));
+  const [linkedScheduler, setLinkedScheduler] = useState(() => new URLSearchParams(location.search).get('report_scheduler'));
   useEffect(() => {
-    const read = () => queueMicrotask(() => setLinked(new URLSearchParams(location.search).get('report_service')));
+    const read = () => queueMicrotask(() => { const params = new URLSearchParams(location.search); setLinked(params.get('report_service')); setLinkedScheduler(params.get('report_scheduler')); });
     for (const event of ['popstate', OPEN_REPORT_EVENT, REPORT_ROUTE_CHANGED]) window.addEventListener(event, read);
     return () => { for (const event of ['popstate', OPEN_REPORT_EVENT, REPORT_ROUTE_CHANGED]) window.removeEventListener(event, read); };
   }, []);
   const urls = useMemo(() => [...new Set([serviceUrl, ...catalogs.map(c => c.sourceUrl),
     ...(workspaceId ? getWorkspace(workspaceId)?.catalogs.filter(c => c.enabled !== false).map(c => c.url) ?? [] : []),
     ...(linked && !['all', 'local'].includes(linked) ? [linked] : []),
-  ].flatMap(url => { try { return url ? [serviceLocation(url)] : []; } catch { return []; } }))].sort(), [serviceUrl, workspaceId, catalogs, linked]);
+    linkedScheduler,
+  ].flatMap(url => { try { return url ? [serviceLocation(url)] : []; } catch { return []; } }))].sort(), [serviceUrl, workspaceId, catalogs, linked, linkedScheduler]);
   const key = JSON.stringify(urls);
   useEffect(() => {
     const abort = new AbortController();
@@ -43,7 +46,8 @@ export function ReportLocationsProvider({ serviceUrl, workspaceId, catalogs, chi
     return () => abort.abort();
   }, [key, generation]);
   const refresh = useCallback(() => setGeneration(n => n + 1), []);
-  return <Context.Provider value={{ locations, refresh, refreshVersion: generation, transfer, setTransfer }}>{children}</Context.Provider>;
+  const { workers: scheduleWorkers, refresh: refreshSchedules } = useScheduleInventory(urls.map(url => ({ url, name: locations.find(location => location.url === url)?.name ?? catalogs.find(catalog => catalog.sourceUrl === url)?.catalogName ?? new URL(url).host })), generation);
+  return <Context.Provider value={{ locations, refresh, refreshVersion: generation, scheduleWorkers, refreshSchedules, transfer, setTransfer }}>{children}</Context.Provider>;
 }
 
 export function useReportLocations() {

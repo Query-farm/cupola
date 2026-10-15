@@ -284,7 +284,7 @@ export function NotebookPanel({
         />
         {!documents.length && (
           <div className="rounded-lg border border-dashed p-12 text-center">
-            <h2 className="font-medium">Start an investigation</h2>
+            <h2 className="font-medium">Create a notebook</h2>
             <p className="text-sm text-muted-foreground mt-2">
               Add SQL cells, turn results into charts, and explain your findings with Markdown.
             </p>

@@ -14,6 +14,44 @@ const test = base.extend<{}, { scheduler: Awaited<ReturnType<typeof startReporti
   }, { scope: 'worker' }],
 });
 
+test('Library shows scheduled reports only when accessible schedules exist and updates after deletion', async ({ page }) => {
+  const worker = await startReportingWorker('Sidebar schedules', `${process.env.CUPOLA_APP_ORIGIN || 'http://localhost:4321'}/v${pkg.version}/report-render`);
+  try {
+    const client = worker.client();
+    const saved = await client.call('create_report', { request_id: crypto.randomUUID(), ...encodeReport(report('Sidebar scheduled report'), { description: '', tags: [] }) });
+    await authorizeSchedules(client, requiredDelegations(worker.url, []), 'Sidebar schedule test', () => ({ options: null, data_version_spec: '', implementation_version: '' }), 7, () => client);
+    await page.addInitScript(({ url }) => sessionStorage.setItem('vgi.oauth.tokens.' + url, JSON.stringify({ access_token: 'test-alice', expires_at: Date.now() / 1000 + 3600 })), { url: worker.url });
+    await page.goto(`reports?service=${encodeURIComponent(worker.url)}`);
+    const sidebar = page.getByTestId('catalog-sidebar');
+    const entry = sidebar.getByRole('link', { name: 'Scheduled reports', exact: true });
+    await page.getByRole('button', { name: 'Schedules & alerts', exact: true }).click();
+    const activity = page.getByRole('region', { name: 'Schedules & alerts', exact: true });
+    await expect(activity.getByText('No report schedules yet', { exact: true })).toBeVisible();
+    await expect(entry).toHaveCount(0);
+    // Paused schedules are still manageable; the sidebar refresh discovers external changes.
+    const schedule = await client.call('schedules.create_schedule', { request_id: crypto.randomUUID(), schedule: newSchedule(saved, worker.url) });
+    await sidebar.getByRole('button', { name: 'Refresh catalogs and reports', exact: true }).click();
+    await expect(entry).toBeVisible();
+    await activity.getByRole('button', { name: 'Back to reports', exact: true }).click();
+    await page.evaluate(() => { (window as any).__scheduleNavigation = 'same app'; });
+    await entry.click();
+    await expect(activity.getByRole('heading', { name: 'Sidebar scheduled report', exact: true })).toBeVisible();
+    await expect(activity.getByLabel('Schedule worker', { exact: true })).toHaveValue('');
+    await expect(entry).toHaveAttribute('aria-current', 'page');
+    expect(await page.evaluate(() => (window as any).__scheduleNavigation)).toBe('same app');
+    await page.goBack();
+    await expect(page.getByRole('region', { name: 'Report browser', exact: true })).toBeVisible();
+    await sidebar.getByRole('treeitem', { name: 'Scheduled reports', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(activity.getByRole('heading', { name: 'Sidebar scheduled report', exact: true })).toBeVisible();
+    await activity.getByRole('link', { name: 'Manage schedule', exact: true }).click();
+    await page.getByRole('button', { name: 'Delete schedule', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm deletion', exact: true }).click();
+    await expect(entry).toHaveCount(0);
+    expect((await client.call('schedules.list_schedules', {})).some(record => record.schedule_id === schedule.schedule_id)).toBe(false);
+  } finally { await worker.stop(); }
+});
+
 test('schedule drafts survive reload and status polling never overwrites a concurrent edit', async ({ page, scheduler }) => {
   const c = scheduler.client();
   const saved = await c.call('create_report', { request_id: crypto.randomUUID(), ...encodeReport(report('Concurrent schedule'), { description: '', tags: [] }) });
@@ -47,6 +85,7 @@ test('saved reports remain usable when their worker does not implement schedules
     await page.goto(`reports?service=${encodeURIComponent(worker.url)}&report_service=${encodeURIComponent(worker.url)}&report_id=${saved.report_id}#token=test-alice`);
     await chooseReportAction(page, 'Schedules & email');
     await expect(page.getByText('Scheduling is not available on this worker', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('catalog-sidebar').getByRole('link', { name: 'Scheduled reports', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'New schedule', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Back to report', exact: true }).click();
     await expect(page.getByRole('button', { name: 'More report actions', exact: true })).toBeVisible();

@@ -148,7 +148,7 @@ export function Sidebar({ activeNotebookId, notebooksActive, reportsActive, serv
       .flatMap(catalog => {
         const meta = catalogMeta?.get(catalog.catalogName);
         const isMemory = catalog.catalogName === "memory";
-        return buildTreeData(catalog, {
+        const nodes = buildTreeData(catalog, {
           showDuckDBTypes: settings.showDuckDBTypes,
           hideTableBackingFunctions: settings.hideTableBackingFunctions,
           hideDollarTables: settings.hideDollarTables,
@@ -160,6 +160,12 @@ export function Sidebar({ activeNotebookId, notebooksActive, reportsActive, serv
           onTableAction: canInsert ? (schema, table) => insertRelation(catalog.catalogName, schema, table) : undefined,
           onCallableAction: canInsertCallable ? (schema, name, kind) => insertCallable(catalog.catalogName, schema, name, kind) : undefined,
           onColumnAction: canInsert && insertTarget === 'notebook' ? (_schema, _table, column) => insertRef.current?.(quoteIdent(column)) : undefined,
+        });
+        if (!isMemory) return nodes;
+        // Local schemas and their catalog only need a row when they contain visible objects.
+        return nodes.flatMap(root => {
+          const children = root.children?.filter(schema => schema.children?.length) ?? [];
+          return children.length ? [{ ...root, children }] : [];
         });
       });
   }, [catalogs, order, statusByAlias, catalogMeta, settings.showDuckDBTypes, settings.hideTableBackingFunctions, settings.hideDollarTables, canInsert, canInsertCallable, insertTarget, insertRelation, insertCallable]);
@@ -326,7 +332,8 @@ export function Sidebar({ activeNotebookId, notebooksActive, reportsActive, serv
         />
         {serviceUrl && <ReportsSidebar key={`reports:${workspaceId ?? serviceUrl}`} serviceUrl={serviceUrl} workspaceId={workspaceId} search={search} active={reportsActive} />}
         {(serviceUrl || localData.length > 0) && (
-          <section aria-label="On this device" className="mt-2 border-t border-border pt-2">
+          // Keep the draft listener mounted so the first notebook can reveal this section.
+          <section aria-label="On this device" className="hidden has-[nav]:block has-[[role=treeitem]]:block mt-2 border-t border-border pt-2">
             <h2 className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">On this device</h2>
             <TreeView
               data={localData}

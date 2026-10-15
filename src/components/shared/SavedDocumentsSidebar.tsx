@@ -12,6 +12,7 @@ export function SavedDocumentsSidebar({
   openKey,
   testId,
   items,
+  showCount = true,
   search = '',
   libraryHref,
   onNavigate,
@@ -31,6 +32,7 @@ export function SavedDocumentsSidebar({
   openKey: string;
   testId: string;
   items: { id: string; title: string; href: string }[];
+  showCount?: boolean;
   search?: string;
   libraryHref: string;
   onNavigate: (event: MouseEvent<HTMLAnchorElement>, id?: string) => void;
@@ -90,7 +92,7 @@ export function SavedDocumentsSidebar({
         >
           <Icon aria-hidden className="mr-2 h-4 w-4 shrink-0" />
           <span className="truncate">{title}</span>
-          <span aria-hidden className="ml-1.5 text-xs font-normal text-muted-foreground">{items.length}</span>
+          {showCount && <span aria-hidden className="ml-1.5 text-xs font-normal text-muted-foreground">{items.length}</span>}
         </a>
         {createControl}
         {!createControl && onCreate && (

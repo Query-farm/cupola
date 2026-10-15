@@ -12,13 +12,18 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("Memory catalog sidebar", () => {
-  test("new view in memory catalog appears in the sidebar tree", async ({ page }) => {
+  test("memory catalog and schemas appear only while they contain objects", async ({ page }) => {
     // Wait for refreshMemoryTables to be wired up by CatalogApp.
     await page.waitForFunction(
       () => typeof (window as any).__bridge?.refreshMemoryTables === "function",
       null,
       { timeout: T_SHELL_BOOT },
     );
+    await page.evaluate(async () => { await (window as any).__bridge.refreshMemoryTables(); });
+    const local = page.getByRole('region', { name: 'On this device', exact: true });
+    const memory = local.getByRole('treeitem', { name: 'memory', exact: true });
+    await expect(memory).toHaveCount(0);
+    await expect(local).toBeHidden();
 
     const VIEW_NAME = `pw_test_view_${Date.now()}`;
 
@@ -41,6 +46,8 @@ test.describe("Memory catalog sidebar", () => {
     await filter.fill(VIEW_NAME);
     const viewItem = page.getByRole("treeitem", { name: new RegExp(VIEW_NAME) }).first();
     await expect(viewItem).toBeVisible({ timeout: T_NORMAL });
+    await expect(memory).toBeVisible();
+    await expect(local.getByRole('treeitem', { name: 'main', exact: true })).toBeVisible();
 
     // Cleanup: drop the view, refresh, and assert it's gone from the tree.
     await page.evaluate(async (name) => {
@@ -51,5 +58,7 @@ test.describe("Memory catalog sidebar", () => {
 
     await expect(viewItem).toBeHidden({ timeout: T_NORMAL });
     await filter.fill("");
+    await expect(memory).toHaveCount(0);
+    await expect(local).toBeHidden();
   });
 });
