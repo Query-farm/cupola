@@ -10,7 +10,7 @@ const appUrl = `${base}?service=${encodeURIComponent(service)}&view=editor#sql=$
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Cupola · Mobile browser prototype</title>
+    <title>Cupola · Mobile browser preview</title>
     <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
     <link href="https://fonts.googleapis.com/css2?family=Petrona:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   </head>
@@ -18,7 +18,7 @@ const appUrl = `${base}?service=${encodeURIComponent(service)}&view=editor#sql=$
     <main class="preview-layout">
       <section class="preview-intro">
         <a class="preview-brand" href={base}><img src={`${base}cupola-mark.svg`} width="36" height="36" alt="" />Cupola</a>
-        <p class="preview-eyebrow">MOBILE BROWSER PROTOTYPE</p>
+        <p class="preview-eyebrow">MOBILE BROWSER PREVIEW</p>
         <h1>A little screen.<br />Room to explore.</h1>
         <p class="preview-lede">Your Cupola workspace, shaped for a phone. Ask questions, explore data, and write SQL—one focused view at a time.</p>
         <ol class="preview-steps">
@@ -39,14 +39,16 @@ const appUrl = `${base}?service=${encodeURIComponent(service)}&view=editor#sql=$
         <p class="preview-caption">Same app. Same data engine. No installation.</p>
       </section>
     </main>
-    <script>
-      const frame = document.querySelector<HTMLElement>('.preview-frame')!;
-      document.querySelectorAll<HTMLButtonElement>('[data-width]').forEach(button => {
-        button.addEventListener('click', () => {
-          frame.style.setProperty('--preview-width', `${button.dataset.width}px`);
-          document.querySelectorAll('[data-width]').forEach(option => option.setAttribute('aria-pressed', String(option === button)));
+    <script is:inline>
+      const frame = document.querySelector('.preview-frame');
+      if (frame instanceof HTMLElement) {
+        document.querySelectorAll('[data-width]').forEach(button => {
+          button.addEventListener('click', () => {
+            frame.style.setProperty('--preview-width', `${button.getAttribute('data-width')}px`);
+            document.querySelectorAll('[data-width]').forEach(option => option.setAttribute('aria-pressed', String(option === button)));
+          });
         });
-      });
+      }
     </script>
     <style>
       :global(body) { margin: 0; color: var(--foreground); background: var(--background); font-family: 'Noto Sans', sans-serif; }
