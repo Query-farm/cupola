@@ -18,6 +18,7 @@ import type { EvidenceDataContext } from '../../lib/evidence/data-browser';
 import { EvidenceParameters, type ParameterChoicesContext } from './EvidenceParameters';
 import { EvidencePerformance } from './EvidencePerformance';
 import type { RefreshProfile } from '../../lib/evidence/refresh-profile';
+import type { RevealedChanges } from '../../lib/evidence/report-changes';
 import type { EvidenceReport } from '../../lib/evidence/reports';
 import { EvidenceHistory } from './EvidenceHistory';
 import type { ProposalEvent } from './EvidenceAgent';
@@ -34,7 +35,7 @@ const snippets: Record<string, string> = {
   'Two columns': '\n\n{% row %}\n\nAdd components here.\n\n{% /row %}\n',
 };
 
-export function EvidenceEditor({ historyContent, history, onProposal, performance, parameterChoices, fullScreen, onToggleFullScreen, report, onChange, issues, stale, issuesStale, editorOnly, onTogglePreview, onApplyPreview, previewBusy, dataContext, onRefreshData, reportTheme, catalogs, semanticStates }: { historyContent?: ReactNode; history?: { history: ReportHistory; dirty: boolean; onRestore: (revision: Revision) => void; onDelete: (revision: Revision) => void }; onProposal?: (event: ProposalEvent) => void; performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[]; runnable: (sql: string) => string }; parameterChoices?: ParameterChoicesContext; fullScreen: boolean; onToggleFullScreen: () => void; catalogs: readonly CatalogData[]; semanticStates: SemanticDatasetState[]; reportTheme: ReportTheme; dataContext: EvidenceDataContext | null; onRefreshData: () => Promise<void>; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; issuesStale: boolean; editorOnly: boolean; onTogglePreview: () => void; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
+export function EvidenceEditor({ historyContent, history, onProposal, performance, parameterChoices, fullScreen, onToggleFullScreen, report, onChange, issues, stale, issuesStale, editorOnly, onTogglePreview, onApplyPreview, onShowChange, previewBusy, dataContext, onRefreshData, reportTheme, catalogs, semanticStates }: { historyContent?: ReactNode; history?: { history: ReportHistory; dirty: boolean; onRestore: (revision: Revision) => void; onDelete: (revision: Revision) => void }; onProposal?: (event: ProposalEvent) => void; performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[]; runnable: (sql: string) => string }; parameterChoices?: ParameterChoicesContext; fullScreen: boolean; onToggleFullScreen: () => void; catalogs: readonly CatalogData[]; semanticStates: SemanticDatasetState[]; reportTheme: ReportTheme; dataContext: EvidenceDataContext | null; onRefreshData: () => Promise<void>; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; issuesStale: boolean; editorOnly: boolean; onTogglePreview: () => void; onApplyPreview: (report: EvidenceReport, action?: string) => Promise<RevealedChanges | null>; onShowChange?: (revision: number, index: number) => void; previewBusy: boolean }) {
   const [tab, setTab] = useState('agent');
   const [agentOpened, setAgentOpened] = useState(true);
   const source = useRef<EvidenceCodeHandle>(null);
@@ -80,7 +81,7 @@ export function EvidenceEditor({ historyContent, history, onProposal, performanc
         }}>{starter.name}</Button>)}</div>
         <p className="text-muted-foreground">These use sample data. Replace the query in Code, or ask Chat to connect your data.</p>
       </section>}
-      <TabsContent value="agent" keepMounted style={{ display: tab === 'agent' ? undefined : 'none' }} className="min-h-0 overflow-hidden"><Suspense fallback={<p className="p-4 text-sm" role="status">Loading report agent…</p>}>{agentOpened && <EvidenceAgent onProposal={onProposal} catalogs={catalogs} report={report} onChange={onChange} issues={issues} stale={stale} onApplyPreview={onApplyPreview} previewBusy={previewBusy} performance={performance} />}</Suspense></TabsContent>
+      <TabsContent value="agent" keepMounted style={{ display: tab === 'agent' ? undefined : 'none' }} className="min-h-0 overflow-hidden"><Suspense fallback={<p className="p-4 text-sm" role="status">Loading report agent…</p>}>{agentOpened && <EvidenceAgent onProposal={onProposal} catalogs={catalogs} report={report} onChange={onChange} issues={issues} stale={stale} onApplyPreview={onApplyPreview} onShowChange={onShowChange} previewBusy={previewBusy} performance={performance} />}</Suspense></TabsContent>
       <TabsContent value="document" className="min-h-0 overflow-auto px-4 pb-4">
         <div className="flex h-full min-h-80 flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">

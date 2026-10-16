@@ -7,7 +7,7 @@ const RECENT_STEPS = 4;
 
 /** Readers of a report aren't necessarily its authors: the list speaks in what is happening,
  *  not in SQL. The Performance tab keeps the technical view. */
-const PHASES: Record<RefreshPhase, string> = {
+export const PHASES: Record<RefreshPhase, string> = {
   engine: 'Starting up', choices: 'Loading filter options', setup: 'Preparing the data', semantic: 'Building datasets', render: 'Drawing the report',
 };
 const humanize = (name: string) => name.split('.').at(-1)!.replace(/^"|"$/g, '').replace(/[_-]+/g, ' ').trim();
@@ -43,10 +43,10 @@ function mergeSteps(steps: ProfiledQuery[], current: RunningStep | null) {
   return [...merged.values()];
 }
 
-/** What a refresh is doing before the report can draw: each phase it will pass through, and
- *  within the running one, the statement in flight. Read from the same profile as the
- *  Performance tab, and replaced by the report itself once rendering starts. */
-export function EvidenceRefreshProgress({ profile, phases, fallback }: { profile: RefreshProfile | null; phases: RefreshPhase[]; fallback: string }) {
+/** What a refresh is doing: each phase it will pass through, and within the running one, the
+ *  statement in flight. Read from the same profile as the Performance tab. On first open it fills
+ *  the empty report; otherwise it opens from the refresh status (header pill, bottom chip). */
+export function EvidenceRefreshProgress({ profile, phases, fallback, className = 'max-w-md py-8' }: { profile: RefreshProfile | null; phases: RefreshPhase[]; fallback: string; className?: string }) {
   const [, tick] = useState(0);
   const running = Boolean(profile && profile.finishedAt === undefined);
   useEffect(() => {
@@ -54,13 +54,13 @@ export function EvidenceRefreshProgress({ profile, phases, fallback }: { profile
     const timer = setInterval(() => tick(n => n + 1), 250);
     return () => clearInterval(timer);
   }, [running]);
-  if (!profile) return <p className="py-8 text-sm text-muted-foreground" role="status">{fallback}</p>;
+  if (!profile) return <p className={`${className} text-sm text-muted-foreground`} role="status">{fallback}</p>;
   const now = profile.finishedAt ?? performance.now();
   const open = new Map((profile.open ?? []).map(item => [item.phase, item.start]));
   const done = new Map<RefreshPhase, number>();
   for (const span of profile.phases) done.set(span.phase, (done.get(span.phase) ?? 0) + span.end - span.start);
 
-  return <div className="max-w-md space-y-3 py-8 text-sm" role="status" aria-label="Refresh progress">
+  return <div className={`${className} space-y-3 text-sm`} role="status" aria-label="Refresh progress">
     <p className="font-medium">Updating the report… <span className="tabular-nums font-normal text-muted-foreground">{friendlyTime(now - profile.startedAt)}</span></p>
     <ol className="space-y-2">
       {phases.map(phase => {

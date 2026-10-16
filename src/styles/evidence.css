@@ -85,3 +85,23 @@
   [data-evidence-print-chart] > :not([data-evidence-print-snapshot]) { display: none !important; }
   [data-evidence-print-snapshot] { display: block; width: 100%; height: auto; }
 }
+
+/* Parts of the report an edit changed (report-changes.ts): outlined for a moment after the new
+   version appears, and again when the agent card links to one. */
+[data-cupola-change] { position: relative; border-radius: 8px; animation: cupola-change 3.2s ease-out 1 both; }
+[data-cupola-change].cupola-change-flash { animation-name: cupola-change-again; }
+[data-cupola-change]::after {
+  content: attr(data-cupola-change-kind); position: absolute; top: -9px; right: 10px; z-index: 1;
+  padding: 0 7px; border: 1px solid color-mix(in oklab, var(--primary) 45%, transparent); border-radius: 999px;
+  background: var(--card, var(--background)); color: var(--primary); font: 500 10px/16px var(--font-sans, system-ui);
+  text-transform: capitalize; pointer-events: none; animation: cupola-change-chip 3.2s ease-out 1 both;
+}
+[data-cupola-change].cupola-change-flash::after { animation-name: cupola-change-chip-again; }
+@keyframes cupola-change { 0%, 70% { box-shadow: 0 0 0 2px color-mix(in oklab, var(--primary) 70%, transparent), 0 0 0 6px color-mix(in oklab, var(--primary) 14%, transparent); } 100% { box-shadow: 0 0 0 2px transparent; } }
+@keyframes cupola-change-again { 0%, 70% { box-shadow: 0 0 0 2px color-mix(in oklab, var(--primary) 70%, transparent), 0 0 0 6px color-mix(in oklab, var(--primary) 14%, transparent); } 100% { box-shadow: 0 0 0 2px transparent; } }
+@keyframes cupola-change-chip { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes cupola-change-chip-again { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  [data-cupola-change], [data-cupola-change]::after { animation-duration: 0.01s; animation-delay: 3s; }
+}
+@media print { [data-cupola-change] { animation: none; box-shadow: none; } [data-cupola-change]::after { display: none; } }

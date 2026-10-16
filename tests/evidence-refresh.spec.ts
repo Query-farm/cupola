@@ -46,7 +46,8 @@ test('report setup and renderer queries can be stopped, time out, and recover on
   const source = panel.getByRole('textbox', { name: 'Evidence source', exact: true });
   await source.fill('```sql slow\n' + slow + '\n```\n\n{% table data="slow" /%}');
   await panel.getByRole('button', { name: 'Update preview', exact: true }).click();
-  await expect(panel.getByTestId('evidence-document')).toBeVisible();
+  // The new document renders out of sight behind the previous results until it is quiet.
+  await expect(panel.getByTestId('evidence-document')).toBeAttached();
   await expect(panel.getByRole('button', { name: 'Stop refresh', exact: true })).toBeVisible();
   await page.waitForTimeout(500); // Let the real worker enter the expensive query.
   await panel.getByRole('button', { name: 'Stop refresh', exact: true }).click();

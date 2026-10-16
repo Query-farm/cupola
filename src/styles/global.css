@@ -434,3 +434,9 @@ body > div[style*="z-index: 9999999"] .font-semibold { font-weight: 600; }
 body > div[style*="z-index: 9999999"] .text-xs { font-size: 0.75rem; line-height: 1rem; }
 body > div[style*="z-index: 9999999"] .mb-1 { margin-bottom: 0.25rem; }
 body > div[style*="z-index: 9999999"] .text-muted-foreground { color: var(--muted-foreground); }
+
+/* A report's previous results while a refresh runs (EvidenceWorkspace): they dim only once the
+   refresh has run a beat, so quick refreshes don't flicker. An animation, not a transition: the
+   copy mounts as the refresh starts, and a transition has no earlier state to start from. */
+.report-dim-while-refreshing { animation: report-dim 200ms ease-out 300ms both; }
+@keyframes report-dim { from { opacity: 1; filter: none; } to { opacity: 0.5; filter: saturate(0.5); } }

@@ -31,6 +31,12 @@ paths:
 - Refresh/Stop: lazy renderer queries show Stop only after 400ms (else misclicks on a reused node). `refresh()` with no arg reads `reportRef`, updated synchronously in `change()` (CodeMirror edits are outside React events).
 - Tests: `tests/evidence-parameters.spec.ts`, `tests/evidence-drill.spec.ts` on the test service's `geo` schema (`tests/fixtures/evidence-geo-report.ts`). Use `replaceEditorText` (helpers.ts), not `fill()`, for long CodeMirror text.
 
+## Refresh display (`EvidenceWorkspace.tsx`, `EvidenceRefreshStatus.tsx`, `report-changes.ts`)
+- One experience for every trigger: the previous render stays up as a static copy (`retained`, dimmed after 300ms by `.report-dim-while-refreshing`), the new run's `EvidencePreview` mounts `invisible` behind it, and `reveal()` swaps them once the run has mounted, its queries are quiet for 700ms and no chart is `data-echarts-ready="false"` — or after `REVEAL_TIMEOUT_MS` (8s). Keep the preview at the same tree position across the swap, or it remounts and re-queries.
+- Live semantic temp tables are dropped before render, so the old document can't stay live; the static copy covers the gap. A refresh starting from a run with errors falls back to `lastGood`. Stop during a hidden render drops the new run. `settledRoot()` (PDF) waits for the reveal.
+- Status: header pill (verb from `refresh(next, history, action)`, phase, elapsed; opens the checklist), a 2px bar and a bottom chip (after `CHIP_DELAY_MS`) positioned in the preview pane outside its scroller, so they show at any scroll depth. A failure/stop while scrolled past the report's notice repeats in the chip.
+- After a structural change (`diagnosticSpec` differs) `markReportChanges` diffs the copy's blocks against the new ones (text + 8×8 canvas print) and outlines them (`data-cupola-change`, styles in `evidence.css`). `onApplyPreview` resolves with the list after the reveal; the agent card links each part (`showReportChange`).
+
 ## Report files (`report-file.ts`)
 - Import accepts the file, a bare report or an array; each report validates alone and saves into the current scope. Same id + same content (timestamps/service ignored) → skip; else replace or keep both as "(imported)".
 

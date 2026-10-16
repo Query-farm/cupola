@@ -31,6 +31,8 @@ import { parameterLint } from '../../lib/evidence/parameter-lint';
 import { runSetupSql } from '../../lib/evidence/setup-test';
 import { RefreshProfiler, type RefreshPhase, type RefreshProfile } from '../../lib/evidence/refresh-profile';
 import { EvidenceRefreshProgress } from './EvidenceRefreshProgress';
+import { CHIP_DELAY_MS, RefreshChip, RefreshStatusPill, RefreshTopBar, refreshSummary, type RefreshAlert } from './EvidenceRefreshStatus';
+import { markReportChanges, showReportChange, type ReportChange, type RevealedChanges } from '../../lib/evidence/report-changes';
 import { drillState, drillValues, matchDrillValue } from '../../lib/evidence/drill';
 import { completeValuesFromUrl, PARAMETER_URL_PREFIX, valuesFromUrl, withParameterValues } from '../../lib/evidence/parameter-url';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
@@ -59,6 +61,10 @@ import { useTransferSource } from '../../lib/reporting/transfer-source';
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 /** A PDF per parameter value re-renders the report once per section; past this, it stops. */
 const MAX_PDF_SECTIONS = 25;
+/** A new render stays hidden behind the previous one until it is quiet, but never longer than this. */
+const REVEAL_TIMEOUT_MS = 8_000;
+/** A refresh's end is repeated in the bottom chip when the report is scrolled past its notice. */
+const CHIP_ALERT_MS = 10_000;
 const RECOVERED_NOTICE = 'Recovered changes that could not be saved when this report was last open.';
 /** How long after the last edit a report saves itself. */
 const AUTOSAVE_DELAY_MS = 1_500;
@@ -165,11 +171,17 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     const timer = setTimeout(() => setSlowQueries(true), 400);
     return () => clearTimeout(timer);
   }, [pendingQueries > 0]);
-  const offerStop = busy || slowQueries;
   function stopRefresh() {
     execution.current?.stop();
     setStatus('Refresh stopped');
     setNotice('Report refresh stopped. Refresh again to reload the report.');
+    // A new version still rendering out of sight is dropped: the previous one stays.
+    if (retainedRef.current && run && revealed !== run.revision) {
+      setRun(null);
+      if (profiler.current && !profiler.current.finished) profiler.current.finish('stopped');
+    }
+    settleReveal(null);
+    announceEnd('stopped');
   }
   const semanticTables = useRef(new Set<string>());
   const [semanticStates, setSemanticStates] = useState<SemanticDatasetState[]>([]);
@@ -177,7 +189,74 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   /** Reads the rendered document's Evidence input values (for the PDF's filter summary). */
   const readInputs = useRef<(() => EvidenceInputState[]) | null>(null);
   const [run, setRun] = useState<ReportRun | null>(null);
-  const [retained, setRetained] = useState<{ content: DocumentFragment; run: ReportRun } | null>(null);
+  // While a refresh runs, the previous render stays on screen as a static copy (`retained`), and
+  // the new one renders out of sight until it is quiet; then they swap in one step (`reveal`).
+  const [retained, setRetainedState] = useState<{ content: DocumentFragment; run: ReportRun } | null>(null);
+  const retainedRef = useRef(retained);
+  function setRetained(next: typeof retained) { retainedRef.current = next; setRetainedState(next); }
+  /** The last clean render of this report: it stands in when a refresh starts from one with errors. */
+  const lastGood = useRef<{ id: string; content: DocumentFragment; run: ReportRun } | null>(null);
+  /** The run revision now on screen; a newer run is still rendering behind the retained copy. */
+  const [revealed, setRevealed] = useState(-1);
+  /** The run that replaced a retained copy, which fades in; one drawn in place from empty doesn't. */
+  const [swapped, setSwapped] = useState(-1);
+  const settling = Boolean(run && revealed !== run.revision);
+  const updating = busy || settling;
+  const offerStop = busy || slowQueries || (settling && Boolean(retained));
+  /** What the running refresh is doing, for its status: "Applying filters", "Applying AI edit"… */
+  const [verb, setVerb] = useState('Refreshing');
+  const revealWaiters = useRef<((changes: RevealedChanges | null) => void)[]>([]);
+  function settleReveal(result: RevealedChanges | null) {
+    const waiters = revealWaiters.current; revealWaiters.current = [];
+    for (const resolve of waiters) resolve(result);
+  }
+  /** Resolves once the run just started is on screen, with what it changed; null if it never is. */
+  function nextReveal() { return new Promise<RevealedChanges | null>(resolve => revealWaiters.current.push(resolve)); }
+  const viewerScroll = useRef<HTMLDivElement>(null);
+  const [chipVisible, setChipVisible] = useState(false);
+  useEffect(() => {
+    if (!updating) { setChipVisible(false); return; }
+    const timer = setTimeout(() => setChipVisible(true), CHIP_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [updating]);
+  const [chipAlert, setChipAlert] = useState<RefreshAlert | null>(null);
+  useEffect(() => {
+    if (!chipAlert) return;
+    const timer = setTimeout(() => setChipAlert(null), CHIP_ALERT_MS);
+    return () => clearTimeout(timer);
+  }, [chipAlert]);
+  /** A refresh that failed or stopped says so at the top of the report; a reader scrolled past it
+   *  hears it from the chip instead. */
+  function announceEnd(tone: 'error' | 'stopped') {
+    const scroller = viewerScroll.current;
+    if (!scroller || scroller.scrollTop < 120) return;
+    const toTop = () => { setChipAlert(null); scroller.scrollTo({ top: 0, behavior: 'smooth' }); };
+    const again = () => { setChipAlert(null); void refresh(); };
+    setChipAlert(tone === 'error'
+      ? { tone, text: retainedRef.current ? 'Couldn’t refresh · showing the previous results' : 'Couldn’t refresh', actions: [{ label: 'Details', onClick: toTop }, { label: 'Try again', onClick: again }] }
+      : { tone, text: 'Refresh stopped', actions: [{ label: 'Refresh', onClick: again }] });
+  }
+  const livePreviewRoot = () => workspace.current?.querySelector('[data-testid="evidence-preview"]')?.shadowRoot ?? null;
+  /** Put a run that has gone quiet on screen. After a structural change (an edit, an AI proposal, a
+   *  restored version) the parts it changed are outlined and listed for the agent card. */
+  function reveal(shown: ReportRun) {
+    const previous = retainedRef.current;
+    let list: ReportChange[] = [];
+    if (previous && diagnosticSpec(previous.run.report) !== diagnosticSpec(shown.report)) {
+      const before = workspace.current?.querySelector('[data-testid="retained-report-preview"]')?.shadowRoot;
+      const after = livePreviewRoot();
+      if (before && after) try { list = markReportChanges(before, after); } catch { /* Outlining is a nicety. */ }
+    }
+    setRetained(null);
+    setRevealed(shown.revision);
+    setSwapped(previous ? shown.revision : -1);
+    const result: RevealedChanges = { revision: shown.revision, list };
+    settleReveal(result);
+  }
+  function showChange(revision: number, index: number) {
+    const root = livePreviewRoot();
+    if (root && run?.revision === revision && revealed === revision) showReportChange(root, index);
+  }
   const [updated, setUpdated] = useState('');
   /** When the report's data was last refreshed; the PDF prints it in full (date and time). */
   const updatedAt = useRef<Date | null>(null);
@@ -229,14 +308,15 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     }
   }
   /** Wait until a freshly refreshed report has rendered and gone quiet: a new document root,
-   *  no report queries in flight and no chart still drawing, for several checks in a row. */
+   *  on screen (not behind the previous results), no report queries in flight and no chart still
+   *  drawing, for several checks in a row. */
   async function settledRoot(previous: Element | null): Promise<Element> {
     const deadline = Date.now() + 90_000;
     let quiet = 0;
     while (Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 100));
       const root = previewRoot();
-      const ready = root && root !== previous && !busyRef.current && pendingRef.current === 0 && !root.querySelector('[data-echarts-ready="false"]');
+      const ready = root && root !== previous && !busyRef.current && !retainedRef.current && pendingRef.current === 0 && !root.querySelector('[data-echarts-ready="false"]');
       if (!ready) { quiet = 0; continue; }
       if (++quiet >= 5) return root;
     }
@@ -289,6 +369,20 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   // and its queries have then been quiet for a moment; it ended when its last query did. Quiet
   // alone isn't enough: the document loads and mounts before its first query starts.
   const [mountedRevision, setMountedRevision] = useState(-1);
+  const mountedRef = useRef(mountedRevision); mountedRef.current = mountedRevision;
+  // The swap: a run is revealed once it has mounted, its queries have been quiet for 700ms and its
+  // charts have drawn (as HeadlessReport settles), or after REVEAL_TIMEOUT_MS whatever its state.
+  useEffect(() => {
+    if (!run || revealed === run.revision) return;
+    const shown = run, started = performance.now();
+    let quiet = 0;
+    const timer = setInterval(() => {
+      const root = livePreviewRoot();
+      quiet = mountedRef.current === shown.revision && !busyRef.current && pendingRef.current === 0 && !root?.querySelector('[data-echarts-ready="false"]') ? quiet + 1 : 0;
+      if (quiet >= 7 || performance.now() - started > REVEAL_TIMEOUT_MS) { clearInterval(timer); reveal(shown); }
+    }, 100);
+    return () => clearInterval(timer);
+  }, [run, revealed]);
   useEffect(() => {
     const current = profiler.current;
     if (!run || mountedRevision !== run.revision || busy || pendingQueries > 0 || !current || current.finished) return;
@@ -357,7 +451,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
     setLibrary(showLibrary);
     if (showLibrary) setFocused(false);
-    if (showLibrary) { setRun(null); setRetained(null); reloadList(); }
+    if (showLibrary) { setRun(null); setRetained(null); lastGood.current = null; settleReveal(null); reloadList(); }
   }
   const choices = useParameterChoices(report.parameters, report.values, !library && (!remote || Boolean(run) || busy),
     resets => setReport(current => ({ ...current, values: { ...current.values, ...resets } })));
@@ -369,7 +463,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     if (busyRef.current) return;
     const next = { ...reportRef.current, values };
     change(next);
-    void refresh(next, 'push');
+    void refresh(next, 'push', 'Drilling down');
   }
   const previewDrill: PreviewDrill | undefined = drills.length ? {
     match: text => drills.some(drill => drill.next && matchDrillValue(drill.next, text, choices.states) !== undefined),
@@ -386,12 +480,20 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   const drillSummary = drills.map(drill => drill.crumbs.map(crumb => crumb.label).join(' › ')).join('; ');
   // `reportRef`, not `report`: an edit made just before ⌘Enter (CodeMirror reports changes outside
   // React events) has not re-rendered yet, and the render's `report` would refresh the old draft.
-  async function refresh(next = reportRef.current, history: 'push' | 'replace' | 'none' = 'push'): Promise<boolean> {
+  async function refresh(next = reportRef.current, history: 'push' | 'replace' | 'none' = 'push', action = 'Refreshing'): Promise<boolean> {
     if (busyRef.current) return false;
     checkedSpec.current = diagnosticSpec(next);
-    const previousRoot = workspace.current?.querySelector('[data-testid="evidence-preview"]')?.shadowRoot;
-    if (run?.report.id === next.id && previousRoot && pendingRef.current === 0 && !specIssues.some(issue => issue.severity === 'error') && !logs.some(log => log.error)) {
-      setRetained({ content: captureReportPreview(previousRoot), run });
+    setVerb(action); setChipAlert(null);
+    settleReveal(null);
+    // Keep what is on screen while the new version loads. A copy already up (a refresh that failed,
+    // or a render not yet revealed) stays; else the render shown, if it was clean, else the last clean one.
+    if (!retainedRef.current) {
+      const previousRoot = livePreviewRoot();
+      if (run && revealed === run.revision && run.report.id === next.id && previousRoot && pendingRef.current === 0 && !specIssues.some(issue => issue.severity === 'error') && !logs.some(log => log.error)) {
+        const content = captureReportPreview(previousRoot);
+        lastGood.current = { id: next.id, content, run };
+        setRetained({ content, run });
+      } else if (run && lastGood.current?.id === next.id) setRetained(lastGood.current);
     }
     execution.current?.stop();
     const current = new EvidenceQueryRun(count => { if (execution.current === current) { pendingRef.current = count; setPendingQueries(count); } });
@@ -445,7 +547,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
           },
           step => profile.start({ phase: 'setup', ...step }));
         profile.end('setup');
-        if (!setup.ok) { setStatus('Refresh failed'); profile.finish('failed'); return false; }
+        if (!setup.ok) { setStatus('Refresh failed'); profile.finish('failed'); announceEnd('error'); return false; }
       }
       if (next.semanticDatasets?.length) profile.begin('semantic');
       const semanticCatalogs = next.semanticDatasets?.length ? await current.wait(sessionCatalogs(catalogs)) : catalogs;
@@ -456,7 +558,6 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       setSemanticStates(semantic.states);
       // Rendering runs on after this returns: it ends once the document's queries go quiet.
       profile.begin('render');
-      setRetained(null);
       setRun({ execution: current, report: structuredClone(next), values, appliedFilters: next.parameters.map(parameter => `${parameter.label}: ${describeParameter(parameter, values, fitted.states)}`).join(' · '), semanticQueries: semantic.queries, semanticStates: semantic.states, revision: ++revision.current });
       updatedAt.current = new Date();
       setUpdated(updatedAt.current.toLocaleTimeString());
@@ -468,7 +569,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       return true;
     } catch (e) {
       if (current.signal.aborted) { setStatus('Refresh stopped'); profile.finish('stopped'); }
-      else { setError(message(e)); setStatus('Refresh failed'); profile.finish('failed'); }
+      else { setError(message(e)); setStatus('Refresh failed'); profile.finish('failed'); announceEnd('error'); }
       return false;
     }
     finally { busyRef.current = false; setBusy(false); }
@@ -480,7 +581,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       if (initial.library) navigate(true, undefined, true);
       // A pending Add to report opens and saves its own definition below. A
       // template refresh here would take the busy lock and discard that open.
-      else if (!managementPage && !promotion && !initial.library && !initial.error) void refresh(initial.report, 'replace');
+      else if (!managementPage && !promotion && !initial.library && !initial.error) void refresh(initial.report, 'replace', 'Loading report');
     }
     const changed = (event: StorageEvent) => { if (event.key === null || event.key.startsWith(STORAGE_PREFIX) || event.key.startsWith(LEGACY_STORAGE_PREFIX)) reloadList(); };
     // Save on the way out; ask only when the draft can't be saved (it is kept for recovery either way).
@@ -493,7 +594,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       if (!id || id === reportRef.current.id) {
         // Back/Forward between parameter views: the URL names every value that isn't a default.
         const restored = { ...reportRef.current, values: completeValuesFromUrl(reportRef.current.parameters, search) };
-        setReport(restored); setLibrary(false); void refresh(restored, 'none'); return;
+        setReport(restored); setLibrary(false); void refresh(restored, 'none', 'Applying filters'); return;
       }
       try {
         const found = listEvidenceReports(scope).find(item => item.id === id);
@@ -755,7 +856,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       const label = `Restored the version of ${new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(revision.savedAt)} (${revision.label})`;
       if (persist(next, { kind: 'restore', label })) setNotice('Earlier version restored.');
       session.current = crypto.randomUUID();
-      void refresh(reportRef.current);
+      void refresh(reportRef.current, 'push', 'Restoring version');
     } catch (e) { setError(`Could not restore that version: ${message(e)}`); }
   }
   /** Remove an earlier version from the history. The saved report itself is untouched. */
@@ -782,12 +883,12 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     if (next.id === deletedReportId.current) deletedReportId.current = null;
     reportRef.current = draft ?? next;
     setReport(draft ?? next); setHasOpenedReport(true); setSaved(fresh ? '' : JSON.stringify(next)); savedRef.current = fresh ? '' : JSON.stringify(next); baseline.current = JSON.stringify(next); setEditing(fresh || Boolean(draft)); setEditorOnly(false);
-    setError(''); setNotice(''); setRecovered(Boolean(draft)); setSaveError(''); setRun(null); setRetained(null); setUpdated(''); setLibrary(false); setCompactView('editor');
+    setError(''); setNotice(''); setRecovered(Boolean(draft)); setSaveError(''); setRun(null); setRetained(null); lastGood.current = null; setUpdated(''); setLibrary(false); setCompactView('editor');
     session.current = crypto.randomUUID();
     // A new report is named in the URL too, so a reload finds its draft if it never saved.
     if (updateUrl) navigate(false, next.id);
     if (saveNow && fresh) persist(next, { kind: 'edit', session: session.current });
-    void refresh(draft ?? next, history);
+    void refresh(draft ?? next, history, 'Loading report');
   }
   /** Reopen a new report that never saved, from its recovery draft; it saves as soon as it can. */
   function resumeDraft(draft: EvidenceReport, updateUrl = true) {
@@ -975,7 +1076,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     if (event.defaultPrevented) return;
     if (event.key === 'Escape' && focused) { setFocused(false); setEditorOnly(false); event.stopPropagation(); }
     if (library || !(event.metaKey || event.ctrlKey)) return;
-    if (event.key === 'Enter') { event.preventDefault(); void refresh(); }
+    if (event.key === 'Enter') { event.preventDefault(); void refresh(reportRef.current, 'push', editing ? 'Updating preview' : 'Refreshing'); }
     if (event.key.toLowerCase() === 's') { event.preventDefault(); checkpoint(); }
   }}>
     {library ? <header className="z-10 flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-5 py-3">
@@ -990,10 +1091,11 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
       onRename={!remote || remote.canEdit && !remote.pending ? () => setRename(reportRef.current.title) : undefined} actions={reportActions}
       status={<><span role="status" aria-label="Save status" className={saveError ? 'text-destructive' : undefined}>{saveError ? `Not saved: ${saveError}` : remote ? remote.status : !dirty ? 'Saved' : saved || asSaved(report) !== baseline.current ? 'Saving…' : 'Not saved yet'}</span>
         {remote?.versionLabel && <span>· {remote.versionLabel}</span>}
-        <span role="status" aria-label="Report refresh status" className={quietStatus && !updated ? 'sr-only' : undefined}>{pendingQueries > 0 ? 'Refreshing report…' : quietStatus ? '' : status}{updated && ` · Updated ${updated}`}</span></>}>
+        {updating && <RefreshStatusPill verb={verb} profile={profile} phases={refreshPhases} />}
+        <span role="status" aria-label="Report refresh status" className={updating || quietStatus && !updated ? 'sr-only' : undefined}>{pendingQueries > 0 ? 'Refreshing report…' : quietStatus ? '' : status}{updated && ` · Updated ${updated}`}</span></>}>
       {remote?.onOpenCurrent && <Button size="sm" variant="outline" onClick={remote.onOpenCurrent}>Open current report</Button>}
       {offerStop ? <Button key="stop" size="sm" variant="outline" onClick={stopRefresh}><Square />Stop refresh</Button>
-        : <Button key="refresh" size="sm" variant="outline" aria-label={editing ? 'Update preview' : 'Refresh report'} title="⌘ / Ctrl + Enter" onClick={() => void refresh()}><RefreshCw />{editing ? 'Update preview' : 'Refresh'}{pending && <span role="status" aria-label="Changes not applied" className="size-2 rounded-full bg-amber-400" />}</Button>}
+        : <Button key="refresh" size="sm" variant="outline" aria-label={editing ? 'Update preview' : 'Refresh report'} title="⌘ / Ctrl + Enter" onClick={() => void refresh(reportRef.current, 'push', editing ? 'Updating preview' : 'Refreshing')}><RefreshCw />{editing ? 'Update preview' : 'Refresh'}{pending && <span role="status" aria-label="Changes not applied" className="size-2 rounded-full bg-amber-400" />}</Button>}
       <div className="flex rounded-lg bg-muted p-1" role="group" aria-label="Report mode">
         <Button variant={editing ? 'ghost' : 'outline'} size="sm" aria-pressed={!editing} aria-label="View report" onClick={() => { setEditing(false); setEditorOnly(false); }}><Eye />View</Button>
         <Button disabled={remote && !remote.canEdit} variant={editing ? 'outline' : 'ghost'} size="sm" aria-pressed={editing} aria-label="Edit report" onClick={() => { setEditing(true); setCompactView('editor'); }}><Code2 />Edit{errorCount > 0 && <span className="rounded-full bg-destructive px-1.5 text-[10px] font-semibold text-white" data-testid="report-problem-count">{errorCount}</span>}</Button>
@@ -1055,9 +1157,10 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
         <Button size="sm" variant={compactView === 'preview' ? 'secondary' : 'ghost'} aria-pressed={compactView === 'preview'} onClick={() => setCompactView('preview')}>Preview</Button>
       </div>}
       <div ref={split} style={{ '--evidence-editor-width': `clamp(280px, ${editorWidth}%, calc(100% - 288px))` } as CSSProperties} className={`grid min-h-0 flex-1 ${editing && !editorOnly ? 'grid-rows-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_8px_var(--evidence-editor-width)]' : 'grid-rows-1'}`}>
-        <section style={{ display: editing && editorOnly ? 'none' : undefined }} aria-label={editing ? 'Report preview' : 'Report viewer'} className={`${editing && compactView === 'editor' ? 'hidden lg:flex' : 'flex'} min-h-0 min-w-0 flex-col`}>
-          <div data-testid="evidence-viewer-scroll" className="min-h-0 flex-1 overflow-auto bg-muted/20 p-3 md:p-6">
-            <article data-testid="evidence-report-surface" data-print-title={report.title} data-report-mode={reportTheme.mode} style={reportTheme.style} aria-busy={busy} className="mx-auto min-w-0 max-w-6xl rounded-lg border bg-card p-5 md:p-8">
+        <section style={{ display: editing && editorOnly ? 'none' : undefined }} aria-label={editing ? 'Report preview' : 'Report viewer'} className={`${editing && compactView === 'editor' ? 'hidden lg:flex' : 'flex'} relative min-h-0 min-w-0 flex-col`}>
+          <RefreshTopBar active={updating} fraction={refreshSummary(profile, refreshPhases).fraction} />
+          <div ref={viewerScroll} data-testid="evidence-viewer-scroll" onScroll={event => { if (chipAlert && event.currentTarget.scrollTop < 80) setChipAlert(null); }} className={`min-h-0 flex-1 overflow-auto bg-muted/20 p-3 md:p-6 ${chipVisible || chipAlert ? 'pb-16 md:pb-16' : ''}`}>
+            <article data-testid="evidence-report-surface" data-print-title={report.title} data-report-mode={reportTheme.mode} style={reportTheme.style} aria-busy={updating} className="mx-auto min-w-0 max-w-6xl rounded-lg border bg-card p-5 md:p-8">
               {logs.some(log => log.failure) && <div role="region" aria-label="Report query errors" className="mb-4 space-y-3">
                 {checkedSpec.current !== diagnosticSpec(report) && <p className="text-xs text-muted-foreground">From the previous preview. Refresh to check your changes.</p>}
                 {logs.flatMap((log, index) => log.failure ? [<EvidenceQueryError key={index} failure={log.failure} />] : [])}
@@ -1071,11 +1174,11 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
                 {pending && <p>Unapplied changes are not included.</p>}
                 {run.report.parameters.length > 0 && <dl>{run.report.parameters.map(parameter => <div key={parameter.id}><dt>{parameter.label}</dt><dd>{describeParameter(parameter, run.values, choices.states)}</dd></div>)}</dl>}
               </div>}
-              {report.parameters.length > 0 && <form className="mb-6 flex flex-wrap items-end gap-4 border-b pb-5" onSubmit={event => { event.preventDefault(); void refresh(); }} aria-label="Report inputs">
+              {report.parameters.length > 0 && <form className="mb-6 flex flex-wrap items-end gap-4 border-b pb-5" onSubmit={event => { event.preventDefault(); void refresh(reportRef.current, 'push', 'Applying filters'); }} aria-label="Report inputs">
                 {report.parameters.map(parameter => <label key={parameter.id} className={`min-w-32 ${parameter.type === 'date_range' ? 'max-w-80' : 'max-w-56'} space-y-1 text-xs font-medium`}>{parameter.label}{parameter.required && <span className="text-muted-foreground"> *</span>}<ParameterInput parameter={parameter} value={choices.values[parameter.key] ?? null} choices={choices.states[parameter.key]} label={parameter.label} disabled={busy} onChange={value => { choices.clearNotes(); change({ ...report, values: { ...report.values, [parameter.key]: value } }); }} /></label>)}
                 <div className="flex gap-2">
                   <Button type="submit" size="sm" disabled={refreshing || exporting || !filtersPending}>Apply filters</Button>
-                  <Button type="button" size="sm" variant="ghost" disabled={refreshing || exporting} onClick={() => { const next = { ...report, values: {} }; change(next); void refresh(next); }}>Reset filters</Button>
+                  <Button type="button" size="sm" variant="ghost" disabled={refreshing || exporting} onClick={() => { const next = { ...report, values: {} }; change(next); void refresh(next, 'push', 'Resetting filters'); }}>Reset filters</Button>
                 </div>
                 {displayedRun && <p aria-label="Applied filters" className="basis-full text-xs text-muted-foreground">Results use: {displayedRun.appliedFilters}</p>}
                 {choices.notes.length > 0 && <p role="status" aria-label="Parameter changes" className="basis-full text-xs text-amber-700 dark:text-amber-400">{choices.notes.join(' ')}</p>}
@@ -1091,19 +1194,25 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
                 </ol>
                 {drill.next && <span className="text-xs text-muted-foreground print:hidden">Click a chart bar or underlined value to drill into {drill.next.label.toLowerCase()}.</span>}
               </nav>)}
-              {run ? <EvidencePreview reportTheme={reportTheme} run={run} drill={previewDrill} onInputs={read => { readInputs.current = read; }} onData={context => { setDataContext(context); setMountedRevision(run.revision); }} onIssues={setSpecIssues} onQuery={entry => { setLogs(current => [...current.slice(-99), entry]); profiler.current?.query({ ...entry, phase: 'render' }); }} onError={message => { setError(message); setSpecIssues(current => [...current, { message, severity: 'error', target: 'document' }]); }} /> : <>
-                {busy && <EvidenceRefreshProgress profile={profile} phases={refreshPhases} fallback={status} />}
-                {retained ? <section aria-label="Last successful preview">
-                  <p role="status" className="mb-3 rounded-md border bg-muted p-3 text-sm">{busy ? 'Refreshing. Showing the previous results until the new data is ready.' : 'Refresh did not complete. Showing the previous results.'} This preview is read-only.</p>
+              <div className={retained && run ? 'relative overflow-hidden' : undefined}>
+                {retained && <section aria-label="Last successful preview" className={updating ? 'report-dim-while-refreshing' : undefined}>
+                  {!updating && <p role="status" className="mb-3 rounded-md border bg-muted p-3 text-sm">{status === 'Refresh stopped' ? 'Refresh stopped. Showing the previous results.' : 'Refresh did not complete. Showing the previous results.'} This preview is read-only.</p>}
                   <RetainedReportPreview content={retained.content} />
-                </section> : !busy && <p className="py-8 text-sm text-muted-foreground" role="status">Refresh to render this report.</p>}
-              </>}
+                </section>}
+                {/* The new version renders out of sight, at the report's width, until it is quiet. */}
+                {run && <div aria-hidden={retained ? true : undefined} className={retained ? 'invisible absolute inset-x-0 top-0' : swapped === run.revision ? 'animate-in fade-in-0 duration-200' : undefined}>
+                  <EvidencePreview reportTheme={reportTheme} run={run} drill={previewDrill} onInputs={read => { readInputs.current = read; }} onData={context => { setDataContext(context); setMountedRevision(run.revision); }} onIssues={setSpecIssues} onQuery={entry => { setLogs(current => [...current.slice(-99), entry]); profiler.current?.query({ ...entry, phase: 'render' }); }} onError={message => { setError(message); setSpecIssues(current => [...current, { message, severity: 'error', target: 'document' }]); }} />
+                </div>}
+                {!retained && !run && (busy ? <EvidenceRefreshProgress profile={profile} phases={refreshPhases} fallback={status} />
+                  : <p className="py-8 text-sm text-muted-foreground" role="status">Refresh to render this report.</p>)}
+              </div>
               {dataContext && (report.pivots ?? []).map(pivot => <section key={pivot.id} className="mt-8 space-y-3" aria-label={pivot.title}>
                 <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg font-semibold">{pivot.title}</h2>{editing && <Button variant="ghost" size="sm" onClick={() => change({ ...report, pivots: report.pivots?.filter(item => item.id !== pivot.id) })}>Remove pivot</Button>}</div>
                 <EvidencePivot mode={reportTheme.mode} context={dataContext} datasetId={pivot.datasetId} config={pivot.config} onConfig={config => { if (editing) change({ ...reportRef.current, pivots: reportRef.current.pivots?.map(item => item.id === pivot.id ? { ...item, config } : item) }); }} />
               </section>)}
             </article>
           </div>
+          <RefreshChip visible={chipVisible && Boolean(retained || run)} profile={profile} phases={refreshPhases} onStop={stopRefresh} alert={chipAlert} onDismiss={() => setChipAlert(null)} />
         </section>
         {editing && !editorOnly && <div
           role="separator" aria-label="Resize report editor" aria-orientation="vertical" tabIndex={0}
@@ -1129,7 +1238,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
         <div style={{ display: editing ? undefined : 'none' }} className={`${!editorOnly && compactView === 'preview' ? 'hidden lg:flex' : 'flex'} min-h-0 min-w-0 flex-col [&>aside]:flex-1`}>{deletedReportId.current !== report.id && <EvidenceEditor historyContent={remote?.historyContent} history={{ history, dirty, onRestore: restoreRevision, onDelete: deleteRevision }} onProposal={proposalEvent} performance={{ profile, namedQueries: dataContext?.queries ?? [], runnable: sql => {
           if (!run) return sql;
           try { return materializeReportQuery(sql, compilerParameters(run.report, run.values), run.values); } catch { return sql; }
-        } }} parameterChoices={{ states: choices.states, values: choices.values, loader: choices.loader }} fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={async () => { await refresh(); }} key={report.id} report={report} onChange={change} issues={issues} issuesStale={checkedSpec.current !== diagnosticSpec(report)} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => { setEditorOnly(!editorOnly); setCompactView(editorOnly ? 'preview' : 'editor'); }} previewBusy={busy} onApplyPreview={async next => { setEditorOnly(false); setCompactView('preview'); await refresh(next); }} />}</div>
+        } }} parameterChoices={{ states: choices.states, values: choices.values, loader: choices.loader }} fullScreen={focused && editorOnly} onToggleFullScreen={() => { const exit = focused && editorOnly; setFocused(!exit); setEditorOnly(!exit); }} catalogs={catalogs} semanticStates={semanticStates} reportTheme={reportTheme} dataContext={dataContext} onRefreshData={async () => { await refresh(); }} key={report.id} report={report} onChange={change} issues={issues} issuesStale={checkedSpec.current !== diagnosticSpec(report)} stale={Boolean(pending)} editorOnly={editorOnly} onTogglePreview={() => { setEditorOnly(!editorOnly); setCompactView(editorOnly ? 'preview' : 'editor'); }} previewBusy={busy} onApplyPreview={async (next, action) => { setEditorOnly(false); setCompactView('preview'); return await refresh(next, 'push', action) ? nextReveal() : null; }} onShowChange={showChange} />}</div>
       </div>
     </main>
   </div>;

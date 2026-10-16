@@ -24,19 +24,21 @@ import { ParameterChoicesLoader, previewParameterOptions } from '../../lib/evide
 import { waitForEngineReady, engine, ui } from '../../lib/shell-bridge';
 import { resolveParameters, type EvidenceReport } from '../../lib/evidence/reports';
 import { refreshForAgent, type RefreshProfile } from '../../lib/evidence/refresh-profile';
+import type { RevealedChanges } from '../../lib/evidence/report-changes';
 import { isReadOnlySql, testSetupSql } from '../../lib/evidence/setup-test';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
 import { describeIssues, introducedIssues, sourceValidationIssues } from '../../lib/evidence/source-check';
 
 type ProposalState = 'pending' | 'applied' | 'discarded' | 'superseded' | 'undone' | 'stopped';
-type Message = { id: string; role: 'user' | 'assistant'; text: string; attachments?: AttachmentSummary[]; proposal?: ReportProposal; state?: ProposalState; blocks?: ContentBlock[]; queued?: boolean };
+/** `preview`: once an applied proposal's preview is on screen, the parts of the report it changed. */
+type Message = { id: string; role: 'user' | 'assistant'; text: string; attachments?: AttachmentSummary[]; proposal?: ReportProposal; state?: ProposalState; blocks?: ContentBlock[]; queued?: boolean; preview?: RevealedChanges | 'failed' };
 type Request = { text: string; attachments: AiAttachment[] };
 const uid = () => crypto.randomUUID();
 const fieldLabel = { title: 'Title', source: 'Document', setupSql: 'Dataset SQL', parameters: 'Parameters', values: 'Input values', drillPaths: 'Drill paths', appearance: 'Appearance', semanticDatasets: 'Semantic datasets', pivots: 'Pivot views' };
 const printable = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 /** An agent proposal applied to the draft, or undone: the workspace labels the next saved revision with it. */
 export type ProposalEvent = { type: 'applied' | 'undone'; id: string; proposal: ReportProposal };
-export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview, previewBusy, catalogs, performance, onProposal }: { onProposal?: (event: ProposalEvent) => void; performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[] }; catalogs: readonly CatalogData[]; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; onApplyPreview: (report: EvidenceReport) => Promise<void>; previewBusy: boolean }) {
+export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview, onShowChange, previewBusy, catalogs, performance, onProposal }: { onShowChange?: (revision: number, index: number) => void; onProposal?: (event: ProposalEvent) => void; performance?: { profile: RefreshProfile | null; namedQueries: { name: string; sql: string }[] }; catalogs: readonly CatalogData[]; report: EvidenceReport; onChange: (report: EvidenceReport) => void; issues: EvidenceIssue[]; stale: boolean; onApplyPreview: (report: EvidenceReport, action?: string) => Promise<RevealedChanges | null>; previewBusy: boolean }) {
   const { settings } = useSettings();
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
@@ -283,7 +285,8 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
       onProposal?.({ type: 'applied', id: message.id, proposal: message.proposal });
       setUndo({ id: message.id, proposal: message.proposal });
       setMessages(previous => previous.map(m => m.id === message.id ? { ...m, state: 'applied' } : m));
-      await onApplyPreview(next);
+      const preview = await onApplyPreview(next, 'Applying AI edit');
+      setMessages(previous => previous.map(m => m.id === message.id ? { ...m, preview: preview ?? 'failed' } : m));
     } catch (e) { setError((e as Error).message); }
     finally { setApplying(false); }
   }
@@ -298,10 +301,20 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
     onProposal?.({ type: 'undone', id: undo.id, proposal: undo.proposal });
     setMessages(previous => [...previous.map(m => m.id === undo.id ? { ...m, state: 'undone' as const } : m), { id: uid(), role: 'assistant', text: 'Undone. I restored the previous draft and requested a fresh preview. The report saved itself; the History tab has every version.' }]);
     setUndo(null);
-    try { await onApplyPreview(next); } catch (e) { setError((e as Error).message); }
+    try { await onApplyPreview(next, 'Undoing AI edit'); } catch (e) { setError((e as Error).message); }
     finally { setApplying(false); }
   }
   const locked = busy || applying || previewBusy;
+  /** After Apply: the preview's progress, then what it changed, each part a link to it in the report. */
+  function appliedNote(m: Message) {
+    const preview = m.preview;
+    if (!preview) return <p className="text-xs text-muted-foreground">Applied and saved · updating the preview…</p>;
+    if (preview === 'failed') return <p className="text-xs text-muted-foreground">Applied and saved · the preview did not finish. Check Problems for errors; Undo or the History tab brings back the previous version.</p>;
+    const { list, revision } = preview;
+    return <p className="text-xs text-muted-foreground" aria-label="Applied changes">
+      Applied and previewed{list.length ? <> · {list.length === 1 ? '1 part' : `${list.length} parts`} of the report changed: {list.map((change, index) => <span key={index}>{index > 0 && ', '}<button type="button" className="font-medium text-foreground underline decoration-dotted underline-offset-2 hover:decoration-solid" onClick={() => onShowChange?.(revision, index)}>{change.label}</button></span>)}.</> : '.'} Undo or the History tab brings back the previous version.
+    </p>;
+  }
   function proposalCard(m: Message) {
     const proposal = m.proposal!;
     const outdated = reportFingerprint(report) !== reportFingerprint(proposal.before);
@@ -312,7 +325,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
       {m.state === 'pending' ? <>
         {outdated && <p role="alert" className="text-xs text-destructive">Your draft changed. Ask me to revise this proposal before applying it.</p>}
         <div className="flex flex-wrap gap-2"><Button size="sm" disabled={locked || outdated} onClick={() => void apply(m)}>Apply and preview</Button><Button size="sm" variant="ghost" disabled={locked} onClick={() => setMessages(previous => previous.map(item => item.id === m.id ? { ...item, state: 'discarded' } : item))}>Discard</Button></div>
-      </> : <p className="text-xs text-muted-foreground">{({ applied: 'Applied and saved · preview requested. Check Problems for errors; Undo or the History tab brings back the previous version.', discarded: 'Discarded · your report was not changed.', superseded: 'Replaced by your follow-up request.', undone: 'Undone · previous draft restored.', stopped: 'Stopped · your report was not changed.' } as Record<string, string>)[m.state!]}</p>}
+      </> : m.state === 'applied' ? appliedNote(m) : <p className="text-xs text-muted-foreground">{({ discarded: 'Discarded · your report was not changed.', superseded: 'Replaced by your follow-up request.', undone: 'Undone · previous draft restored.', stopped: 'Stopped · your report was not changed.' } as Record<string, string>)[m.state!]}</p>}
       {m.state === 'applied' && undo?.id === m.id && <Button size="sm" variant="outline" disabled={locked || reportFingerprint(report) !== reportFingerprint(proposal.after)} onClick={() => void undoEdit()}>Undo last agent edit</Button>}
     </section>;
   }

@@ -23,7 +23,9 @@ test('filters disclose the displayed values, apply explicitly, and reset to defa
   await expect(panel.getByRole('status', { name: 'Unapplied report changes' })).toContainText('Filters have changed');
   await expect(rows).toContainText('North');
   await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved');
-  await expect(panel.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'More report actions', exact: true }).click();
+  await expect(page.getByRole('menuitem', { name: 'Export PDF', exact: true })).toBeDisabled();
+  await page.keyboard.press('Escape');
   await panel.getByRole('button', { name: 'Apply filters', exact: true }).click();
   await expect(rows).toContainText('South');
   await expect(panel.getByLabel('Applied filters', { exact: true })).toHaveText('Results use: Region: South');
