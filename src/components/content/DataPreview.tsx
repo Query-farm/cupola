@@ -15,6 +15,7 @@ import type { ColumnInfo } from "@/lib/service";
 import { arrowFieldToDuckDB } from "@/lib/arrow-to-duckdb";
 import { safeGetArrowValue } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
+import { useMediaQuery } from "@/lib/use-media-query";
 
 const PAGE_SIZES = [25, 50, 100, 200];
 const DEFAULT_PAGE_SIZE = 50;
@@ -110,6 +111,9 @@ function makeIndexComparator(table: any, col: string, dir: "asc" | "desc"): (a: 
 
 export function DataPreview({ result }: Props) {
   const { settings, updateSettings } = useSettings();
+  const isMobile = useMediaQuery("(max-width: 767px)");
+  // A phone-specific choice does not change the reader's desktop preference.
+  const [mobileLayout, setMobileLayout] = useState<"lines" | "grid">("lines");
   const [columns, setColumns] = useState<string[]>([]);
   const [columnInfo, setColumnInfo] = useState<ColumnInfo[]>([]);
   const [arrowFields, setArrowFields] = useState<any[]>([]);
@@ -134,7 +138,7 @@ export function DataPreview({ result }: Props) {
   // paging doesn't re-sort every window).
   const sortedIndicesRef = useRef<{ table: any; col: string; dir: string; indices: number[] } | null>(null);
   const requestIdRef = useRef(0);
-  const layout = settings.previewLayout === "lines" ? "lines" : "grid";
+  const layout = isMobile ? mobileLayout : settings.previewLayout === "lines" ? "lines" : "grid";
   // The grid's active cell, and whether the value panel is open on it. The
   // panel follows the active cell as it moves.
   const [activeCell, setActiveCell] = useState<Cell | null>(null);
@@ -373,7 +377,7 @@ export function DataPreview({ result }: Props) {
       </div>
 
       {/* Pagination footer */}
-      <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-card shrink-0">
+      <div className="mobile-result-footer flex items-center justify-between px-4 py-2 border-t border-border bg-card shrink-0">
         {/* Left: row info */}
         <span className="text-xs text-muted-foreground whitespace-nowrap">
           {loading || appending ? (
@@ -447,12 +451,13 @@ export function DataPreview({ result }: Props) {
                 aria-checked={layout === value}
                 aria-label={name}
                 title={label}
-                onClick={() => updateSettings({ previewLayout: value })}
+                onClick={() => isMobile ? setMobileLayout(value) : updateSettings({ previewLayout: value })}
                 className={`h-6 w-7 inline-flex items-center justify-center rounded-sm cursor-pointer transition-colors ${
                   layout === value ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 <Icon className="h-3.5 w-3.5" />
+                {isMobile && <span className="text-xs">{value === "grid" ? "Grid" : "Records"}</span>}
               </button>
             ))}
           </div>

@@ -192,7 +192,7 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOp
         <>
           <h2 className={SECTION_HEADING}>Arguments</h2>
           <div className="border rounded-md overflow-hidden mb-4">
-            <table className="text-sm" style={{ tableLayout: "auto", width: "100%" }}>
+            <table className="mobile-metadata-table text-sm" style={{ tableLayout: "auto", width: "100%" }}>
               <thead className="bg-muted/50">
                 <tr>
                   <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground align-top">Name</th>
@@ -216,16 +216,15 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOp
                         type={arg.isAnyType ? "ANY" : arg.isTableInput ? "TABLE" : settings.showDuckDBTypes ? arg.duckdbType : arg.arrowType}
                       />
                     </td>
-                    <td className="px-3 py-1.5 text-center">
-                      {arg.nullable ? null : (
-                        <span className="block text-center text-[10px] font-medium text-primary/60" title="Not null">✓</span>
-                      )}
+                    <td data-label="Nullability" className="px-3 py-1.5 text-center">
+                      <span className="mobile-column-nullability hidden">{arg.nullable ? "Nullable" : "Not null"}</span>
+                      {!arg.nullable && <span className="desktop-column-nullability block text-center text-[10px] font-medium text-primary/60" title="Not null">✓</span>}
                     </td>
-                    <td className="px-3 py-1.5 text-xs">
+                    <td data-label="Kind" className="px-3 py-1.5 text-xs">
                       <ArgKindBadges arg={arg} />
                     </td>
                     {anyConstraints && (
-                      <td className="px-3 py-1.5">
+                      <td data-label="Constraints" className="px-3 py-1.5">
                         {hasArgConstraints(arg) ? (
                           <ArgConstraints arg={arg} />
                         ) : (
@@ -234,7 +233,7 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOp
                       </td>
                     )}
                     {anyDescriptions && (
-                      <td className="px-3 py-1.5 text-muted-foreground max-w-md">
+                      <td data-label="Description" className="px-3 py-1.5 text-muted-foreground max-w-md">
                         {arg.description ? (
                           <span className="whitespace-pre-wrap break-words">{arg.description}</span>
                         ) : (
@@ -255,7 +254,7 @@ export function FunctionDetail({ func, catalogName, schemaName, onNavigate, onOp
       {tableFn ? (
         ret.columns.length > 0 ? (
           <div className="border rounded-md overflow-hidden mb-4">
-            <table className="text-sm" style={{ tableLayout: "auto", width: "100%" }}>
+            <table className="mobile-metadata-table text-sm" style={{ tableLayout: "auto", width: "100%" }}>
               <thead className="bg-muted/50">
                 <tr>
                   <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground">Column</th>

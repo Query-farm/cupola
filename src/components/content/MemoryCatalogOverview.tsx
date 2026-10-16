@@ -35,7 +35,7 @@ export function MemoryCatalogOverview({ catalog, onNavigate }: Props) {
           <button
             key={s.info.name}
             onClick={() => onNavigate({ type: "schema", name: s.info.name, schema: s.info.name, catalog: "memory" })}
-            className="flex items-center justify-between px-4 py-3 rounded-lg border border-border bg-card hover:border-primary/30 hover:bg-accent/5 transition-colors text-left group cursor-pointer"
+            className="memory-schema-row flex items-center justify-between px-4 py-3 rounded-lg border border-border bg-card hover:border-primary/30 hover:bg-accent/5 transition-colors text-left group cursor-pointer"
           >
             <div className="flex items-center gap-3">
               <Folder className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors shrink-0" />

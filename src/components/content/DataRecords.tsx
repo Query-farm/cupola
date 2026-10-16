@@ -169,7 +169,7 @@ export function DataRecords({
                   return (
                     <div
                       key={col}
-                      className="grid hover:bg-accent/5 last:rounded-b-md"
+                      className="mobile-record-field grid hover:bg-accent/5 last:rounded-b-md"
                       // ch + the label's px-3 padding + its 1px rule.
                       style={{ gridTemplateColumns: `calc(${labelWidth}ch + 1.5rem + 1px) minmax(0, 1fr)` }}
                     >

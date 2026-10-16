@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, mock, spyOn, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import { CatalogRelationships } from "../../src/components/content/CatalogRelationships";
@@ -37,6 +37,30 @@ function testCatalog(): CatalogData {
 }
 
 describe("catalog relationship explorer", () => {
+  test("mobile lists declared links, focuses neighbors, and prepares a JOIN without running it", () => {
+    const media = spyOn(window, "matchMedia").mockImplementation(query => ({
+      matches: query === "(max-width: 767px)", media: query, onchange: null,
+      addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true,
+    }));
+    try {
+      const openInEditor = mock((_sql: string, _options?: { autoRun?: boolean }) => {});
+      ui.openInEditor = openInEditor;
+      const view = render(<CatalogRelationships catalog={testCatalog()} onNavigate={() => {}} />);
+      const list = view.getByRole("list", { name: "Tables and relationships" });
+      expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+      const orders = within(list).getByRole("button", { name: "Open main.orders" }).closest("article")!;
+      fireEvent.click(within(orders).getByRole("button", { name: "Create JOIN query" }));
+      expect(openInEditor.mock.calls[0][0]).toContain('source."customer_id" = target."id"');
+      expect(openInEditor.mock.calls[0][1]).toEqual({ autoRun: false });
+      fireEvent.click(within(orders).getByRole("button", { name: "Related tables" }));
+      expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+      fireEvent.click(view.getByRole("button", { name: "Show schema" }));
+      expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+      fireEvent.click(view.getByRole("button", { name: "Show relationship diagram" }));
+      expect(view.getByRole("button", { name: /orders\.customer_id references customers\.id/i })).toBeTruthy();
+    } finally { media.mockRestore(); }
+  });
+
   test("renders declared column relationships and navigates to a table", () => {
     const onNavigate = mock(() => {});
     const view = render(<CatalogRelationships catalog={testCatalog()} onNavigate={onNavigate} />);

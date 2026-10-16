@@ -14,7 +14,7 @@
  * therefore no longer do anything to it, so the hover tint lives on the
  * wordmark alone.
  */
-export function BrandMark() {
+export function BrandMark({ compact = false }: { compact?: boolean } = {}) {
   return (
     <a
       href="https://query.farm"
@@ -31,10 +31,10 @@ export function BrandMark() {
         height={32}
         className="w-8 h-8 shrink-0 self-center object-contain"
       />
-      <span className="font-heading font-bold text-base leading-none text-foreground group-hover/brand:text-sun-700 dark:group-hover/brand:text-sun-300 transition-colors">
+      <span className={compact ? "sr-only" : "font-heading font-bold text-base leading-none text-foreground group-hover/brand:text-sun-700 dark:group-hover/brand:text-sun-300 transition-colors"}>
         Cupola
       </span>
-      <span className="hidden md:inline font-sans text-sm leading-none text-muted-foreground group-hover/brand:text-foreground transition-colors">
+      <span className={compact ? "hidden" : "hidden md:inline font-sans text-sm leading-none text-muted-foreground group-hover/brand:text-foreground transition-colors"}>
         by <span aria-hidden="true">🚜&nbsp;</span>Query.Farm
       </span>
     </a>

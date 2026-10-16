@@ -1,0 +1,79 @@
+---
+import "../styles/global.css";
+const base = import.meta.env.BASE_URL;
+const service = 'https://vgi-cupola-test.rusty-bb6.workers.dev';
+const sql = `-- Sample data. Edit this query, then tap Run.\nSELECT * FROM (VALUES\n  ('New York', 68, 'Clear'),\n  ('Boston', 61, 'Cloudy'),\n  ('Chicago', 57, 'Light rain'),\n  ('Austin', 82, 'Sunny')\n) AS weather(city, temperature_f, conditions);`;
+const appUrl = `${base}?service=${encodeURIComponent(service)}&view=editor#sql=${encodeURIComponent(sql)}`;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Cupola · Mobile browser prototype</title>
+    <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
+    <link href="https://fonts.googleapis.com/css2?family=Petrona:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <main class="preview-layout">
+      <section class="preview-intro">
+        <a class="preview-brand" href={base}><img src={`${base}cupola-mark.svg`} width="36" height="36" alt="" />Cupola</a>
+        <p class="preview-eyebrow">MOBILE BROWSER PROTOTYPE</p>
+        <h1>A little screen.<br />Room to explore.</h1>
+        <p class="preview-lede">Your Cupola workspace, shaped for a phone. Ask questions, explore data, and write SQL—one focused view at a time.</p>
+        <ol class="preview-steps">
+          <li><span>01</span><div><strong>Run a real query</strong><p>Tap Run to execute the sample SQL. Switch between Records and Grid in the results.</p></div></li>
+          <li><span>02</span><div><strong>Keep your place</strong><p>Move between Query, Results, and Assistant. Explore the catalog, then return to your work.</p></div></li>
+          <li><span>03</span><div><strong>Open your library</strong><p>Browse reports and notebooks. Find the SQL shell and settings under More.</p></div></li>
+        </ol>
+        <a class="preview-open" href={appUrl} target="_blank">Open in a browser tab <span aria-hidden="true">↗</span></a>
+        <p class="preview-note">A working web app using the public Cupola test service. The starter query contains sample data. AI requires your own configured API key.</p>
+      </section>
+      <section class="preview-stage" aria-label="Responsive app preview">
+        <div class="preview-sizes" aria-label="Preview width">
+          <button type="button" data-width="390" aria-pressed="true">Phone <span>390</span></button>
+          <button type="button" data-width="430" aria-pressed="false">Large <span>430</span></button>
+          <button type="button" data-width="360" aria-pressed="false">Small <span>360</span></button>
+        </div>
+        <div class="preview-frame"><div class="preview-address"><span aria-hidden="true">●</span> Cupola · browser preview</div><iframe title="Cupola mobile browser workspace" src={appUrl} allow="clipboard-write"></iframe></div>
+        <p class="preview-caption">Same app. Same data engine. No installation.</p>
+      </section>
+    </main>
+    <script>
+      const frame = document.querySelector<HTMLElement>('.preview-frame')!;
+      document.querySelectorAll<HTMLButtonElement>('[data-width]').forEach(button => {
+        button.addEventListener('click', () => {
+          frame.style.setProperty('--preview-width', `${button.dataset.width}px`);
+          document.querySelectorAll('[data-width]').forEach(option => option.setAttribute('aria-pressed', String(option === button)));
+        });
+      });
+    </script>
+    <style>
+      :global(body) { margin: 0; color: var(--foreground); background: var(--background); font-family: 'Noto Sans', sans-serif; }
+      .preview-layout { max-width: 1320px; margin: auto; padding: 48px; display: grid; grid-template-columns: minmax(280px, 420px) minmax(0, 1fr); gap: 64px; align-items: center; min-height: 100dvh; }
+      .preview-brand { display: flex; gap: 10px; align-items: center; font: 700 24px 'Petrona', Georgia, serif; text-decoration: none; }
+      .preview-eyebrow { color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .18em; margin: 46px 0 16px; }
+      h1 { font: 500 clamp(38px, 4vw, 56px)/1.04 'Petrona', Georgia, serif; letter-spacing: -.035em; margin: 0 0 22px; }
+      .preview-lede { color: var(--muted-foreground); line-height: 1.8; font-size: 15px; max-width: 36ch; }
+      .preview-steps { padding: 0; list-style: none; margin: 32px 0; display: grid; gap: 24px; }
+      .preview-steps li { display: flex; gap: 15px; }
+      .preview-steps li > span { font-size: 11px; color: var(--accent); padding-top: 3px; font-weight: 600; }
+      .preview-steps strong { font-size: 13px; }
+      .preview-steps p { font-size: 12px; line-height: 1.75; color: var(--muted-foreground); margin: 5px 0 0; max-width: 38ch; }
+      .preview-open { display: inline-flex; align-items: center; justify-content: space-between; gap: 24px; background: var(--primary); color: var(--primary-foreground); padding: 14px 18px; border-radius: 10px; text-decoration: none; font-size: 13px; font-weight: 600; }
+      .preview-note { font-size: 11px; color: var(--muted-foreground); line-height: 1.8; margin-top: 16px; max-width: 45ch; }
+      .preview-stage { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 16px; }
+      .preview-sizes { display: flex; gap: 4px; border: 1px solid var(--border); padding: 4px; border-radius: 12px; background: var(--card); }
+      .preview-sizes button { min-height: 38px; padding: 0 12px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+      .preview-sizes button[aria-pressed=true] { background: var(--primary); color: var(--primary-foreground); }
+      .preview-sizes span { opacity: .6; font-size: 10px; margin-left: 6px; }
+      .preview-frame { --preview-width: 390px; width: calc(var(--preview-width) + 2px); max-width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; box-shadow: 0 22px 60px -25px #32271f44; }
+      .preview-address { height: 34px; display: flex; gap: 10px; align-items: center; justify-content: center; font-size: 10px; color: var(--muted-foreground); border-bottom: 1px solid var(--border); }
+      .preview-address span { color: var(--accent); font-size: 7px; }
+      iframe { width: 100%; height: min(760px, 80dvh); min-height: 520px; display: block; border: 0; }
+      .preview-caption { font-size: 10px; color: var(--muted-foreground); }
+      @media (max-width: 1000px) { .preview-layout { padding: 32px; gap: 28px; grid-template-columns: 300px minmax(0, 1fr); } }
+      @media (max-width: 720px) { .preview-layout { display: flex; flex-direction: column; padding: 24px 16px; gap: 32px; } .preview-intro { width: 100%; max-width: 430px; } .preview-eyebrow { margin-top: 24px; } .preview-steps { display: none; } .preview-lede { margin-bottom: 20px; } .preview-stage { width: 100%; } }
+    </style>
+  </body>
+</html>

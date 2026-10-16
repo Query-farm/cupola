@@ -54,13 +54,14 @@ export function useDockState() {
 interface Props {
   state: ReturnType<typeof useDockState>;
   isNarrow: boolean;
+  fullHeight?: boolean;
   aiBusy?: boolean;
   inspector: ReactNode;
   ai: ReactNode;
   history: ReactNode;
 }
 
-export function RightDock({ state, isNarrow, aiBusy, inspector, ai, history }: Props) {
+export function RightDock({ state, isNarrow, fullHeight, aiBusy, inspector, ai, history }: Props) {
   const { open, tab, setTab, setOpen, width } = state;
   const tabClass = (active: boolean) =>
     `flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border-b-2 transition-colors ${
@@ -74,7 +75,7 @@ export function RightDock({ state, isNarrow, aiBusy, inspector, ai, history }: P
       <div
         className={isNarrow ? "min-h-0 border-t border-border overflow-hidden flex flex-col" : "shrink-0 overflow-hidden flex flex-col border-l border-border"}
         style={open
-          ? (isNarrow ? { width: "100%", flex: "1 1 45%" } : { width })
+          ? (isNarrow ? { width: "100%", flex: fullHeight ? "1 1 0%" : "1 1 45%" } : { width })
           : { width: 0, display: "none" }}
         data-testid="editor-dock"
       >

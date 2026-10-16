@@ -25,6 +25,7 @@ import { quoteIdentifier } from '../../lib/evidence/data-browser';
 import type { EvidenceDataContext } from '../../lib/evidence/data-browser';
 import type { QueryLogEntry } from '../../lib/evidence/haybarn-query-service';
 import { ParameterInput, useParameterChoices } from './EvidenceParameters';
+import { MobileReportFilters } from '../mobile/MobileReportFilters';
 import { describeParameter, resolveChoices } from '../../lib/evidence/parameter-choices';
 import { summarizeFilters } from '../../lib/evidence/filter-summary';
 import { parameterLint } from '../../lib/evidence/parameter-lint';
@@ -1174,7 +1175,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
                 {pending && <p>Unapplied changes are not included.</p>}
                 {run.report.parameters.length > 0 && <dl>{run.report.parameters.map(parameter => <div key={parameter.id}><dt>{parameter.label}</dt><dd>{describeParameter(parameter, run.values, choices.states)}</dd></div>)}</dl>}
               </div>}
-              {report.parameters.length > 0 && <form className="mb-6 flex flex-wrap items-end gap-4 border-b pb-5" onSubmit={event => { event.preventDefault(); void refresh(reportRef.current, 'push', 'Applying filters'); }} aria-label="Report inputs">
+              {report.parameters.length > 0 && <MobileReportFilters summary={displayedRun?.appliedFilters} pending={filtersPending}><form className="mb-6 flex flex-wrap items-end gap-4 border-b pb-5" onSubmit={event => { event.preventDefault(); void refresh(reportRef.current, 'push', 'Applying filters'); }} aria-label="Report inputs">
                 {report.parameters.map(parameter => <label key={parameter.id} className={`min-w-32 ${parameter.type === 'date_range' ? 'max-w-80' : 'max-w-56'} space-y-1 text-xs font-medium`}>{parameter.label}{parameter.required && <span className="text-muted-foreground"> *</span>}<ParameterInput parameter={parameter} value={choices.values[parameter.key] ?? null} choices={choices.states[parameter.key]} label={parameter.label} disabled={busy} onChange={value => { choices.clearNotes(); change({ ...report, values: { ...report.values, [parameter.key]: value } }); }} /></label>)}
                 <div className="flex gap-2">
                   <Button type="submit" size="sm" disabled={refreshing || exporting || !filtersPending}>Apply filters</Button>
@@ -1182,7 +1183,7 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
                 </div>
                 {displayedRun && <p aria-label="Applied filters" className="basis-full text-xs text-muted-foreground">Results use: {displayedRun.appliedFilters}</p>}
                 {choices.notes.length > 0 && <p role="status" aria-label="Parameter changes" className="basis-full text-xs text-amber-700 dark:text-amber-400">{choices.notes.join(' ')}</p>}
-              </form>}
+              </form></MobileReportFilters>}
               {drills.map(drill => <nav key={drill.path.id} aria-label={drill.path.label ? `Drill path: ${drill.path.label}` : 'Drill path'} className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                 <ol className="flex flex-wrap items-center gap-1">
                   {drill.crumbs.map((crumb, index) => <li key={crumb.depth} className="flex items-center gap-1">

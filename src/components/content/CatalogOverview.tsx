@@ -12,6 +12,7 @@ import { DocumentationSection } from "./DocumentationSection";
 import { MetaChips } from "./MetaChips";
 import { ProvenanceCard } from "./ProvenanceCard";
 import { Button } from "@/components/ui/button";
+import { CatalogDisclosure } from "./CatalogDisclosure";
 
 interface Props {
   catalog: CatalogData;
@@ -44,8 +45,8 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, attachSpec
   const keywords = parseKeywords(catalog.catalogTags);
 
   return (
-    <div>
-      <div className="flex flex-wrap items-center gap-3 mb-6">
+    <div className="catalog-overview">
+      <div className="catalog-overview-heading flex flex-wrap items-center gap-3 mb-6">
         <Database className="h-8 w-8 text-primary" />
         <div className="mr-auto">
           <h1 className="text-2xl font-bold text-primary">{title || catalog.catalogName}</h1>
@@ -57,6 +58,8 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, attachSpec
           </p>
         </div>
         <Button
+          className="catalog-overview-relationships"
+          aria-label="Relationships"
           variant="outline"
           onClick={() => onNavigate({
             type: "relationships",
@@ -64,7 +67,7 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, attachSpec
             catalog: catalog.catalogName,
           })}
         >
-          <Network /> Relationships
+          <Network /><span>Relationships</span>
         </Button>
       </div>
 
@@ -72,7 +75,7 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, attachSpec
         <p className="text-muted-foreground mb-6">{catalog.catalogComment}</p>
       )}
 
-      {docMd && <DocumentationSection markdown={docMd} defaultOpen />}
+      {docMd && <section className="catalog-overview-docs"><DocumentationSection markdown={docMd} collapseOnMobile /></section>}
 
       <MetaChips keywords={keywords} />
 
@@ -80,10 +83,10 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, attachSpec
           switcher in the top-right, which shows the same name/email and owns
           sign-in and sign-out — so this was a second, read-only copy of it
           halfway down the page. */}
-      {serviceUrl && <ConnectBox catalogName={catalog.catalogName} serverCatalogName={catalog.serverCatalogName} serviceUrl={serviceUrl} attachOptions={attachOptions} attachSpecs={attachSpecs} />}
+      {serviceUrl && <div className="catalog-overview-connect"><CatalogDisclosure title="Connection instructions"><ConnectBox catalogName={catalog.catalogName} serverCatalogName={catalog.serverCatalogName} serviceUrl={serviceUrl} attachOptions={attachOptions} attachSpecs={attachSpecs} /></CatalogDisclosure></div>}
 
       {catalog.schemas.length > 0 && (
-        <>
+        <section className="catalog-overview-schemas">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3 mt-8">
             Schemas
           </h2>
@@ -110,15 +113,15 @@ export function CatalogOverview({ catalog, serviceUrl, attachOptions, attachSpec
               );
             })}
           </div>
-        </>
+        </section>
       )}
 
-      <ProvenanceCard tags={catalog.catalogTags} />
+      <section className="catalog-overview-about"><ProvenanceCard tags={catalog.catalogTags} />
 
       {(() => {
         const filtered = filterDisplayTags(catalog.catalogTags);
         return filtered ? <TagsTable tags={filtered} /> : null;
-      })()}
+      })()}</section>
     </div>
   );
 }

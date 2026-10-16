@@ -99,7 +99,7 @@ export function EditorToolbar({
 }: Props) {
   const canRun = queryReady && !running && !runBlocked;
   return (
-    <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0">
+    <div className="mobile-editor-toolbar flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0">
       {running ? (
         <>
           <Button size="sm" variant="destructive" onClick={onStop} className="h-7 gap-1.5" data-testid="editor-stop">

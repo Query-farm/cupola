@@ -5,6 +5,8 @@ import * as Sentry from "@sentry/astro";
 import { useSettings, DEFAULT_AI_MODEL } from "@/lib/settings";
 import { engine, ui } from "@/lib/shell-bridge";
 import { useEngineLifecycle } from "@/lib/use-engine-lifecycle";
+import { useMediaQuery } from "@/lib/use-media-query";
+import { MobileAskIntro } from "./mobile/MobileAskIntro";
 import { getEngineInfo } from "@/lib/duckdb-engine";
 import { DEFAULT_AI_MAX_TOKENS } from "@/lib/ai/model-limits";
 import { deniedAIQueryToolResult, normalizeAIQueryMode, toolsForAIQueryMode } from "@/lib/ai/query-mode";
@@ -81,6 +83,7 @@ interface Props {
 }
 
 export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isActive, onBusyChange }: Props) {
+  const isMobile = useMediaQuery("(max-width: 767px)");
   const engineLifecycle = useEngineLifecycle();
   const { settings } = useSettings();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -870,7 +873,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
       )}
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-5">
-        {!hasMessages ? (
+        {!hasMessages ? isMobile ? <MobileAskIntro ready={hasApiKey} onPrompt={text => inputRef.current?.restore(text)} /> : (
           <div className="flex flex-col justify-end h-full max-w-2xl px-2 pb-2">
             <div className="flex items-center gap-2 mb-2">
               <Sparkles className="h-4 w-4 text-accent shrink-0" />

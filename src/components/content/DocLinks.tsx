@@ -18,10 +18,10 @@ export function DocLinks({ links }: Props) {
               href={link.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+              className="inline-flex max-w-full items-start gap-1.5 text-sm text-primary hover:underline"
             >
-              <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">{link.title || link.url}</span>
+              <ExternalLink className="h-3.5 w-3.5 shrink-0 mt-1" />
+              <span className="min-w-0 [overflow-wrap:anywhere]">{link.title || link.url}</span>
             </a>
           </li>
         ))}

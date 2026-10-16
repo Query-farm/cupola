@@ -98,7 +98,7 @@ export function ViewDetail({ view, catalogName, schemaName, onNavigate, onOpenSh
             <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0 normal-case">{columns.length}</Badge>
           </h2>
           <div className="border rounded-md overflow-hidden mb-4 bg-card shadow-sm">
-            <table className="w-full text-sm">
+            <table className="mobile-metadata-table w-full text-sm">
               <thead className="bg-muted/50">
                 <tr>
                   <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground">Name</th>

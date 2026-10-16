@@ -10,7 +10,7 @@ export function TagsTable({ tags }: Props) {
     <>
       <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mt-6 mb-2">Tags</h2>
       <div className="border rounded-md overflow-hidden mb-4 bg-card shadow-sm">
-        <table className="text-sm" style={{ tableLayout: "auto", width: "100%" }}>
+        <table className="catalog-tags-table text-sm" aria-label="Tags" style={{ tableLayout: "auto", width: "100%" }}>
           <thead className="bg-muted/50">
             <tr>
               <th className="text-left px-3 py-1.5 text-xs font-medium text-muted-foreground" style={{ width: "1%" }}>Key</th>

@@ -14,7 +14,7 @@ interface Props {
 export function CatalogListItem({ icon: Icon, iconClassName, title, description, badge, rightLabel, onClick }: Props) {
   return (
     <button
-      className="flex items-center justify-between w-full px-4 py-3 rounded-lg border border-border bg-card hover:border-primary/30 hover:bg-accent/5 transition-colors text-left group cursor-pointer"
+      className="catalog-list-item flex items-center justify-between w-full px-4 py-3 rounded-lg border border-border bg-card hover:border-primary/30 hover:bg-accent/5 transition-colors text-left group cursor-pointer"
       onClick={onClick}
     >
       <div className="flex items-start gap-3 min-w-0">
@@ -29,11 +29,12 @@ export function CatalogListItem({ icon: Icon, iconClassName, title, description,
           {description && (
             <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{description}</p>
           )}
+          {rightLabel && <span className="catalog-list-meta-mobile hidden text-xs text-muted-foreground">{rightLabel}</span>}
         </div>
       </div>
       <div className="flex items-center gap-2 shrink-0 ml-3">
         {rightLabel && (
-          <span className="text-xs text-muted-foreground">{rightLabel}</span>
+          <span className="catalog-list-meta-desktop text-xs text-muted-foreground">{rightLabel}</span>
         )}
         <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30 group-hover:text-primary shrink-0 transition-colors" />
       </div>

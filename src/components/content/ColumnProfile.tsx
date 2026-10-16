@@ -58,7 +58,7 @@ export function ColumnProfile({
 
   if (!profile) {
     return (
-      <div className="flex items-center gap-2 pt-1 border-t border-border/50">
+      <div className="column-profile-prompt flex flex-wrap items-center gap-2 pt-1 border-t border-border/50">
         <Button
           variant="outline"
           size="sm"
@@ -94,27 +94,24 @@ function ProfileResult({ profile, onReprofile, loading }: { profile: ProfileData
   const nullPct = total > 0 ? (nullCount / total) * 100 : 0;
 
   return (
-    <div className="space-y-2.5 pt-1 border-t border-border/50">
+    <div className="column-profile space-y-2.5 pt-1 border-t border-border/50">
       {/* Header — compact, with null info inline */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <BarChart3 className="h-4 w-4" />
-        <span className="uppercase tracking-wide font-semibold">Distribution</span>
-        <span className="text-muted-foreground/50">·</span>
-        <span className="font-mono">
+      <div className="column-profile-header flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        <span className="flex items-center gap-2 whitespace-nowrap"><BarChart3 className="h-4 w-4" />
+        <span className="uppercase tracking-wide font-semibold">Distribution</span></span>
+        <span className="column-profile-count font-mono">
           {total.toLocaleString()} rows
           {profile.kind !== "boolean" && nullCount > 0 && (
             <>, {nullPct.toFixed(1)}% null</>
           )}
         </span>
         {sampled && (
-          <>
-            <span className="text-muted-foreground/50">·</span>
-            <span className="text-muted-foreground/60">sampled {sampled.toLocaleString()}</span>
-          </>
+          <span className="column-profile-sample text-muted-foreground/60">sampled {sampled.toLocaleString()}</span>
         )}
         <button
           onClick={onReprofile}
           disabled={loading}
+          aria-label="Refresh distribution"
           className="ml-auto flex items-center gap-1 hover:text-foreground transition-colors disabled:opacity-50"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -158,12 +155,12 @@ function NumericDistribution({ profile }: { profile: NumericProfile }) {
   return (
     <div className="space-y-2.5">
       {/* Summary + percentiles as aligned columns */}
-      <div className="flex gap-8">
+      <div className="profile-stat-groups flex gap-8">
         {stats.length > 0 && (
-          <StatsColumn rows={stats} />
+          <StatsColumn rows={stats} numeric />
         )}
         {percentiles.length > 0 && (
-          <StatsColumn rows={percentiles} />
+          <StatsColumn rows={percentiles} numeric />
         )}
       </div>
       {/* Histogram */}
@@ -208,7 +205,7 @@ function CategoricalDistribution({ profile }: { profile: StringProfile }) {
   return (
     <div className="space-y-2.5">
       {/* Summary stats as aligned columns */}
-      <div className="flex gap-8">
+      <div className="profile-stat-groups flex gap-8">
         {valueStats.length > 0 && <StatsColumn rows={valueStats} />}
         {lengthStats.length > 0 && <StatsColumn rows={lengthStats} />}
       </div>
@@ -266,9 +263,9 @@ function BooleanDistribution({ profile }: { profile: BooleanProfile }) {
           )
         ))}
       </div>
-      <div className="flex gap-3 mt-1 text-sm text-muted-foreground font-mono">
+      <div className="flex flex-wrap gap-3 mt-1 text-sm text-muted-foreground font-mono">
         {segments.map((seg) => (
-          <span key={seg.label}>{seg.label}: {seg.count.toLocaleString()}</span>
+          <span key={seg.label} className="whitespace-nowrap">{seg.label}: {seg.count.toLocaleString()}</span>
         ))}
       </div>
     </div>
@@ -308,7 +305,7 @@ function HorizontalBarChart({ bars, showCumulativePct }: { bars: BarWithPct[]; s
   return (
     <div className="space-y-0.5 max-w-lg">
       {bars.map((bar, i) => (
-        <div key={i} className="flex items-center gap-2 text-sm">
+        <div key={i} className="profile-chart-row flex items-center gap-2 text-sm">
           <span
             className="shrink-0 text-right font-mono text-muted-foreground truncate"
             style={{ width: `${labelWidth}px` }}
@@ -337,9 +334,9 @@ function HorizontalBarChart({ bars, showCumulativePct }: { bars: BarWithPct[]; s
 }
 
 /** Vertical label-value pairs with right-aligned values. */
-function StatsColumn({ rows }: { rows: [string, string][] }) {
+function StatsColumn({ rows, numeric = false }: { rows: [string, string][]; numeric?: boolean }) {
   return (
-    <div className="text-sm font-mono inline-grid grid-cols-[auto_auto] gap-x-3">
+    <div className="profile-stats text-sm font-mono inline-grid grid-cols-[auto_auto] gap-x-3" data-numeric={numeric}>
       {rows.map(([label, value], i) => (
         <Fragment key={i}>
           <span className="text-muted-foreground text-right">{label}</span>

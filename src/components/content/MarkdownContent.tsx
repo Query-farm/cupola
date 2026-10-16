@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Check, Copy } from 'lucide-react';
+import { Check, Copy, Maximize2 } from 'lucide-react';
+import { useMediaQuery } from '@/lib/use-media-query';
+import { Dialog, DialogClose, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 import { SqlCodeBlock } from './SqlCodeBlock';
 import { buildTableClipboard, writeGridClipboard } from '@/lib/grid-clipboard';
 
@@ -12,7 +15,9 @@ export interface MarkdownContentProps {
   document?: boolean;
 }
 
-function CopyableMarkdownTable({ children }: { children: React.ReactNode }) {
+function ReadableMarkdownTable({ children, copyTables }: { children: React.ReactNode; copyTables: boolean }) {
+  const isMobile = useMediaQuery('(max-width: 767px)');
+  const [expanded, setExpanded] = useState(false);
   const tableRef = useRef<HTMLTableElement>(null);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copied, setCopied] = useState(false);
@@ -40,8 +45,9 @@ function CopyableMarkdownTable({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="border rounded-md overflow-hidden my-2 bg-card shadow-sm">
-      <div className="flex justify-end border-b border-border bg-muted/20 px-2 py-1">
-        <button
+      {(copyTables || isMobile) && <div className="markdown-table-toolbar flex justify-end gap-2 border-b border-border bg-muted/20 px-2 py-1">
+        {isMobile && <Button variant="ghost" size="sm" onClick={() => setExpanded(true)}><Maximize2 />Expand table</Button>}
+        {copyTables && <button
           type="button"
           className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           onClick={() => void copyTable()}
@@ -50,13 +56,22 @@ function CopyableMarkdownTable({ children }: { children: React.ReactNode }) {
         >
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           {copied ? 'Copied' : 'Copy table'}
-        </button>
-      </div>
+        </button>}
+      </div>}
       <div className="overflow-auto">
-        <table ref={tableRef} className="w-full text-xs">
+        <table ref={tableRef} className="catalog-markdown-table w-full text-xs">
           {children}
         </table>
       </div>
+      <Dialog open={expanded} onOpenChange={setExpanded}>
+        <DialogContent className="catalog-reader-dialog" showCloseButton={false}>
+          <div className="flex items-center justify-between gap-3"><DialogTitle>Table</DialogTitle><DialogClose render={<Button variant="outline" className="min-h-11" />}>Done</DialogClose></div>
+          <p className="text-sm text-muted-foreground">Scroll horizontally to compare columns.</p>
+          <div className="min-h-0 flex-1 overflow-auto" tabIndex={0} role="region" aria-label="Expanded table">
+            <table className="min-w-[640px] w-full text-sm">{children}</table>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -148,14 +163,7 @@ export function MarkdownContent({ content, copyTables = false, document = false 
               </pre>
             );
           },
-          table: ({ children }) =>
-            copyTables ? (
-              <CopyableMarkdownTable>{children}</CopyableMarkdownTable>
-            ) : (
-              <div className="border rounded-md overflow-auto my-2 bg-card shadow-sm">
-                <table className="w-full text-xs">{children}</table>
-              </div>
-            ),
+          table: ({ children }) => <ReadableMarkdownTable copyTables={copyTables}>{children}</ReadableMarkdownTable>,
           thead: ({ children }) => <thead className="bg-muted/50">{children}</thead>,
           th: ({ children }) => (
             <th className="text-left px-3 py-1.5 font-semibold text-muted-foreground whitespace-nowrap">

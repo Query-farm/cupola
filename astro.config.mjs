@@ -28,6 +28,7 @@ export default defineConfig({
   // /v{version}/. The Cloudflare/R2 publish path leaves this unset.
   base: process.env.BASE_PATH || `/v${pkg.version}/`,
   trailingSlash: 'ignore',
+  devToolbar: { enabled: false },
 
   integrations: [
     react(),
@@ -275,10 +276,12 @@ export default defineConfig({
       // modules per page load (6,000+ requests in all), which stalled parallel e2e runs.
       // Only single-copy libraries: the svelte-exports resolver above keeps per-importer
       // copies of bits-ui, runed and friends on purpose.
-      include: ['lucide-svelte', 'date-fns', 'chroma-js', 'leaflet', 'cli-table3', '@haybarn/haybarn-wasm', 'svelte-sonner', 'html-to-image', 'highlight.js/lib/common', 'exceljs', 'json5', 'pako', 'fastest-levenshtein', 'ssf', 'js-yaml', 'lodash', 'echarts', 'posthog-js', '@markdoc/markdoc', 'lodash/assign', 'lodash/defaults', 'lodash/defaultsDeep', 'lodash/get', 'lodash/isEqual', 'lodash/isString', 'lodash/merge', 'lodash/omit', '@myriaddreamin/typst.ts/compiler', '@myriaddreamin/typst.ts/options.init'],
+      include: ['lucide-svelte', 'date-fns', 'chroma-js', 'leaflet', 'cli-table3', '@haybarn/haybarn-wasm', 'html-to-image', 'highlight.js/lib/common', 'exceljs', 'json5', 'pako', 'fastest-levenshtein', 'ssf', 'js-yaml', 'lodash', 'echarts', 'posthog-js', '@markdoc/markdoc', 'lodash/assign', 'lodash/defaults', 'lodash/defaultsDeep', 'lodash/get', 'lodash/isEqual', 'lodash/isString', 'lodash/merge', 'lodash/omit', '@myriaddreamin/typst.ts/compiler', '@myriaddreamin/typst.ts/options.init'],
       // vgi-rpc-iroh-browser locates its .wasm with `new URL(..., import.meta.url)`;
       // pre-bundling moves the JS into .vite/deps/ and that URL then 404s in dev.
-      exclude: ['astro', '@evidence/core', '@query-farm/vgi-rpc-iroh-browser'],
+      // Sonner's .svelte.js rune modules need Svelte's normal transform;
+      // prebundling them can leave raw $state calls in the dev report renderer.
+      exclude: ['astro', '@evidence/core', '@query-farm/vgi-rpc-iroh-browser', 'svelte-sonner'],
     },
     resolve: {
       conditions: ['svelte', 'module', 'browser', 'development|production'],

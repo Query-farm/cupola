@@ -6,6 +6,7 @@ import { extensionInstallSql, shellExtensionsForVgiVersion } from "@/lib/duckdb-
 import { getVgiExtensionVersionSetting, isGrainliftService } from "@/lib/url-params";
 import { buildAttachSql, isSecretOption, type AttachSpec, type OptionSpecInfo } from "@/lib/attach/options";
 import { quoteIdent, quoteLiteral } from "@/lib/duckdb-query";
+import { CodeReader } from "./content/CodeReader";
 
 interface Props {
   /** The alias the snippets attach under (what this app's SQL calls it). */
@@ -280,7 +281,7 @@ export function ConnectBox({ catalogName, serverCatalogName, serviceUrl, attachO
   }
 
   return (
-    <Card variant="featured" className="mb-8">
+    <Card variant="featured" className="catalog-connect mb-8 min-w-0">
       <CardContent className="pt-4 pb-4">
         <div className="flex flex-wrap items-center gap-2 mb-3">
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mr-1">
@@ -309,15 +310,16 @@ export function ConnectBox({ catalogName, serverCatalogName, serviceUrl, attachO
             })}
           </div>
 
-          <Button
+        </div>
+
+        <CodeReader title={`${LANGS.find(item => item.id === lang)!.label} connection`} actions={<Button
             variant="outline"
             size="sm"
             onClick={handleCopy}
             className={cn("h-6 px-2 text-xs ml-auto", copied && "text-accent border-accent")}
           >
             {copied ? "Copied" : "Copy"}
-          </Button>
-        </div>
+          </Button>}>
 
         {/* rock-900 in light, rock-950 in dark: in dark the featured card is
             already near rock-900, so the slab drops a step to keep an edge. */}
@@ -331,6 +333,7 @@ export function ConnectBox({ catalogName, serverCatalogName, serviceUrl, attachO
             ))}
           </code>
         </pre>
+        </CodeReader>
       </CardContent>
     </Card>
   );

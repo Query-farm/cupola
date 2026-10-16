@@ -14,7 +14,7 @@ export function MetaChips({ keywords, classificationTags }: Props) {
   if (!hasKeywords && !hasTags) return null;
 
   return (
-    <div className="flex flex-col gap-2 mb-4">
+    <div className="catalog-meta-chips flex flex-col gap-2 mb-4">
       {hasKeywords && (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide mr-1">Keywords</span>

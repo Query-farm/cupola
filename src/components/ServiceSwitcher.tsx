@@ -291,7 +291,7 @@ export function ServiceSwitcher({ workspace, catalogs, actions }: Props) {
         data-testid="workspace-picker"
       >
         {only ? <CatalogChip alias={only.alias} color={only.color} /> : <ChipStack catalogs={catalogs} />}
-        <span className="max-w-[200px] truncate font-medium text-card-foreground hidden sm:inline">
+        <span className="max-w-[110px] sm:max-w-[200px] truncate font-medium text-card-foreground">
           {only && !workspace.name ? only.alias : title}
           {!only && <span className="font-normal text-muted-foreground"> · {catalogs.length} {catalogs.length === 1 ? "catalog" : "catalogs"}</span>}
         </span>

@@ -9,6 +9,8 @@ import {
   Network,
   Plus,
   Search,
+  SlidersHorizontal,
+  List,
   Table2,
 } from "lucide-react";
 import type { CatalogData } from "@/lib/service";
@@ -24,6 +26,8 @@ import { ui } from "@/lib/shell-bridge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { useMediaQuery } from "@/lib/use-media-query";
 
 interface Props {
   catalog: CatalogData;
@@ -204,6 +208,10 @@ function RelationshipCard({ node, selected, onOpen, onFocus }: {
 }
 
 export function CatalogRelationships({ catalog, initialSchema, initialFocusTable, onNavigate }: Props) {
+  const isMobile = useMediaQuery("(max-width: 767px)");
+  const [mobileView, setMobileView] = useState<"list" | "diagram">("list");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const showDiagram = !isMobile || mobileView === "diagram";
   const graph = useMemo(() => buildCatalogRelationshipGraph(catalog), [catalog]);
   const initialFocusId = initialSchema && initialFocusTable
     ? catalogRelationshipTableId(catalog.catalogName, initialSchema, initialFocusTable)
@@ -213,7 +221,9 @@ export function CatalogRelationships({ catalog, initialSchema, initialFocusTable
   const [depth, setDepth] = useState(1);
   const [search, setSearch] = useState("");
   const [keysOnly, setKeysOnly] = useState(true);
-  const [showIsolated, setShowIsolated] = useState(false);
+  const [isolatedChoice, setIsolatedChoice] = useState<boolean | null>(null);
+  const showIsolated = isolatedChoice ?? isMobile;
+  const setShowIsolated = (value: boolean) => setIsolatedChoice(value);
   const [zoom, setZoom] = useState(1);
   const [selectedRelationshipId, setSelectedRelationshipId] = useState<string>();
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -240,48 +250,85 @@ export function CatalogRelationships({ catalog, initialSchema, initialFocusTable
     viewport.scrollTo({ left: 0, top: 0, behavior: "smooth" });
   }, [height, nodes.length, width]);
 
-  useEffect(() => { const id = requestAnimationFrame(fitDiagram); return () => cancelAnimationFrame(id); }, [fitDiagram]);
+  useEffect(() => { const id = requestAnimationFrame(fitDiagram); return () => cancelAnimationFrame(id); }, [fitDiagram, showDiagram]);
 
-  const openJoin = () => {
-    if (!selectedRelationship) return;
-    const sql = joinSql(selectedRelationship, tableMap);
+  const openJoin = (relationship = selectedRelationship) => {
+    if (!relationship) return;
+    const sql = joinSql(relationship, tableMap);
     if (sql) ui.openInEditor?.(sql, { autoRun: false });
   };
 
+  const focusTable = (table: CatalogRelationshipTable) => {
+    setSchema(table.schema); setFocusTableId(table.id); setSearch("");
+  };
+  const filters = <>
+    <div className="relative w-44 max-w-full">
+      <Search className="pointer-events-none absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
+      <Input value={search} onChange={event => { setSearch(event.target.value); setFocusTableId(undefined); }} placeholder="Find a table…" aria-label="Find a table" className="pl-8" />
+    </div>
+    <label className={isMobile ? "text-sm font-medium" : "sr-only"} htmlFor="relationship-schema">Schema</label>
+    <select id="relationship-schema" className="h-8 rounded-lg border border-input bg-background px-2 text-sm" value={schema} onChange={event => { setSchema(event.target.value); setFocusTableId(undefined); }}>
+      <option value="all">All schemas</option>
+      {catalog.schemas.map(item => <option key={item.info.name} value={item.info.name}>{item.info.name}</option>)}
+    </select>
+    <label className={isMobile ? "text-sm font-medium" : "sr-only"} htmlFor="relationship-depth">Relationship depth</label>
+    <select id="relationship-depth" className="h-8 rounded-lg border border-input bg-background px-2 text-sm" value={depth} disabled={!focusTableId && !search} onChange={event => setDepth(Number(event.target.value))}>
+      <option value={1}>1 hop</option><option value={2}>2 hops</option><option value={3}>3 hops</option>
+    </select>
+    {showDiagram && <Button variant={keysOnly ? "secondary" : "outline"} aria-pressed={keysOnly} onClick={() => setKeysOnly(value => !value)}><KeyRound /> {keysOnly ? "Keys only" : "All columns"}</Button>}
+    <Button variant={showIsolated ? "secondary" : "outline"} aria-pressed={showIsolated} onClick={() => setShowIsolated(!showIsolated)}><Columns3 /> {isMobile ? "Include unrelated tables" : "Unrelated"}</Button>
+  </>;
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background" data-testid="catalog-relationships">
+    <div className="catalog-relationships flex h-full min-h-0 flex-col bg-background" data-testid="catalog-relationships">
       <header className="shrink-0 border-b border-border bg-card px-3 py-2.5 sm:px-4">
         <div className="flex flex-wrap items-center gap-1.5">
           <Button variant="ghost" size="icon-sm" aria-label="Back to catalog details" onClick={() => onNavigate(initialSchema
             ? { type: "schema", name: initialSchema, schema: initialSchema, catalog: catalog.catalogName }
             : { type: "catalog", name: catalog.catalogName, catalog: catalog.catalogName })}
           ><ArrowLeft /></Button>
-          <Network className="h-5 w-5 text-primary" />
+          <Network className="hidden md:block h-5 w-5 text-primary" />
           <div className="mr-auto min-w-0">
             <h1 className="truncate text-base font-semibold">Relationships</h1>
-            <p className="text-xs text-muted-foreground">{scoped.relationships.length} declared foreign keys across {scoped.tables.length} tables</p>
+            <p className="text-xs text-muted-foreground">{isMobile ? `${scoped.tables.length} tables · ${scoped.relationships.length} ${scoped.relationships.length === 1 ? "link" : "links"}` : `${scoped.relationships.length} declared foreign keys across ${scoped.tables.length} tables`}</p>
           </div>
-          <div className="relative w-44 max-w-full">
-            <Search className="pointer-events-none absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />
-            <Input value={search} onChange={(event) => { setSearch(event.target.value); setFocusTableId(undefined); }} placeholder="Find a table…" aria-label="Find a table" className="pl-8" />
-          </div>
-          <label className="sr-only" htmlFor="relationship-schema">Schema</label>
-          <select id="relationship-schema" className="h-8 rounded-lg border border-input bg-background px-2 text-sm" value={schema} onChange={(event) => { setSchema(event.target.value); setFocusTableId(undefined); }}>
-            <option value="all">All schemas</option>
-            {catalog.schemas.map((item) => <option key={item.info.name} value={item.info.name}>{item.info.name}</option>)}
-          </select>
-          <label className="sr-only" htmlFor="relationship-depth">Relationship depth</label>
-          <select id="relationship-depth" className="h-8 rounded-lg border border-input bg-background px-2 text-sm" value={depth} disabled={!focusTableId && !search} onChange={(event) => setDepth(Number(event.target.value))}>
-            <option value={1}>1 hop</option><option value={2}>2 hops</option><option value={3}>3 hops</option>
-          </select>
-          <Button variant={keysOnly ? "secondary" : "outline"} onClick={() => setKeysOnly((value) => !value)}><KeyRound /> {keysOnly ? "Keys only" : "All columns"}</Button>
-          <Button variant={showIsolated ? "secondary" : "outline"} onClick={() => setShowIsolated((value) => !value)}><Columns3 /> Unrelated</Button>
+          {isMobile ? <>
+            <Button variant="ghost" size="icon" aria-label="Relationship filters" onClick={() => setFiltersOpen(true)}><SlidersHorizontal /></Button>
+            <Button variant="ghost" size="icon" aria-label={showDiagram ? "Show relationship list" : "Show relationship diagram"} onClick={() => setMobileView(showDiagram ? "list" : "diagram")}>{showDiagram ? <List /> : <Network />}</Button>
+          </> : filters}
         </div>
         {focusTableId ? <div className="mt-2 text-xs text-muted-foreground">Focused on <strong className="font-mono text-foreground">{tableMap.get(focusTableId)?.name}</strong> and {depth}-hop neighbors. <button type="button" className="text-primary hover:underline" onClick={() => setFocusTableId(undefined)}>Show schema</button></div> : null}
         {scoped.truncated ? <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">Showing the first {scoped.tables.length} of {scoped.totalCandidates} tables. Focus or search to narrow the graph.</p> : null}
       </header>
 
-      <div className="relative min-h-0 flex-1">
+      <Dialog open={isMobile && filtersOpen} onOpenChange={setFiltersOpen}>
+        <DialogContent className="mobile-more-sheet relationship-filter-sheet" showCloseButton={false}>
+          <div className="flex items-center justify-between gap-2"><DialogTitle>Relationship filters</DialogTitle><DialogClose render={<Button variant="outline" />}>Done</DialogClose></div>
+          <div className="grid gap-3">{filters}</div>
+        </DialogContent>
+      </Dialog>
+
+      {!showDiagram ? <div className="relationship-list min-h-0 flex-1 overflow-y-auto p-3 space-y-3" role="list" aria-label="Tables and relationships">
+        {scoped.tables.map(table => {
+          const related = scoped.relationships.filter(edge => edge.sourceTableId === table.id || edge.targetTableId === table.id);
+          return <article key={table.id} role="listitem" className="rounded-lg border border-border bg-card p-3 min-w-0">
+            <div className="text-xs text-muted-foreground break-all">{table.catalog}.{table.schema}</div>
+            {table.external ? <h2 className="font-mono font-semibold break-all">{table.name} <span className="font-sans text-xs text-muted-foreground">external</span></h2> :
+              <button className="min-h-11 text-left font-mono font-semibold text-primary [overflow-wrap:anywhere]" aria-label={`Open ${table.schema}.${table.name}`} onClick={() => openTable(table)}>{table.name} <ExternalLink className="inline size-3.5" /></button>}
+            {table.comment && <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">{table.comment}</p>}
+            {related.length > 0 ? <>
+              <Button variant="outline" className="my-2" onClick={() => focusTable(table)}>Related tables</Button>
+              {related.map(edge => <div key={edge.id} className="border-t border-border py-3 space-y-2 text-sm [overflow-wrap:anywhere]">
+                <p className="text-xs text-muted-foreground">{edge.sourceTableId === table.id ? "References" : "Referenced by"} · {edge.oneToOne ? "one-to-one" : edge.optional ? "optional many-to-one" : "many-to-one"}</p>
+                <p className="font-mono">{tableMap.get(edge.sourceTableId)?.name}.{edge.sourceColumns.join(", ")}<span className="block text-muted-foreground">↓</span>{tableMap.get(edge.targetTableId)?.name}.{edge.targetColumns.join(", ")}</p>
+                {edge.constraintName && <p className="text-xs text-muted-foreground">{edge.constraintName}</p>}
+                <Button variant="outline" onClick={() => openJoin(edge)} disabled={!ui.openInEditor}>Create JOIN query</Button>
+              </div>)}
+            </> : <p className="mt-2 text-xs text-muted-foreground">No declared relationships.</p>}
+          </article>;
+        })}
+        {scoped.tables.length === 0 && <div className="rounded-lg border border-dashed p-4 text-sm"><p>No tables match these filters.</p><Button variant="outline" className="mt-3" onClick={() => { setSearch(""); setSchema("all"); setFocusTableId(undefined); setShowIsolated(true); }}>Show all tables</Button></div>}
+      </div> : <div className="relative min-h-0 flex-1">
         <div ref={viewportRef} className="absolute inset-0 overflow-auto bg-muted/20" onClick={() => setSelectedRelationshipId(undefined)}>
           {nodes.length > 0 ? (
           <div className="relative" style={{ width: width * zoom, height: height * zoom }}>
@@ -302,7 +349,7 @@ export function CatalogRelationships({ catalog, initialSchema, initialFocusTable
                   </g>;
                 })}
               </svg>
-              {nodes.map((node) => <RelationshipCard key={node.table.id} node={node} selected={node.table.id === focusTableId} onOpen={openTable} onFocus={(table) => { setSchema(table.schema); setFocusTableId(table.id); setSearch(""); }} />)}
+              {nodes.map((node) => <RelationshipCard key={node.table.id} node={node} selected={node.table.id === focusTableId} onOpen={openTable} onFocus={focusTable} />)}
             </div>
           </div>
           ) : (
@@ -317,8 +364,8 @@ export function CatalogRelationships({ catalog, initialSchema, initialFocusTable
           <span className="h-5 w-px bg-border" />
           <Button variant="ghost" size="icon" aria-label="Fit relationship layout" title="Fit layout" onClick={fitDiagram}><LayoutDashboard /></Button>
         </div>
-        {selectedRelationship ? <div className="absolute bottom-3 left-1/2 z-20 flex w-fit max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded-xl border border-border bg-card/95 px-3 py-2 text-xs shadow-lg backdrop-blur" onClick={(event) => event.stopPropagation()}><div className="min-w-0"><div className="truncate font-medium">{tableMap.get(selectedRelationship.sourceTableId)?.name}.{selectedRelationship.sourceColumns.join(", ")} <span className="mx-1 text-muted-foreground">→</span> {tableMap.get(selectedRelationship.targetTableId)?.name}.{selectedRelationship.targetColumns.join(", ")}</div><div className="text-muted-foreground">{selectedRelationship.constraintName || "Foreign key"} · {selectedRelationship.oneToOne ? "one-to-one" : selectedRelationship.optional ? "optional many-to-one" : "many-to-one"}</div></div><Button size="sm" onClick={openJoin} disabled={!ui.openInEditor}>Create JOIN query</Button></div> : null}
-      </div>
+        {selectedRelationship ? <div className="relationship-join-preview absolute bottom-3 left-1/2 z-20 flex w-fit max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded-xl border border-border bg-card/95 px-3 py-2 text-xs shadow-lg backdrop-blur" onClick={(event) => event.stopPropagation()}><div className="min-w-0"><div className="truncate font-medium">{tableMap.get(selectedRelationship.sourceTableId)?.name}.{selectedRelationship.sourceColumns.join(", ")} <span className="mx-1 text-muted-foreground">→</span> {tableMap.get(selectedRelationship.targetTableId)?.name}.{selectedRelationship.targetColumns.join(", ")}</div><div className="text-muted-foreground">{selectedRelationship.constraintName || "Foreign key"} · {selectedRelationship.oneToOne ? "one-to-one" : selectedRelationship.optional ? "optional many-to-one" : "many-to-one"}</div></div><Button size="sm" onClick={() => openJoin()} disabled={!ui.openInEditor}>Create JOIN query</Button></div> : null}
+      </div>}
     </div>
   );
 }

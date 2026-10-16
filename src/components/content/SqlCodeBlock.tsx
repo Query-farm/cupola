@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
+import { CodeReader } from "./CodeReader";
 import { displaySql } from "@/lib/sql/display-sql";
 import hljs from "highlight.js/lib/core";
 import sql from "highlight.js/lib/languages/sql";
@@ -7,9 +8,10 @@ hljs.registerLanguage("sql", sql);
 
 interface Props {
   query: string;
+  actions?: ReactNode;
 }
 
-export function SqlCodeBlock({ query }: Props) {
+export function SqlCodeBlock({ query, actions }: Props) {
   const { highlighted } = useMemo(() => {
     // Copy/Run buttons beside a code block use displaySql too, so the text
     // they hand on is the text shown here.
@@ -18,7 +20,7 @@ export function SqlCodeBlock({ query }: Props) {
   }, [query]);
 
   return (
-    <pre className="overflow-x-auto text-xs font-mono leading-relaxed">
+    <CodeReader actions={actions}><pre className="overflow-x-auto text-xs font-mono leading-relaxed">
       <code
         className="hljs language-sql"
         dangerouslySetInnerHTML={{ __html: highlighted }}
@@ -33,6 +35,6 @@ export function SqlCodeBlock({ query }: Props) {
         .hljs-operator { color: #6b6b5a; }
         .hljs-punctuation { color: #6b6b5a; }
       `}</style>
-    </pre>
+    </pre></CodeReader>
   );
 }

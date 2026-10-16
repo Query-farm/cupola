@@ -71,11 +71,8 @@ function QueryBlock({ query, onOpenShell }: { query: ExampleQuery; index: number
   };
 
   return (
-    <div className="flex items-start gap-2 bg-muted/60 rounded-md px-3 py-2">
-      <div className="flex-1 min-w-0">
-        <SqlCodeBlock query={query.sql} />
-      </div>
-      <div className="flex items-center gap-1 shrink-0">
+    <div className="bg-muted/60 rounded-md px-3 py-2 min-w-0">
+      <SqlCodeBlock query={query.sql} actions={<>
         <Button
           variant="ghost"
           size="sm"
@@ -96,7 +93,7 @@ function QueryBlock({ query, onOpenShell }: { query: ExampleQuery; index: number
             Run
           </Button>
         )}
-      </div>
+      </>} />
     </div>
   );
 }

@@ -101,6 +101,7 @@ export function SqlEditorView({ active = true, catalogData, attachedCatalogs = [
   const storageScope = workspaceId ?? serviceUrl;
   const { settings } = useSettings();
   const isNarrow = useMediaQuery("(max-width: 767px)");
+  const [mobilePane, setMobilePane] = useState<"query" | "results">("query");
   // Transient "Copied" confirmation on the Share button.
   const [shareCopied, setShareCopied] = useState(false);
   const [docState, setDocState] = useState<EditorDocState>(() => loadEditorState(storageScope));
@@ -171,6 +172,16 @@ export function SqlEditorView({ active = true, catalogData, attachedCatalogs = [
     [docState, activeId],
   );
   const activeResult = (activeId && results[activeId]) || emptyResult;
+  // One task fills a phone screen. Running from any entry point reveals the
+  // result, while both the editor and result remain mounted to retain state.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (isNarrow && activeResult.running && !wasRunning.current) {
+      setMobilePane("results");
+      dock.setOpen(false);
+    }
+    wasRunning.current = activeResult.running;
+  }, [isNarrow, activeResult.running, dock.setOpen]);
   const activeSession = useMemo(() => {
     if (!activeId) return undefined;
     let session = editorSessions.current.get(activeId);
@@ -801,7 +812,7 @@ export function SqlEditorView({ active = true, catalogData, attachedCatalogs = [
         onCancel={() => setPendingClose(null)}
         onConfirm={(id) => { setPendingClose(null); closeTab(id); }}
       />
-      <SqlEditorTabs
+      <div className="mobile-editor-tabs"><SqlEditorTabs
         docs={docState.docs}
         activeId={activeId}
         busyDocIds={aiBusyDocs}
@@ -809,7 +820,7 @@ export function SqlEditorView({ active = true, catalogData, attachedCatalogs = [
         onAdd={() => handleAddTab("")}
         onClose={handleCloseTab}
         onRename={handleRename}
-      />
+      /></div>
 
       {libraryError && <p role="alert" className="border-b p-3 text-sm text-destructive">{libraryError}</p>}
       {activeDoc && activeBinding && latestRecord && latestRecord.revision_number > activeBinding.record.revision_number && !activeDoc.library?.revision && <QueryRevisionNotice
@@ -851,6 +862,11 @@ export function SqlEditorView({ active = true, catalogData, attachedCatalogs = [
         shareCopied={shareCopied}
       />
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      {isNarrow && <div className="mobile-editor-views" aria-label="Query workspace views">
+        <button aria-pressed={!dock.open && mobilePane === "query"} onClick={() => { dock.setOpen(false); setMobilePane("query"); }} data-testid="mobile-query">Query</button>
+        <button aria-pressed={!dock.open && mobilePane === "results"} onClick={() => { dock.setOpen(false); setMobilePane("results"); }} data-testid="mobile-results">Results{activeResult.ran && !activeResult.running && activeResult.table ? ` · ${activeResult.rowCount.toLocaleString()}` : ""}</button>
+        <button aria-pressed={dock.open} onClick={() => dock.show("ai")} data-testid="mobile-assistant">Assistant</button>
+      </div>}
       {backgroundRun && (
         <div role="status" className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2 text-xs" data-testid="editor-background-run">
           <span>“{backgroundRun.name}” is running. Wait for it to finish or return to that tab to stop it.</span>
@@ -861,8 +877,8 @@ export function SqlEditorView({ active = true, catalogData, attachedCatalogs = [
           right. The panel stays mounted (display:none when closed) so its
           per-tab conversations survive open/close toggles. */}
       <div className="flex flex-col md:flex-row flex-1 min-h-0">
-        <div ref={splitColRef} className={`flex flex-col flex-1 min-w-0 ${dock.open && isNarrow ? "min-h-0 basis-[55%]" : ""}`}>
-          <div className="min-h-[120px] overflow-hidden" style={{ height: `${editorFrac * 100}%` }}>
+        <div ref={splitColRef} className="flex flex-col flex-1 min-w-0 min-h-0" style={isNarrow && dock.open ? { display: "none" } : undefined}>
+          <div className="mobile-editor-content min-h-[120px] overflow-hidden" style={isNarrow ? (mobilePane === "query" ? { flex: 1 } : { display: "none" }) : { height: `${editorFrac * 100}%` }}>
             <CodeMirrorSql
               key={activeDoc?.id ?? "none"}
               ref={editorRef}
@@ -877,11 +893,11 @@ export function SqlEditorView({ active = true, catalogData, attachedCatalogs = [
               getCatalogIndex={getCatalogIndex}
             />
           </div>
-          <div
+          {!isNarrow && <div
             onPointerDown={onSplitResizeStart}
             className="h-1.5 shrink-0 cursor-row-resize bg-border hover:bg-accent/60 active:bg-accent transition-colors"
-          />
-          <div className="flex-1 min-h-0">
+          />}
+          <div className="flex-1 min-h-0" style={isNarrow && mobilePane !== "results" ? { display: "none" } : undefined}>
             <EditorResultsPane
               state={activeResult}
               onPopout={handlePopout}
@@ -895,6 +911,7 @@ export function SqlEditorView({ active = true, catalogData, attachedCatalogs = [
         <RightDock
           state={dock}
           isNarrow={isNarrow}
+          fullHeight={isNarrow}
           aiBusy={aiBusyDocs.size > 0}
           inspector={
             <Inspector

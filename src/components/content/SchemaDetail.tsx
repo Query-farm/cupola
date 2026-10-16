@@ -128,7 +128,7 @@ export function SchemaDetail({ schema, onNavigate, catalogName, onOpenShell }: P
 
       <ObjectMeta tags={schema.info.tags} />
 
-      <div className="flex gap-6 text-sm text-muted-foreground mb-6">
+      <div className="catalog-schema-counts flex gap-6 text-sm text-muted-foreground mb-6">
         <span className="flex items-center gap-1.5">
           <CatalogIcon type="table" className="h-4 w-4" /> {visibleTables.length} tables
         </span>

@@ -9,6 +9,9 @@ import { quoteIdent } from "@/lib/duckdb-query";
 import { appBase } from "@/lib/app-base";
 import { toLatestBaseUrl } from "@/lib/share-query";
 import { useMediaQuery } from "@/lib/use-media-query";
+import { mobileViewFromUrl, useMobileWorkspace } from "@/lib/mobile-workspace";
+import { MobileNavigation, MobileLibraryTabs } from "./mobile/MobileNavigation";
+import { CatalogSidebarFrame } from "./mobile/CatalogSidebarFrame";
 import { OPEN_REPORT_EVENT, pushReportRoute, reportHref, type OpenReportDetail } from "@/lib/evidence/open-report";
 import { REPORT_ROUTE_CHANGED, reportNavigationHref } from "@/lib/reporting/navigation";
 import {
@@ -399,6 +402,8 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // the old appView toggle + shell-drawer mode. Persisted (migrating the old
   // vgi-app-view key) so a reload returns to the same tab.
   const [activeTab, setActiveTab] = useState<TabId>(() => {
+    const mobileView = mobileViewFromUrl();
+    if (mobileView) return mobileView === "perspective" ? "catalog" : mobileView;
     if (initialTab) return initialTab === "evidence" ? "reports" : initialTab;
     try {
       const stored = localStorage.getItem("vgi-active-tab") as TabId | null;
@@ -419,16 +424,10 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     try { return localStorage.getItem("vgi-sidebar-collapsed") === "1"; } catch { return false; }
   });
   const isNarrow = useMediaQuery(activeTab === "reports" ? "(max-width: 1023px)" : "(max-width: 767px)");
+  const isMobile = useMediaQuery("(max-width: 767px)");
+  const selectMobileTab = useMobileWorkspace(activeTab, isMobile, setActiveTab);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const sidebarVisible = isNarrow ? mobileSidebarOpen : !sidebarCollapsed;
-  useEffect(() => {
-    if (!mobileSidebarOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMobileSidebarOpen(false);
-    };
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [mobileSidebarOpen]);
   // AI turns in flight, per surface. Both panels stay mounted (or, for the
   // editor's, can be collapsed) while a turn runs, so the tab bar is the only
   // place that can say "still working" once the user looks elsewhere.
@@ -682,8 +681,13 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     };
     const open = (event: Event) => request((event as CustomEvent<OpenNotebookDetail>).detail);
     const fromUrl = () => {
+      const view = mobileViewFromUrl();
+      // Perspective has no restorable result on first load. Its in-session
+      // Back/Forward navigation is handled by useMobileWorkspace.
+      if (view === "perspective") return;
+      if (view && view !== "notebooks") { setActiveTab(view); return; }
       const path = window.location.pathname.replace(/\/$/, "");
-      if (!path.endsWith("/notebooks")) {
+      if (!path.endsWith("/notebooks") && view !== "notebooks") {
         if (path.includes('/reports')) { setActiveTab('reports'); return; }
         if (path.endsWith('/editor')) { setActiveTab('editor'); return; }
         if (lastTabRef.current === "notebooks") setActiveTab(path.includes("/reports") ? "reports" : path.endsWith("/editor") ? "editor" : path.endsWith("/shell") ? "shell" : "catalog");
@@ -1658,15 +1662,17 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   return (
     <SettingsProvider>
     <ReportLocationsProvider serviceUrl={serviceUrl} workspaceId={workspaceId || undefined} catalogs={catalogs}>
-    <div className="flex flex-col h-dvh">
+    <div className="mobile-workspace flex flex-col h-dvh">
       <CommandPalette getCommands={paletteCommands} />
       <AliasRenameHost onRename={renameAlias} />
       <Header
         workspace={{ id: workspaceId, name: storedWorkspace?.name ?? null }}
         catalogs={pickerCatalogs}
         actions={workspaceActions}
+        onBrowse={isMobile ? () => setMobileSidebarOpen((open) => !open) : undefined}
+        catalogOpen={mobileSidebarOpen}
       />
-      <AppTabBar
+      {isMobile ? <MobileLibraryTabs activeTab={activeTab} onSelect={selectMobileTab} /> : <AppTabBar
         activeTab={activeTab}
         onSelect={tab => {
           const search = new URLSearchParams(location.search);
@@ -1688,7 +1694,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
         onToggleSidebar={() => isNarrow ? setMobileSidebarOpen((open) => !open) : setSidebarCollapsed((c) => !c)}
         openTabs={{ perspective: perspectiveOpen }}
         onCloseTab={closeTab}
-      />
+      />}
       <EngineStatusRibbon />
       {boot.banner && (
         <ServiceRedirectBanner
@@ -1706,25 +1712,10 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
         />
       )}
       <div role="status" aria-live="polite" aria-atomic="true" className="sr-only" data-testid="catalog-status-announcer">{announcement}</div>
-      <div className="relative flex flex-1 overflow-hidden">
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {sidebarVisible && (
           <>
-            {isNarrow && (
-              <button
-                type="button"
-                className="absolute inset-0 z-20 bg-black/35"
-                aria-label="Close catalog sidebar"
-                onClick={() => setMobileSidebarOpen(false)}
-              />
-            )}
-            <div
-              className={isNarrow ? "absolute inset-y-0 left-0 z-30 w-[min(85vw,320px)] shadow-xl" : undefined}
-              style={isNarrow ? undefined : { width: sidebarWidth, minWidth: sidebarWidth }}
-              data-testid="catalog-sidebar"
-              role={isNarrow ? "dialog" : undefined}
-              aria-modal={isNarrow ? "true" : undefined}
-              aria-label={isNarrow ? "Catalog sidebar" : undefined}
-            >
+            <CatalogSidebarFrame narrow={isNarrow} width={sidebarWidth} onClose={() => setMobileSidebarOpen(false)}>
               <Sidebar
                 serviceUrl={serviceUrl}
                 activeNotebookId={activeNotebookId}
@@ -1742,6 +1733,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                     if (sel && ["function", "macro", "table", "view"].includes(sel.type)) setInspectRequest((n) => n + 1);
                   } else {
                     navigate(sel);
+                    if (isMobile) setActiveTab("catalog");
                   }
                   if (isNarrow) setMobileSidebarOpen(false);
                 }}
@@ -1797,7 +1789,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
                 } : null}
                 onDismissSignInNotice={() => setSignInNotice(null)}
               />
-            </div>
+            </CatalogSidebarFrame>
             {!isNarrow && <div
               onPointerDown={onResizeStart}
               className="w-2 -ml-1 -mr-1 z-10 cursor-col-resize group flex-shrink-0 flex items-stretch justify-center"
@@ -1816,7 +1808,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
           {activeTab === "catalog" && (
             <main className={selection?.type === "relationships"
               ? "absolute inset-0 overflow-hidden"
-              : "absolute inset-0 overflow-y-auto p-3 sm:p-6"}
+              : "catalog-content absolute inset-0 overflow-y-auto p-3 sm:p-6"}
             >
               <ErrorBoundary>
                 <ContentPanel catalogs={catalogs} defaultCatalogName={defaultAlias ?? data.catalogName} selection={selection} onNavigate={navigate} onOpenShell={() => setActiveTab("shell")} onPivotTable={pivotTable} />
@@ -1897,6 +1889,9 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
           )}
         </div>
       </div>
+      {isMobile && <MobileNavigation activeTab={activeTab} onSelect={selectMobileTab}
+        onBrowse={() => setMobileSidebarOpen(true)} onManage={() => setManagerOpen(true)}
+        perspectiveOpen={perspectiveOpen} busyTabs={{ notebooks: notebookBusy, askai: askAiBusy, editor: editorAiBusy }} />}
     </div>
     <Dialog open={!!authError} onOpenChange={(open) => { if (!open) setAuthError(null); }}>
       <DialogContent className="max-w-2xl">

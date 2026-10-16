@@ -89,6 +89,8 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, check
                   }
                 }}
                 tabIndex={canExpand ? 0 : -1}
+                aria-label={`Details for ${col.name}`}
+                aria-expanded={row.getIsExpanded()}
               >
                 <ChevronRight className={`h-3 w-3 text-muted-foreground/60 transition-transform ${row.getIsExpanded() ? "rotate-90" : ""}`} />
               </button>
@@ -142,9 +144,8 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, check
       cell: ({ row }) => {
         const col = row.original;
         const isNotNull = pkColumns.has(col.idx) || notNullSet.has(col.idx) || !col.nullable;
-        return isNotNull
-          ? <span className="block text-center text-[10px] font-medium text-primary/60">✓</span>
-          : null;
+        return <><span className="mobile-column-nullability hidden">{isNotNull ? "Not null" : "Nullable"}</span>
+          {isNotNull && <span className="desktop-column-nullability block text-center text-[10px] font-medium text-primary/60">✓</span>}</>;
       },
       enableSorting: false,
     },
@@ -247,12 +248,12 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, check
             )}
           </div>
         )}
-        <Table>
+        <Table className="mobile-columns-table" aria-label="Table columns">
           <TableHeader className="sticky top-0 bg-muted/80 backdrop-blur-sm z-10">
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id} className="text-xs">
+                  <TableHead key={header.id} data-column={header.column.id} className="text-xs">
                     {header.isPlaceholder
                       ? null
                       : flexRender(header.column.columnDef.header, header.getContext())}
@@ -270,7 +271,7 @@ export function ColumnsTable({ columns, pkColumns, notNullSet, fkByColumn, check
                     onClick={() => row.getCanExpand() && row.toggleExpanded()}
                   >
                     {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id} className="text-sm py-1.5">
+                      <TableCell key={cell.id} data-column={cell.column.id} className="text-sm py-1.5">
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </TableCell>
                     ))}
