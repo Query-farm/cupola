@@ -844,6 +844,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
   const hasMessages = messages.length > 0;
   const model = getSetting("aiModel") || DEFAULT_AI_MODEL;
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
+  const systemPromptTrigger = useRef<HTMLButtonElement>(null);
   // Pass hasChartTool=true so the preview shown to the user matches what
   // the agent actually sees at runtime (see line 128).
   // Preview of the prompt the agent is ACTUALLY using. Once a conversation has
@@ -924,6 +925,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
       {systemPrompt && (
         <div className="flex justify-end px-4 py-1 shrink-0">
           <button
+            ref={systemPromptTrigger}
             onClick={() => setShowSystemPrompt(true)}
             className="text-[10px] text-primary/60 hover:text-primary flex items-center gap-1 transition-colors"
           >
@@ -935,7 +937,7 @@ export function AskAIChat({ catalogData, attachedCatalogs = [], serviceUrl, isAc
 
       {systemPrompt && (
         <Dialog open={showSystemPrompt} onOpenChange={setShowSystemPrompt}>
-          <DialogContent className="!max-w-2xl max-h-[80vh] grid grid-rows-[auto_minmax(0,1fr)] gap-0 p-0 overflow-hidden">
+          <DialogContent finalFocus={systemPromptTrigger} className="!max-w-2xl max-h-[80vh] grid grid-rows-[auto_minmax(0,1fr)] gap-0 p-0 overflow-hidden">
             <DialogHeader className="flex-row items-center gap-2 border-b border-border px-4 py-3 pr-12">
               <FileText className="h-4 w-4 text-primary shrink-0" aria-hidden="true" />
               <div className="min-w-0">

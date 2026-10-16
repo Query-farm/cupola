@@ -242,7 +242,7 @@ function buildSchemaNode(catalogName: string, schema: ResolvedSchema, showDuckDB
       name: view.name,
       icon: Eye,
       selectedIcon: Eye,
-      className: "text-accent/80",
+      className: "text-accent",
       draggable: !!onTableAction,
       actions: onTableAction
         ? insertButton(`Paste ${schema.info.name}.${view.name} into ${into}`, () => onTableAction(schema.info.name, view.name))

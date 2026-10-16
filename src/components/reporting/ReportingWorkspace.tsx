@@ -22,7 +22,7 @@ import { hasReportPromotion } from '../../lib/reports/events';
 import { appBase } from '../../lib/app-base';
 
 export interface ReportingWorkspaceProps {
-  catalogName: string; serviceUrl: string; workspaceId?: string; catalogs: readonly CatalogData[]; defaultToLibrary?: boolean;
+  catalogName: string; serviceUrl: string; workspaceId?: string; catalogs: readonly CatalogData[]; defaultToLibrary?: boolean; active?: boolean;
   onCreateLocal?: () => void; onTransferReport?: (source: TransferSource, move: boolean) => void;
 }
 const route = () => {
@@ -44,12 +44,14 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
   const [editorKey, setEditorKey] = useState(0);
   const scope = props.workspaceId ?? props.serviceUrl;
   useEffect(() => {
+    // Lazy mounting can finish after the user has already changed tabs.
+    if (props.active === false) return;
     const url = new URL(location.href);
     if (!/\/(?:reports|evidence)(?:\/|$)/.test(url.pathname)) {
       url.pathname = `${appBase.replace(/\/$/, '')}/reports`;
       history.replaceState({}, '', url);
     }
-  }, []);
+  }, [props.active]);
   function refresh() { refreshLocations(); setGeneration(n => n + 1); try { setJobs(transferJobs(scope)); } catch (e) { setError(reportError(e)); } }
   useEffect(() => {
     const read = () => { try { setJobs(transferJobs(scope)); } catch (e) { setError(reportError(e)); } };

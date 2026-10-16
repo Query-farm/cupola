@@ -403,6 +403,12 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // vgi-app-view key) so a reload returns to the same tab.
   const [activeTab, setActiveTab] = useState<TabId>(() => {
     const mobileView = mobileViewFromUrl();
+    // Saved queries and notebooks are resolved by the library before opening
+    // their editor. A remembered mobile pane must not bypass that loader.
+    if (mobileView === 'editor' || mobileView === 'notebooks') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.has('report_id') || params.has('evidence_report')) return 'reports';
+    }
     if (mobileView) return mobileView === "perspective" ? "catalog" : mobileView;
     if (initialTab) return initialTab === "evidence" ? "reports" : initialTab;
     try {
@@ -682,6 +688,11 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     const open = (event: Event) => request((event as CustomEvent<OpenNotebookDetail>).detail);
     const fromUrl = () => {
       const view = mobileViewFromUrl();
+      const params = new URLSearchParams(window.location.search);
+      if ((view === 'editor' || view === 'notebooks') && (params.has('report_id') || params.has('evidence_report'))) {
+        setActiveTab('reports');
+        return;
+      }
       // Perspective has no restorable result on first load. Its in-session
       // Back/Forward navigation is handled by useMobileWorkspace.
       if (view === "perspective") return;
@@ -1659,6 +1670,26 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
     });
   };
 
+  function selectWorkspaceTab(tab: TabId, mobileNavigation = false) {
+    const search = new URLSearchParams(location.search);
+    const folderView = search.has('report_service') && search.get('report_service') !== 'all'
+      && !['report_id', 'evidence_report', 'evidence_new', 'report_view'].some(key => search.has(key));
+    if (tab === 'reports' && (libraryQuery || libraryNotebook || folderView)) {
+      const href = new URL(reportNavigationHref(serviceUrl, { location: 'all' }, location.href, appBase), location.href);
+      if (mobileNavigation || mobileViewFromUrl()) href.searchParams.set('view', 'reports');
+      window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId: workspaceId || undefined, href: href.toString() } }));
+    } else {
+      if (mobileNavigation) selectMobileTab(tab);
+      if (!['editor', 'notebooks', 'reports', 'evidence'].includes(tab)) {
+        const url = new URL(location.href); url.pathname = appBase;
+        for (const key of [...url.searchParams.keys()]) if (key.startsWith('report_') || key.startsWith('evidence_') || key === 'notebook' || key === 'local_report_folder') url.searchParams.delete(key);
+        history.replaceState(history.state, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
+      }
+      setActiveTab(tab);
+    }
+  }
+  const selectMobileWorkspaceTab = (tab: TabId) => selectWorkspaceTab(tab, true);
+
   return (
     <SettingsProvider>
     <ReportLocationsProvider serviceUrl={serviceUrl} workspaceId={workspaceId || undefined} catalogs={catalogs}>
@@ -1672,23 +1703,9 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
         onBrowse={isMobile ? () => setMobileSidebarOpen((open) => !open) : undefined}
         catalogOpen={mobileSidebarOpen}
       />
-      {isMobile ? <MobileLibraryTabs activeTab={activeTab} onSelect={selectMobileTab} /> : <AppTabBar
+      {isMobile ? <MobileLibraryTabs activeTab={activeTab} onSelect={selectMobileWorkspaceTab} /> : <AppTabBar
         activeTab={activeTab}
-        onSelect={tab => {
-          const search = new URLSearchParams(location.search);
-          const folderView = search.has('report_service') && search.get('report_service') !== 'all'
-            && !['report_id', 'evidence_report', 'evidence_new', 'report_view'].some(key => search.has(key));
-          if (tab === 'reports' && (libraryQuery || libraryNotebook || folderView)) {
-            window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId: workspaceId || undefined, href: reportNavigationHref(serviceUrl, { location: 'all' }, location.href, appBase) } }));
-          } else {
-            if (!['editor', 'notebooks', 'reports', 'evidence'].includes(tab)) {
-              const url = new URL(location.href); url.pathname = appBase;
-              for (const key of [...url.searchParams.keys()]) if (key.startsWith('report_') || key.startsWith('evidence_') || key === 'notebook' || key === 'local_report_folder') url.searchParams.delete(key);
-              history.replaceState(history.state, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
-            }
-            setActiveTab(tab);
-          }
-        }}
+        onSelect={selectWorkspaceTab}
         busyTabs={{ notebooks: notebookBusy, askai: askAiBusy, editor: editorAiBusy }}
         sidebarCollapsed={!sidebarVisible}
         onToggleSidebar={() => isNarrow ? setMobileSidebarOpen((open) => !open) : setSidebarCollapsed((c) => !c)}
@@ -1854,7 +1871,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
             // sections inheriting stale visibility:hidden when returning from an editor.
             <div className="absolute inset-0 overflow-hidden" style={activeTab === "reports" ? undefined : { display: "none" }}>
               <ErrorBoundary><Suspense fallback={<div className="p-6">Loading reports…</div>}>
-                <EvidencePanel catalogName={plan.catalogName} serviceUrl={serviceUrl} workspaceId={workspaceId || undefined} catalogs={catalogs} defaultToLibrary={initialTab !== "evidence"} />
+                <EvidencePanel active={activeTab === 'reports'} catalogName={plan.catalogName} serviceUrl={serviceUrl} workspaceId={workspaceId || undefined} catalogs={catalogs} defaultToLibrary={initialTab !== "evidence"} />
               </Suspense></ErrorBoundary>
             </div>
           )}
@@ -1889,7 +1906,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
           )}
         </div>
       </div>
-      {isMobile && <MobileNavigation activeTab={activeTab} onSelect={selectMobileTab}
+      {isMobile && <MobileNavigation activeTab={activeTab} onSelect={selectMobileWorkspaceTab}
         onBrowse={() => setMobileSidebarOpen(true)} onManage={() => setManagerOpen(true)}
         perspectiveOpen={perspectiveOpen} busyTabs={{ notebooks: notebookBusy, askai: askAiBusy, editor: editorAiBusy }} />}
     </div>

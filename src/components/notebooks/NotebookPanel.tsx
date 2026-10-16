@@ -84,7 +84,7 @@ export function NotebookPanel({
 }) {
   const scope = workspaceId ?? serviceUrl;
   const [active, setActive] = useState<Notebook | null>(null);
-  const [activeLibrary, setActiveLibrary] = useState<LibraryDocumentNavigation | null>(null);
+  const [activeLibrary, setActiveLibrary] = useState<LibraryDocumentNavigation | null>(libraryDocument ?? null);
   const handledLibrary = useRef<number | null>(null);
   const [navigationError, setNavigationError] = useState('');
   const beforeLeave = useRef<(() => boolean) | null>(null);
@@ -155,6 +155,7 @@ export function NotebookPanel({
       ? new URL(reportNavigationHref(serviceUrl, { location: activeLibrary.libraryUrl, reportId: activeLibrary.record.report_id }, location.href, appBase), location.href)
       : new URL(notebookHref(serviceUrl, active?.id), location.href);
     url.hash = location.hash;
+    if (new URLSearchParams(location.search).has('view')) url.searchParams.set('view', 'notebooks');
     if (activeLibrary?.pinned) url.searchParams.set('report_revision', activeLibrary.record.revision_served);
     history.replaceState(history.state, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
   }, [visible, activeLibrary, active?.id, serviceUrl]);

@@ -36,7 +36,7 @@
   .mobile-editor-views { display: flex; gap: 3px; padding: 5px 12px; flex-shrink: 0; border-bottom: 1px solid var(--border); background: var(--card); }
   .mobile-editor-views button { flex: 1; min-height: 44px; border-radius: 8px; font-size: 12px; font-weight: 500; color: var(--muted-foreground); }
   .mobile-editor-views button[aria-pressed=true] { background: var(--muted); color: var(--foreground); }
-  .mobile-editor-toolbar { overflow-x: auto; gap: 8px; padding: 7px 12px; scrollbar-width: none; }
+  .mobile-editor-toolbar { flex-wrap: nowrap; overflow-x: auto; gap: 8px; padding: 7px 12px; scrollbar-width: none; }
   .mobile-editor-toolbar > * { flex-shrink: 0; }
   .mobile-editor-toolbar button, .mobile-editor-toolbar > .inline-flex { min-height: 44px; }
   .mobile-editor-toolbar button { min-width: 36px; }
