@@ -15,6 +15,7 @@ import {
   SHELL_EXTENSIONS,
   extensionInstallSql,
   shellExtensionsForVgiVersion,
+  shellExtensionsForRuntime,
   recordExtensionLoaded,
   recordDuckDBVersion,
   getEngineInfo,
@@ -84,6 +85,19 @@ describe("SHELL_EXTENSIONS", () => {
   test("names are unique", () => {
     const names = SHELL_EXTENSIONS.map((e) => e.name);
     expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+describe("runtime startup extensions", () => {
+  test("iOS retains catalog, timezone, JSON, network and completion support without the heavyweight optional extensions", () => {
+    const extensions = shellExtensionsForRuntime(shellExtensionsForVgiVersion("v1.2.3"), true);
+    expect(extensions.map(({ name }) => name)).toEqual(["icu", "json", "httpfs", "vgi", "grainlift", "autocomplete"]);
+    expect(extensions.find(({ name }) => name === "vgi")).toMatchObject({ required: true, version: "v1.2.3" });
+  });
+
+  test("other platforms retain the complete list, including spatial capabilities", () => {
+    expect(shellExtensionsForRuntime(SHELL_EXTENSIONS, false)).toBe(SHELL_EXTENSIONS);
+    expect(SHELL_EXTENSIONS.map(({ name }) => name)).toEqual(expect.arrayContaining(["spatial", "iceberg", "ducklake"]));
   });
 });
 

@@ -22,7 +22,8 @@ import { attachInputHandlers, type CompletionItem } from "./shell-input";
 import { engine, terminal, ui, notifyQueryChange, recordQuery, setBootPhase, setEngineLifecycleError } from "./shell-bridge";
 import { quoteLiteral } from "./duckdb-query";
 import { attachAll, type AttachCallbacks, type DefaultRequest, type ShellCatalog } from "./attach/attach-catalog";
-import { extensionInstallSql, recordExtensionLoaded, restrictShellExtensions, shellExtensionsForVgiVersion, testExtensionSelection } from "./duckdb-engine";
+import { extensionInstallSql, recordExtensionLoaded, restrictShellExtensions, shellExtensionsForRuntime, shellExtensionsForVgiVersion, testExtensionSelection } from "./duckdb-engine";
+import { isIOSWebKit } from "./duckdb-runtime";
 import { QueryResultCache } from "./query-results";
 import { ensureDuckDB } from "./duckdb-worker-boot";
 import { getTerminalTheme } from "./theme";
@@ -354,7 +355,8 @@ export function initShell(
       // describe it, and a second hardcoded copy there drifted from this one.
       const selection = testExtensionSelection();
       if (selection) console.info(`[shell] test extension selection: ${selection.join(", ")}`);
-      for (const ext of restrictShellExtensions(shellExtensionsForVgiVersion(vgiVersion.value), selection)) {
+      const startupExtensions = shellExtensionsForRuntime(shellExtensionsForVgiVersion(vgiVersion.value), isIOSWebKit());
+      for (const ext of restrictShellExtensions(startupExtensions, selection)) {
         writeln(`Loading ${ext.name} extension...`, "33");
         setBootPhase(`Loading ${ext.name} extension`, null, "attaching");
         const install = await engine.query!(extensionInstallSql(ext));

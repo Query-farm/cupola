@@ -28,11 +28,12 @@ export interface DuckDBExtension {
 }
 
 /**
- * Extensions the shell installs and loads at startup, in order.
+ * Available startup extensions, in order. iOS omits the three heavyweight
+ * optional extensions through shellExtensionsForRuntime below.
  *
  * Autoload AND autoinstall are disabled at boot (a synchronous extension fetch
- * mid-statement could deadlock the wasm worker), so this list is the only way
- * an extension becomes available — nothing else can pull one in later.
+ * mid-statement could deadlock the wasm worker). Additional extensions require
+ * an explicit INSTALL + LOAD before a query can use them.
  */
 export const SHELL_EXTENSIONS: readonly DuckDBExtension[] = [
   { name: "icu" },
@@ -75,6 +76,17 @@ export function shellExtensionsForVgiVersion(
   return SHELL_EXTENSIONS.map((extension) =>
     extension.name === "vgi" ? { ...extension, version: versionOverride } : extension,
   );
+}
+
+/** Keep iOS catalog startup within a smaller memory budget while retaining COI.
+ * These optional extensions can still be explicitly installed/loaded later;
+ * they must not be autoloaded in the middle of a statement. */
+export function shellExtensionsForRuntime(
+  extensions: readonly DuckDBExtension[],
+  iosWebKit: boolean,
+): readonly DuckDBExtension[] {
+  if (!iosWebKit) return extensions;
+  return extensions.filter(({ name }) => name !== "spatial" && name !== "iceberg" && name !== "ducklake");
 }
 
 /**
