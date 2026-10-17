@@ -4,6 +4,7 @@ import { resolve, dirname } from 'node:path';
 import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { MOBILE_COI_WORKER, mobileCoiWorker, mobileCoiSourceMap } from './scripts/haybarn-mobile-runtime.mjs';
 
 import react from '@astrojs/react';
 import sentry from '@sentry/astro';
@@ -204,14 +205,18 @@ export default defineConfig({
             // pipeline as /shell/wasm/ to avoid Vite transform hangs.
             if (stripped?.startsWith('/haybarn/')) {
               const relPath = stripped.split('?')[0].slice('/haybarn/'.length);
-              let filePath = resolve('node_modules/@haybarn/haybarn-wasm/dist/' + relPath);
+              const mobileWorker = relPath === MOBILE_COI_WORKER || relPath === `${MOBILE_COI_WORKER}.map`;
+              const sourcePath = mobileWorker ? relPath.replace('coi-mobile', 'coi') : relPath;
+              let filePath = resolve('node_modules/@haybarn/haybarn-wasm/dist/' + sourcePath);
               try { filePath = realpathSync(filePath); } catch {}
               if (existsSync(filePath)) {
                 const ext = filePath.split('.').pop() ?? '';
                 /** @type {Record<string, string>} */
                 const types = { js: 'application/javascript', wasm: 'application/wasm' };
                 res.setHeader('Content-Type', types[ext] || 'application/octet-stream');
-                res.end(readFileSync(filePath));
+                res.end(mobileWorker
+                  ? (ext === 'map' ? mobileCoiSourceMap : mobileCoiWorker)(readFileSync(filePath, 'utf8'))
+                  : readFileSync(filePath));
                 return;
               }
             }

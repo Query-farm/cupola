@@ -21,6 +21,7 @@ import * as duckdb from "@haybarn/haybarn-wasm";
 import { engine, notifyQueryChange, setBootPhase, setEngineLifecycleError, type QueryResult } from "./shell-bridge";
 import { recordDuckDBVersion } from "./duckdb-engine";
 import { startIrohAdapter } from "./iroh";
+import { isIOSWebKit, selectDuckDBRuntime, IOS_QUERY_MEMORY_LIMIT } from './duckdb-runtime';
 
 let bootPromise: Promise<void> | null = null;
 
@@ -79,15 +80,14 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
 
   setBootPhase("Checking browser support");
   const platform = await duckdb.getPlatformFeatures();
+  const ios = isIOSWebKit();
   // Haybarn's selectBundle requires an MVP fallback, but MVP cannot load the
   // required VGI extension. Fail before downloading an unusable engine.
-  if (!platform.wasmExceptions) {
-    throw new Error("Your browser does not support the features required by Cupola's query engine. Update your browser and try again.");
-  }
-  const bundle: duckdb.DuckDBBundle = platform.wasmSIMD && platform.wasmThreads && platform.crossOriginIsolated
+  const runtime = selectDuckDBRuntime(platform);
+  const bundle: duckdb.DuckDBBundle = runtime === 'coi'
     ? {
       mainModule: `${absBase}haybarn/duckdb-coi.wasm`,
-      mainWorker: `${absBase}haybarn/duckdb-browser-coi.worker.js`,
+      mainWorker: `${absBase}haybarn/duckdb-browser-coi${ios ? '-mobile' : ''}.worker.js`,
       pthreadWorker: `${absBase}haybarn/duckdb-browser-coi.pthread.worker.js`,
     }
     : {
@@ -200,11 +200,12 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   // `src/lib/format.ts` keys its hugeint/timetz/bit/uuid handlers off the
   // `ARROW:extension:metadata` this produces; without it they silently never
   // fire. `.test_formats` is the guard.
-  await db.open({ arrowLosslessConversion: true });
+  await db.open({ arrowLosslessConversion: true, ...(ios ? { maximumThreads: 1 } : {}) });
 
   setBootPhase("Opening the database");
   const conn = await db.connect();
   const connId = conn.useUnsafe((_db, id) => id);
+  if (ios) await db.runQuery(connId, `SET memory_limit = '${IOS_QUERY_MEMORY_LIMIT}'`);
   mark("connect");
   setBootPhase("Ready", 100);
 

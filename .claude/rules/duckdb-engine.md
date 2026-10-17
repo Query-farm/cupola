@@ -39,3 +39,5 @@ paths:
 
 ## Eager worker boot
 - Worker created at CatalogApp mount, not when the shell opens. Pre-allocates SharedArrayBuffers for cancellation and OAuth.
+- iPhone/iPad WebKit keeps the COI WASM and shared-memory interruption. `scripts/haybarn-mobile-runtime.mjs` generates a COI loader that prewarms four pthreads instead of eight; setting SQL `threads = 1` afterwards cannot prevent the original startup cost. Do not reduce the pool to one: instantiation opens a default four-thread database before `db.open` can apply our config, and a pool of one or two stalls in WebKit. The guarded one-character loader change preserves source-map positions and must be reviewed if the upstream initializer changes. Dev and asset staging use the same transformation. iPad desktop user agents are identified through `MacIntel` + touch points; layout selection remains based on viewport width.
+- iOS sets `maximumThreads: 1` at open and a 256 MB DuckDB buffer-manager limit before loading extensions. This is not a cap on all browser memory. All startup extensions remain available; `tests/ios-startup.spec.ts` exercises the complete list with isolation enabled.

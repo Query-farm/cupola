@@ -46,6 +46,8 @@ for file in \
   fi
 done
 
+node scripts/haybarn-mobile-runtime.mjs "$HAYBARN_SRC" dist/haybarn
+
 echo "==> Fetching VGI extension variants for ${HAYBARN_EXT_VERSION}..."
 for variant in wasm_eh wasm_threads; do
   destination="dist/haybarn/extensions/${HAYBARN_EXT_VERSION}/${variant}/vgi.duckdb_extension.wasm"
