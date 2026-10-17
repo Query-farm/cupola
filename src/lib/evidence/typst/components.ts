@@ -37,6 +37,7 @@ export const COMPONENT_HANDLING: Record<string, Handling> = {
   row: 'native', stack: 'container', tabs: 'container', tab: 'container', details: 'container',
   accordion: 'container', accordion_item: 'container', accordion_title: 'part', accordion_body_slot: 'container',
   callout: 'native', commentary: 'container', note: 'native', print_group: 'native', page_break: 'native',
+  hidden_in_print: 'container', only_in_print: 'container', file: 'native',
   line_break: 'native', link: 'native', link_button: 'native', icon: 'native', fence: 'native',
   image: 'snapshot', logo: 'snapshot', clock: 'snapshot', html: 'snapshot',
   info: 'input', modal: 'input', download: 'input',
@@ -47,7 +48,7 @@ export const COMPONENT_HANDLING: Record<string, Handling> = {
   benchmark_comparison: 'filter', button_group: 'filter', comparison_selector: 'filter', date_grain_selector: 'filter',
   dimension_grid: 'filter', dropdown: 'filter', dropdown_option: 'input', filter_bar: 'filter', input_tabs: 'filter',
   option: 'input', range_calendar: 'filter', slider: 'filter', table_filter: 'filter', target_comparison: 'filter',
-  text_input: 'filter', toggle: 'filter', workflow_period: 'filter',
+  text_input: 'filter', toggle: 'filter', workflow_period: 'filter', period_selector: 'filter',
 };
 
 export const handlingOf = (render: string): Handling | undefined => COMPONENT_HANDLING[render];

@@ -72,11 +72,18 @@ export async function settleDom(root: Element, quietMs = 400, maxMs = 15_000): P
 /** `filePrefix` keeps several extractions' files apart when they share one PDF. */
 export async function extractReport(root: Element, widthPx: number, renderChart: ChartRenderer, snapshot: SnapshotRenderer, filePrefix = '', settle: Settle = () => settleDom(root)): Promise<Extraction> {
   const extractor = new Extractor(renderChart, filePrefix);
-  await extractor.openSections(root, widthPx, settle, snapshot);
-  await extractor.collectPagedTables(root);
-  const blocks = extractor.blocks(root, widthPx);
-  await extractor.captureSnapshots(snapshot);
-  return { blocks, files: extractor.files, omitted: extractor.omitted, coverage: extractor.coverage };
+  try {
+    if (extractor.revealPrintOnly(root)) await settle();
+    await extractor.openSections(root, widthPx, settle, snapshot);
+    // A section the reader had open is rebuilt when another closes it, print-only content hidden again.
+    if (extractor.revealPrintOnly(root)) await settle();
+    await extractor.collectPagedTables(root);
+    const blocks = extractor.blocks(root, widthPx);
+    await extractor.captureSnapshots(snapshot);
+    return { blocks, files: extractor.files, omitted: extractor.omitted, coverage: extractor.coverage };
+  } finally {
+    extractor.hidePrintOnly();
+  }
 }
 
 class Extractor {
@@ -93,6 +100,8 @@ class Extractor {
    * element the contents follow (an accordion item's header, a `details` button). */
   private opened = new Map<Element, Block[]>();
   private openedTriggers = new WeakSet<Element>();
+  /** Print-only content shown for the walk, with the inline display it had before. */
+  private revealed = new Map<HTMLElement, string>();
   private count = 0;
   constructor(private renderChart: ChartRenderer, private filePrefix = '') {}
 
@@ -338,20 +347,27 @@ class Extractor {
     return this.blocks(content, width);
   }
 
-  /** Components laid out side by side: each nested component nearest the row.
-   * Inputs are removed before the width is shared, or their slot stays empty and
-   * the charts beside them print stretched. */
+  /** Components and text laid out side by side: the row's flex items, as Evidence's own
+   * `layoutChildren` sees them. A `hidden_in_print` / `only_in_print` wrapper has no
+   * component wrapper of its own, so it is looked through (and dropped when hidden in
+   * print). Inputs are removed before the width is shared, or their slot stays empty
+   * and the charts beside them print stretched. */
   private row(content: Element, width: number): Block[] {
-    const children = [...content.querySelectorAll('[data-render]')].filter(child =>
-      !this.hidden(child) && child.parentElement?.closest('[data-render]') === content.closest('[data-render]'));
+    const rowEl = content.closest('[data-render]');
+    const flex = [...content.querySelectorAll('.flex-row')].find(found => found.closest('[data-render]') === rowEl) ?? content;
+    const flexItems = (parent: Element): Element[] => [...parent.children].flatMap(child => {
+      if (this.hidden(child)) return [];
+      return child.hasAttribute('data-print-visibility') ? flexItems(child) : [child];
+    });
+    const children = flexItems(flex);
+    if (!children.some(child => child.hasAttribute('data-render'))) return this.blocks(content, width);
     const printable = children.filter(child => {
-      const render = child.getAttribute('data-render')!;
-      const handling = handlingOf(render);
+      const render = child.getAttribute('data-render');
+      const handling = render && handlingOf(render);
       if (handling !== 'input' && handling !== 'filter') return true;
-      this.skip(render, child);
+      this.skip(render!, child);
       return false;
     });
-    if (!children.length) return this.blocks(content, width);
     if (!printable.length) return [];
     const share = (width - (printable.length - 1) * ROW_GAP_PT * PX_PER_PT) / printable.length;
     const items = printable.map(child => this.block(child, share)).filter(blocks => blocks.length);
@@ -487,6 +503,7 @@ class Extractor {
           await settle();
           const body = item.body();
           if (!body) continue;
+          if (this.revealPrintOnly(body)) await settle();
           if (depth < 5) await read(body, depth + 1);
           await this.collectPagedTables(body);
           const blocks = this.blocks(body, width);
@@ -506,6 +523,27 @@ class Extractor {
       // Closing transitions end, and reopened sections load, before the walk reads the report.
       if (changed) await settle();
     }
+  }
+
+  /** `{% only_in_print %}` and `{% print_group print_only=true %}` are `display: none` on
+   * screen, so their charts and tables have no size to be read at. Each is shown with its
+   * print display (`print:contents`, `print:block`) until `hidePrintOnly`. True when any was. */
+  revealPrintOnly(root: Element): boolean {
+    let changed = false;
+    for (const el of root.querySelectorAll<HTMLElement>('[data-print-only]')) {
+      if (this.revealed.has(el) || getComputedStyle(el).display !== 'none') continue;
+      const display = [...el.classList].find(name => PRINT_DISPLAY.test(name))?.slice('print:'.length);
+      if (!display) continue;
+      this.revealed.set(el, el.style.display);
+      el.style.display = display;
+      changed = true;
+    }
+    return changed;
+  }
+
+  hidePrintOnly(): void {
+    for (const [el, display] of this.revealed) el.style.display = display;
+    this.revealed.clear();
   }
 
   /** A paged table prints every row, not the page on screen: step through its own

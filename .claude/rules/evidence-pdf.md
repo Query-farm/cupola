@@ -27,7 +27,8 @@ Pipeline (`src/lib/evidence/typst/`): `extract.ts` (live DOM in the preview's sh
 ## Traps
 - A component owns only its own chart/table: `tabs`/`details` contain others' ECharts instances.
 - `page_break` / `print_group` have `componentWrapper: false`; extractor follows print CSS (`break-*`, `print:hidden`, `hidden print:block`) from the class list.
-- Charts render at `contentWidthPx()` (1px = 0.75pt); a `row` divides it among printable children only (inputs removed first). Disable series-level `animation` too, or line series draw nothing.
+- Print-only content (`only_in_print`, `print_group print_only`, marked `data-print-only`) is `display: none` on screen, so its charts have no size: `revealPrintOnly` shows it with its `print:` display for the walk (also inside opened sections) and `hidePrintOnly` restores it. `hidden_in_print` is plain `print:hidden`.
+- Charts render at `contentWidthPx()` (1px = 0.75pt); a `row` divides it among printable children only (inputs removed first). Row items are the row's flex children as Evidence's `layoutChildren` sees them: `data-print-visibility` wrappers looked through (or dropped when `print:hidden`), headings and text kept as items. Disable series-level `animation` too, or line series draw nothing.
 - Chart pixel geometry is fitted, not replayed (`chart-geometry.ts`): pixel margins kept, pixel `width`/`height` shrink. Font set in the option before rendering (`withFont`).
 - Typst's first layout pass reads a `state`'s initial value: seed the theme state with a real theme (field access on `none` is fatal).
 - Collapsed sections print open (`openSections`): click open one at a time, `settleDom` + `settleReport`, read, close; reader's open items never pre-read; budget `OPEN_SECTIONS_BUDGET_MS`. Test visibility not presence (hidden registration div); `aria-expanded` alone isn't a trigger test.

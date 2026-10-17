@@ -39,6 +39,9 @@ function skipReason(source: string, key?: string): string | undefined {
   if (key && BROKEN_UPSTREAM[key]) return `fails in Evidence itself: ${BROKEN_UPSTREAM[key]}`;
   if (/\bmetric\s*=|\bmetrics\s*=/.test(source)) return 'uses the semantic metrics catalog, which Cupola reports do not configure';
   if (/\{%\s*partial\b/.test(source)) return 'includes a partial file';
+  if (/^---\n/.test(source)) return 'sets page frontmatter, which a section of a catalog report cannot';
+  if (/\bscope=\[?[^\]\n]*"period"/.test(source)) return 'scopes commentary to workflow.period, which needs page frontmatter';
+  if (/\burl="evd_/.test(source)) return 'links an Evidence Cloud upload, which only Evidence can serve';
   const defined = new Set([...source.matchAll(/```sql\s+(\w+)/g)].map(m => m[1]));
   // Components read a query through `data="…"`; scripts in a sandboxed component (html,
   // custom_map, custom_echart) through `evidence.query("…")`.

@@ -38,6 +38,10 @@ export const CATALOG_GROUPS: { id: string; title: string; categories: string[]; 
   { id: 'maps', title: 'Maps', categories: ['map', 'map_slot'] },
 ];
 
+/** Attributes whose values name columns or are display text, never a query or an input:
+ * `{% dropdown id="category" value_column="category" /%}` keeps its column. */
+const NOT_REFERENCES = /\b(?:\w+_column|column|placeholder|title|subtitle|description)="[^"]*"/g;
+
 /** Give an example's query names and input ids a unique prefix, so examples that
  * reuse `category_filter` or `filtered_orders` can share one report. */
 export function isolate(source: string, prefix: string): string {
@@ -45,9 +49,17 @@ export function isolate(source: string, prefix: string): string {
     ...[...source.matchAll(/```sql\s+(\w+)/g)].map(m => m[1]),
     ...[...source.matchAll(/\bid="(\w+)"/g)].map(m => m[1]),
   ]);
-  let out = source;
-  for (const name of names) out = out.replace(new RegExp(`(?<![\\w.])${name}(?!\\w)`, 'g'), `${prefix}_${name}`);
-  return out;
+  const rename = (text: string) => {
+    for (const name of names) text = text.replace(new RegExp(`(?<![\\w.])${name}(?!\\w)`, 'g'), `${prefix}_${name}`);
+    return text;
+  };
+  let out = '';
+  let last = 0;
+  for (const match of source.matchAll(NOT_REFERENCES)) {
+    out += rename(source.slice(last, match.index)) + match[0];
+    last = match.index + match[0].length;
+  }
+  return out + rename(source.slice(last));
 }
 
 export interface CatalogReport { id: string; title: string; source: string; renders: string[]; examples: number }

@@ -10,6 +10,7 @@
   import { setPageSettingsContext } from '@evidence/core/page-settings.context';
   import { setAutoRefreshContext } from '@evidence/core/auto-refresh.context.svelte';
   import { createPageFiltersContext } from '@evidence/core/page-filters-context';
+  import { PeriodFilter } from '@evidence/core/user-components/tags/workflow_period/PeriodFilter.svelte';
   import { createInlineQueriesContext } from '@evidence/core/user-components/common/inline-queries';
   import { setShowErrorsContext } from '@evidence/core/show-errors.context';
   import * as Tooltip from '@evidence/core/shadcn/components/ui/tooltip';
@@ -53,9 +54,14 @@
   }
   // Input titles by id, from the processed document (the rendered DOM doesn't link the two).
   const inputTitles = new Map<string, string>();
-  untrack(() => props.onInputs)?.(() => filters.componentFilterIds.map(id => {
+  // A period selector without value_column is query-only (it filters through `{{id.between}}`)
+  // but still filters the page; it reads as its period's label, which is the newest complete
+  // period while nothing is selected.
+  untrack(() => props.onInputs)?.(() => filters.filterIds.flatMap(id => {
     const filter = filters.get(id);
-    return { id, component: filter?.userComponentName ?? '', value: filter?.value, title: inputTitles.get(id) };
+    const period = filter instanceof PeriodFilter;
+    if (!filter || filter.queryOnly && !period) return [];
+    return [{ id, component: filter.userComponentName, value: period ? filter.period.label : filter.value, title: inputTitles.get(id) }];
   }));
   const inlineQueries = createInlineQueriesContext({ filterContexts: [filters] }, undefined, semanticQueries);
   const inlineQueryMetadata = new InlineQueryMetadata(service, { inlineQueries, pageFilters: filters });

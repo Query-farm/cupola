@@ -466,7 +466,13 @@
    },
    {
     "title": "Reporting-period commentary",
-    "source": "{% commentary id=\"monthly-review\" scope=\"period\" /%}"
+    "source": "{% commentary id=\"monthly-review\" scope=\"period\" /%}",
+    "skip": "scopes commentary to workflow.period, which needs page frontmatter"
+   },
+   {
+    "title": "Commentary per period and input",
+    "source": "{% dropdown id=\"category\" data=\"demo.daily_orders\" value_column=\"category\" select_first=true /%}\n\n{% commentary id=\"category-review\" scope=[\"period\", \"category\"] /%}",
+    "skip": "scopes commentary to workflow.period, which needs page frontmatter"
    }
   ]
  },
@@ -729,6 +735,22 @@
   ]
  },
  {
+  "render": "file",
+  "category": "ui",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% file\n    url=\"https://files.example.com/reports/q3-board-deck.pdf\"\n    name=\"Q3 Board Deck.pdf\"\n    date=\"2026-09-29\"\n/%}"
+   },
+   {
+    "title": "Uploaded File",
+    "source": "{% file\n    url=\"evd_org_01ABC/k7Xq2mB9.xlsx\"\n    name=\"Regional Sales Model.xlsx\"\n    date=\"2026-09-29\"\n/%}",
+    "skip": "links an Evidence Cloud upload, which only Evidence can serve"
+   }
+  ]
+ },
+ {
   "render": "fill",
   "category": "ui",
   "wrapper": "none",
@@ -816,6 +838,17 @@
     "title": "Adjusted Radius and Intensity",
     "source": "{% map %}\n    {% heatmap_layer\n        data=\"visits\"\n        lat=\"latitude\"\n        lng=\"longitude\"\n        weight=\"visit_count\"\n        radius=50\n        intensity=2\n    /%}\n{% /map %}",
     "skip": "reads data it does not define (visits)"
+   }
+  ]
+ },
+ {
+  "render": "hidden_in_print",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Hidden in Print",
+    "source": "{% hidden_in_print %}\nThis content is hidden when printed.\n{% /hidden_in_print %}"
    }
   ]
  },
@@ -949,6 +982,10 @@
    {
     "title": "Basic Usage",
     "source": "{% info text=\"Report data as of Dec 31, 2024\" /%}"
+   },
+   {
+    "title": "Multi-line Text",
+    "source": "{% info text=\"\"\"Revenue is gross sales minus refunds.\nExcludes test orders.\"\"\" /%}"
    }
   ]
  },
@@ -1236,6 +1273,17 @@
   ]
  },
  {
+  "render": "only_in_print",
+  "category": "ui",
+  "wrapper": "none",
+  "examples": [
+   {
+    "title": "Only in Print",
+    "source": "{% only_in_print %}\nThis content only appears when printed.\n{% /only_in_print %}"
+   }
+  ]
+ },
+ {
   "render": "option",
   "category": "input",
   "wrapper": "inline",
@@ -1280,6 +1328,26 @@
     "title": "Passing Hardcoded Values",
     "source": "{% partial file=\"my_partial\" variables={\n\tmy_category=\"Home\"\n\tsales_threshold=10000\n} /%}",
     "skip": "includes a partial file"
+   }
+  ]
+ },
+ {
+  "render": "period_selector",
+  "category": "input",
+  "wrapper": "block",
+  "examples": [
+   {
+    "title": "Basic Usage",
+    "source": "{% period_selector id=\"sales_period\" grain=\"quarter\" /%}\n\n{% big_value\n    data=\"demo.daily_orders\"\n    value=\"sum(total_sales)\"\n    where=\"date {{sales_period.between}}\"\n/%}"
+   },
+   {
+    "title": "Using `filters`",
+    "source": "{% period_selector id=\"sales_period\" grain=\"quarter\" value_column=\"date\" /%}\n\n{% line_chart\n    data=\"demo.daily_orders\"\n    x=\"date\"\n    y=\"sum(total_sales)\"\n    filters=[\"sales_period\"]\n/%}"
+   },
+   {
+    "title": "Placing the `workflow.period` selector",
+    "source": "---\nworkflow:\n  period:\n    grain: quarter\n---\n\n{% row align=\"center\" justify=\"between\" %}\n# {{ period.label }} Review\n{% period_selector id=\"period\" /%}\n{% /row %}",
+    "skip": "sets page frontmatter, which a section of a catalog report cannot"
    }
   ]
  },
@@ -1394,6 +1462,10 @@
    {
     "title": "Hidden Print Group",
     "source": "{% print_group hide=true %}\nThis content will be hidden when printed.\n{% /print_group %}"
+   },
+   {
+    "title": "Print-Only Group",
+    "source": "{% print_group print_only=true %}\nThis content only appears when printed.\n{% /print_group %}"
    }
   ]
  },
@@ -1559,6 +1631,26 @@
    {
     "title": "Basic Usage",
     "source": "<!-- 2 side-by-side charts -->\n{% row %}\n    {% line_chart\n        data=\"demo.daily_orders\"\n        x=\"date\"\n        date_grain=\"quarter\"\n        y=\"sum(total_sales)\"\n    /%}\n    {% bar_chart\n        data=\"demo.daily_orders\"\n        x=\"category\"\n        y=\"sum(transactions)\"\n    /%}\n{% /row %}"
+   },
+   {
+    "title": "Heading with a button on the right",
+    "source": "{% row align=\"center\" justify=\"between\" %}\n# Sales Overview\n{% link_button url=\"https://example.com\" title=\"Full report\" /%}\n{% /row %}"
+   },
+   {
+    "title": "Heading with a filter on the right",
+    "source": "{% row align=\"center\" justify=\"between\" %}\n## Orders by category\n{% dropdown id=\"category\" data=\"demo.daily_orders\" value_column=\"category\" /%}\n{% /row %}"
+   },
+   {
+    "title": "Filter on the right",
+    "source": "{% row justify=\"end\" %}\n{% dropdown id=\"category\" data=\"demo.daily_orders\" value_column=\"category\" /%}\n{% /row %}"
+   },
+   {
+    "title": "Centered big values",
+    "source": "{% row justify=\"center\" %}\n{% big_value data=\"demo.daily_orders\" value=\"sum(total_sales)\" title=\"Sales\" /%}\n{% big_value data=\"demo.daily_orders\" value=\"sum(transactions)\" title=\"Transactions\" /%}\n{% /row %}"
+   },
+   {
+    "title": "Setting an item's width",
+    "source": "{% row justify=\"end\" %}\n{% dropdown id=\"category\" data=\"demo.daily_orders\" value_column=\"category\" width=40 /%}\n{% /row %}"
    }
   ]
  },
