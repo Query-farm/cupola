@@ -33,6 +33,11 @@ import { getVgiExtensionVersionSetting } from "./url-params";
 
 export type { ShellCatalog } from "./attach/attach-catalog";
 
+/** How long the extension's sign-in popup is listened for. Well past the
+ *  extension's own budget (`vgi_oauth_timeout_seconds`, 120 s by default),
+ *  which is what actually ends a sign-in. */
+const AUTH_POPUP_ABANDON_MS = 10 * 60_000;
+
 export interface ShellConfig {
   /** The default catalog's service URL (dot commands, `.ai`). */
   serviceUrl: string;
@@ -224,6 +229,8 @@ export function initShell(
   // ensureDuckDB is called below inside the isNewTerminal branch (idempotent)
   // so the boot fires lazily on first shell open, not on every initShell.
   let currentWasmVersion = "";
+  // Closes the extension's open sign-in popup, if any (handleAuthUrl).
+  let retireAuthPopup: (() => void) | null = null;
 
   let outputMode: "box" | "line" = "box";
   let maxDisplayRows = 40;
@@ -243,8 +250,17 @@ export function initShell(
    *  SAB protocol (see duckdb-coi.js, _duckdb_wasm_open_auth_url):
    *    flag = 1   → byte[4..7] holds length, byte[8..] holds the code
    *    flag = -1  → byte[4..7] holds length, byte[8..] holds the error msg
-   *    flag = 0   → extension is still waiting (Atomics.wait on this) */
+   *    flag = 0   → extension is still waiting (Atomics.wait on this)
+   *
+   *  The worker bounds its own wait with the extension's
+   *  `vgi_oauth_timeout_seconds` and resets the flag on every request, so this
+   *  side never reports a timeout: a 60 s cutoff here used to fail sign-ins
+   *  that were still inside the extension's 120 s budget (an MFA prompt takes
+   *  that long). A late code lands in a SAB nobody is waiting on, harmlessly. */
   function handleAuthUrl(url: string): void {
+    // One sign-in at a time: a new request means the extension gave up on the
+    // last one, whose popup is now only in the way.
+    retireAuthPopup?.();
     const oauthSAB = (engine as unknown as { _oauthSAB?: SharedArrayBuffer })._oauthSAB ?? null;
     if (!oauthSAB) {
       console.error("[shell] No oauth SAB — can't route auth code back to extension");
@@ -275,19 +291,32 @@ export function initShell(
     }
     console.log("[shell] Opened OAuth popup:", url.slice(0, 80));
 
+    // The channel also carries Cupola's own sign-in and any older popup's
+    // callback; only the one answering this request's `state` is ours.
+    let expectedState: string | null = null;
+    try { expectedState = new URL(url).searchParams.get("state"); } catch { /* not a URL */ }
+
     const bc = new BroadcastChannel("vgi-oauth");
     let settled = false;
 
     const cleanup = () => {
       settled = true;
       try { bc.close(); } catch { /* already closed */ }
-      clearTimeout(timeoutTimer);
+      clearTimeout(abandonTimer);
+      if (retireAuthPopup === retire) retireAuthPopup = null;
     };
+    const retire = () => {
+      if (settled) return;
+      cleanup();
+      try { popup.close(); } catch { /* already closed */ }
+    };
+    retireAuthPopup = retire;
 
     bc.onmessage = (ev: MessageEvent) => {
       if (settled) return;
       const m = ev.data;
       if (!m || m.type !== "oauth-callback") return;
+      if (expectedState && m.state !== expectedState) return;
       cleanup();
       if (m.code) {
         console.log("[shell] Received auth code from popup, delivering to extension");
@@ -306,14 +335,9 @@ export function initShell(
     // disconnected WindowProxy reports `closed === true` immediately — even
     // while the user is still mid-login. The BroadcastChannel message from
     // oauth-callback.html (same-origin) is the only reliable signal. The
-    // timeout below bounds the worker's Atomics.wait if no callback arrives.
-    const timeoutTimer = setTimeout(() => {
-      if (settled) return;
-      cleanup();
-      console.warn("[shell] OAuth popup timed out after 60s");
-      writeSab(-1, "Authentication timed out");
-      try { popup.close(); } catch { /* already closed */ }
-    }, 60_000);
+    // worker bounds its own Atomics.wait; this only stops listening for a
+    // popup the user walked away from.
+    const abandonTimer = setTimeout(retire, AUTH_POPUP_ABANDON_MS);
   }
 
   // Runs the post-ready flow (INSTALL vgi + ATTACH + timezone + readLoop).

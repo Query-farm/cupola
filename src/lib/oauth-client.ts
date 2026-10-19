@@ -322,6 +322,13 @@ interface TokenResponse {
   scope?: string;
 }
 
+/** A token endpoint's refusal, with its RFC 6749 `error` code. */
+class TokenEndpointError extends Error {
+  constructor(message: string, readonly oauthError: string) {
+    super(message);
+  }
+}
+
 async function postTokenRequest(tokenEndpoint: string, body: URLSearchParams): Promise<TokenResponse> {
   const res = await fetch(tokenEndpoint, {
     method: "POST",
@@ -334,7 +341,7 @@ async function postTokenRequest(tokenEndpoint: string, body: URLSearchParams): P
   if (!res.ok) {
     const err = parsed?.error ?? "unknown";
     const desc = parsed?.error_description ?? text.slice(0, 500);
-    throw new Error(`Token endpoint ${tokenEndpoint} returned HTTP ${res.status} (${err}): ${desc}`);
+    throw new TokenEndpointError(`Token endpoint ${tokenEndpoint} returned HTTP ${res.status} (${err}): ${desc}`, String(err));
   }
   return parsed as TokenResponse;
 }
@@ -501,7 +508,18 @@ async function refreshAccessToken(serviceOrigin: string): Promise<StoredTokens |
       extra: { serviceOrigin },
     });
     // Don't clear tokens on a transient failure — the caller can decide
-    // whether to force a fresh login.
+    // whether to force a fresh login. `invalid_grant` is not transient (Entra's
+    // 24-hour cap on SPA refresh tokens, a revoked session): forget the refresh
+    // token, or every poller sends it to the IdP again, every few seconds, until
+    // the page reloads. The rest stays for sign-out.
+    // Only if it is still the one that failed: another caller may have stored
+    // a fresh one meanwhile.
+    const current = readTokens(serviceOrigin);
+    if (err instanceof TokenEndpointError && err.oauthError === "invalid_grant" && current?.refresh_token === stored.refresh_token) {
+      const { refresh_token: _dead, ...rest } = current;
+      writeTokens(serviceOrigin, rest);
+      authCrumb("refresh token rejected (invalid_grant), dropped", { serviceOrigin });
+    }
     return null;
   }
 }
