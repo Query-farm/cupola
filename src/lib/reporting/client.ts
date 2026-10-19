@@ -3,9 +3,16 @@ import { deserializeSchema, schema, serializeBatch, singleRowBatch } from '@quer
 import { tableFromIPC, type RecordBatch, type Schema } from '@query-farm/apache-arrow';
 import { getAuthTokenForService } from '../auth';
 import { connectionErrorMessage } from '../connection-errors';
-import { identityDescription, methodConfig, recordSchemas, REPORTS_PROTOCOL, type ReportMethods } from './contracts.generated';
+import { identityDescription, methodConfig, recordSchemas, OBJECTS_PROTOCOL, OBJECT_SCHEDULES_PROTOCOL, OWNERSHIP_PROTOCOL, REPORTS_PROTOCOL, SCHEDULES_PROTOCOL, type ReportMethods } from './contracts.generated';
 import { fromObject, fromScheduleV2, kindForFormat, toScheduleV2 } from './object-adapter';
 import { REPORT_LIBRARY_CHANGED } from './navigation';
+
+const OBJECT_OWNERSHIP_PROTOCOL = 'vgi.ownership.v1';
+const preferredProtocols: Readonly<Record<string, string>> = {
+  [REPORTS_PROTOCOL]: OBJECTS_PROTOCOL,
+  [SCHEDULES_PROTOCOL]: OBJECT_SCHEDULES_PROTOCOL,
+  [OWNERSHIP_PROTOCOL]: OBJECT_OWNERSHIP_PROTOCOL,
+};
 
 export type Method = keyof ReportMethods;
 export type Input<M extends Method> = ReportMethods[M]['input'];
@@ -133,7 +140,7 @@ export class ReportClient {
   }
   async discover(signal?: AbortSignal, protocol: string = REPORTS_PROTOCOL): Promise<boolean> {
     const protocols = await this.protocols(signal);
-    return protocols.has(protocol) || protocol === REPORTS_PROTOCOL && protocols.has('vgi.objects.v1') || protocol === 'vgi.schedules.v1' && protocols.has('vgi.schedules.v2') || protocol === 'vgi.reports.ownership.v1' && protocols.has('vgi.ownership.v1');
+    return protocols.has(protocol) || Object.hasOwn(preferredProtocols, protocol) && protocols.has(preferredProtocols[protocol]);
   }
   /** Unsupported metadata is optional; authentication and transport failures remain errors. */
   async identityInfo<M extends 'identity.get_current_identity' | 'identity.get_grant_policy'>(method: M, signal?: AbortSignal): Promise<Output<M> | null> {
@@ -145,16 +152,16 @@ export class ReportClient {
   }
   async protocolFor(method: Method, signal?: AbortSignal): Promise<string> {
     const original = methodConfig[method].protocol;
-    if (!['vgi.reports.v1', 'vgi.reports.ownership.v1', 'vgi.schedules.v1'].includes(original)) return original;
+    if (!Object.hasOwn(preferredProtocols, original)) return original;
     const protocols = await this.protocols(signal);
-    const preferred = original === 'vgi.reports.v1' ? 'vgi.objects.v1' : original === 'vgi.schedules.v1' ? 'vgi.schedules.v2' : 'vgi.ownership.v1';
+    const preferred = preferredProtocols[original];
     return protocols.has(preferred) ? preferred : original;
   }
   async canFindOwners(resourceKind: 'report' | 'folder', signal?: AbortSignal): Promise<boolean> {
-    if (!await this.discover(signal, 'vgi.reports.ownership.v1')) return false;
-    if (await this.protocolFor('find_owners', signal) !== 'vgi.ownership.v1') return true;
+    if (!await this.discover(signal, OWNERSHIP_PROTOCOL)) return false;
+    if (await this.protocolFor('find_owners', signal) !== OBJECT_OWNERSHIP_PROTOCOL) return true;
     const protocol = await this.protocolFor('get_report', signal);
-    const kind = protocol === 'vgi.objects.v1' && resourceKind === 'report' ? 'object' : resourceKind;
+    const kind = protocol === OBJECTS_PROTOCOL && resourceKind === 'report' ? 'object' : resourceKind;
     const info = await this.rawCall('ownership.get_ownership_info', {}, signal);
     return info.resources.some(r => r.protocol === protocol && r.resource_kind === kind);
   }
@@ -163,18 +170,18 @@ export class ReportClient {
     const original = methodConfig[method].protocol;
     if (selected === original) return this.rawCall(method, input, signal);
     let args: any = { ...input }, translated: string = method;
-    if (selected === 'vgi.objects.v1') {
+    if (selected === OBJECTS_PROTOCOL) {
       const names: Record<string, string> = { get_report_service_info: 'get_objects_info', get_report: 'get_object', list_reports: 'list_objects', create_report: 'create_object', move_report: 'move_object', delete_report: 'delete_object' };
       translated = 'objects.' + (names[method] ?? method);
       if ('report_id' in args) { args.object_id = args.report_id; delete args.report_id; }
       if (method === 'create_report') args.object_kind = kindForFormat(args.envelope.body_format);
       return fromObject(await this.rawCall(translated as Method, args, signal));
     }
-    if (selected === 'vgi.ownership.v1') {
+    if (selected === OBJECT_OWNERSHIP_PROTOCOL) {
       const protocol = await this.protocolFor('get_report', signal);
-      return this.rawCall('ownership.find_owners', { ...args, protocol, resource_kind: protocol === 'vgi.objects.v1' && args.resource_kind === 'report' ? 'object' : args.resource_kind }, signal) as Promise<Output<M>>;
+      return this.rawCall('ownership.find_owners', { ...args, protocol, resource_kind: protocol === OBJECTS_PROTOCOL && args.resource_kind === 'report' ? 'object' : args.resource_kind }, signal) as Promise<Output<M>>;
     }
-    if (selected === 'vgi.schedules.v2') {
+    if (selected === OBJECT_SCHEDULES_PROTOCOL) {
       translated = method.replace('schedules.', 'schedules2.');
       if (args.schedule) args.schedule = toScheduleV2(args.schedule);
       if ('report_id' in args) {
@@ -187,7 +194,7 @@ export class ReportClient {
     throw new Error('Unsupported protocol for this saved request.');
   }
   async listSchedulesForSource(url: string, id: string, signal?: AbortSignal) {
-    if (await this.protocolFor('schedules.list_schedules', signal) === 'vgi.schedules.v2') {
+    if (await this.protocolFor('schedules.list_schedules', signal) === OBJECT_SCHEDULES_PROTOCOL) {
       return fromScheduleV2(await this.rawCall('schedules2.list_schedules', { source: { service_url: serviceLocation(url), object_id: id }, action_kind: 'render_report' }, signal)) as Output<'schedules.list_schedules'>;
     }
     return (await this.rawCall('schedules.list_schedules', { report_id: id, action_kind: 'render_report' }, signal)).filter(s => Boolean(s.definition.action.render_report && serviceLocation(s.definition.action.render_report.report.service_url) === serviceLocation(url)));
