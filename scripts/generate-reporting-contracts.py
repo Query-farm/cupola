@@ -97,6 +97,9 @@ for prefix, protocol, name, method in methods:
 # production builds can tree-shake them without losing any TypeScript types.
 runtime_records = {name for method in config.values() for name in method["structured"].values()}
 result_records = {method["result"] for method in config.values()}
+# Result type names are needed by this generator, not by the RPC client.
+for method in config.values():
+    del method["result"]
 out += ["}", "export const methodConfig = " + json.dumps(config, indent=2) + " as const;",
         "export const recordSchemas: Record<string, string> = " + json.dumps({
             r.__name__: base64.b64encode(r.ARROW_SCHEMA.serialize().to_pybytes()).decode() for r in records if r.__name__ in runtime_records

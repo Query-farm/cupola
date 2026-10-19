@@ -6,6 +6,7 @@ import { connectionErrorMessage } from '../connection-errors';
 import { identityDescription, methodConfig, recordSchemas, OBJECTS_PROTOCOL, OBJECT_SCHEDULES_PROTOCOL, OWNERSHIP_PROTOCOL, REPORTS_PROTOCOL, SCHEDULES_PROTOCOL, type ReportMethods } from './contracts.generated';
 import { fromObject, fromScheduleV2, kindForFormat, toScheduleV2 } from './object-adapter';
 import { REPORT_LIBRARY_CHANGED } from './navigation';
+import { fetchWithCachedCapabilities } from './http-capabilities';
 
 const OBJECT_OWNERSHIP_PROTOCOL = 'vgi.ownership.v1';
 const preferredProtocols: Readonly<Record<string, string>> = {
@@ -102,9 +103,11 @@ export class ReportClient {
       const base = new URL(this.url);
       const headers = new Headers(init?.headers);
       headers.delete('Authorization');
-      if (target.origin === base.origin && (target.pathname === base.pathname || target.pathname.startsWith(base.pathname.replace(/\/$/, '') + '/')) && token) headers.set('Authorization', `Bearer ${token}`);
+      const ownService = target.origin === base.origin && (target.pathname === base.pathname || target.pathname.startsWith(base.pathname.replace(/\/$/, '') + '/'));
+      if (ownService && token) headers.set('Authorization', `Bearer ${token}`);
       try {
-        return await transport(input, { ...init, headers, credentials: 'omit', redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+        const request: RequestInit = { ...init, headers, credentials: 'omit', redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout };
+        return await (ownService ? fetchWithCachedCapabilities(transport, this.url, input, request) : transport(input, request));
       } catch (error) {
         const message = connectionErrorMessage(error, target.href);
         if (error instanceof Error && message !== error.message) throw new TypeError(message, { cause: error });

@@ -849,7 +849,6 @@ export const methodConfig = {
     "structured": {
       "envelope": "ObjectEnvelope"
     },
-    "result": "ObjectResult",
     "stream": false
   },
   "objects.create_folder": {
@@ -862,7 +861,6 @@ export const methodConfig = {
     "structured": {
       "ownership": "OwnershipInput"
     },
-    "result": "ObjectFolder",
     "stream": false
   },
   "objects.create_object": {
@@ -877,7 +875,6 @@ export const methodConfig = {
       "envelope": "ObjectEnvelope",
       "ownership": "OwnershipInput"
     },
-    "result": "ObjectResult",
     "stream": false
   },
   "objects.delete_folder": {
@@ -885,7 +882,6 @@ export const methodConfig = {
     "protocol": "vgi.objects.v1",
     "defaults": {},
     "structured": {},
-    "result": "Ack",
     "stream": false
   },
   "objects.delete_object": {
@@ -893,7 +889,6 @@ export const methodConfig = {
     "protocol": "vgi.objects.v1",
     "defaults": {},
     "structured": {},
-    "result": "Ack",
     "stream": false
   },
   "objects.get_folder": {
@@ -901,7 +896,6 @@ export const methodConfig = {
     "protocol": "vgi.objects.v1",
     "defaults": {},
     "structured": {},
-    "result": "ObjectFolder",
     "stream": false
   },
   "objects.get_object": {
@@ -914,7 +908,6 @@ export const methodConfig = {
     "structured": {
       "selection": "RevisionSelection"
     },
-    "result": "ObjectResult",
     "stream": false
   },
   "objects.get_objects_info": {
@@ -922,7 +915,6 @@ export const methodConfig = {
     "protocol": "vgi.objects.v1",
     "defaults": {},
     "structured": {},
-    "result": "ObjectsInfo",
     "stream": false
   },
   "objects.list_folders": {
@@ -933,7 +925,6 @@ export const methodConfig = {
       "recursive": true
     },
     "structured": {},
-    "result": "ObjectFolder",
     "stream": true
   },
   "objects.list_objects": {
@@ -949,7 +940,6 @@ export const methodConfig = {
       "object_kind": ""
     },
     "structured": {},
-    "result": "ObjectRow",
     "stream": true
   },
   "objects.list_revisions": {
@@ -957,7 +947,6 @@ export const methodConfig = {
     "protocol": "vgi.objects.v1",
     "defaults": {},
     "structured": {},
-    "result": "ObjectRevision",
     "stream": true
   },
   "objects.move_object": {
@@ -965,7 +954,6 @@ export const methodConfig = {
     "protocol": "vgi.objects.v1",
     "defaults": {},
     "structured": {},
-    "result": "ObjectRow",
     "stream": false
   },
   "objects.publish": {
@@ -973,7 +961,6 @@ export const methodConfig = {
     "protocol": "vgi.objects.v1",
     "defaults": {},
     "structured": {},
-    "result": "ObjectResult",
     "stream": false
   },
   "objects.redact_revision": {
@@ -981,7 +968,6 @@ export const methodConfig = {
     "protocol": "vgi.objects.v1",
     "defaults": {},
     "structured": {},
-    "result": "ObjectRevision",
     "stream": false
   },
   "objects.set_folder_ownership": {
@@ -991,7 +977,6 @@ export const methodConfig = {
     "structured": {
       "ownership": "Ownership"
     },
-    "result": "ObjectFolder",
     "stream": false
   },
   "objects.set_ownership": {
@@ -1001,7 +986,6 @@ export const methodConfig = {
     "structured": {
       "ownership": "Ownership"
     },
-    "result": "ObjectResult",
     "stream": false
   },
   "objects.update_folder": {
@@ -1009,7 +993,6 @@ export const methodConfig = {
     "protocol": "vgi.objects.v1",
     "defaults": {},
     "structured": {},
-    "result": "ObjectFolder",
     "stream": false
   },
   "ownership.find_owners": {
@@ -1020,7 +1003,6 @@ export const methodConfig = {
       "limit": 20
     },
     "structured": {},
-    "result": "OwnershipOptions",
     "stream": false
   },
   "ownership.get_ownership_info": {
@@ -1028,7 +1010,6 @@ export const methodConfig = {
     "protocol": "vgi.ownership.v1",
     "defaults": {},
     "structured": {},
-    "result": "OwnershipInfo",
     "stream": false
   },
   "schedules2.cancel_run": {
@@ -1036,7 +1017,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v2",
     "defaults": {},
     "structured": {},
-    "result": "ScheduleRunV2",
     "stream": false
   },
   "schedules2.create_schedule": {
@@ -1051,7 +1031,6 @@ export const methodConfig = {
       "ownership": "OwnershipInput",
       "execution": "ExecutionInput"
     },
-    "result": "ScheduleRecordV2",
     "stream": false
   },
   "schedules2.delete_schedule": {
@@ -1059,7 +1038,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v2",
     "defaults": {},
     "structured": {},
-    "result": "Ack",
     "stream": false
   },
   "schedules2.get_run": {
@@ -1067,7 +1045,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v2",
     "defaults": {},
     "structured": {},
-    "result": "ScheduleRunV2",
     "stream": false
   },
   "schedules2.get_schedule": {
@@ -1075,7 +1052,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v2",
     "defaults": {},
     "structured": {},
-    "result": "ScheduleRecordV2",
     "stream": false
   },
   "schedules2.get_scheduler_info": {
@@ -1083,7 +1059,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v2",
     "defaults": {},
     "structured": {},
-    "result": "SchedulerInfoV2",
     "stream": false
   },
   "schedules2.list_runs": {
@@ -1095,7 +1070,6 @@ export const methodConfig = {
       "since": null
     },
     "structured": {},
-    "result": "ScheduleRunV2",
     "stream": true
   },
   "schedules2.list_schedules": {
@@ -1109,7 +1083,6 @@ export const methodConfig = {
     "structured": {
       "source": "ObjectRef"
     },
-    "result": "ScheduleRecordV2",
     "stream": true
   },
   "schedules2.preview_trigger": {
@@ -1121,7 +1094,6 @@ export const methodConfig = {
     "structured": {
       "trigger": "Trigger"
     },
-    "result": "TriggerPreview",
     "stream": false
   },
   "schedules2.resolve_run": {
@@ -1129,7 +1101,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v2",
     "defaults": {},
     "structured": {},
-    "result": "ScheduleRunV2",
     "stream": false
   },
   "schedules2.retry_run": {
@@ -1137,7 +1108,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v2",
     "defaults": {},
     "structured": {},
-    "result": "ScheduleRunV2",
     "stream": false
   },
   "schedules2.run_now": {
@@ -1147,7 +1117,6 @@ export const methodConfig = {
       "ignore_condition": false
     },
     "structured": {},
-    "result": "ScheduleRunV2",
     "stream": false
   },
   "schedules2.set_execution_principal": {
@@ -1155,7 +1124,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v2",
     "defaults": {},
     "structured": {},
-    "result": "ScheduleRecordV2",
     "stream": false
   },
   "schedules2.set_ownership": {
@@ -1165,7 +1133,6 @@ export const methodConfig = {
     "structured": {
       "ownership": "Ownership"
     },
-    "result": "ScheduleRecordV2",
     "stream": false
   },
   "schedules2.test_run": {
@@ -1178,7 +1145,6 @@ export const methodConfig = {
       "schedule": "ScheduleV2",
       "execution": "ExecutionInput"
     },
-    "result": "ScheduleTestV2",
     "stream": false
   },
   "schedules2.update_schedule": {
@@ -1188,7 +1154,6 @@ export const methodConfig = {
     "structured": {
       "schedule": "ScheduleV2"
     },
-    "result": "ScheduleRecordV2",
     "stream": false
   },
   "commit_revision": {
@@ -1201,7 +1166,6 @@ export const methodConfig = {
     "structured": {
       "envelope": "ReportEnvelope"
     },
-    "result": "ReportResult",
     "stream": false
   },
   "create_folder": {
@@ -1214,7 +1178,6 @@ export const methodConfig = {
     "structured": {
       "ownership": "OwnershipInput"
     },
-    "result": "FolderRecord",
     "stream": false
   },
   "create_report": {
@@ -1229,7 +1192,6 @@ export const methodConfig = {
       "envelope": "ReportEnvelope",
       "ownership": "OwnershipInput"
     },
-    "result": "ReportResult",
     "stream": false
   },
   "delete_folder": {
@@ -1237,7 +1199,6 @@ export const methodConfig = {
     "protocol": "vgi.reports.v1",
     "defaults": {},
     "structured": {},
-    "result": "Ack",
     "stream": false
   },
   "delete_report": {
@@ -1245,7 +1206,6 @@ export const methodConfig = {
     "protocol": "vgi.reports.v1",
     "defaults": {},
     "structured": {},
-    "result": "Ack",
     "stream": false
   },
   "get_folder": {
@@ -1253,7 +1213,6 @@ export const methodConfig = {
     "protocol": "vgi.reports.v1",
     "defaults": {},
     "structured": {},
-    "result": "FolderRecord",
     "stream": false
   },
   "get_report": {
@@ -1263,7 +1222,6 @@ export const methodConfig = {
       "revision_id": null
     },
     "structured": {},
-    "result": "ReportResult",
     "stream": false
   },
   "get_report_service_info": {
@@ -1271,7 +1229,6 @@ export const methodConfig = {
     "protocol": "vgi.reports.v1",
     "defaults": {},
     "structured": {},
-    "result": "ReportsInfo",
     "stream": false
   },
   "list_folders": {
@@ -1282,7 +1239,6 @@ export const methodConfig = {
       "recursive": true
     },
     "structured": {},
-    "result": "FolderRecord",
     "stream": true
   },
   "list_reports": {
@@ -1297,7 +1253,6 @@ export const methodConfig = {
       "published_only": false
     },
     "structured": {},
-    "result": "ReportRow",
     "stream": true
   },
   "list_revisions": {
@@ -1305,7 +1260,6 @@ export const methodConfig = {
     "protocol": "vgi.reports.v1",
     "defaults": {},
     "structured": {},
-    "result": "RevisionRow",
     "stream": true
   },
   "move_report": {
@@ -1313,7 +1267,6 @@ export const methodConfig = {
     "protocol": "vgi.reports.v1",
     "defaults": {},
     "structured": {},
-    "result": "ReportRow",
     "stream": false
   },
   "publish": {
@@ -1321,7 +1274,6 @@ export const methodConfig = {
     "protocol": "vgi.reports.v1",
     "defaults": {},
     "structured": {},
-    "result": "ReportResult",
     "stream": false
   },
   "redact_revision": {
@@ -1329,7 +1281,6 @@ export const methodConfig = {
     "protocol": "vgi.reports.v1",
     "defaults": {},
     "structured": {},
-    "result": "RevisionRow",
     "stream": false
   },
   "set_folder_ownership": {
@@ -1339,7 +1290,6 @@ export const methodConfig = {
     "structured": {
       "ownership": "Ownership"
     },
-    "result": "FolderRecord",
     "stream": false
   },
   "set_ownership": {
@@ -1349,7 +1299,6 @@ export const methodConfig = {
     "structured": {
       "ownership": "Ownership"
     },
-    "result": "ReportResult",
     "stream": false
   },
   "update_folder": {
@@ -1357,7 +1306,6 @@ export const methodConfig = {
     "protocol": "vgi.reports.v1",
     "defaults": {},
     "structured": {},
-    "result": "FolderRecord",
     "stream": false
   },
   "find_owners": {
@@ -1368,7 +1316,6 @@ export const methodConfig = {
       "limit": 20
     },
     "structured": {},
-    "result": "OwnershipOptions",
     "stream": false
   },
   "schedules.cancel_run": {
@@ -1376,7 +1323,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v1",
     "defaults": {},
     "structured": {},
-    "result": "ScheduleRun",
     "stream": false
   },
   "schedules.create_schedule": {
@@ -1391,7 +1337,6 @@ export const methodConfig = {
       "ownership": "OwnershipInput",
       "execution": "ExecutionInput"
     },
-    "result": "ScheduleRecord",
     "stream": false
   },
   "schedules.delete_schedule": {
@@ -1399,7 +1344,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v1",
     "defaults": {},
     "structured": {},
-    "result": "Ack",
     "stream": false
   },
   "schedules.get_run": {
@@ -1407,7 +1351,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v1",
     "defaults": {},
     "structured": {},
-    "result": "ScheduleRun",
     "stream": false
   },
   "schedules.get_schedule": {
@@ -1415,7 +1358,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v1",
     "defaults": {},
     "structured": {},
-    "result": "ScheduleRecord",
     "stream": false
   },
   "schedules.get_scheduler_info": {
@@ -1423,7 +1365,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v1",
     "defaults": {},
     "structured": {},
-    "result": "SchedulerInfo",
     "stream": false
   },
   "schedules.list_runs": {
@@ -1435,7 +1376,6 @@ export const methodConfig = {
       "since": null
     },
     "structured": {},
-    "result": "ScheduleRun",
     "stream": true
   },
   "schedules.list_schedules": {
@@ -1447,7 +1387,6 @@ export const methodConfig = {
       "owned_by_me": false
     },
     "structured": {},
-    "result": "ScheduleRecord",
     "stream": true
   },
   "schedules.preview_trigger": {
@@ -1459,7 +1398,6 @@ export const methodConfig = {
     "structured": {
       "trigger": "Trigger"
     },
-    "result": "TriggerPreview",
     "stream": false
   },
   "schedules.resolve_run": {
@@ -1467,7 +1405,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v1",
     "defaults": {},
     "structured": {},
-    "result": "ScheduleRun",
     "stream": false
   },
   "schedules.retry_run": {
@@ -1475,7 +1412,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v1",
     "defaults": {},
     "structured": {},
-    "result": "ScheduleRun",
     "stream": false
   },
   "schedules.run_now": {
@@ -1485,7 +1421,6 @@ export const methodConfig = {
       "ignore_condition": false
     },
     "structured": {},
-    "result": "ScheduleRun",
     "stream": false
   },
   "schedules.set_execution_principal": {
@@ -1493,7 +1428,6 @@ export const methodConfig = {
     "protocol": "vgi.schedules.v1",
     "defaults": {},
     "structured": {},
-    "result": "ScheduleRecord",
     "stream": false
   },
   "schedules.set_ownership": {
@@ -1503,7 +1437,6 @@ export const methodConfig = {
     "structured": {
       "ownership": "Ownership"
     },
-    "result": "ScheduleRecord",
     "stream": false
   },
   "schedules.test_run": {
@@ -1516,7 +1449,6 @@ export const methodConfig = {
       "schedule": "Schedule",
       "execution": "ExecutionInput"
     },
-    "result": "ScheduleTest",
     "stream": false
   },
   "schedules.update_schedule": {
@@ -1526,7 +1458,6 @@ export const methodConfig = {
     "structured": {
       "schedule": "Schedule"
     },
-    "result": "ScheduleRecord",
     "stream": false
   },
   "delegations.list_delegations": {
@@ -1534,7 +1465,6 @@ export const methodConfig = {
     "protocol": "vgi.delegations.v1",
     "defaults": {},
     "structured": {},
-    "result": "DelegationRecord",
     "stream": true
   },
   "delegations.put_delegations": {
@@ -1542,7 +1472,6 @@ export const methodConfig = {
     "protocol": "vgi.delegations.v1",
     "defaults": {},
     "structured": {},
-    "result": "DelegationPutResult",
     "stream": false
   },
   "delegations.revoke_delegation": {
@@ -1552,7 +1481,6 @@ export const methodConfig = {
     "structured": {
       "key": "DelegationKey"
     },
-    "result": "Ack",
     "stream": false
   },
   "notify.check_destinations": {
@@ -1560,7 +1488,6 @@ export const methodConfig = {
     "protocol": "vgi.notify.v1",
     "defaults": {},
     "structured": {},
-    "result": "DestinationChecks",
     "stream": false
   },
   "notify.get_notify_info": {
@@ -1568,7 +1495,6 @@ export const methodConfig = {
     "protocol": "vgi.notify.v1",
     "defaults": {},
     "structured": {},
-    "result": "NotifyInfo",
     "stream": false
   },
   "notify.list_destinations": {
@@ -1579,7 +1505,6 @@ export const methodConfig = {
       "query": ""
     },
     "structured": {},
-    "result": "DestinationRecord",
     "stream": true
   },
   "identity.get_current_identity": {
@@ -1587,7 +1512,6 @@ export const methodConfig = {
     "protocol": "vgi_rpc.Identity.v1",
     "defaults": {},
     "structured": {},
-    "result": "CurrentIdentity",
     "stream": false
   },
   "identity.get_grant_policy": {
@@ -1595,7 +1519,6 @@ export const methodConfig = {
     "protocol": "vgi_rpc.Identity.v1",
     "defaults": {},
     "structured": {},
-    "result": "GrantPolicy",
     "stream": false
   },
   "identity.issue_grant": {
@@ -1603,7 +1526,6 @@ export const methodConfig = {
     "protocol": "vgi_rpc.Identity.v1",
     "defaults": {},
     "structured": {},
-    "result": "IssuedGrant",
     "stream": false
   },
   "tickets.seal_attach": {
@@ -1613,7 +1535,6 @@ export const methodConfig = {
     "structured": {
       "request": "SealAttachRequest"
     },
-    "result": "AttachTicket",
     "stream": false
   }
 } as const;
