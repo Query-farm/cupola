@@ -18,6 +18,8 @@ CUPOLA_TEST_ATTACH_OPTIONS=1 PORT=9010 ./test-worker/run.sh    # cupola_secure, 
 PORT=9011 ./test-worker/run.sh                                 # second cupola_test, multi-catalog.spec.ts
 CUPOLA_TEST_MULTI_CATALOG=1 PORT=9012 ./test-worker/run.sh     # cupola_test + cupola_edge + cupola_secure (catalog picker)
 VGI_BEARER_TOKENS="t=alice" ./test-worker/run.sh               # behind auth (VGI_OAUTH_* / VGI_JWT_* for real OAuth)
+./test-worker/run-oauth.sh                                     # :9013 behind fake_idp.py (:9019): token expiry, refresh, popup re-auth; auth.whoami()
+./test-worker/run-entra.sh                                     # :9015 behind real Entra (Query.Farm test app; dev server must be :4391)
 bun run dev   # then http://localhost:4321/?service=http://localhost:9009
 ```
 

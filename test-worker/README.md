@@ -71,6 +71,62 @@ protected without editing the worker:
   Cupola's PKCE sign-in follows. See `vgi/serve.py` in vgi-python for the full
   list.
 
+### Behind a fake identity provider
+
+`./run-oauth.sh` serves `cupola_test` on :9013 behind OAuth, with
+`fake_idp.py` on :9019 as the identity provider, so sign-in, refresh and expiry
+can be tested end to end without Entra: Cupola's own PKCE client and the VGI
+extension's popup flow both sign in against it.
+
+- Tokens are real RS256 JWTs. Refresh tokens have a fixed lifetime counted from
+  sign-in, like Entra's 24-hour cap on SPA refresh tokens; past it the token
+  endpoint answers `invalid_grant` with Entra's AADSTS700084 text.
+- Every token carries `gen` (which token, of all issued) and `sid` (which
+  sign-in). Behind JWT auth the catalog gains an `auth` schema, and
+  `SELECT * FROM cupola_test.auth.whoami()` shows the token the extension
+  actually sent.
+- Control endpoints move time along:
+
+```bash
+curl -s -XPOST localhost:9019/_test/config -d '{"access_ttl":180,"refresh_lifetime":600}'
+curl -s -XPOST localhost:9019/_test/revoke-access   # worker refuses every token so far (forces a refresh)
+curl -s -XPOST localhost:9019/_test/expire-all      # "24 hours later": refresh tokens dead too
+curl -s -XPOST localhost:9019/_test/config -d '{"authorize_delay":75}'      # a slow sign-in
+curl -s -XPOST localhost:9019/_test/config -d '{"authorize_mode":"button"}' # a person clicks Sign in
+curl -s localhost:9019/_test/state | jq .events
+```
+
+Keep `access_ttl` well above 60 s: Cupola refreshes any token within 60 s of
+expiry, so a shorter one is refreshed on every request. Revocation works
+because `run-oauth.sh` sets `CUPOLA_TEST_IDP_URL`, which makes the worker check
+the IdP's `gen` watermark on each request; the JWKS alone can't do it, since the
+worker caches keys.
+
+### Behind real Entra ID
+
+`./run-entra.sh` serves `cupola_test` on :9015 behind the Query.Farm tenant's
+"Cupola OAuth harness (test)" app registration, set up like Lighthouse's (v2
+access tokens for an `access` scope, audience = client id). Its only redirect
+is `http://localhost:4391/oauth-callback.html`, so run the dev server on 4391.
+Sign in as `cupola-oauth-test@query.farm` (password:
+`security find-generic-password -s cupola-oauth-test -w`).
+
+- `CUPOLA_TEST_MAX_TOKEN_AGE` (default 300) makes the worker refuse a token
+  that long after it first saw it, so Entra's hour-long access token "expires"
+  in minutes. It counts from first sight, not `iat`, which Entra back-dates by
+  five minutes. Refusals are logged as `[cupola-test] refusing token: …`.
+- "24 hours later" is revoking the test user's sessions, which kills every
+  refresh token it holds (`invalid_grant`, AADSTS50173 rather than
+  AADSTS700084). It does not end the browser's Entra session, so the next
+  interactive sign-in completes without a prompt:
+
+```bash
+TOKEN=$(az account get-access-token --resource-type ms-graph --query accessToken -o tsv \
+  --subscription "$(az account list --all --query "[?tenantId=='bf30a0bb-8485-42d4-b41e-b961acdea52c'].id | [0]" -o tsv)")
+curl -s -XPOST -H "Authorization: Bearer $TOKEN" -H "Content-Length: 0" \
+  https://graph.microsoft.com/v1.0/users/cupola-oauth-test@query.farm/revokeSignInSessions
+```
+
 From a DuckDB-compatible CLI, without HTTP:
 
 ```sql

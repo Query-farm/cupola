@@ -45,6 +45,7 @@ See README.md for the dataset inventory and how to run it.
 
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar
@@ -781,6 +782,44 @@ class RateLimited(TableFunctionGenerator[NoArgs]):
         raise RuntimeError("HTTP 429 Too Many Requests: rate limit exceeded. Try again in 5 seconds.")
 
 
+@init_single_worker
+@bind_fixed_schema
+class WhoAmI(TableFunctionGenerator[NoArgs]):
+    """The credential this request arrived with, as the worker validated it.
+
+    Served (as ``auth.whoami()``) only behind JWT auth: ``run-oauth.sh`` puts
+    the worker behind ``fake_idp.py``, whose tokens carry ``gen`` (which token
+    of all those issued) and ``sid`` (which sign-in it descends from). Selecting
+    from it through the shell shows exactly which token the VGI extension sent,
+    so a test can tell a refreshed or re-issued token from a stale one. Entra
+    tokens have no ``gen``; ``token_id`` (``jti``, or Entra's ``uti``) tells
+    them apart instead."""
+
+    class Meta:
+        name = "whoami"
+        description = "The caller's validated token claims: principal, gen, sid, token_use, expiry"
+        categories = ["auth"]
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([
+        ("principal", pa.string()), ("authenticated", pa.bool_()), ("gen", pa.int64()), ("sid", pa.string()),
+        ("token_use", pa.string()), ("token_id", pa.string()), ("issued_at", pa.timestamp("s", tz="UTC")), ("expires_at", pa.timestamp("s", tz="UTC")),
+        ("seconds_left", pa.int64()),
+    ])
+
+    @classmethod
+    def process(cls, params: ProcessParams[NoArgs], state: None, out: OutputCollector) -> None:
+        auth = params.auth_context
+        claims = dict(auth.claims or {})
+        exp = claims.get("exp")
+        row = [
+            auth.principal, auth.authenticated, claims.get("gen"), claims.get("sid"), claims.get("token_use"),
+            claims.get("jti") or claims.get("uti"), claims.get("iat"), exp, int(exp - time.time()) if isinstance(exp, (int, float)) else None,
+        ]
+        arrays = [pa.array([value], type=field.type) for value, field in zip(row, cls.FIXED_SCHEMA, strict=True)]
+        out.emit(pa.RecordBatch.from_arrays(arrays, schema=cls.FIXED_SCHEMA).select(params.output_schema.names))
+        out.finish()
+
+
 # ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
@@ -884,6 +923,18 @@ EDGE = schema(
 )
 
 
+# Behind JWT auth (run-oauth.sh) the catalog gains an `auth` schema holding
+# `whoami()`. Only then: without a validated token there is nothing to report,
+# and the plain worker's catalog keeps the shape the e2e specs expect.
+AUTH = schema(
+    "auth",
+    comment="The credential each request presents (served behind JWT auth only)",
+    tags={"vgi.title": "Auth diagnostics"},
+    functions=[WhoAmI],
+)
+AUTH_SCHEMAS = [AUTH] if os.environ.get("VGI_JWT_ISSUER") else []
+
+
 # CUPOLA_TEST_ATTACH_OPTIONS=1 serves the same data as `cupola_secure`, a
 # catalog that declares attach options: one required secret, one optional
 # string and one optional integer. It cannot be attached without `api_key`, so
@@ -918,7 +969,7 @@ class CupolaTestWorker(Worker):
             "vgi.doc_llm": "Deterministic synthetic retail data for testing Cupola. Use small.* for reference tables, large.* for volume, edge.* for type and failure cases.",
             "vgi.author": "Query Farm",
         },
-        schemas=[SMALL, LARGE, EDGE],
+        schemas=[SMALL, LARGE, EDGE, *AUTH_SCHEMAS],
     )
 
 
@@ -1014,7 +1065,70 @@ def serve_multi_catalog() -> None:
     )
 
 
+def install_idp_revocation() -> None:
+    """Refuse tokens the IdP would no longer honour, with the 401 an expired token gets.
+
+    - ``CUPOLA_TEST_IDP_URL`` (run-oauth.sh): JWT validation is local and the
+      worker caches the JWKS, so a token stays good until its ``exp`` whatever
+      the IdP does. fake_idp.py's revoke-access and expire-all end tokens at
+      once by publishing a ``gen`` watermark; anything at or below it is refused.
+    - ``CUPOLA_TEST_MAX_TOKEN_AGE=<seconds>`` (run-entra.sh): refuse a token
+      this long after the worker first saw it, so a real IdP's hour-long access
+      token "expires" in minutes while its ``exp`` still says it is good. Not
+      from ``iat``: Entra back-dates it by five minutes.
+
+    ``Worker.main`` and the multi-catalog server both import
+    ``_resolve_authenticate`` from ``vgi.serve`` when they start, so replacing
+    it there covers both.
+    """
+    idp = os.environ.get("CUPOLA_TEST_IDP_URL")
+    max_age = int(os.environ.get("CUPOLA_TEST_MAX_TOKEN_AGE") or 0)
+    if not idp and not max_age:
+        return
+    import urllib.request
+
+    import vgi.serve
+    from vgi_rpc.http import AuthFailure, AuthReason
+
+    resolve = vgi.serve._resolve_authenticate
+
+    def revoked_through() -> int:
+        # Every request asks: it is a loopback call, and a test that revokes
+        # then queries must never see a stale answer.
+        with urllib.request.urlopen(f"{idp.rstrip('/')}/_test/revocation", timeout=5) as response:
+            return int(json.load(response)["revoked_through_gen"])
+
+    first_seen: dict[str, float] = {}
+
+    def refuse(reason: str) -> None:
+        print(f"[cupola-test] refusing token: {reason}", file=sys.stderr, flush=True)
+        raise AuthFailure(AuthReason.EXPIRED_CREDENTIAL, f"Invalid JWT: {reason}")
+
+    def resolve_with_revocation() -> Any:
+        inner = resolve()
+        if inner is None:
+            return None
+
+        def authenticate(req: Any) -> Any:
+            ctx = inner(req)
+            claims = ctx.claims or {}
+            gen = claims.get("gen")
+            if idp and isinstance(gen, int) and gen <= revoked_through():
+                refuse(f"token gen {gen} was revoked by the fake IdP")
+            if max_age:
+                token_id = str(claims.get("jti") or claims.get("uti") or claims.get("iat"))
+                age = int(time.time() - first_seen.setdefault(token_id, time.time()))
+                if age > max_age:
+                    refuse(f"token {token_id} first seen {age}s ago (CUPOLA_TEST_MAX_TOKEN_AGE={max_age})")
+            return ctx
+
+        return authenticate
+
+    vgi.serve._resolve_authenticate = resolve_with_revocation
+
+
 if __name__ == "__main__":
+    install_idp_revocation()
     if MULTI_CATALOG and ATTACH_OPTIONS_VARIANT:
         raise SystemExit("CUPOLA_TEST_MULTI_CATALOG already serves cupola_secure; unset CUPOLA_TEST_ATTACH_OPTIONS")
     if MULTI_CATALOG:
