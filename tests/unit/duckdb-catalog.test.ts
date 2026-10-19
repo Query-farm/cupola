@@ -12,7 +12,7 @@ test('DuckDB metadata preserves VGI docs, semantic tags, columns and function ar
     'duckdb_views()': { schema_name: ['main'], view_name: ['latest'], sql: ['SELECT * FROM prices'] },
     'duckdb_columns()': { schema_name: ['main', 'main'], table_name: ['prices', 'latest'], column_name: ['price', 'price'], data_type: ['DOUBLE', 'DOUBLE'], is_nullable: [false, true], comment: ['Price in USD', 'Latest price'], tags: [{ 'vgi.semantic_member': '{"member_id":"price"}' }, { 'vgi.semantic_member': '' }] },
     'duckdb_functions()': { schema_name: ['main'], function_name: ['history'], function_type: ['table'], description: ['Price history'], tags: [{ 'vgi.doc_llm': 'Supply a ticker.' }], parameters: [['ticker']], parameter_types: [['VARCHAR']], categories: [['Finance']], examples: [[{ sql: "SELECT * FROM history('AAPL')", description: 'Apple prices', expected_output: 'Prices' }]] },
-    'vgi_function_arguments()': { schema_name: ['main'], function_name: ['history'], function_type: ['table'], arg_name: ['ticker'], arg_type: ['VARCHAR'], is_named: [true], is_const: [true], arg_description: ['Ticker symbol'], arg_default: ['"AAPL"'], arg_choices: ['["AAPL","MSFT"]'], input_from_args: [false], field_index: [0] },
+    'vgi_function_arguments(': { schema_name: ['main'], function_name: ['history'], function_type: ['table'], arg_name: ['ticker'], arg_type: ['VARCHAR'], is_named: [true], is_const: [true], arg_description: ['Ticker symbol'], arg_default: ['"AAPL"'], arg_choices: ['["AAPL","MSFT"]'], input_from_args: [false], field_index: [0] },
   };
   const previous = engine.query;
   engine.query = async sql => {

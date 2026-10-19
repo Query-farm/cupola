@@ -1,6 +1,6 @@
 import { httpConnect } from '@query-farm/vgi-rpc/connect';
-import { deserializeSchema, serializeBatch, singleRowBatch } from '@query-farm/vgi-rpc/arrow';
-import { tableFromIPC, type Schema } from '@query-farm/apache-arrow';
+import { deserializeSchema, schema, serializeBatch, singleRowBatch } from '@query-farm/vgi-rpc/arrow';
+import { tableFromIPC, type RecordBatch, type Schema } from '@query-farm/apache-arrow';
 import { getAuthTokenForService } from '../auth';
 import { connectionErrorMessage } from '../connection-errors';
 import { identityDescription, methodConfig, recordSchemas, REPORTS_PROTOCOL, type ReportMethods } from './contracts.generated';
@@ -108,8 +108,25 @@ export class ReportClient {
   }
   private protocols(signal?: AbortSignal): Promise<Set<string>> {
     if (!this.advertised) this.advertised = (async () => {
-      const rpc = await this.connection(undefined, signal);
-      try { const info = await rpc.describe(); return new Set([info.protocolName, ...(info.hostedProtocols ?? [])]); }
+      const protocol = 'vgi_rpc.Reflection.v1';
+      const rpc = await this.connection(protocol, signal);
+      try {
+        // Reflection has a fixed bootstrap contract. Asking what is hosted
+        // needs no method description, including on catalog-only services.
+        const response = await rpc.callRaw('list_protocols', {
+          batch: singleRowBatch(schema([]), {}) as unknown as RecordBatch,
+          metadata: new Map([
+            ['vgi_rpc.method', 'list_protocols'],
+            ['vgi_rpc.protocol', protocol],
+            ['vgi_rpc.request_version', '1'],
+          ]),
+        });
+        const info = decodeRecord(response?.batch.get(0)?.result);
+        if (!Array.isArray(info.protocols) || info.protocols.some((entry: any) => typeof entry?.protocol !== 'string')) {
+          throw new Error('The report worker returned an invalid protocol listing.');
+        }
+        return new Set<string>(info.protocols.map((entry: { protocol: string }) => entry.protocol));
+      }
       finally { rpc.close(); }
     })().catch(error => { this.advertised = undefined; throw error; });
     return this.advertised;

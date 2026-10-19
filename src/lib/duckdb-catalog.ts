@@ -215,6 +215,20 @@ export async function fetchAttachedCatalog(databaseName: string, databaseType = 
     }
   };
   const dbLit = `'${esc(databaseName)}'`;
+  const readFunctionArguments = async (): Promise<Record<string, any>[]> => {
+    if (databaseType !== "vgi") return [];
+    const suffix = `WHERE catalog_name = ${dbLit} ORDER BY schema_name, function_name, function_type, field_index`;
+    try {
+      return await readRowsOrThrow(`SELECT * FROM vgi_function_arguments(catalog := ${dbLit}) ${suffix}`);
+    } catch (error) {
+      // Older installed extensions lack the catalog selector. Keep their
+      // detailed argument metadata available during independent rollouts.
+      if (error instanceof Error && /Invalid named parameter ["']catalog["'] for function vgi_function_arguments/i.test(error.message)) {
+        return readRows(`SELECT * FROM vgi_function_arguments() ${suffix}`, true);
+      }
+      return [];
+    }
+  };
 
   // Parallel metadata fetches — none depend on each other.
   const none = Promise.resolve([] as Record<string, any>[]);
@@ -248,9 +262,7 @@ export async function fetchAttachedCatalog(databaseName: string, databaseType = 
        WHERE database_name = ${dbLit}
        ORDER BY schema_name, table_name, constraint_index`
     ),
-    databaseType === "vgi" ? readRows(
-      `SELECT * FROM vgi_function_arguments() WHERE catalog_name = ${dbLit} ORDER BY schema_name, function_name, function_type, field_index`, true
-    ) : Promise.resolve([]),
+    readFunctionArguments(),
   ]);
 
   // Schema name → resolved slot. Seed with schemas from duckdb_schemas() so
