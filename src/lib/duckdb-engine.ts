@@ -39,6 +39,12 @@ export const SHELL_EXTENSIONS: readonly DuckDBExtension[] = [
   { name: "icu" },
   { name: "json" },
   { name: "httpfs" },
+  // Not statically linked in the WASM build (only core_functions is), and
+  // autoload is off, so read_parquet / read_avro / COPY … (FORMAT parquet)
+  // fail without them. Iceberg also reads Avro manifests and Parquet data.
+  // Kept on iOS: they are the file formats people actually query.
+  { name: "parquet" },
+  { name: "avro" },
   // Deliberately unpinned: no VERSION clause, so the community repository
   // serves its current build for this DuckDB version. Cupola pinned an exact
   // build for a while (a broken publish had made an unpinned INSTALL fetch

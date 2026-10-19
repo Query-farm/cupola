@@ -91,7 +91,7 @@ describe("SHELL_EXTENSIONS", () => {
 describe("runtime startup extensions", () => {
   test("iOS retains catalog, timezone, JSON, network and completion support without the heavyweight optional extensions", () => {
     const extensions = shellExtensionsForRuntime(shellExtensionsForVgiVersion("v1.2.3"), true);
-    expect(extensions.map(({ name }) => name)).toEqual(["icu", "json", "httpfs", "vgi", "grainlift", "autocomplete"]);
+    expect(extensions.map(({ name }) => name)).toEqual(["icu", "json", "httpfs", "parquet", "avro", "vgi", "grainlift", "autocomplete"]);
     expect(extensions.find(({ name }) => name === "vgi")).toMatchObject({ required: true, version: "v1.2.3" });
   });
 

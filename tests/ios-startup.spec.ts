@@ -30,7 +30,7 @@ test('iOS keeps COI and cancellation while skipping heavyweight optional extensi
   const extensions = await shellQuery(page, 'SELECT extension_name FROM duckdb_extensions() WHERE loaded');
   expect(extensions.ok, extensions.error).toBe(true);
   const loaded = extensions.rows?.map(row => row.extension_name);
-  expect(loaded).toEqual(expect.arrayContaining(['icu', 'json', 'httpfs', 'vgi', 'grainlift', 'autocomplete']));
+  expect(loaded).toEqual(expect.arrayContaining(['icu', 'json', 'httpfs', 'parquet', 'avro', 'vgi', 'grainlift', 'autocomplete']));
   for (const name of ['spatial', 'iceberg', 'ducklake']) {
     expect(loaded).not.toContain(name);
     expect(requests.some(path => path.endsWith(`/${name}.duckdb_extension.wasm`))).toBe(false);
