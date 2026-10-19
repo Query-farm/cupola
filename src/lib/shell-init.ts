@@ -355,10 +355,17 @@ export function initShell(
       // describe it, and a second hardcoded copy there drifted from this one.
       const selection = testExtensionSelection();
       if (selection) console.info(`[shell] test extension selection: ${selection.join(", ")}`);
-      const startupExtensions = shellExtensionsForRuntime(shellExtensionsForVgiVersion(vgiVersion.value), isIOSWebKit());
-      for (const ext of restrictShellExtensions(startupExtensions, selection)) {
-        writeln(`Loading ${ext.name} extension...`, "33");
-        setBootPhase(`Loading ${ext.name} extension`, null, "attaching");
+      const iosWebKit = isIOSWebKit();
+      const startupExtensions = restrictShellExtensions(
+        shellExtensionsForRuntime(shellExtensionsForVgiVersion(vgiVersion.value), iosWebKit),
+        selection,
+      );
+      // INSTALL every extension first. In the browser it downloads nothing; it
+      // records the repository (`FROM community`) and version that LOAD's URL is
+      // built from, so it has to run before the prefetch below or the prefetch
+      // would fetch from the core repository and never be used.
+      const installed: typeof startupExtensions[number][] = [];
+      for (const ext of startupExtensions) {
         const install = await engine.query!(extensionInstallSql(ext));
         if (!install.ok) {
           const msg = `INSTALL ${ext.name} failed: ${install.error ?? ""}`;
@@ -373,6 +380,20 @@ export function initShell(
           console.warn("[shell]", msg, "(continuing)");
           continue;
         }
+        installed.push(ext);
+      }
+      // Download, hash and compile them all at once, so each LOAD below only
+      // checks the signature and links (about half the load time). Skipped on
+      // iPhone and iPad: holding every file and compiled module at once raises
+      // peak memory, and the iOS budget is the tighter constraint there.
+      if (!iosWebKit) {
+        writeln("Downloading extensions...", "33");
+        setBootPhase("Downloading extensions", null, "attaching");
+        await engine.prefetchExtensions?.(installed.map(({ name }) => name));
+      }
+      for (const ext of installed) {
+        writeln(`Loading ${ext.name} extension...`, "33");
+        setBootPhase(`Loading ${ext.name} extension`, null, "attaching");
         const load = await engine.query!(`LOAD ${ext.name}`);
         if (!load.ok) {
           const msg = `LOAD ${ext.name} failed: ${load.error ?? ""}`;

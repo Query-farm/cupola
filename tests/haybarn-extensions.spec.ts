@@ -43,6 +43,12 @@ for (const variant of ["coi", "eh"] as const) {
     for (const url of extensionRequests) {
       expect(url.pathname).toContain(`/${extensionVersion}/`);
     }
+    // Startup prefetches every extension, and each LOAD takes its prefetched
+    // copy: a LOAD that downloaded the file again would show up as a second
+    // request for the same path.
+    const requestsPerFile = new Map<string, number>();
+    for (const url of extensionRequests) requestsPerFile.set(url.pathname, (requestsPerFile.get(url.pathname) ?? 0) + 1);
+    expect([...requestsPerFile].filter(([, count]) => count > 1)).toEqual([]);
 
     const extensions = await shellQuery(page, "SELECT extension_name FROM duckdb_extensions() WHERE loaded");
     expect(extensions.ok, extensions.error).toBe(true);

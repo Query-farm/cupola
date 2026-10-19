@@ -37,6 +37,13 @@ paths:
 - Nullable slots and `?.()` guards are deliberate (late-bound).
 - **`window.__bridge` is a deliberately FLAT facade for Playwright** (nine specs use old names); delegates via getters. Extend, don't reshape. `catalogStatuses()` returns plain objects; `defaultCatalog` the default state.
 
+## Startup extensions (`shell-init.ts`)
+- Three passes: every `INSTALL`, then one `engine.prefetchExtensions(names)` (haybarn-wasm ≥ 1.5.6-rc6), then every `LOAD`. Prefetch downloads, hashes (WebCrypto) and compiles all of them in parallel in the worker; each `LOAD` then only checks the signature and links. About 4.7 s → 3.7 s from page load to catalog attached.
+- **`INSTALL` must come first.** In the browser it downloads nothing, but `FROM community` / `VERSION` set the repository `LOAD`'s URL is built from. Prefetched before it, vgi and grainlift would be fetched from the core repository and never used.
+- Requests sent while a prefetch runs wait for it, so it stays in the startup flow, before any user query. A failed prefetch just leaves the download to `LOAD`.
+- Skipped on iOS WebKit: holding every file and compiled module at once raises peak memory.
+- Guard: `tests/haybarn-extensions.spec.ts` fails if any extension file is requested twice (a `LOAD` that ignored its prefetched copy).
+
 ## Eager worker boot
 - Worker created at CatalogApp mount, not when the shell opens. Pre-allocates SharedArrayBuffers for cancellation and OAuth.
 - iPhone/iPad WebKit keeps the COI WASM and shared-memory interruption. `scripts/haybarn-mobile-runtime.mjs` generates a COI loader that prewarms four pthreads instead of eight; setting SQL `threads = 1` afterwards cannot prevent the original startup cost. Do not reduce the pool to one: instantiation opens a default four-thread database before `db.open` can apply our config, and a pool of one or two stalls in WebKit. The guarded one-character loader change preserves source-map positions and must be reviewed if the upstream initializer changes. Dev and asset staging use the same transformation. iPad desktop user agents are identified through `MacIntel` + touch points; layout selection remains based on viewport width.

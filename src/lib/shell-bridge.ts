@@ -143,6 +143,10 @@ export const engine = {
   /** Parse SQL with DuckDB and return the relations it reads. Reports use
    *  this to infer dataset dependencies from ordinary FROM/JOIN references. */
   getTableNames: null as ((sql: string) => Promise<string[]>) | null,
+  /** Download, hash and compile extensions in parallel ahead of their LOADs
+   *  (haybarn-wasm ≥ 1.5.6-rc6; a no-op on older builds). Never rejects. See
+   *  shell-init's startup extension flow. */
+  prefetchExtensions: null as ((names: string[]) => Promise<void>) | null,
   /** Run statements as one exclusive unit inside a transaction that is always rolled
    *  back: a dry run that leaves the session as it found it. See duckdb-worker-boot. */
   rolledBack: null as (<T>(work: (run: (sql: string, params?: unknown[]) => Promise<QueryResult>) => Promise<T>, options?: QueryExecutionOptions) => Promise<T>) | null,

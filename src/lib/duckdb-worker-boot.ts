@@ -367,6 +367,19 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
     }
   }), options ?? {});
   engine.getTableNames = (sql: string) => execute(() => conn.getTableNames(sql));
+  // The worker downloads every extension at once, hashes it with WebCrypto and
+  // compiles it, so each LOAD afterwards only checks the signature and links.
+  // Requests sent while it runs wait for it, so it belongs in the startup flow
+  // before any user query. A failed prefetch just leaves the download to LOAD.
+  const prefetchSource = db as unknown as { prefetchExtensions?: (names: string[]) => Promise<void> };
+  engine.prefetchExtensions = async (names: string[]) => {
+    if (!prefetchSource.prefetchExtensions || names.length === 0) return;
+    try {
+      await prefetchSource.prefetchExtensions(names);
+    } catch (error) {
+      console.warn('[shell] extension prefetch failed; LOAD will download them', error);
+    }
+  };
   engine.openConnection = () => execute(async () => {
     const session = await db.connect();
     try {
