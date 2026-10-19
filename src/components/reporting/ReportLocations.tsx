@@ -16,6 +16,7 @@ export function ReportLocationsProvider({ serviceUrl, workspaceId, catalogs, chi
   serviceUrl: string; workspaceId?: string; catalogs: readonly CatalogData[]; children: ReactNode;
 }) {
   const [locations, setLocations] = useState<ReportLocation[]>([]), [generation, setGeneration] = useState(0);
+  const [clients, setClients] = useState<ReadonlyMap<string, ReportClient>>(() => new Map());
   // A sidebar action survives closing the mobile drawer and lazy mounting Reports.
   const [transfer, setTransfer] = useState<TransferRequest | null>(null);
   const [linked, setLinked] = useState(() => new URLSearchParams(location.search).get('report_service'));
@@ -33,9 +34,12 @@ export function ReportLocationsProvider({ serviceUrl, workspaceId, catalogs, chi
   const key = JSON.stringify(urls);
   useEffect(() => {
     const abort = new AbortController();
+    // Both inventories share protocol discovery for this refresh. Create the
+    // clients inside the effect so each run owns its requests and cancellation.
+    const clients = new Map(urls.map(url => [url, new ReportClient(url)]));
+    setClients(clients);
     setLocations(urls.map(url => ({ url, name: new URL(url).host, loading: true })));
-    for (const url of urls) {
-      const client = new ReportClient(url);
+    for (const [url, client] of clients) {
       void client.discover(abort.signal).then(async supported => {
         if (!supported) { if (!abort.signal.aborted) setLocations(old => old.filter(l => l.url !== url)); return; }
         const info = await client.call('get_report_service_info', {}, abort.signal);
@@ -46,7 +50,10 @@ export function ReportLocationsProvider({ serviceUrl, workspaceId, catalogs, chi
     return () => abort.abort();
   }, [key, generation]);
   const refresh = useCallback(() => setGeneration(n => n + 1), []);
-  const { workers: scheduleWorkers, refresh: refreshSchedules } = useScheduleInventory(urls.map(url => ({ url, name: locations.find(location => location.url === url)?.name ?? catalogs.find(catalog => catalog.sourceUrl === url)?.catalogName ?? new URL(url).host })), generation);
+  const { workers, refresh: refreshSchedules } = useScheduleInventory(clients);
+  // Names are presentation only; resolving a library name must not restart
+  // schedule discovery or cancel an in-flight schedule request.
+  const scheduleWorkers = workers.map(worker => ({ ...worker, name: locations.find(location => location.url === worker.url)?.name ?? catalogs.find(catalog => catalog.sourceUrl === worker.url)?.catalogName ?? worker.name }));
   return <Context.Provider value={{ locations, refresh, refreshVersion: generation, scheduleWorkers, refreshSchedules, transfer, setTransfer }}>{children}</Context.Provider>;
 }
 

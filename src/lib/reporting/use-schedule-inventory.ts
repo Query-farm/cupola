@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ReportClient, reportError } from './client';
+import { reportError, type ReportClient } from './client';
 import { SCHEDULES_PROTOCOL, type ScheduleRecord } from './contracts.generated';
 import { REPORT_LIBRARY_CHANGED } from './navigation';
 
@@ -7,10 +7,9 @@ export interface ScheduleHost { url: string; name: string }
 export interface WorkerSchedules extends ScheduleHost { records: ScheduleRecord[]; loading?: boolean; error?: string; supported?: boolean }
 
 /** One inventory for sidebar navigation and the schedule activity page. */
-export function useScheduleInventory(hosts: ScheduleHost[], refreshVersion: number) {
+export function useScheduleInventory(clients: ReadonlyMap<string, ReportClient>) {
   const [workers, setWorkers] = useState<WorkerSchedules[]>([]), [generation, setGeneration] = useState(0);
   const refresh = useCallback(() => setGeneration(n => n + 1), []);
-  const key = JSON.stringify(hosts);
   useEffect(() => {
     window.addEventListener(REPORT_LIBRARY_CHANGED, refresh);
     window.addEventListener('focus', refresh);
@@ -18,8 +17,7 @@ export function useScheduleInventory(hosts: ScheduleHost[], refreshVersion: numb
   }, [refresh]);
   useEffect(() => {
     const abort = new AbortController(); let timer: ReturnType<typeof setTimeout>;
-    const candidates: ScheduleHost[] = JSON.parse(key);
-    const clients = new Map(candidates.map(host => [host.url, new ReportClient(host.url)]));
+    const candidates: ScheduleHost[] = [...clients.keys()].map(url => ({ url, name: new URL(url).host }));
     setWorkers(old => candidates.map(host => {
       const previous = old.find(worker => worker.url === host.url);
       return { ...previous, ...host, records: previous?.records ?? [], loading: true };
@@ -38,6 +36,6 @@ export function useScheduleInventory(hosts: ScheduleHost[], refreshVersion: numb
     }
     void load();
     return () => { abort.abort(); clearTimeout(timer); };
-  }, [key, generation, refreshVersion]);
+  }, [clients, generation]);
   return { workers, refresh };
 }
