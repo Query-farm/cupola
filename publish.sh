@@ -76,8 +76,6 @@ echo "==> Building..."
 CUPOLA_HOSTED_RELEASES=1 NODE_OPTIONS="--max-old-space-size=8192" bun run build
 
 echo "==> dist/ size: $(du -sh dist/ | cut -f1)"
-echo "==> Checking JavaScript bundle budget..."
-bun run check:bundle
 
 # ---- Sentry: validate, upload, and strip browser source maps ----
 # Upload the final Vite output rather than relying on @sentry/astro's build

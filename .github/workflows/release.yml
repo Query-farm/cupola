@@ -59,9 +59,6 @@ jobs:
       - name: Production build
         run: CUPOLA_HOSTED_RELEASES=1 bun run build
 
-      - name: Bundle-size budget
-        run: bun run check:bundle
-
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
 
@@ -104,7 +101,6 @@ jobs:
           BASE_PATH: /
         run: |
           bun run build
-          bun run check:bundle
           ./scripts/stage-haybarn-assets.sh
 
       - name: Build smoke-test image

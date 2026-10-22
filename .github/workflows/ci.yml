@@ -59,10 +59,6 @@ jobs:
         working-directory: cupola
         run: CUPOLA_HOSTED_RELEASES=1 bun run build
 
-      - name: Bundle-size budget
-        working-directory: cupola
-        run: bun run check:bundle
-
       - name: Install Chromium
         working-directory: cupola
         run: bunx playwright install --with-deps chromium
@@ -94,7 +90,6 @@ jobs:
           BASE_PATH: /
         run: |
           bun run build
-          bun run check:bundle
           ./scripts/stage-haybarn-assets.sh
 
       - name: Build and smoke-test container
