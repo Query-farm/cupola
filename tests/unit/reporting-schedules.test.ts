@@ -62,7 +62,7 @@ test('opaque credential writes cannot enter the persistent mutation journal', as
 test('authorization failure does not leak a minted credential or partially install a grant set', async () => {
   const keys = requiredDelegations('https://reports.test', [{ alias: 'finance', attachment_id: 'finance', location: 'https://source.test', catalog_name: 'finance', label: '', required: true }]);
   let writes = 0;
-  const scheduler = { recoveryScope: async () => 'same', call: async (method: string) => { if (method === 'delegations.list_delegations') return []; writes++; throw new Error('must not write'); } } as unknown as ReportClient;
+  const scheduler = { recoveryScope: async () => 'same', call: async (method: string) => { if (method === 'delegations.get_delegation_limits') return { limits: [{ name: 'max_delegation_writes', value: 10n, unit: 'count' }] }; if (method === 'delegations.get_delegation') throw { errorCode: 'NOT_FOUND' }; writes++; throw new Error('must not write'); } } as unknown as ReportClient;
   const source = { call: async (method: string) => { if (method === 'identity.issue_grant') return { token: 'opaque-secret-token', expires_at: Date.now() / 1000 + 3600 }; throw new Error('upstream echoed opaque-secret-token'); } } as unknown as ReportClient;
   try { await authorizeSchedules(scheduler, keys, 'Report', () => ({ options: null, data_version_spec: '', implementation_version: '' }), 7, () => source); throw new Error('Expected failure'); }
   catch (error) { expect((error as Error).message).not.toContain('opaque-secret-token'); expect((error as Error).message).toContain('source.test'); }

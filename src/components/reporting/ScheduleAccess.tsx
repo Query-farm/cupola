@@ -5,7 +5,7 @@ import { ReportNotice } from './ReportNotice';
 import { ReportClient, reportError } from '../../lib/reporting/client';
 import type { DelegationKey, DelegationRecord, GrantPolicy } from '../../lib/reporting/contracts.generated';
 import type { CatalogData } from '../../lib/service';
-import { authorizeSchedules, AuthorizationError, dateLabel, delegationId, sameService, sourceAttach } from '../../lib/reporting/schedules';
+import { authorizeSchedules, getRequiredDelegations, AuthorizationError, dateLabel, delegationId, sameService, sourceAttach } from '../../lib/reporting/schedules';
 import { startLoginFlow } from '../../lib/oauth-client';
 
 export function ScheduleAccess({ client, requirements, catalogs, workspaceId, title, busy, onChange, warningSeconds = 86400 }: {
@@ -40,10 +40,10 @@ export function ScheduleAccess({ client, requirements, catalogs, workspaceId, ti
   const connection = (key: DelegationKey & { alias?: string }) => bindings[delegationId(key)] ?? choices(key).find(c => c.catalogName === (key.alias ?? key.attachment_id))?.catalogName ?? '';
   useEffect(() => {
     const abort = new AbortController(); setLoading(true);
-    void client.call('delegations.list_delegations', {}, abort.signal).then(value => { if (!abort.signal.aborted) setRecords(value); })
+    void getRequiredDelegations(client, requirements, abort.signal).then(value => { if (!abort.signal.aborted) setRecords(value); })
       .catch(e => { if (!abort.signal.aborted) setError(reportError(e)); }).finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
-  }, [client, generation]);
+  }, [client, generation, JSON.stringify(requirements)]);
   async function authorize() {
     setWorking(true); setError(''); setSignIn('');
     try {

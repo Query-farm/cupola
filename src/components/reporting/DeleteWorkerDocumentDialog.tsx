@@ -4,11 +4,11 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { ReportClient, reportError } from '../../lib/reporting/client';
 import { MutationJournal } from '../../lib/reporting/journal';
 import { documentKind } from '../../lib/reporting/object-adapter';
-import type { ReportRow } from '../../lib/reporting/contracts.generated';
+import type { ReportSummary, ReportRow } from '../../lib/reporting/contracts.generated';
 
 /** Sidebar deletion uses the same durable journal as the worker's contents page. */
 export function DeleteWorkerDocumentDialog({ url, record, libraryName, onClose, onDeleted }: {
-  url: string; record: ReportRow; libraryName: string; onClose: () => void; onDeleted: (authScope: string) => void;
+  url: string; record: ReportSummary | ReportRow; libraryName: string; onClose: () => void; onDeleted: (authScope: string) => void;
 }) {
   const [journal, setJournal] = useState<MutationJournal | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -25,7 +25,7 @@ export function DeleteWorkerDocumentDialog({ url, record, libraryName, onClose, 
   const retry = pending?.method === 'delete_report' && pending.input.report_id === record.report_id;
   return <Dialog open onOpenChange={open => { if (!open && !busy) onClose(); }}><DialogContent>
     <DialogHeader><DialogTitle>Delete {kind}?</DialogTitle><DialogDescription>
-      Delete “{record.envelope?.title ?? 'this document'}” from {libraryName}?
+      Delete “{('title' in record ? record.title : record.envelope?.title) ?? 'this document'}” from {libraryName}?
       {kind !== 'report' && ' Open editor drafts will stay on this device.'}
     </DialogDescription></DialogHeader>
     <form className="space-y-4" onSubmit={async event => {

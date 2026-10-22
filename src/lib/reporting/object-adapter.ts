@@ -1,10 +1,13 @@
-import type { ReportResult, ReportRow, Schedule, ScheduleV2 } from './contracts.generated';
+import type { ReportResult, ReportRow, ReportSummary, Schedule, ScheduleV2 } from './contracts.generated';
 
 /** UI compatibility model while the common library replaces report-only views.
  * The generated wire contracts remain unmodified and authoritative. */
-export type LibraryRow = ReportRow & { object_kind?: string; creatable_kinds?: string[] };
-export function documentKind(record: Pick<ReportRow, 'envelope'> & { object_kind?: string }): string {
-  return record.object_kind ?? kindForFormat(record.envelope?.body_format ?? '');
+export type LibraryRow = (ReportRow | ReportSummary) & { object_kind?: string; creatable_kinds?: string[] };
+export function documentTitle(record: ReportRow | ReportSummary): string {
+  return ('title' in record ? record.title : record.envelope?.title) ?? 'Redacted document';
+}
+export function documentKind(record: (Pick<ReportRow, 'envelope'> | Pick<ReportSummary, 'body_format'>) & { object_kind?: string }): string {
+  return record.object_kind ?? kindForFormat(('body_format' in record ? record.body_format : record.envelope?.body_format) ?? '');
 }
 export function kindForFormat(format: string): string {
   return format === 'cupola.query/1' ? 'query' : format === 'cupola.notebook/1' ? 'notebook' : 'report';

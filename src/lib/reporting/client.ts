@@ -3,7 +3,7 @@ import { deserializeSchema, schema, serializeBatch, singleRowBatch } from '@quer
 import { tableFromIPC, type RecordBatch, type Schema } from '@query-farm/apache-arrow';
 import { getAuthTokenForService } from '../auth';
 import { connectionErrorMessage } from '../connection-errors';
-import { identityDescription, methodConfig, recordSchemas, OBJECTS_PROTOCOL, OBJECT_SCHEDULES_PROTOCOL, OWNERSHIP_PROTOCOL, REPORTS_PROTOCOL, SCHEDULES_PROTOCOL, type ReportMethods } from './contracts.generated';
+import { identityDescription, methodConfig, recordSchemas, OBJECTS_PROTOCOL, OBJECT_SCHEDULES_PROTOCOL, OWNERSHIP_PROTOCOL, REPORTS_PROTOCOL, SCHEDULES_PROTOCOL, type ReportMethods, type ResourceContext } from './contracts.generated';
 import { fromObject, fromScheduleV2, kindForFormat, toScheduleV2 } from './object-adapter';
 import { REPORT_LIBRARY_CHANGED } from './navigation';
 import { fetchWithCachedCapabilities } from './http-capabilities';
@@ -87,6 +87,7 @@ export class ReportClient {
     this.url = serviceLocation(url);
   }
   private advertised?: Promise<Set<string>>;
+  private advertisedScope?: string;
   private token() { return this.options.token ? this.options.token() : getAuthTokenForService(this.url); }
   /** Partition local recovery by credentials, without persisting the credential itself. */
   async recoveryScope(): Promise<string> {
@@ -116,7 +117,9 @@ export class ReportClient {
     }) as typeof fetch;
     return httpConnect(this.url, { protocol, fetch: scopedFetch, description: protocol === identityDescription.protocolName ? identityWireDescription : undefined });
   }
-  private protocols(signal?: AbortSignal): Promise<Set<string>> {
+  private async protocols(signal?: AbortSignal): Promise<Set<string>> {
+    const scope = await this.recoveryScope();
+    if (this.advertisedScope !== scope) { this.advertised = undefined; this.advertisedScope = scope; }
     if (!this.advertised) this.advertised = (async () => {
       const protocol = 'vgi_rpc.Reflection.v1';
       const rpc = await this.connection(protocol, signal);
@@ -168,13 +171,18 @@ export class ReportClient {
     const info = await this.rawCall('ownership.get_ownership_info', {}, signal);
     return info.resources.some(r => r.protocol === protocol && r.resource_kind === kind);
   }
+  async ownershipContext(resourceKind: 'report' | 'folder', resourceId: string, signal?: AbortSignal): Promise<ResourceContext> {
+    const protocol = await this.protocolFor('get_report', signal);
+    return { protocol, resource_kind: protocol === OBJECTS_PROTOCOL && resourceKind === 'report' ? 'object' : resourceKind,
+      operation: 'transfer_ownership', resource_id: resourceId, parent_folder_id: null };
+  }
   async call<M extends Method>(method: M, input: Input<M>, signal?: AbortSignal, wireProtocol?: string): Promise<Output<M>> {
     const selected = wireProtocol ?? await this.protocolFor(method, signal);
     const original = methodConfig[method].protocol;
     if (selected === original) return this.rawCall(method, input, signal);
     let args: any = { ...input }, translated: string = method;
     if (selected === OBJECTS_PROTOCOL) {
-      const names: Record<string, string> = { get_report_service_info: 'get_objects_info', get_report: 'get_object', list_reports: 'list_objects', create_report: 'create_object', move_report: 'move_object', delete_report: 'delete_object' };
+      const names: Record<string, string> = { get_report_service_info: 'get_objects_info', get_report: 'get_object', list_reports: 'list_objects', scan_reports: 'scan_objects', create_report: 'create_object', move_report: 'move_object', delete_report: 'delete_object' };
       translated = 'objects.' + (names[method] ?? method);
       if ('report_id' in args) { args.object_id = args.report_id; delete args.report_id; }
       if (method === 'create_report') args.object_kind = kindForFormat(args.envelope.body_format);
@@ -182,7 +190,7 @@ export class ReportClient {
     }
     if (selected === OBJECT_OWNERSHIP_PROTOCOL) {
       const protocol = await this.protocolFor('get_report', signal);
-      return this.rawCall('ownership.find_owners', { ...args, protocol, resource_kind: protocol === OBJECTS_PROTOCOL && args.resource_kind === 'report' ? 'object' : args.resource_kind }, signal) as Promise<Output<M>>;
+      return this.rawCall(('ownership.' + method) as Method, { ...args, protocol, resource_kind: protocol === OBJECTS_PROTOCOL && args.resource_kind === 'report' ? 'object' : args.resource_kind }, signal) as Promise<Output<M>>;
     }
     if (selected === OBJECT_SCHEDULES_PROTOCOL) {
       translated = method.replace('schedules.', 'schedules2.');
@@ -196,11 +204,21 @@ export class ReportClient {
     }
     throw new Error('Unsupported protocol for this saved request.');
   }
-  async listSchedulesForSource(url: string, id: string, signal?: AbortSignal) {
+  async listSchedulesForSource(url: string, id: string, signal?: AbortSignal, limit = 100n) {
     if (await this.protocolFor('schedules.list_schedules', signal) === OBJECT_SCHEDULES_PROTOCOL) {
-      return fromScheduleV2(await this.rawCall('schedules2.list_schedules', { source: { service_url: serviceLocation(url), object_id: id }, action_kind: 'render_report' }, signal)) as Output<'schedules.list_schedules'>;
+      const records = fromScheduleV2(await this.rawCall('schedules2.list_schedules', { source: { service_url: serviceLocation(url), object_id: id }, action_kind: 'render_report', limit }, signal)) as Output<'schedules.list_schedules'>;
+      return { records, limitReached: records.length >= Number(limit) };
     }
-    return (await this.rawCall('schedules.list_schedules', { report_id: id, action_kind: 'render_report' }, signal)).filter(s => Boolean(s.definition.action.render_report && serviceLocation(s.definition.action.render_report.report.service_url) === serviceLocation(url)));
+    // v1 has no service-qualified source filter. Inspect only this bounded set
+    // before exposing a schedule as associated with the selected report.
+    const summaries = await this.rawCall('schedules.list_schedules', { report_id: id, action_kind: 'render_report', limit }, signal);
+    const matches = [];
+    for (const summary of summaries) {
+      const detail = await this.rawCall('schedules.get_schedule', { schedule_id: summary.schedule_id }, signal);
+      const source = detail.definition.action.render_report?.report;
+      if (source && serviceLocation(source.service_url) === serviceLocation(url) && source.report_id === id) matches.push(summary);
+    }
+    return { records: matches, limitReached: summaries.length >= Number(limit) };
   }
   private async rawCall<M extends Method>(method: M, input: Input<M>, signal?: AbortSignal): Promise<Output<M>> {
     const config = methodConfig[method];
@@ -221,7 +239,7 @@ export class ReportClient {
         for await (const batch of stream) rows.push(...batch.map(row => {
           const result = plain(row);
           // The SDK converts safe top-level int64 values to Number. Keep our contract uniform.
-          for (const key of ['version', 'revision_number']) if (result[key] != null) result[key] = BigInt(result[key]);
+          for (const key of config.int64Fields) if (result[key] != null) result[key] = BigInt(result[key]);
           return result;
         }));
         return rows as Output<M>;

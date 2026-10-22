@@ -1,7 +1,8 @@
 import { Field, Schema, Utf8 } from '@query-farm/apache-arrow';
 import { serializeBatch, singleRowBatch } from '@query-farm/vgi-rpc/arrow';
-import { ReportClient, serviceLocation } from './client';
-import type { DataSource, DelegationKey, DelegationRecord, DelegationWrite, ReportResult, Schedule, ScheduleRecord, ScheduleIssue, Trigger } from './contracts.generated';
+import { ReportClient, serviceLocation, errorCode } from './client';
+import { finiteLimit } from './discovery';
+import type { DataSource, DelegationKey, DelegationRecord, DelegationWrite, ReportResult, Schedule, ScheduleRecord, ScheduleSummary, ScheduleIssue, Trigger } from './contracts.generated';
 import type { CatalogData } from '../service';
 import { getWorkspace } from '../workspace/store';
 import { catalogSecrets, secretsFor } from '../attach/secret-store';
@@ -63,23 +64,38 @@ export function validateSchedule(schedule: Schedule): void {
   }
 }
 
-/** New workers own attention policy. Older workers expose enough state for a fallback. */
-export function scheduleIssues(record: ScheduleRecord): ScheduleIssue[] {
-  if (Array.isArray(record.issues)) return record.issues;
-  const issues: ScheduleIssue[] = [];
-  if (record.last_run?.status === 'failed') issues.push({ kind: 'run_failed', message: record.last_run.error?.message ?? 'A report run failed.', run_id: record.last_run.run_id, expires_at: null });
-  if (record.definition.enabled && record.credentials.some(c => ['missing', 'expired'].includes(c.state))) issues.push({ kind: 'access_expired', message: 'Scheduled access needs renewal.', run_id: null, expires_at: null });
-  else if (record.definition.enabled && record.credentials.some(c => c.state === 'expiring')) issues.push({ kind: 'access_expiring', message: 'Scheduled access expires soon.', run_id: null, expires_at: null });
-  return issues;
+/** Attention and effective membership are evaluated by the authoritative worker. */
+export function scheduleIssues(record: ScheduleRecord | ScheduleSummary): ScheduleIssue[] {
+  return record.issues;
 }
 
 export async function checkEmailRecipients(client: ReportClient, text: string) {
   const addresses = emailDestinations(text);
-  const checks = await client.call('notify.check_destinations', { destinations: addresses });
-  if (checks.results.length !== addresses.length || checks.results.some((r, i) => r.address !== addresses[i].address || r.kind !== 'email')) throw new Error('The worker returned an incomplete recipient check.');
-  const refused = checks.results.filter(r => !r.allowed);
-  if (refused.length) throw new Error(refused.map(r => `${r.address}: ${r.reason || 'not allowed by this worker'}`).join('\n'));
+  const info = await client.call('notify.get_notify_info', {});
+  const maximum = finiteLimit(info.limits, 'max_check_destinations');
+  for (let offset = 0; offset < addresses.length; offset += maximum) {
+    const batch = addresses.slice(offset, offset + maximum);
+    const checks = await client.call('notify.check_destinations', { destinations: batch });
+    const seen = new Set<number>();
+    for (const check of checks) {
+      const index = Number(check.input_index);
+      if (!Number.isSafeInteger(index) || seen.has(index) || !batch[index] || check.address !== batch[index].address || check.kind !== batch[index].kind) throw new Error('The worker returned an incomplete recipient check.');
+      seen.add(index);
+    }
+    if (seen.size !== batch.length) throw new Error('The worker returned an incomplete recipient check.');
+    const refused = checks.filter(r => r.state !== 'allowed');
+    if (refused.length) throw new Error(refused.map(r => `${r.address}: ${r.reason || (r.state === 'unknown' ? 'permission could not be verified' : 'not allowed by this worker')}`).join('\n'));
+  }
   return addresses;
+}
+
+export async function getRequiredDelegations(client: ReportClient, keys: DelegationKey[], signal?: AbortSignal): Promise<DelegationRecord[]> {
+  const records: DelegationRecord[] = [];
+  for (const key of keys) {
+    try { records.push(await client.call('delegations.get_delegation', { key }, signal)); }
+    catch (error) { if (errorCode(error) !== 'NOT_FOUND') throw error; }
+  }
+  return records;
 }
 
 /** Attach with the exact options of the matching connection. Never silently use defaults for a missing connection. */
@@ -107,7 +123,9 @@ export async function authorizeSchedules(scheduler: ReportClient, keys: Delegati
   attach: (key: DelegationKey) => ReturnType<typeof sourceAttach>, days: number | 'worker',
   makeClient: (url: string) => ReportClient = url => new ReportClient(url)): Promise<DelegationRecord[]> {
   const scope = await scheduler.recoveryScope();
-  const existing = await scheduler.call('delegations.list_delegations', {});
+  const limits = await scheduler.call('delegations.get_delegation_limits', {});
+  if (keys.length > finiteLimit(limits.limits, 'max_delegation_writes')) throw new Error('This schedule requires more credentials than the worker can authorize atomically. Contact its administrator.');
+  const existing = await getRequiredDelegations(scheduler, keys);
   if (days !== 'worker' && (!Number.isFinite(days) || Math.round(days * 86400) < 1 || !Number.isSafeInteger(Math.round(days * 86400)))) throw new Error('Enter an access duration of at least one second.');
   const ttl = days === 'worker' ? 0n : BigInt(Math.round(days * 86400)), writes: DelegationWrite[] = [];
   for (const key of keys) {

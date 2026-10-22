@@ -9,6 +9,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { DocumentSources } from './DocumentSources';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
+import { folderAncestors } from '../../lib/reporting/folders';
 import { ReportStorageTree } from './ReportStorageTree';
 import { useReportLocations } from './ReportLocations';
 import { ReportClient, reportError, errorCode } from '../../lib/reporting/client';
@@ -42,10 +43,8 @@ export const DocumentSave = forwardRef<DocumentSaveHandle, {
     if (!binding?.record.folder_id) { setFolderPath(''); return; }
     if (binding.localScope) { setFolderPath(localFolderPath(binding.record.folder_id, localLibrary(binding.localScope).folders)); return; }
     const abort = new AbortController();
-    void new ReportClient(binding.url).call('list_folders', {}, abort.signal).then(folders => {
-      const names: string[] = [], visited = new Set<string>(); let id = binding.record.folder_id;
-      while (id && !visited.has(id)) { visited.add(id); const folder = folders.find(f => f.folder_id === id); if (!folder) break; names.unshift(folder.name); id = folder.parent_folder_id; }
-      if (!abort.signal.aborted) setFolderPath(names.join(' / '));
+    void folderAncestors(new ReportClient(binding.url), binding.record.folder_id, abort.signal).then(folders => {
+      if (!abort.signal.aborted) setFolderPath(folders.map(folder => folder.name).join(' / '));
     }).catch(() => { if (!abort.signal.aborted) setFolderPath('Folder'); });
     return () => abort.abort();
   }, [binding?.url, binding?.localScope, binding?.record.folder_id]);

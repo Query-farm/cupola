@@ -16,6 +16,7 @@ import { downloadDocumentFile } from '../../lib/saved-document-actions';
 import { ResourceDialog, folderPath, type ResourceAction, type ResourceValues } from './ResourceDialog';
 import type { LibrarySession } from './ReportLibrary';
 import type { ReportingWorkspaceProps } from './ReportingWorkspace';
+import { folderAncestors } from '../../lib/reporting/folders';
 import { WorkerReportHistory } from './WorkerReportHistory';
 import { ReportHeader } from './ReportHeader';
 import { reportAction, type ReportAction } from './ReportActionMenu';
@@ -40,6 +41,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
   }, [session.client.url, reportId]);
   const [generation, setGeneration] = useState(0), [editorGeneration, setEditorGeneration] = useState(0);
   const [folders, setFolders] = useState<FolderRecord[]>([]), [revisions, setRevisions] = useState<RevisionRow[]>([]);
+  const [historyLimit, setHistoryLimit] = useState(100);
   const [historyLoading, setHistoryLoading] = useState(true), [historyError, setHistoryError] = useState(''), [historyReload, setHistoryReload] = useState(0);
   const [page, showPage] = useReportPage();
   const [dialog, setDialog] = useState<{ action: ResourceAction; revision?: RevisionRow } | null>(null);
@@ -84,15 +86,15 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     if (!record) return;
     const abort = new AbortController();
     setHistoryLoading(true); setHistoryError('');
-    void session.client.call('list_revisions', { report_id: reportId }, abort.signal)
+    void session.client.call('list_revisions', { report_id: reportId, limit: BigInt(historyLimit) }, abort.signal)
       .then(history => { if (!abort.signal.aborted) setRevisions(history); })
       .catch(e => { if (!abort.signal.aborted) { setRevisions([]); setHistoryError(reportError(e)); } })
       .finally(() => { if (!abort.signal.aborted) setHistoryLoading(false); });
-    void session.client.call('list_folders', {}, abort.signal)
+    void folderAncestors(session.client, record.folder_id, abort.signal)
       .then(folders => { if (!abort.signal.aborted) setFolders(folders); })
       .catch(e => { if (!abort.signal.aborted) setError(reportError(e)); });
     return () => abort.abort();
-  }, [session.client, reportId, record?.version, historyReload]);
+  }, [session.client, reportId, record?.version, historyReload, historyLimit]);
   async function attempt(action: () => Promise<void>) {
     setBusy(true); setError('');
     try { await action(); } catch (e) { setError(reportError(e)); } finally { setBusy(false); }
@@ -139,7 +141,7 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     const a = document.createElement('a'); a.href = url; a.download = `${reportId}-${record.revision_served}.bin`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   const historyContent = <WorkerReportHistory client={session.client} reportId={reportId} revisions={revisions} headId={record?.head_revision_id} publishedId={record?.published_revision_id} pinnedId={revisionId}
-    blocked={blocked} loading={historyLoading} error={historyError} onRetry={() => setHistoryReload(n => n + 1)}
+    onLoadMore={revisions.length >= historyLimit ? () => setHistoryLimit(n => n + 100) : undefined} blocked={blocked} loading={historyLoading} error={historyError} onRetry={() => setHistoryReload(n => n + 1)}
     onView={id => { if (!blocked) props.onOpen(reportId, id); }}
     onCopyLink={revision => void attempt(async () => { await navigator.clipboard.writeText(reportLink(session.client.url, reportId, revision.revision_id)); setNotice('Revision link copied. Recipients need worker access.'); })}
     onRestore={controller || (can('edit') && record && documentKind(record) !== 'report') ? revision => void attempt(() => restore(revision)) : undefined}
@@ -201,6 +203,6 @@ export function RemoteReport(props: ReportingWorkspaceProps & { session: Library
     {page === 'ownership' && record && <OwnershipPage client={session.client} resourceKind="report" resourceId={reportId} name={record.envelope?.title ?? 'Report'} current={record.ownership} blocked={blocked || !can('transfer_ownership')} onBack={() => showPage(null)} onApply={async ownership => {
       setBusy(true); try { await session.journal.run('set_ownership', { report_id: reportId, expected_version: record.version, ownership }); props.onLeave(); } finally { setBusy(false); }
     }} />}
-    {dialog && record && <ResourceDialog {...dialog} resource={record} folders={folders} libraryName={session.info.display_name} rootActions={session.info.root_allowed_actions} writable={session.info.writable} onClose={() => setDialog(null)} onApply={apply} />}
+    {dialog && record && <ResourceDialog {...dialog} workerLocation={{ url: session.client.url, name: session.info.display_name, info: session.info }} resource={record} folders={folders} libraryName={session.info.display_name} rootActions={session.info.root_allowed_actions} writable={session.info.writable} onClose={() => setDialog(null)} onApply={apply} />}
   </section>;
 }

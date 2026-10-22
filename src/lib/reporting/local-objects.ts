@@ -19,7 +19,7 @@ export function deleteLocalObject(scope: string, id: string, storage: Storage = 
   if (typeof window !== 'undefined' && storage === window.localStorage) window.dispatchEvent(new Event(EVIDENCE_REPORTS_CHANGED));
 }
 export function localObjectRecord(object: LocalObject): ReportResult {
-  const actor = { id: 'local', display_name: 'On this device', email: null };
+  const actor = { id: 'local', kind: 'user' as const, display_name: 'On this device', email: null };
   return { report_id: object.id, object_kind: object.kind, version: 1n, folder_id: null, head_revision_id: String(object.updatedAt), published_revision_id: null,
     revision_served: String(object.updatedAt), revision_number: 1n, envelope: object.envelope, body: object.body, body_sha256: null, redacted: false,
     ownership: { owner_ref: { kind: 'principal', id: 'local', display_name: 'On this device' }, parent_owner_ref: null },

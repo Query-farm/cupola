@@ -1,6 +1,7 @@
 # Worker report libraries in Cupola
 
-Cupola probes the workspace's connected HTTP services for `vgi.reports.v1` and
+Cupola prefers `vgi.objects.v1` and `vgi.schedules.v2` when advertised, retaining
+report-only routing through `vgi.reports.v1` and `vgi.schedules.v1`. It
 combines their visible reports with browser-local reports in **All reports**.
 The **Location** column identifies each source. The main catalog sidebar has one
 **Reports → library → folders → reports** tree, available in every app tab.
@@ -61,9 +62,9 @@ available in the combined browser.
 - `ReportLocationsProvider` shares protocol discovery between the sidebar and
   report pages, deduplicating catalogs that use the same worker endpoint.
 - `ReportStorageTree` adapts local and worker folders for transfer dialogs.
-  `ResourceDialog` uses
-  `FileTree` for folder creation and moves within a worker, excluding a folder's
-  own descendants as move targets.
+  It loads the selected folder’s children and ancestors, offers bounded search,
+  and loads more results explicitly. `ResourceDialog` uses the same picker and
+  validates the selected path to prevent moves into the folder’s descendants.
 - `ReportFileList` renders the contents of both local and worker directories.
 - `ReportNotice` standardizes permission, information, and error messages with
   icons, concise text, and optional actions.
@@ -114,10 +115,11 @@ finds a visible item. Expansion does not select a destination.
   The original history remains at its source; Cupola does not impersonate its
   authors by replaying their revisions into a new worker report.
 
-Other reporting protocols (render, schedules, tasks, alerts, notify and owned
-resources) are not hosted by the current reference worker. This implementation
-does not manufacture those capabilities. Preview/PDF execution remains in
-Cupola, with the reader's current catalog connections.
+The reference worker's library host exposes objects, reports, ownership and
+resource identity. Its execution host also exposes render, schedules, delegations
+and notify. SQL tasks and the standalone alerts protocol are not advertised.
+Interactive report preview/PDF uses Cupola's current catalog connections;
+scheduled previews and deliveries use the execution host's delegated access.
 
 ## Revision history
 
@@ -149,10 +151,11 @@ authenticated accounts record their own identities.
 ## Contracts and transport
 
 `src/lib/reporting/contracts.generated.ts` is generated from the actual Python
-dataclasses in the adjacent SDK checkout, including the inline HTML email contract:
+dataclasses in the adjacent SDK checkout, including enterprise identity capabilities, summary streams, and preview jobs:
 
 ```sh
-../vgi-reporting-protocol-reference/.venv/bin/python scripts/generate-reporting-contracts.py
+../vgi-python/.venv/bin/python scripts/generate-reporting-contracts.py
+../vgi-python/.venv/bin/python scripts/generate-reporting-contracts.py --check
 ```
 
 The generated file contains TypeScript record/method types, all explicit method
@@ -169,6 +172,39 @@ service and a token digest. Tokens themselves are never written into report
 records, links or mutation journals. A changed token requires the original
 credential to retry its journal; this conservative boundary also applies to
 rotated opaque credentials.
+
+## Enterprise ownership and bounded browsing
+
+Library and schedule filters send `ownership_scope` directly to the worker.
+`all` means accessible resources; `self` means direct ownership by the caller;
+`member` means effective membership in a supported direct owner; `self_or_member`
+is their union. The UI offers only advertised scopes and never enumerates the
+caller’s groups. Unsupported scopes and membership outages remain errors.
+Membership filters do not imply membership in the recorded parent owner.
+
+`vgi.resource_identity.v1` binds owner discovery and exact validation to the
+resource protocol, kind, ID and transfer operation. The ownership page offers
+advertised identifier schemes even if discovery is disabled. Only an `allowed`
+check supplies a selectable canonical ownership value; editing its identifiers
+invalidates the previous selection. Teams use `group` owners. The optional
+parent identifier selects a durable management owner, independent of folders.
+The worker revalidates all assignments when the transfer executes. Ownership,
+resource access, and consent to execute as a user or service remain separate.
+
+Workers offering the generic or report-only ownership companion still support
+capability-aware, bounded `find_owners` streams. Protocol discovery is partitioned
+by the current service and credential scope. The host establishes tenant context;
+owner keys, identifier values and browser labels cannot select a tenant.
+
+`list_reports`/`list_objects` and `list_schedules` return compact summaries.
+The UI fetches full records when opening, editing, or copying them. Publication
+and revision metadata absent from summaries are no longer inferred in list rows.
+Lists start at 100 results and offer explicit expansion; search runs on the worker.
+The sidebar shows at most 100 documents and 200 folders per library and labels
+that limit. Folder browsing is shallow unless a search explicitly requests
+recursive results. Revision and run histories are bounded and expand on demand.
+The v1 schedule association path reads bounded details to verify the report’s
+service URL; v2 uses its service-qualified source filter directly.
 
 ## `cupola.evidence/1` body
 
@@ -245,15 +281,21 @@ warnings. Public report parameters support fixed values and the worker's
 advertised relative periods. Advanced settings expose the optional read-only
 condition SQL. A worker remains authoritative for validation and limits.
 
-Email supports multiple recipients, worker-provided suggestions and recipient
-policy checks. Choose the full report as email content (when advertised through
+Email supports exact recipient entry even when directory enumeration and search
+are disabled. Suggestions and `find_destinations` run only when their channel
+advertises them, respecting minimum query length and the total result limit.
+Recipient checks split at `max_check_destinations`, consume each stream to
+completion, and correlate every result by its unique `input_index`. Missing,
+duplicate, denied, unknown, or interrupted results prevent saving or preview. Choose the full report as email content (when advertised through
 `ChannelInfo.html_body`), a summary, or attachments only; PDF and HTML attachments
 are independent choices. Provider credentials and sender configuration remain
 on the worker. Cupola never calls `notify.send` directly.
 
 **Authorize / renew access** issues grants using each source's signed-in account,
 seals the exact attached catalog options, and installs credentials using delegation
-version preconditions. Report service access and catalog access are separate.
+version preconditions. Credential metadata is fetched with `get_delegation` for
+each required key. `max_delegation_writes` is checked before minting grants;
+oversized atomic batches are refused. Report service access and catalog access are separate.
 The UI shows expiration metadata; the worker caps requested lifetimes. A fresh
 login can be requested with OIDC `prompt=login` and `max_age=0`. Non-secret schedule
 drafts survive that redirect in this tab. Grant and ticket bytes stay in memory
@@ -261,11 +303,16 @@ and are explicitly prohibited from the persistent mutation journal. Delegations
 belong to the signed-in scheduler account; an execution identity belonging to
 someone else must renew its own credentials.
 
-**Preview without sending** calls `test_run`, returning downloadable files and
-prospective message descriptions without sending mail or creating a scheduled
-run. **Run & send now** admits a real manual run. Run history polls the worker
-and shows rendering steps, provider acceptance, errors, downloads and recovery
-events. Acceptance by an email provider does not claim inbox delivery.
+**Preview without sending** first calls `validate_schedule`; incomplete validation
+blocks both saving and preview. It admits a job with `start_test_run` and polls
+`get_test_run` at the worker’s interval. Interrupted starts retain the same request
+ID and payload in the mounted editor; interrupted polling resumes the existing
+job. `cancel_test_run` uses the job version and retains its request ID after a lost
+reply. Closing the editor stops polling; worker expiry bounds abandoned jobs.
+Preview produces files and message descriptions without sending mail or creating
+a scheduled run. **Run & send now** admits a real manual run. Run lists contain
+summaries; opening a run fetches its full record and separate bounded step,
+destination, and recovery streams. Attempt history loads only when expanded. Acceptance by an email provider does not claim inbox delivery.
 
 Schedule changes and manual runs use the same durable request journal as saved
 reports. Lost acknowledgements replay the original request ID; they never become
@@ -336,6 +383,36 @@ Without a token, the reference worker exposes only its anonymously readable
 published reports, with no write actions.
 
 ## Verification
+
+The current contract tests run against the adjacent SDK, independently of the
+reference worker. Run the UI and HTTP suites in separate Bun processes because
+the UI suite installs a DOM environment:
+
+```sh
+bun test ./tests/unit
+bun test tests/reporting/protocol-ui.test.tsx
+bun test tests/reporting/protocols.integration.test.ts
+bun run check
+bun run build
+```
+
+The HTTP fixture uses the real Python SDK, reflection, Arrow schemas and continued
+streams. It covers exact group lookup without enumeration, out-of-order and
+partial destination checks, summary metadata, and preview replay/poll/cancel.
+Set `CUPOLA_REPORTING_SDK_PYTHON` to override the default `../vgi-python/.venv/bin/python`.
+
+The adjacent reference worker implements the revised contracts, including streamed
+identity and destination checks, compact summaries and receipts, and asynchronous
+preview jobs. Its real-worker library and scheduling HTTP integration tests pass.
+Run them with `bun test tests/reporting/client.integration.test.ts
+tests/reporting/objects.integration.test.ts tests/reporting/scheduling.integration.test.ts`.
+All 40 browser tests in `tests/reporting.spec.ts` and
+`tests/report-scheduling.spec.ts` passed against the migrated worker, including
+preview without email, lost-response replay, ownership transfers and run history.
+The reference worker advertises `all`/`self` ownership scopes; the SDK fixture also
+exercises enterprise group ownership and checks without enumeration.
+
+### Historical reference-worker verification
 
 The 0.4.226 integration review checked all 17 methods against the pinned Python
 SDK and reference worker. Regenerating the Arrow schemas and method signatures

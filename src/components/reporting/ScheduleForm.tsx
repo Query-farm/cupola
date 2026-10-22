@@ -1,14 +1,16 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { CalendarClock, Mail, Play, Save, ShieldCheck } from 'lucide-react';
 import { Button } from '../ui/button';
 import { ReportNotice } from './ReportNotice';
 import { ReportClient, reportError, errorCode } from '../../lib/reporting/client';
-import type { NotifyInfo, ParameterSpec, ParamValue, ReportResult, RevisionRow, Schedule, ScheduleRecord, SchedulerInfo, ScheduleTest, TriggerPreview } from '../../lib/reporting/contracts.generated';
+import type { NotifyInfo, ParameterSpec, ParamValue, ReportResult, RevisionRow, Schedule, ScheduleRecord, SchedulerInfo, ScheduleTest, SchedulePreviewJob, TriggerPreview } from '../../lib/reporting/contracts.generated';
 import { cronFor, dateLabel, checkEmailRecipients, HTML, newSchedule, PDF, triggerFields, validateSchedule, type Frequency } from '../../lib/reporting/schedules';
 import { ScheduleAlertsEditor, alertEventLabels } from './ScheduleAlertsEditor';
 import { UseMyEmail, addRecipient } from './UseMyEmail';
 import { scheduleInput, ScheduleField, ScheduleSection } from './ScheduleFields';
 import { ScheduleArtifacts } from './ScheduleRunDetails';
+import { SchedulePreviewSession } from '../../lib/reporting/preview';
+import { discoveryLimit } from '../../lib/reporting/discovery';
 import { parseJournal, serializeJournal } from '../../lib/reporting/journal';
 
 export { scheduleInput, ScheduleField, ScheduleSection } from './ScheduleFields';
@@ -34,9 +36,16 @@ export function ScheduleForm({ initial, draftKey, report, reportClient, client, 
   const [revisions, setRevisions] = useState<RevisionRow[]>([]), [selectedReport, setSelectedReport] = useState(report), [versionLoading, setVersionLoading] = useState(true), [versionError, setVersionError] = useState('');
   const [destinations, setDestinations] = useState<string[]>([]), [recipientStatus, setRecipientStatus] = useState('');
   const [conflict, setConflict] = useState(false);
+  const previewSession = useRef<SchedulePreviewSession | null>(null), previewAbort = useRef<AbortController | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [previewJob, setPreviewJob] = useState<SchedulePreviewJob | null>(null), [previewPending, setPreviewPending] = useState(false);
+  const [recipientQuery, setRecipientQuery] = useState(''), [discoveryError, setDiscoveryError] = useState('');
+  const [revisionLimit, setRevisionLimit] = useState(100);
+  useEffect(() => () => previewAbort.current?.abort(), []);
+
   const action = draft.action.render_report!;
   const restricted = draft.deliveries.length > 1 || draft.deliveries.some(d => d.destinations.some(x => x.kind !== 'email') || !['none', 'summary', 'report'].includes(d.inline)) || Boolean(draft.alerts?.destinations.some(d => d.kind !== 'email') || draft.alerts?.events.some(e => !(e in alertEventLabels)));
-  const disabled = busy || working || !scheduler.writable || Boolean(initial && !initial.allowed_actions.includes('update')) || restricted;
+  const disabled = busy || working || previewPending || !scheduler.writable || Boolean(initial && !initial.allowed_actions.includes('update')) || restricted;
   const patch = (value: Partial<Schedule>) => { setDraft(old => ({ ...old, ...value })); setPreview(null); };
   useEffect(() => {
     // Survives fresh-login redirects in this tab. Only schedule settings; never grants or tickets.
@@ -56,10 +65,9 @@ export function ScheduleForm({ initial, draftKey, report, reportClient, client, 
   }, [client, JSON.stringify(draft.trigger)]);
   useEffect(() => {
     const abort = new AbortController();
-    void reportClient.call('list_revisions', { report_id: report.report_id }, abort.signal).then(setRevisions).catch(e => { if (!abort.signal.aborted) setError(reportError(e)); });
-    if (notify) void client.call('notify.list_destinations', { kind: 'email' }, abort.signal).then(rows => setDestinations(rows.map(r => r.address))).catch(() => { /* Suggestions are optional; checks are required. */ });
+    void reportClient.call('list_revisions', { report_id: report.report_id, limit: BigInt(revisionLimit) }, abort.signal).then(value => { if (!abort.signal.aborted) setRevisions(value); }).catch(e => { if (!abort.signal.aborted) setError(reportError(e)); });
     return () => abort.abort();
-  }, [client, reportClient, report.report_id, notify]);
+  }, [reportClient, report.report_id, revisionLimit]);
   useEffect(() => {
     const abort = new AbortController(); setVersionLoading(true); setVersionError('');
     const id = action.track === 'pinned' ? action.report.revision_id : action.track === 'published' ? report.published_revision_id : null;
@@ -69,6 +77,50 @@ export function ScheduleForm({ initial, draftKey, report, reportClient, client, 
     }).catch(e => { if (!abort.signal.aborted) setVersionError(reportError(e)); }).finally(() => { if (!abort.signal.aborted) setVersionLoading(false); });
     return () => abort.abort();
   }, [reportClient, report.report_id, report.published_revision_id, action.track, action.report.revision_id]);
+  useEffect(() => {
+    const abort = new AbortController(); setDestinations([]); setDiscoveryError('');
+    const caps = notify?.channels.find(c => c.kind === 'email' && c.enabled)?.discovery;
+    const limit = caps && discoveryLimit(caps, recipientQuery);
+    if (limit == null) return;
+    const timer = setTimeout(() => void client.call('notify.find_destinations', { kind: 'email', query: recipientQuery.trim(), limit }, abort.signal)
+      .then(rows => { if (!abort.signal.aborted) setDestinations(rows.map(r => r.address)); })
+      .catch(e => { if (!abort.signal.aborted) setDiscoveryError(reportError(e)); }), 200);
+    return () => { clearTimeout(timer); abort.abort(); };
+  }, [client, notify, recipientQuery]);
+  async function previewSchedule(next?: Schedule) {
+    if (!previewSession.current) {
+      if (!next) return;
+      setPreview(null); setPreviewJob(null);
+      previewSession.current = new SchedulePreviewSession(client, { request_id: crypto.randomUUID(), schedule: next, execution: initial ? { principal_id: initial.execution_identity.principal.id } : null, as_of: Date.now() });
+    }
+    setPreviewPending(true); setWorking(true); setError('');
+    const abort = new AbortController(); previewAbort.current = abort;
+    try { setPreview(await previewSession.current.run(abort.signal, setPreviewJob)); }
+    catch (e) {
+      if (!abort.signal.aborted) {
+        setError(reportError(e));
+        if (!previewSession.current?.job && ['INVALID_ARGUMENT', 'PERMISSION_DENIED', 'UNAUTHENTICATED', 'FAILED_PRECONDITION', 'RESOURCE_EXHAUSTED', 'UNIMPLEMENTED'].includes(errorCode(e) ?? '')) {
+          previewSession.current = null; setPreviewPending(false);
+        }
+      }
+    }
+    finally {
+      if (!abort.signal.aborted) {
+        setWorking(false);
+        const job = previewSession.current?.job;
+        if (job && (['succeeded', 'failed', 'cancelled'].includes(job.status) || job.expires_at <= Date.now())) { previewSession.current = null; setPreviewPending(false); }
+      }
+    }
+  }
+  async function cancelPreview() {
+    previewAbort.current?.abort(); setCancelling(true); setWorking(true); setError('');
+    try {
+      const job = await previewSession.current?.cancel();
+      if (job) setPreviewJob(job);
+      if (job && ['succeeded', 'failed', 'cancelled'].includes(job.status)) { previewSession.current = null; setPreviewPending(false); }
+      else setError('Cancellation was requested. Resume checking the preview to confirm its final state.');
+    } catch (e) { setError(reportError(e)); } finally { setWorking(false); setCancelling(false); }
+  }
   async function definition() {
     if (versionLoading || versionError) throw new Error(versionError || 'Wait for the selected report version to load.');
     let next = structuredClone(draft);
@@ -86,17 +138,23 @@ export function ScheduleForm({ initial, draftKey, report, reportClient, client, 
       next.alerts.destinations = await checkEmailRecipients(client, next.alerts.destinations.map(d => d.address).join(', '));
     }
     validateSchedule(next);
-    // Validate timing on the authoritative worker before admitting a mutation.
-    await client.call('schedules.preview_trigger', { trigger: next.trigger, after: Date.now(), count: 1n });
+    const validation = await client.call('schedules.validate_schedule', { schedule: next, execution: initial ? { principal_id: initial.execution_identity.principal.id } : null });
+    if (!validation.valid || !validation.complete) throw new Error(validation.issues.map(issue => `${issue.field}: ${issue.message}`).join('\n') || 'The worker could not completely validate this schedule.');
     return next;
   }
   async function perform(kind: 'save' | 'preview' | 'recipients') {
     setWorking(true); setError('');
+    let previewStarted = false;
     try {
+      if (kind === 'recipients') {
+        const addresses = await checkEmailRecipients(client, recipients);
+        setRecipientStatus(`${addresses.length} recipient${addresses.length === 1 ? '' : 's'} allowed by the worker.`);
+        return;
+      }
       const next = await definition();
       if (kind === 'save') { await onSave(next, baseVersion); sessionStorage.removeItem(draftKey); }
-      else if (kind === 'preview') setPreview(await client.call('schedules.test_run', { schedule: next, execution: initial ? { principal_id: initial.execution_identity.principal.id } : null, as_of: Date.now() }));
-    } catch (e) { setError(reportError(e)); if (errorCode(e) === 'ABORTED') setConflict(true); } finally { setWorking(false); }
+      else { previewStarted = true; await previewSchedule(next); }
+    } catch (e) { setError(reportError(e)); if (errorCode(e) === 'ABORTED') setConflict(true); } finally { if (!previewStarted) setWorking(false); }
   }
   const parameterValues = new Map(draft.parameter_values.map(value => [value.key, value]));
   function parameter(key: string, value: ParamValue | null) { patch({ parameter_values: [...draft.parameter_values.filter(p => p.key !== key), ...(value ? [value] : [])] }); }
@@ -120,7 +178,7 @@ export function ScheduleForm({ initial, draftKey, report, reportClient, client, 
       <ScheduleSection title="Report version">
         <div className="grid gap-4 sm:grid-cols-2"><ScheduleField label="Version to generate"><select className={scheduleInput} value={action.track} onChange={e => patch({ action: { ...draft.action, render_report: { ...action, track: e.target.value as typeof action.track, report: { ...action.report, revision_id: e.target.value === 'pinned' ? report.revision_served : null } } } })}><option value="published" disabled={!report.published_revision_id}>Latest published version</option><option value="head">Latest saved version</option><option value="pinned">Specific version</option></select></ScheduleField>
           {action.track === 'pinned' && <ScheduleField label="Specific version"><select className={scheduleInput} value={action.report.revision_id ?? ''} onChange={e => patch({ action: { ...draft.action, render_report: { ...action, report: { ...action.report, revision_id: e.target.value } } } })}>{revisions.filter(r => r.redacted_at == null).map(r => <option key={r.revision_id} value={r.revision_id}>Version {String(r.revision_number)} · {dateLabel(r.created_at)}</option>)}</select></ScheduleField>}
-        </div><p className="text-xs text-muted-foreground">{action.track === 'head' ? 'New edits will be used automatically, including unpublished changes.' : action.track === 'published' ? 'Publishing a new version updates future runs.' : 'Future runs keep using this version, even after edits.'}</p>
+        </div>{revisions.length >= revisionLimit && <Button type="button" variant="outline" onClick={() => setRevisionLimit(n => n + 100)}>Load older versions</Button>}<p className="text-xs text-muted-foreground">{action.track === 'head' ? 'New edits will be used automatically, including unpublished changes.' : action.track === 'published' ? 'Publishing a new version updates future runs.' : 'Future runs keep using this version, even after edits.'}</p>
         {versionError && <p role="alert" className="text-sm text-destructive">{versionError}</p>}
         {selectedReport.envelope?.parameters.map(spec => {
           const value = parameterValues.get(spec.key);
@@ -135,7 +193,9 @@ export function ScheduleForm({ initial, draftKey, report, reportClient, client, 
         {email ? <>
           <ScheduleField label="Recipients" hint="Separate email addresses with commas or new lines."><textarea className={scheduleInput} value={recipients} rows={2} onChange={e => { setRecipients(e.target.value); setRecipientStatus(''); setPreview(null); }} /></ScheduleField>
           <UseMyEmail client={client} disabled={disabled} onSelect={address => { setRecipients(old => addRecipient(old, address)); setRecipientStatus(''); setPreview(null); }} />
-          {destinations.length > 0 && <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>Suggested:</span>{destinations.slice(0, 8).map(address => <button type="button" key={address} className="rounded border px-2 py-1 hover:bg-muted" onClick={() => { setRecipients(old => old ? `${old}, ${address}` : address); setRecipientStatus(''); }}>{address}</button>)}</div>}
+          {notify?.channels.find(c => c.kind === 'email')?.discovery.search_supported && <ScheduleField label="Search recipients" hint={notify.channels.find(c => c.kind === 'email')?.discovery.query_hint}><input className={scheduleInput} value={recipientQuery} onChange={e => setRecipientQuery(e.target.value)} /></ScheduleField>}
+          {discoveryError && <p className="text-sm text-destructive" role="alert">{discoveryError}</p>}
+          {destinations.length > 0 && <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>Suggested:</span>{destinations.map(address => <button type="button" key={address} className="rounded border px-2 py-1 hover:bg-muted" onClick={() => { setRecipients(old => old ? `${old}, ${address}` : address); setRecipientStatus(''); }}>{address}</button>)}</div>}
           <p className="text-xs text-muted-foreground">{notify?.destination_policy_summary}</p>
           <Button type="button" variant="outline" size="sm" onClick={() => void perform('recipients')}>Check recipients</Button>{recipientStatus && <p role="status" className="text-sm">{recipientStatus}</p>}
           <ScheduleField label="Email content"><select className={scheduleInput} value={inline} onChange={e => { setInline(e.target.value as typeof inline); setPreview(null); }}><option value="report" disabled={!htmlBody}>Full report in the email</option><option value="summary">Summary</option><option value="none">Attachments only</option></select></ScheduleField>
@@ -147,6 +207,7 @@ export function ScheduleForm({ initial, draftKey, report, reportClient, client, 
     </fieldset>
     <ScheduleSection title="Scheduled access" icon={ShieldCheck}>{access}</ScheduleSection>
     {error && <ReportNotice kind="error" title="Schedule needs attention" action={conflict ? <Button type="button" variant="outline" onClick={() => { sessionStorage.removeItem(draftKey); onReload(); }}>Discard draft and load current schedule</Button> : undefined}>{error}</ReportNotice>}
+    {previewPending && <ReportNotice title={previewJob ? `Preview ${previewJob.status}` : 'Preview awaiting confirmation'} action={<div className="flex gap-2">{!working && !cancelling && <Button type="button" variant="outline" onClick={() => void previewSchedule()}>Resume preview</Button>}{previewJob?.allowed_actions.includes('cancel') && <Button type="button" variant="outline" disabled={cancelling} onClick={() => void cancelPreview()}>Cancel preview</Button>}</div>}>No email is sent. An interrupted request resumes the same preview. {previewJob && `Results expire ${dateLabel(previewJob.expires_at)}.`}</ReportNotice>}
     {preview && <ScheduleSection title="Preview result"><p className="text-sm">Generated {dateLabel(preview.evaluated_at)}. No email was sent.</p>{preview.condition_evaluated && <p className="text-sm">Condition: {preview.condition_value ? 'passed' : 'not met — automatic runs would be skipped'}</p>}<ScheduleArtifacts outputs={preview.outputs} />{preview.messages.map((message, i) => <div key={i} className="rounded border p-3 text-sm"><p className="font-medium">{message.title}</p><p>{message.summary}</p>{message.body_html && <p>Includes the full report in the email body.</p>}<p>{message.attachments.map(a => a.filename).join(', ')}</p></div>)}</ScheduleSection>}
     <div className="flex flex-wrap items-center gap-3 border-t pt-4"><Button type="submit" disabled={disabled || versionLoading || Boolean(versionError)}><Save />{working ? 'Working…' : initial ? 'Save changes' : 'Create schedule'}</Button><Button type="button" variant="outline" disabled={disabled || versionLoading || Boolean(versionError)} onClick={() => void perform('preview')}><Play />Preview without sending</Button><span className="text-xs text-muted-foreground">{working ? 'Waiting for the worker…' : 'Recipient permissions are checked again when the worker sends.'}</span></div>
   </form>;

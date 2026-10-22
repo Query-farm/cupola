@@ -5,10 +5,10 @@ import { resolve, join } from 'node:path';
 import { ReportClient } from '../../src/lib/reporting/client';
 
 /** A real reference worker with an isolated database. No Yahoo/network dependency in these tests. */
-export async function startReportingWorker(displayName = "Finance report library", rendererUrl?: string, legacyOnly = false, access: { maximum?: number; legacyIdentity?: boolean; unsupportedIdentity?: boolean } = {}) {
+export async function startReportingWorker(displayName = "Finance report library", rendererUrl?: string, legacyOnly = false, access: { maximum?: number; legacyIdentity?: boolean; unsupportedIdentity?: boolean; protocolFixture?: boolean } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'cupola-reporting-'));
-  const python = process.env.CUPOLA_REPORTING_PYTHON ?? resolve('../vgi-reporting-protocol-reference/.venv/bin/python');
-  const processWorker = spawn(python, rendererUrl ? [resolve('tests/reporting/scheduling_worker.py')] : legacyOnly ? ['-c', `from vgi_reporting_reference.worker import ReportStoreWorker, ReportingWorker
+  const python = access.protocolFixture ? process.env.CUPOLA_REPORTING_SDK_PYTHON ?? resolve('../vgi-python/.venv/bin/python') : process.env.CUPOLA_REPORTING_PYTHON ?? resolve('../vgi-reporting-protocol-reference/.venv/bin/python');
+  const processWorker = spawn(python, access.protocolFixture ? [resolve('tests/reporting/protocol_worker.py'), '--http', '--host', '127.0.0.1', '--port', '0'] : rendererUrl ? [resolve('tests/reporting/scheduling_worker.py')] : legacyOnly ? ['-c', `from vgi_reporting_reference.worker import ReportStoreWorker, ReportingWorker
 original = ReportStoreWorker.hosted_protocols
 ReportStoreWorker.hosted_protocols = classmethod(lambda cls: [(p, i) for p, i in original() if p.protocol_name.startswith('vgi.reports.')])
 ReportingWorker.main()`, '--http', '--host', '127.0.0.1', '--port', '0'] : ['-m', 'vgi_reporting_reference.worker', '--http', '--host', '127.0.0.1', '--port', '0'], {

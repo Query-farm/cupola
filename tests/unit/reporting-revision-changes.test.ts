@@ -45,7 +45,7 @@ describe('worker revision comparisons', () => {
     expect(() => reportRevisionChanges(before, { ...record(), report_id: 'another' })).toThrow('same report');
   });
   test('resource ownership and timestamps are not changes to the report definition', () => {
-    expect(reportRevisionChanges(record(), { ...record(), updated_at: 500, version: 2n, updated_by: { id: 'bob', display_name: 'Bob', email: null } })).toEqual({ fields: [], encodingChanged: false });
+    expect(reportRevisionChanges(record(), { ...record(), updated_at: 500, version: 2n, updated_by: { id: 'bob', kind: 'user', display_name: 'Bob', email: null } })).toEqual({ fields: [], encodingChanged: false });
   });
 });
 

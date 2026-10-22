@@ -31,7 +31,7 @@ test('sidebar query deletion confirms, retries a lost reply, and retains the ope
   await expect(dialog).toContainText('Deletion is not confirmed');
   await dialog.getByRole('button', { name: 'Retry delete', exact: true }).click();
   await expect(dialog).not.toBeVisible(); await expect(row).toHaveCount(0);
-  expect((await c.call('list_reports', {})).some(record => record.report_id === saved.report_id)).toBe(false);
+  expect((await c.call('scan_reports', {})).some(record => record.report_id === saved.report_id)).toBe(false);
   await page.getByTestId('tab-editor').click();
   await expect(page.locator('.cm-content:visible')).toContainText('87654');
   await expect(page.getByRole('status').filter({ hasText: 'Deleted from library' })).toBeVisible();
@@ -254,7 +254,7 @@ test('query name conflicts stay in the save form and a corrected name can be sav
   await expect(picker).not.toBeVisible();
   await expect(page.getByRole('alert').filter({ hasText: 'A query with this name already exists' })).toBeVisible();
   expect((await client.call('get_report', { report_id: existing.report_id })).revision_number).toBe(1n);
-  expect((await client.call('list_reports', {})).filter(row => row.envelope?.title === 'Taken query name')).toHaveLength(1);
+  expect((await client.call('scan_reports', {})).filter(row => row.envelope?.title === 'Taken query name')).toHaveLength(1);
 });
 
 for (const kind of ['query', 'notebook'] as const) test(`${kind} opens without executing, saves unknown metadata, recovers a lost reply, and copies locally`, async ({ page, reporting }) => {
@@ -334,7 +334,7 @@ for (const kind of ['query', 'notebook'] as const) test(`a new ${kind} saves fro
   await picker.getByRole('treeitem', { name: 'Finance report library', exact: true }).click();
   await picker.getByRole('button', { name: 'Save here' }).click();
   await expect(page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
-  const saved = (await reporting.client().call('list_reports', {})).find(r => r.envelope?.title === `New shared ${kind}`)!;
+  const saved = (await reporting.client().call('scan_reports', {})).find(r => r.envelope?.title === `New shared ${kind}`)!;
   expect(saved).toBeDefined();
   const result = await reporting.client().call('get_report', { report_id: saved.report_id });
   expect(result.envelope?.data_sources.some(s => s.catalog_name === 'yfinance')).toBe(true);
@@ -470,7 +470,7 @@ for (const kind of ['query', 'notebook'] as const) test(`an unsaved ${kind} runs
   await picker.getByRole('treeitem', { name: 'Finance report library', exact: true }).click();
   await picker.getByRole('button', { name: 'Save here' }).click();
   await expect(page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
-  const saved = (await reporting.client().call('list_reports', {})).find(r => r.envelope?.title === `Memory ${kind}`)!;
+  const saved = (await reporting.client().call('scan_reports', {})).find(r => r.envelope?.title === `Memory ${kind}`)!;
   const record = await reporting.client().call('get_report', { report_id: saved.report_id });
   expect(JSON.parse(new TextDecoder().decode(record.body!)).context).toEqual({ default_source_alias: null, default_schema: null });
 });
@@ -485,7 +485,7 @@ test('Library New and sidebar New create all supported document types', async ({
     await expect(page.getByTestId(kind === 'query' ? 'sql-editor-view' : 'notebook-workspace')).toBeVisible();
     await page.getByTestId('catalog-sidebar').getByRole('link', { name: 'Finance report library', exact: true }).click();
   }
-  const rows = await reporting.client().call('list_reports', {});
+  const rows = await reporting.client().call('scan_reports', {});
   expect(rows.filter(r => ['cupola.query/1', 'cupola.notebook/1'].includes(r.envelope?.body_format ?? '')).length).toBeGreaterThanOrEqual(2);
   await page.getByRole('navigation', { name: 'Saved library' }).getByRole('button', { name: 'New document' }).click();
   await page.getByRole('menuitem', { name: 'New query', exact: true }).click();

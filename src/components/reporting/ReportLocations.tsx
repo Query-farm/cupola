@@ -1,15 +1,17 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode, type Dispatch, type SetStateAction } from 'react';
 import { ReportClient, reportError, serviceLocation } from '../../lib/reporting/client';
 import { getWorkspace } from '../../lib/workspace/store';
 import type { CatalogData } from '../../lib/service';
 import type { ReportLocation } from '../../lib/reporting/locations';
 import { OPEN_REPORT_EVENT } from '../../lib/evidence/open-report';
 import { REPORT_ROUTE_CHANGED } from '../../lib/reporting/navigation';
+import type { OwnershipScope } from '../../lib/reporting/discovery';
 import type { TransferDestination, TransferSource } from '../../lib/reporting/transfers';
 import { useScheduleInventory, type WorkerSchedules } from '../../lib/reporting/use-schedule-inventory';
 
+interface ScheduleFilters { query: string; limit: number; ownership_scope: OwnershipScope }
 interface TransferRequest { source: TransferSource; move: boolean; initialDestination?: TransferDestination }
-const Context = createContext<{ locations: ReportLocation[]; refresh: () => void; refreshVersion: number; scheduleWorkers: WorkerSchedules[]; refreshSchedules: () => void; transfer: TransferRequest | null; setTransfer: (request: TransferRequest | null) => void } | null>(null);
+const Context = createContext<{ locations: ReportLocation[]; refresh: () => void; refreshVersion: number; scheduleWorkers: WorkerSchedules[]; scheduleFilters: ScheduleFilters; setScheduleFilters: Dispatch<SetStateAction<ScheduleFilters>>; refreshSchedules: () => void; transfer: TransferRequest | null; setTransfer: (request: TransferRequest | null) => void } | null>(null);
 
 /** The sidebar and report pages discover the same libraries, including a shared-link target. */
 export function ReportLocationsProvider({ serviceUrl, workspaceId, catalogs, children }: {
@@ -50,11 +52,12 @@ export function ReportLocationsProvider({ serviceUrl, workspaceId, catalogs, chi
     return () => abort.abort();
   }, [key, generation]);
   const refresh = useCallback(() => setGeneration(n => n + 1), []);
-  const { workers, refresh: refreshSchedules } = useScheduleInventory(clients);
+  const [scheduleFilters, setScheduleFilters] = useState<ScheduleFilters>({ query: '', limit: 100, ownership_scope: 'all' });
+  const { workers, refresh: refreshSchedules } = useScheduleInventory(clients, scheduleFilters);
   // Names are presentation only; resolving a library name must not restart
   // schedule discovery or cancel an in-flight schedule request.
   const scheduleWorkers = workers.map(worker => ({ ...worker, name: locations.find(location => location.url === worker.url)?.name ?? catalogs.find(catalog => catalog.sourceUrl === worker.url)?.catalogName ?? worker.name }));
-  return <Context.Provider value={{ locations, refresh, refreshVersion: generation, scheduleWorkers, refreshSchedules, transfer, setTransfer }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ locations, refresh, refreshVersion: generation, scheduleWorkers, scheduleFilters, setScheduleFilters, refreshSchedules, transfer, setTransfer }}>{children}</Context.Provider>;
 }
 
 export function useReportLocations() {

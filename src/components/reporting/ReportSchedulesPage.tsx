@@ -8,9 +8,9 @@ import { ScheduleForm, scheduleInput, ScheduleSection } from './ScheduleForm';
 import { ScheduleActivityButton } from './ScheduleActivity';
 import { ScheduleAccess } from './ScheduleAccess';
 import { ScheduleRunDetails } from './ScheduleRunDetails';
-import { ReportClient, reportError, errorCode, serviceLocation } from '../../lib/reporting/client';
+import { ReportClient, reportError, serviceLocation } from '../../lib/reporting/client';
 import { MutationJournal } from '../../lib/reporting/journal';
-import { NOTIFY_PROTOCOL, SCHEDULES_PROTOCOL, type NotifyInfo, type ReportResult, type Schedule, type ScheduleRecord, type SchedulerInfo, type ScheduleRun } from '../../lib/reporting/contracts.generated';
+import { NOTIFY_PROTOCOL, SCHEDULES_PROTOCOL, type NotifyInfo, type ReportResult, type Schedule, type ScheduleRecord, type SchedulerInfo, type ScheduleRun, type ScheduleSummary, type ScheduleRunSummary } from '../../lib/reporting/contracts.generated';
 import { dateLabel, requiredDelegations, sameService, statusLabel, scheduleIssues } from '../../lib/reporting/schedules';
 import { REPORT_ROUTE_CHANGED } from '../../lib/reporting/navigation';
 import type { CatalogData } from '../../lib/service';
@@ -26,11 +26,13 @@ export function ReportSchedulesPage({ report, reportClient, catalogs, workspaceI
   const chosenHost = route.host && hosts.some(h => sameService(h.url, route.host!)) ? route.host : reportClient.url;
   const client = useMemo(() => new ReportClient(chosenHost, { timeoutMs: 180_000 }), [chosenHost]);
   const [info, setInfo] = useState<SchedulerInfo | null>(null), [notify, setNotify] = useState<NotifyInfo | null>(null), [supported, setSupported] = useState(true);
-  const [records, setRecords] = useState<ScheduleRecord[]>([]), [runs, setRuns] = useState<ScheduleRun[]>([]), [run, setRun] = useState<ScheduleRun | null>(null);
+  const [records, setRecords] = useState<ScheduleSummary[]>([]), [runs, setRuns] = useState<ScheduleRunSummary[]>([]), [run, setRun] = useState<ScheduleRun | null>(null);
   const [journal, setJournal] = useState<MutationJournal | null>(null), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [generation, setGeneration] = useState(0), [selectedReport, setSelectedReport] = useState(report), [deleting, setDeleting] = useState(false), [reviewed, setReviewed] = useState(false);
   const [connectionGeneration, setConnectionGeneration] = useState(0), [formGeneration, setFormGeneration] = useState(0), [listLoading, setListLoading] = useState(true);
-  const selected = records.find(s => s.schedule_id === route.schedule);
+  const [selected, setSelected] = useState<ScheduleRecord>();
+  const [listLimitReached, setListLimitReached] = useState(false);
+  const [listLimit, setListLimit] = useState(100), [runLimit, setRunLimit] = useState(100);
   const blocked = busy || Boolean(journal?.pending), current = useRef(0);
   useEffect(() => { const read = () => setRoute(readRoute()); window.addEventListener('popstate', read); window.addEventListener(REPORT_ROUTE_CHANGED, read); return () => { window.removeEventListener('popstate', read); window.removeEventListener(REPORT_ROUTE_CHANGED, read); }; }, []);
   function navigate(schedule: string | null, runId: string | null = null, edit = false, host = chosenHost, showAccess = false) {
@@ -57,21 +59,26 @@ export function ReportSchedulesPage({ report, reportClient, catalogs, workspaceI
     // Sequential polling avoids overlapping reads and stale responses after navigation.
     async function refresh() {
       try {
-        const list = await client.listSchedulesForSource(reportClient.url, report.report_id, abort.signal);
-        if (abort.signal.aborted) return;
-        const filtered = list.filter(s => s.definition.action.render_report && sameService(s.definition.action.render_report.report.service_url, reportClient.url));
-        setRecords(filtered);
-        if (route.schedule && route.schedule !== 'new' && filtered.some(s => s.schedule_id === route.schedule)) {
-          const history = await client.call('schedules.list_runs', { schedule_id: route.schedule }, abort.signal);
+        if (!route.schedule) {
+          const list = await client.listSchedulesForSource(reportClient.url, report.report_id, abort.signal, BigInt(listLimit));
+          if (abort.signal.aborted) return;
+          setRecords(list.records); setListLimitReached(list.limitReached);
+        }
+        if (route.schedule && route.schedule !== 'new') {
+          const detail = await client.call('schedules.get_schedule', { schedule_id: route.schedule }, abort.signal);
+          const source = detail.definition.action.render_report?.report;
+          if (!source || source.report_id !== report.report_id || !sameService(source.service_url, reportClient.url)) throw new Error('This schedule is not associated with the selected report.');
+          if (!abort.signal.aborted) setSelected(detail);
+          const history = await client.call('schedules.list_runs', { schedule_id: route.schedule, limit: BigInt(runLimit) }, abort.signal);
           if (!abort.signal.aborted) setRuns(history.sort((a, b) => b.admitted_at - a.admitted_at));
           if (route.run) { const value = await client.call('schedules.get_run', { run_id: route.run }, abort.signal); if (!abort.signal.aborted && value.schedule_id === route.schedule) setRun(value); }
         }
-      } catch (e) { if (!abort.signal.aborted) { setError(reportError(e)); if (['NOT_FOUND', 'PERMISSION_DENIED', 'UNAUTHENTICATED'].includes(errorCode(e) ?? '')) { setRecords([]); setRuns([]); setRun(null); } } }
+      } catch (e) { if (!abort.signal.aborted) { setError(reportError(e)); setRecords([]); setSelected(undefined); setRuns([]); setRun(null); } }
       finally { if (!abort.signal.aborted) { setListLoading(false); timer = setTimeout(refresh, 5000); } }
     }
-    setRun(null); setRuns([]); setListLoading(true); void refresh();
+    setSelected(undefined); setRun(null); setRuns([]); setListLoading(true); void refresh();
     return () => { abort.abort(); clearTimeout(timer); };
-  }, [client, info, report.report_id, reportClient, route.schedule, route.run, generation]);
+  }, [client, info, report.report_id, reportClient, route.schedule, route.run, generation, listLimit, runLimit]);
   useEffect(() => { if (!route.access || !selected) return; const frame = requestAnimationFrame(() => document.getElementById('scheduled-access')?.scrollIntoView({ block: 'start' })); return () => cancelAnimationFrame(frame); }, [route.access, selected?.schedule_id]);
   async function perform(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
@@ -82,7 +89,7 @@ export function ReportSchedulesPage({ report, reportClient, catalogs, workspaceI
     setBusy(true);
     try {
     const next = selected ? await journal.run('schedules.update_schedule', { schedule_id: selected.schedule_id, expected_version: version!, schedule }) : await journal.run('schedules.create_schedule', { schedule });
-    setRecords(old => [...old.filter(s => s.schedule_id !== next.schedule_id), next]); setNotice('Schedule saved.'); navigate(next.schedule_id); setGeneration(n => n + 1);
+    setSelected(next); setNotice('Schedule saved.'); navigate(next.schedule_id); setGeneration(n => n + 1);
     } finally { setBusy(false); }
   }
   const list = !route.schedule, editing = route.schedule === 'new' || route.edit;
@@ -101,11 +108,12 @@ export function ReportSchedulesPage({ report, reportClient, catalogs, workspaceI
     {info?.action_kinds.includes('render_report') && <>
       {list && <>
         <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-muted-foreground">{info.display_name} · Generate reports and deliver them while you’re away.</p><div className="flex gap-2"><Button variant="outline" size="sm" disabled={busy} onClick={() => setGeneration(n => n + 1)}><RefreshCw />Refresh</Button><Button disabled={blocked || !info.writable} onClick={() => navigate('new')}><Plus />New schedule</Button></div></div>
-        {records.length === 0 ? <div className="rounded-lg border border-dashed p-10 text-center"><CalendarClock className="mx-auto mb-3 size-8 text-muted-foreground" /><h2 className="font-semibold">No schedules for this report</h2><p className="mt-1 text-sm text-muted-foreground">Create a schedule, choose recipients, and preview the result before enabling delivery.</p></div> : <ul className="divide-y overflow-hidden rounded-lg border">{records.map(item => <li key={item.schedule_id}><button className="flex w-full flex-wrap items-center gap-4 p-4 text-left hover:bg-muted/40 focus-visible:bg-muted" onClick={() => navigate(item.schedule_id)}><CalendarClock className="size-5 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1"><span className="block font-medium">{item.definition.title}</span><span className="mt-1 block text-xs text-muted-foreground">{item.definition.deliveries.flatMap(d => d.destinations.map(x => x.address)).join(', ') || 'Generate files only'}</span></span><span className="text-right text-sm"><span className="block">{scheduleIssues(item).length || item.disabled_reason && item.disabled_reason !== 'paused' ? 'Needs attention' : item.definition.enabled ? 'Active' : 'Paused'}</span><span className="block text-xs text-muted-foreground">{item.next_fire_at ? `Next ${dateLabel(item.next_fire_at, item.definition.trigger.time_zone)}` : item.last_run ? `Last run ${statusLabel(item.last_run.status)}` : 'No runs yet'}</span></span></button></li>)}</ul>}
+        {records.length === 0 ? <div className="rounded-lg border border-dashed p-10 text-center"><CalendarClock className="mx-auto mb-3 size-8 text-muted-foreground" /><h2 className="font-semibold">No schedules for this report</h2><p className="mt-1 text-sm text-muted-foreground">Create a schedule, choose recipients, and preview the result before enabling delivery.</p></div> : <ul className="divide-y overflow-hidden rounded-lg border">{records.map(item => <li key={item.schedule_id}><button className="flex w-full flex-wrap items-center gap-4 p-4 text-left hover:bg-muted/40 focus-visible:bg-muted" onClick={() => navigate(item.schedule_id)}><CalendarClock className="size-5 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1"><span className="block font-medium">{item.title}</span><span className="mt-1 block text-xs text-muted-foreground">{`Runs as ${item.execution_identity.principal.display_name || item.execution_identity.principal.id}`}</span></span><span className="text-right text-sm"><span className="block">{scheduleIssues(item).length || item.disabled_reason && item.disabled_reason !== 'paused' ? 'Needs attention' : item.enabled ? 'Active' : 'Paused'}</span><span className="block text-xs text-muted-foreground">{item.next_fire_at ? `Next ${dateLabel(item.next_fire_at)}` : item.last_run ? `Last run ${statusLabel(item.last_run.status)}` : 'No runs yet'}</span></span></button></li>)}</ul>}
+        {listLimitReached && <Button variant="outline" onClick={() => setListLimit(n => n + 100)}>Load more schedules</Button>}
       </>}
       {route.schedule && route.schedule !== 'new' && !selected && !listLoading && <ReportNotice title="Schedule unavailable">It may have been removed, or your access has changed. Return to All schedules to refresh the listing.</ReportNotice>}
       {route.run && selected && !run && !listLoading && <ReportNotice title="Run unavailable">This run is not available for the selected schedule, or your access has changed.</ReportNotice>}
-      {editing && journal && !loading && (route.schedule === 'new' || selected) && <ScheduleForm key={`${chosenHost}:${route.schedule}:${formGeneration}`} draftKey={`cupola.reporting.schedule-draft.v1:${chosenHost}:${reportClient.url}:${report.report_id}:${route.schedule}`} initial={selected} report={report} reportClient={reportClient} client={client} scheduler={info} notify={notify} pinned={pinned} busy={blocked} access={access} onSources={setSelectedReport} onSave={save} onReload={() => void perform(async () => { const latest = await client.call('schedules.get_schedule', { schedule_id: route.schedule! }); setRecords(old => old.map(s => s.schedule_id === latest.schedule_id ? latest : s)); setFormGeneration(n => n + 1); })} />}
+      {editing && journal && !loading && (route.schedule === 'new' || selected) && <ScheduleForm key={`${chosenHost}:${route.schedule}:${formGeneration}`} draftKey={`cupola.reporting.schedule-draft.v2:${journal.scope}:${chosenHost}:${reportClient.url}:${report.report_id}:${route.schedule}`} initial={selected} report={report} reportClient={reportClient} client={client} scheduler={info} notify={notify} pinned={pinned} busy={blocked} access={access} onSources={setSelectedReport} onSave={save} onReload={() => void perform(async () => { const latest = await client.call('schedules.get_schedule', { schedule_id: route.schedule! }); setSelected(latest); setFormGeneration(n => n + 1); })} />}
       {!list && !editing && selected && !route.run && <>
         <div className="flex flex-wrap gap-2">
           {selected.allowed_actions.includes('update') && <><Button variant="outline" disabled={blocked || !info.writable} onClick={() => navigate(selected.schedule_id, null, true)}><Pencil />Edit schedule</Button><Button variant="outline" disabled={blocked || !info.writable} onClick={() => void perform(async () => { await journal!.run('schedules.update_schedule', { schedule_id: selected.schedule_id, expected_version: selected.version, schedule: { ...selected.definition, enabled: !selected.definition.enabled } }); })}>{selected.definition.enabled ? <Pause /> : <Play />}{selected.definition.enabled ? 'Pause schedule' : 'Enable schedule'}</Button></>}
@@ -116,9 +124,10 @@ export function ReportSchedulesPage({ report, reportClient, catalogs, workspaceI
         {scheduleIssues(selected).map((issue, i) => <ReportNotice key={i} kind={issue.kind === 'access_expiring' ? 'permission' : 'error'} title={statusLabel(issue.kind)} action={issue.kind.startsWith('access_') ? <Button variant="outline" onClick={() => navigate(selected.schedule_id, null, false, chosenHost, true)}>Renew access</Button> : undefined}>{issue.message}{issue.expires_at != null && ` Expires ${dateLabel(issue.expires_at)}.`}</ReportNotice>)}
         <ScheduleSection title="Schedule details"><dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[auto_1fr]"><dt className="text-muted-foreground">Status</dt><dd>{selected.definition.enabled ? 'Active' : 'Paused'}{selected.disabled_reason && selected.disabled_reason !== 'paused' ? ` · ${selected.disabled_reason}` : ''}</dd><dt className="text-muted-foreground">Next run</dt><dd>{dateLabel(selected.next_fire_at, selected.definition.trigger.time_zone)} · {selected.definition.trigger.time_zone}</dd><dt className="text-muted-foreground">Report version</dt><dd>{selected.definition.action.render_report?.track === 'head' ? 'Latest saved version' : selected.definition.action.render_report?.track === 'published' ? 'Latest published version' : 'Specific version'}</dd><dt className="text-muted-foreground">Last successful run</dt><dd>{dateLabel(selected.last_successful_at ?? null)}</dd><dt className="text-muted-foreground">Last email accepted</dt><dd>{dateLabel(selected.last_delivery_at ?? null)}</dd><dt className="text-muted-foreground">Alert recipients</dt><dd className="break-words">{selected.definition.alerts?.destinations.map(d => d.address).join(', ') || 'Alerts not configured'}</dd><dt className="text-muted-foreground">Recipients</dt><dd className="break-words">{selected.definition.deliveries.flatMap(d => d.destinations.map(x => x.address)).join(', ') || 'Generate files only'}</dd><dt className="text-muted-foreground">Runs as</dt><dd>{selected.execution_identity.principal.display_name || selected.execution_identity.principal.id} · {statusLabel(selected.execution_identity.state)}</dd><dt className="text-muted-foreground">Created by</dt><dd>{selected.created_by.display_name || selected.created_by.id}</dd></dl>{selected.execution_identity.reason && <ReportNotice title="Scheduled access needs attention">{selected.execution_identity.reason}</ReportNotice>}</ScheduleSection>
         <ScheduleSection title="Run history">{runs.length ? <ul className="divide-y">{runs.map(item => <li key={item.run_id}><button className="flex w-full flex-wrap justify-between gap-2 rounded p-3 text-left text-sm hover:bg-muted" onClick={() => navigate(selected.schedule_id, item.run_id)}><span>{dateLabel(item.scheduled_for)}<span className="ml-2 text-xs text-muted-foreground">{statusLabel(item.trigger_kind)}</span></span><span className="capitalize">{statusLabel(item.status)}{item.recovery.state !== 'none' ? ` · ${statusLabel(item.recovery.state)}` : ''}</span></button></li>)}</ul> : <p className="text-sm text-muted-foreground">No runs yet. Preview from Edit schedule, or run this schedule now.</p>}</ScheduleSection>
+        {runs.length >= runLimit && <Button variant="outline" onClick={() => setRunLimit(n => n + 100)}>Load older runs</Button>}
         <details id="scheduled-access" open={route.access || undefined} className="scroll-mt-4 rounded-lg border p-4"><summary className="cursor-pointer text-sm font-medium">Manage scheduled access</summary><div className="mt-4">{access}</div></details>
       </>}
-      {route.run && run && <ScheduleRunDetails key={run.run_id} run={run} busy={blocked || !info.writable} onRenew={() => navigate(route.schedule, null, true)} onAction={action => void perform(async () => { await journal!.run(action === 'retry' ? 'schedules.retry_run' : 'schedules.cancel_run', { run_id: run.run_id, expected_version: run.version }); })} onResolve={(resolutions, note) => void perform(async () => { await journal!.run('schedules.resolve_run', { run_id: run.run_id, expected_version: run.version, resolutions, note }); })} />}
+      {route.run && run && <ScheduleRunDetails key={run.run_id} client={client} run={run} busy={blocked || !info.writable} onRenew={() => navigate(route.schedule, null, true)} onAction={action => void perform(async () => { await journal!.run(action === 'retry' ? 'schedules.retry_run' : 'schedules.cancel_run', { run_id: run.run_id, expected_version: run.version }); })} onResolve={(resolutions, note) => void perform(async () => { await journal!.run('schedules.resolve_run', { run_id: run.run_id, expected_version: run.version, resolutions, note }); })} />}
     </>}
   </ReportPage>;
 }

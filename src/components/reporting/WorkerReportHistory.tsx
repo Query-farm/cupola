@@ -6,9 +6,9 @@ import { RevisionComparison } from './RevisionComparison';
 import type { ReportClient } from '../../lib/reporting/client';
 import type { RevisionRow } from '../../lib/reporting/contracts.generated';
 
-export function WorkerReportHistory({ client, reportId, revisions, headId, publishedId, pinnedId, blocked, loading, error, onRetry, onView, onCopyLink, onRestore, onRedact }: {
+export function WorkerReportHistory({ client, reportId, revisions, headId, publishedId, pinnedId, blocked, loading, error, onRetry, onLoadMore, onView, onCopyLink, onRestore, onRedact }: {
   client: ReportClient; reportId: string; revisions: RevisionRow[]; headId?: string; publishedId?: string | null; pinnedId: string | null;
-  blocked: boolean; loading: boolean; error: string; onRetry: () => void; onView: (id: string) => void;
+  blocked: boolean; loading: boolean; error: string; onRetry: () => void; onLoadMore?: () => void; onView: (id: string) => void;
   onCopyLink: (revision: RevisionRow) => void; onRestore?: (revision: RevisionRow) => void; onRedact?: (revision: RevisionRow) => void;
 }) {
   const [comparison, setComparison] = useState<{ from: string; to: string } | null>(null);
@@ -36,5 +36,6 @@ export function WorkerReportHistory({ client, reportId, revisions, headId, publi
         {onRedact && <Button size="sm" variant="ghost" disabled={blocked || revision.revision_id === headId || revision.revision_id === publishedId} onClick={() => onRedact(revision)}>Redact revision {String(revision.revision_number)}…</Button>}
       </div>}
     </article>)}
+    {onLoadMore && <Button variant="outline" onClick={onLoadMore}>Load older revisions</Button>}
   </div>;
 }

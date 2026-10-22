@@ -6,10 +6,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FolderOpen, Plus, RefreshCw, MoreHorizontal } from 'lucide-react';
 import { Button, buttonVariants } from '../ui/button';
 import { ReportSearch } from './ReportSearch';
-import { matchesReport } from '../../lib/reporting/search';
+import { ownershipScopeLabels, type OwnershipScope } from '../../lib/reporting/discovery';
+import { folderAncestors } from '../../lib/reporting/folders';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu';
 import { ReportClient, reportError, type Input as RpcInput, type Method, type Output } from '../../lib/reporting/client';
-import type { FolderRecord, ReportResult, ReportRow, ReportsInfo } from '../../lib/reporting/contracts.generated';
+import type { FolderRecord, ReportResult, ReportSummary, ReportsInfo } from '../../lib/reporting/contracts.generated';
 import { MutationJournal } from '../../lib/reporting/journal';
 import { recoveryDrafts, type RecoveryDraft } from '../../lib/reporting/save-controller';
 import { encodeReport, BODY_FORMAT } from '../../lib/reporting/body';
@@ -35,12 +36,13 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
   const [session, setSession] = useState<LibrarySession | null>(null);
   const [folderId, setFolderId] = useState<string | null>(() => new URLSearchParams(location.search).get('report_folder'));
   const [selected, setSelected] = useState(() => ({ id: new URLSearchParams(location.search).get('report_id'), revision: new URLSearchParams(location.search).get('report_revision') }));
-  const [folders, setFolders] = useState<FolderRecord[]>([]), [reports, setReports] = useState<ReportRow[]>([]);
+  const [folders, setFolders] = useState<FolderRecord[]>([]), [reports, setReports] = useState<ReportSummary[]>([]);
   const [kind, setKind] = useState('');
-  const [query, setQuery] = useState(''), [publishedOnly, setPublishedOnly] = useState(false), [ownedByMe, setOwnedByMe] = useState(false);
+  const [resultLimit, setResultLimit] = useState(100);
+  const [query, setQuery] = useState(''), [publishedOnly, setPublishedOnly] = useState(false), [ownershipScope, setOwnershipScope] = useState<OwnershipScope>('all');
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false);
   const [generation, setGeneration] = useState(0);
-  const [dialog, setDialog] = useState<{ action: ResourceAction; resource?: FolderRecord | ReportRow } | null>(() => reportFolderCreationRequested() ? { action: 'folder' } : null);
+  const [dialog, setDialog] = useState<{ action: ResourceAction; resource?: FolderRecord | ReportSummary } | null>(() => reportFolderCreationRequested() ? { action: 'folder' } : null);
   const [drafts, setDrafts] = useState<Array<{ key: string; value: RecoveryDraft }>>([]);
   const [page, showPage] = useReportPage();
   const [recovery, setRecovery] = useState<{ key: string; value: RecoveryDraft } | undefined>();
@@ -67,17 +69,17 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
     const abort = new AbortController(), current = ++revision.current;
     setLoading(true); setError(''); setReports([]); setFolders([]);
     const timer = setTimeout(() => void Promise.all([
-      client.call('list_folders', {}, abort.signal),
-      client.call('list_reports', { folder_id: folderId, recursive: true, published_only: publishedOnly, owned_by_me: ownedByMe }, abort.signal),
-      folderId ? client.call('get_folder', { folder_id: folderId }, abort.signal) : Promise.resolve(null),
-    ]).then(([allFolders, rows, parent]) => {
+      client.call('list_folders', { parent_folder_id: folderId, recursive: false, ownership_scope: ownershipScope, limit: BigInt(resultLimit) }, abort.signal),
+      client.call('list_reports', { folder_id: folderId, recursive: Boolean(query.trim()), query: query.trim(), published_only: publishedOnly, ownership_scope: ownershipScope, limit: BigInt(resultLimit) }, abort.signal),
+      folderAncestors(client, folderId, abort.signal),
+    ]).then(([allFolders, rows, ancestors]) => {
       if (abort.signal.aborted || current !== revision.current) return;
-      setFolders(parent && !allFolders.some(f => f.folder_id === parent.folder_id) ? [...allFolders, parent] : allFolders); setReports(rows);
+      setFolders([...new Map([...ancestors, ...allFolders].map(folder => [folder.folder_id, folder])).values()]); setReports(rows);
       setDrafts(recoveryDrafts(session.scope));
       setLocalReports(listEvidenceReports(props.workspaceId ?? props.serviceUrl));
-    }).catch(e => { if (!abort.signal.aborted) setError(reportError(e)); }).finally(() => { if (!abort.signal.aborted) setLoading(false); }), 0);
+    }).catch(e => { if (!abort.signal.aborted) setError(reportError(e)); }).finally(() => { if (!abort.signal.aborted) setLoading(false); }), 200);
     return () => { clearTimeout(timer); abort.abort(); };
-  }, [session, folderId, selected.id, publishedOnly, ownedByMe]);
+  }, [session, folderId, selected.id, publishedOnly, ownershipScope, query, resultLimit]);
   useEffect(() => {
     const pop = () => { const search = new URLSearchParams(location.search); setFolderId(search.get('report_folder')); const id = search.get('report_id'), revision = search.get('report_revision'); if (id !== selected.id || revision !== selected.revision) { setSelected({ id, revision }); setRecovery(undefined); } };
     window.addEventListener('popstate', pop); return () => window.removeEventListener('popstate', pop);
@@ -157,9 +159,9 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
       id: folder.folder_id, name: folder.name, kind: 'folder' as const, onOpen: () => navigate(null, folder.folder_id), detail: folder.ownership.owner_ref.display_name || folder.ownership.owner_ref.id, state: 'Folder',
       actions: <ResourceMenu resource={folder} disabled={blocked} onAction={action => action === 'ownership' ? navigate(null, folder.folder_id, null, 'ownership') : setDialog({ action, resource: folder })} />,
     })),
-    ...reports.filter(r => (!kind || documentKind(r) === kind) && (Boolean(query) || r.folder_id === folderId) && matchesReport(r.envelope?.title ?? '', r.envelope, query)).map(report => ({ id: report.report_id, documentKind: documentKind(report), name: report.envelope?.title ?? 'Redacted document', description: report.envelope?.description, kind: 'report' as const,
-      onOpen: () => navigate(report.report_id), detail: report.ownership.owner_ref.display_name || report.ownership.owner_ref.id, state: `${report.published_revision_id ? 'Published' : 'Draft'} · revision ${String(report.revision_number)}`,
-      actions: <ReportActionMenu label={`Actions for ${report.envelope?.title ?? 'report'}`} actions={[
+    ...reports.filter(r => (!kind || documentKind(r) === kind) && (Boolean(query) || r.folder_id === folderId)).map(report => ({ id: report.report_id, documentKind: documentKind(report), name: report.title ?? 'Redacted document',  kind: 'report' as const,
+      onOpen: () => navigate(report.report_id), detail: report.ownership.owner_ref.display_name || report.ownership.owner_ref.id, state: report.redacted ? 'Redacted' : 'Saved',
+      actions: <ReportActionMenu label={`Actions for ${report.title ?? 'report'}`} actions={[
         reportAction('details', () => navigate(report.report_id, folderId, null, 'details')),
         ...(!report.redacted && documentKind(report) === 'report' ? [reportAction('schedules', () => navigate(report.report_id, folderId, null, 'schedules'), blocked)] : []),
         ...(report.allowed_actions.includes('transfer_ownership') ? [reportAction('ownership', () => navigate(report.report_id, folderId, null, 'ownership'), blocked)] : []),
@@ -185,10 +187,11 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
       {notice && <p role="status" className="text-sm">{notice}</p>}
       {pending && <div className="space-y-2 rounded border border-amber-400 p-3 text-sm"><p>A previous change has not been confirmed. Retry uses the same request ID and content.</p><Button disabled={busy} onClick={() => void retry()}>Retry pending change</Button> <Button variant="outline" disabled={busy} onClick={async () => { if (confirm('This change may already have succeeded. Inspect the worker first. Discard the saved request without retrying?')) { await session.journal.discard(); setGeneration(n => n + 1); } }}>Discard request…</Button></div>}
       <nav aria-label="Report folders" className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground"><Button variant="ghost" size="sm" onClick={props.onAllReports}>All reports</Button><span aria-hidden>/</span><Button className="h-auto max-w-full whitespace-normal text-left" variant="ghost" size="sm" onClick={() => navigate(null, null)} aria-current={parent ? undefined : 'page'}>{session?.info.display_name || 'Library root'}</Button>{parent && <><span aria-hidden>/</span><span aria-current="page" className="min-w-0 break-words px-2 text-foreground">{folderPath(parent, folders)}</span><Button variant="ghost" size="sm" onClick={() => navigate(null, parent.parent_folder_id)}>Up one folder</Button></>}</nav>
-      <ReportFileList items={items} detailLabel="Owner" heading={query || publishedOnly || ownedByMe ? 'Search results' : 'Folder contents'} emptyMessage={query || publishedOnly || ownedByMe ? 'No documents match these filters.' : 'This folder is empty.'} loadingMessage={loading ? 'Loading report library…' : undefined} filters={<>
+      <ReportFileList items={items} detailLabel="Owner" heading={query || publishedOnly || ownershipScope !== 'all' ? 'Search results' : 'Folder contents'} emptyMessage={query || publishedOnly || ownershipScope !== 'all' ? 'No documents match these filters.' : 'This folder is empty.'} loadingMessage={loading ? 'Loading report library…' : undefined} filters={<>
         <ReportSearch kind={kind} onKind={setKind} query={query} onQuery={setQuery} />
-        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3"><label className="flex items-center gap-2 text-sm"><input className="size-4 accent-primary" type="checkbox" checked={publishedOnly} onChange={e => setPublishedOnly(e.target.checked)} />Published only</label><label className="flex items-center gap-2 text-sm"><input className="size-4 accent-primary" type="checkbox" checked={ownedByMe} onChange={e => setOwnedByMe(e.target.checked)} />Owned by me</label></div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3"><label className="flex items-center gap-2 text-sm"><input className="size-4 accent-primary" type="checkbox" checked={publishedOnly} onChange={e => setPublishedOnly(e.target.checked)} />Published only</label><label className="flex items-center gap-2 text-sm">Ownership<select aria-label="Ownership scope" className="rounded border bg-background p-2" value={ownershipScope} onChange={e => { setOwnershipScope(e.target.value as OwnershipScope); setResultLimit(100); }}>{(session?.info.ownership.scopes ?? ['all', 'self']).map(scope => <option key={scope} value={scope}>{ownershipScopeLabels[scope]}</option>)}</select></label></div>
       </>} />
+      {(reports.length >= resultLimit || folders.length >= resultLimit) && <Button variant="outline" onClick={() => setResultLimit(n => n + 100)}>Load more results</Button>}
       <details className="rounded-lg border bg-muted/30 text-sm"><summary className="cursor-pointer px-4 py-3 font-medium">Import reports</summary><div className="space-y-3 border-t p-4"><p className="max-w-2xl text-muted-foreground">Copies the current report definition into this folder. Existing reports and their history remain on this device or in the source file.</p>
         <div className="flex flex-wrap items-end gap-3"><label className="min-w-0 space-y-1.5 text-xs font-medium"><span>From this device</span><select aria-label="Import report from this device" className="block h-9 w-full max-w-full rounded-lg border border-input bg-card px-3 text-sm font-normal" value="" disabled={blocked || !actions.includes('create_report')} onChange={e => { const report = localReports.find(r => r.id === e.target.value); if (report) void create(report, true).catch(e => setError(reportError(e))); }}><option value="">Choose a report on this device…</option>{localReports.map(r => <option key={r.id} value={r.id}>{r.title}</option>)}</select></label>
         <Button variant="outline" size="lg" disabled={blocked || !actions.includes('create_report')} onClick={() => file.current?.click()}>Import report file</Button></div>
@@ -200,12 +203,12 @@ export function ReportLibrary(props: ReportingWorkspaceProps & { libraryUrl: str
       {drafts.length > 0 && <section aria-label="Recovered worker drafts" className="space-y-2 rounded border p-3"><h2 className="text-sm font-semibold">Drafts kept on this device</h2>{drafts.map(draft => <div key={draft.key} className="flex flex-wrap items-center gap-3 text-sm"><span>{draft.value.draft.report.title} · {new Date(draft.value.updatedAt).toLocaleString()}</span><Button size="sm" variant="outline" onClick={() => { navigate(draft.value.base.report_id); setRecovery(draft); }}>Review draft</Button><Button size="sm" variant="ghost" onClick={() => downloadDocumentFile(JSON.stringify(draft.value.draft.report, null, 2), 'recovered-report.json')}>Export draft</Button><Button size="sm" variant="ghost" onClick={async () => { if (confirm('Discard this recovery draft? Any pending worker request may already have succeeded.')) { localStorage.removeItem(draft.key); await new MutationJournal(client, session!.scope, draft.value.journalId).discard(); setDrafts(recoveryDrafts(session!.scope)); } }}>Discard draft…</Button></div>)}</section>}
       <p className="text-xs text-muted-foreground">Folder and report permissions are defined by this worker. Publishing does not itself grant access.</p>
     </div>
-    {dialog && <ResourceDialog key={`${dialog.action}:${dialog.resource && ('name' in dialog.resource ? dialog.resource.folder_id : dialog.resource.report_id)}`} {...dialog} folders={folders} libraryName={session?.info.display_name} rootActions={session?.info.root_allowed_actions ?? []} writable={Boolean(session?.info.writable)} parentId={folderId} onClose={() => setDialog(null)} onApply={apply} />}
+    {dialog && <ResourceDialog key={`${dialog.action}:${dialog.resource && ('name' in dialog.resource ? dialog.resource.folder_id : dialog.resource.report_id)}`} {...dialog} workerLocation={session ? { url: client.url, name: session.info.display_name, info: session.info } : undefined} folders={folders} libraryName={session?.info.display_name} rootActions={session?.info.root_allowed_actions ?? []} writable={Boolean(session?.info.writable)} parentId={folderId} onClose={() => setDialog(null)} onApply={apply} />}
   </section>;
 }
 
-export function ResourceMenu({ resource, disabled, onAction }: { resource: FolderRecord | ReportRow; disabled: boolean; onAction: (action: ResourceAction | 'ownership') => void }) {
+export function ResourceMenu({ resource, disabled, onAction }: { resource: FolderRecord | ReportSummary; disabled: boolean; onAction: (action: ResourceAction | 'ownership') => void }) {
   const actions: Array<[string, ResourceAction | 'ownership', string]> = [['rename', 'rename', 'Rename'], ['move', 'move', 'Move'], ['transfer_ownership', 'ownership', 'Transfer ownership'], ['delete', 'delete', 'Delete']];
   const offered = actions.filter(([hint]) => resource.allowed_actions.includes(hint) && (hint !== 'rename' || 'name' in resource));
-  return offered.length ? <DropdownMenu><DropdownMenuTrigger disabled={disabled} aria-label={`Actions for ${'name' in resource ? resource.name : resource.envelope?.title ?? 'report'}`} className={buttonVariants({ variant: 'ghost', size: 'icon' })}><MoreHorizontal /></DropdownMenuTrigger><DropdownMenuContent align="end">{offered.map(([hint, action, label]) => <DropdownMenuItem key={hint} onClick={() => onAction(action)}>{label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null;
+  return offered.length ? <DropdownMenu><DropdownMenuTrigger disabled={disabled} aria-label={`Actions for ${'name' in resource ? resource.name : resource.title ?? 'report'}`} className={buttonVariants({ variant: 'ghost', size: 'icon' })}><MoreHorizontal /></DropdownMenuTrigger><DropdownMenuContent align="end">{offered.map(([hint, action, label]) => <DropdownMenuItem key={hint} onClick={() => onAction(action)}>{label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu> : null;
 }

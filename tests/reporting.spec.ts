@@ -2,6 +2,7 @@ import { test as base, expect, type Page } from '@playwright/test';
 import { startReportingWorker } from './reporting/worker';
 import { report } from './reporting/fixtures';
 import { encodeReport } from '../src/lib/reporting/body';
+import type { FolderRecord } from '../src/lib/reporting/contracts.generated';
 import { replaceEditorText, chooseReportAction, chooseLibraryNew } from './helpers';
 
 const test = base.extend<{}, { reporting: Awaited<ReturnType<typeof startReportingWorker>> }>({
@@ -252,7 +253,7 @@ test('move local to worker, then copy and move back without resurrecting the loc
   await dialog.getByRole('button', { name: 'Move report', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   const workerReport = (await reporting.client().call('list_reports', { query: 'Portable report' }))[0];
-  expect(workerReport.envelope?.title).toBe('Portable report');
+  expect(workerReport.title).toBe('Portable report');
   const locations = page.getByTestId('catalog-sidebar').getByRole('tree', { name: 'Library', exact: true });
   await locations.getByRole('treeitem', { name: 'Local', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Report browser' }).getByRole('button', { name: 'Portable report', exact: true })).toHaveCount(0);
@@ -302,14 +303,14 @@ test('combines named workers, tolerates an unavailable location, and moves betwe
     await expect(dialog).toHaveCount(0);
     expect(await reporting.client().call('list_reports', { query: 'Across workers' })).toHaveLength(0);
     const copied = (await second.client().call('list_reports', { query: 'Across workers' }))[0];
-    expect(copied.report_id).not.toBe(source.report_id); expect(copied.published_revision_id).toBeNull();
+    expect(copied.report_id).not.toBe(source.report_id); expect((await second.client().call('get_report', { report_id: copied.report_id })).published_revision_id).toBeNull();
     expect((await second.client().call('get_report', { report_id: other.report_id })).envelope?.title).toBe('Other worker report');
     await page.route(reporting.url + '/**', route => route.request().url().includes('vgi.objects.v1') ? route.abort() : route.continue());
     await page.getByRole('navigation', { name: 'Saved library' }).getByRole('link', { name: 'Library', exact: true }).click();
     await browser.getByRole('button', { name: 'Refresh', exact: true }).click();
     await expect(browser.getByRole('button', { name: 'Other worker report', exact: true })).toBeVisible();
     await expect(browser.getByRole('alert').first()).toBeVisible();
-    await expect(browser.getByRole('button', { name: 'New', exact: true })).toBeEnabled();
+    await expect(browser.getByRole('button', { name: 'New report', exact: true })).toBeEnabled();
   } finally { await second.stop(); }
 });
 
@@ -494,7 +495,7 @@ test('local Share saves a library copy and keeps local metadata and the original
   await chooseReportAction(page, 'Details');
   const details = page.getByRole('region', { name: 'Report details', exact: true });
   await details.getByRole('textbox', { name: 'Description', exact: true }).fill('Local description');
-  await details.getByRole('textbox', { name: 'Tags', exact: true }).fill('quarterly, finance');
+  await expect(details.getByLabel('Tags', { exact: true })).toHaveCount(0);
   await details.getByRole('button', { name: 'Save changes', exact: true }).click();
   await page.getByRole('button', { name: 'Share', exact: true }).click();
   await page.getByRole('region', { name: 'Share report', exact: true }).getByRole('button', { name: 'Save to a report library…', exact: true }).click();
@@ -503,8 +504,8 @@ test('local Share saves a library copy and keeps local metadata and the original
   await copy.getByRole('treeitem', { name: 'Finance report library', exact: true }).click();
   await copy.getByRole('button', { name: 'Save copy', exact: true }).click();
   await expect(copy).toHaveCount(0);
-  const stored = (await reporting.client().call('list_reports', { query: 'Shared local draft' }))[0];
-  expect(stored.envelope).toMatchObject({ title: 'Shared local draft (copy)', description: 'Local description', tags: ['quarterly', 'finance'] });
+  const stored = (await reporting.client().call('scan_reports', { query: 'Shared local draft' }))[0];
+  expect(stored.envelope).toMatchObject({ title: 'Shared local draft (copy)', description: 'Local description', tags: [] });
   expect(stored.published_revision_id).toBeNull();
   const libraryRow = page.getByRole('row').filter({ has: page.getByRole('button', { name: 'Shared local draft (copy)', exact: true }) });
   await expect(libraryRow.getByRole('button', { name: /^Actions for / })).toHaveCount(1);
@@ -561,7 +562,7 @@ test('mobile report navigation uses the catalog drawer and closes after opening 
   await page.goto(path(reporting.url, initial.report_id));
   await expect(page.locator('header[aria-label="Report toolbar"]')).toContainText('Mobile sidebar report');
   await expect(page.getByTestId('catalog-sidebar')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Show catalog sidebar', exact: true }).click();
+  await page.getByRole('button', { name: 'Open catalog menu', exact: true }).click();
   const drawer = page.getByRole('dialog', { name: 'Catalog sidebar', exact: true });
   await expect(drawer.getByRole('treeitem', { name: 'Mobile sidebar report', exact: true })).toHaveAttribute('aria-selected', 'true');
   await drawer.getByRole('link', { name: 'Mobile sidebar report', exact: true }).click();
@@ -581,7 +582,7 @@ test('sidebar creates nested folders through the worker API, including from a la
     await dialog.getByRole('textbox', { name: 'Name', exact: true }).fill(name);
     await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
     await expect(dialog).toHaveCount(0);
-    const folder = (await reporting.client().call('list_folders', {})).find(f => f.name === name)!;
+    const folder: FolderRecord = (await reporting.client().call('list_folders', { parent_folder_id: parent })).find(f => f.name === name)!;
     expect(folder.parent_folder_id).toBe(parent); parent = folder.folder_id;
     // Select it to reveal the next level, including an empty folder.
     await tree.getByRole('link', { name, exact: true }).click();
@@ -651,7 +652,7 @@ test('sidebar drag saves an open local draft before moving to a worker and suppo
   await dialog.getByRole('button', { name: 'Move report', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   const moved = (await reporting.client().call('list_reports', { query: 'Unsaved sidebar transfer' }))[0];
-  expect(moved.envelope?.title).toBe('Unsaved sidebar transfer');
+  expect(moved.title).toBe('Unsaved sidebar transfer');
   await expect(source).toHaveCount(0);
   const remote = tree.getByRole('treeitem', { name: 'Unsaved sidebar transfer', exact: true });
   await remote.locator(':scope > div').dragTo(tree.getByRole('treeitem', { name: 'Local', exact: true }));
@@ -701,7 +702,7 @@ test.describe('touch sidebar actions', () => {
     const initial = await seed(reporting, 'Mobile move report');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(path(reporting.url, initial.report_id)); await saved(page);
-    await page.getByRole('button', { name: 'Show catalog sidebar', exact: true }).click();
+    await page.getByRole('button', { name: 'Open catalog menu', exact: true }).click();
     let drawer = page.getByRole('dialog', { name: 'Catalog sidebar', exact: true });
     await drawer.getByRole('button', { name: 'Actions for Finance report library', exact: true }).click();
     await page.getByRole('menuitem', { name: 'New folder…', exact: true }).click();
@@ -710,7 +711,7 @@ test.describe('touch sidebar actions', () => {
     await folder.getByRole('textbox', { name: 'Name', exact: true }).fill('Mobile destination');
     await folder.getByRole('button', { name: 'Apply', exact: true }).click();
     await expect(folder).toHaveCount(0);
-    await page.getByRole('button', { name: 'Show catalog sidebar', exact: true }).click();
+    await page.getByRole('button', { name: 'Open catalog menu', exact: true }).click();
     drawer = page.getByRole('dialog', { name: 'Catalog sidebar', exact: true });
     await drawer.getByRole('button', { name: 'Expand Finance report library', exact: true }).click();
     const actions = drawer.getByRole('button', { name: 'Actions for Mobile move report', exact: true });
@@ -750,7 +751,8 @@ test('worker sidebar menus support right click, keyboard and hover without navig
   expect(page.url()).toBe(startingUrl);
   await expect(menu.getByRole('menuitem', { name: 'Open in new tab', exact: true })).toHaveAttribute('href', reportHref!);
   await expect(menu.getByRole('menuitem', { name: 'Move…', exact: true })).toBeVisible();
-  await expect(menu.getByRole('menuitem', { name: /Rename|Delete|Export/ })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: /Rename|Export/ })).toHaveCount(0);
+  await expect(menu.getByRole('menuitem', { name: 'Delete…', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await link.focus();
   await page.mouse.move(1500, 1000);

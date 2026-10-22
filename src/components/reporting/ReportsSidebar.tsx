@@ -15,7 +15,7 @@ import { useReportLocations } from './ReportLocations';
 import { ReportClient, reportError } from '../../lib/reporting/client';
 import { matchesReport } from '../../lib/reporting/search';
 import { locationLabel } from '../../lib/reporting/locations';
-import type { FolderRecord, ReportRow } from '../../lib/reporting/contracts.generated';
+import type { FolderRecord, ReportSummary, ReportRow } from '../../lib/reporting/contracts.generated';
 import { localLibrary } from '../../lib/reporting/local-library';
 import { reportDirectoryNodes, type ReportDirectoryNode } from '../../lib/reporting/file-tree';
 import { currentReportNode, REPORT_LIBRARY_CHANGED, REPORT_ROUTE_CHANGED, reportNavigationHref, reportNodeKey, type ReportDestination } from '../../lib/reporting/navigation';
@@ -27,7 +27,7 @@ import { appBase } from '../../lib/app-base';
 import { requestTransferSource } from '../../lib/reporting/transfer-source';
 import type { TransferSource } from '../../lib/reporting/transfers';
 
-interface LibraryRows { reports: ReportRow[]; folders: FolderRecord[]; loading?: boolean; error?: string }
+interface LibraryRows { reports: ReportSummary[]; folders: FolderRecord[]; loading?: boolean; error?: string }
 const SCHEDULES_NODE = 'scheduled-reports';
 
 export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }: {
@@ -40,7 +40,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
   const selectedNode = () => /\/(reports|evidence)(\/|$)/.test(location.pathname) ? new URLSearchParams(location.search).get('report_view') === 'activity' ? SCHEDULES_NODE : currentReportNode() : '';
   const [selected, setSelected] = useState(selectedNode);
   const [actionError, setActionError] = useState(''), [preparing, setPreparing] = useState(false);
-  const [deleting, setDeleting] = useState<{ url: string; record: ReportRow } | null>(null);
+  const [deleting, setDeleting] = useState<{ url: string; record: ReportSummary | ReportRow } | null>(null);
   useEffect(() => {
     const read = () => queueMicrotask(() => setSelected(selectedNode()));
     for (const event of ['popstate', OPEN_REPORT_EVENT, REPORT_ROUTE_CHANGED]) window.addEventListener(event, read);
@@ -53,11 +53,11 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
   }, [scope, refreshVersion]);
   useEffect(() => {
     const supported = locations.filter(l => l.info), requests = new Map<string, AbortController>();
-    setRemote(old => Object.fromEntries(supported.map(l => [l.url, old[l.url] ?? { reports: [], folders: [], loading: true }])));
+    setRemote(Object.fromEntries(supported.map(l => [l.url, { reports: [], folders: [], loading: true }])));
     const load = (url: string) => {
       requests.get(url)?.abort(); const abort = new AbortController(); requests.set(url, abort);
       const client = new ReportClient(url);
-      void Promise.all([client.call('list_folders', {}, abort.signal), client.call('list_reports', { recursive: true }, abort.signal)])
+      void Promise.all([client.call('list_folders', { recursive: true, limit: 200n }, abort.signal), client.call('list_reports', { recursive: true, query: search.trim(), limit: 100n }, abort.signal)])
         .then(([folders, reports]) => { if (!abort.signal.aborted) setRemote(old => ({ ...old, [url]: { folders, reports } })); })
         .catch(e => { if (!abort.signal.aborted) setRemote(old => ({ ...old, [url]: { folders: [], reports: [], error: reportError(e) } })); });
     };
@@ -65,7 +65,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
     const changed = (event: Event) => { const { url } = (event as CustomEvent<{ url: string }>).detail; if (supported.some(l => l.url === url)) load(url); };
     window.addEventListener(REPORT_LIBRARY_CHANGED, changed);
     return () => { requests.forEach(abort => abort.abort()); window.removeEventListener(REPORT_LIBRARY_CHANGED, changed); };
-  }, [locations]);
+  }, [locations, search]);
   const href = (destination: ReportDestination) => reportNavigationHref(serviceUrl, destination, window.location.href, appBase);
   function open(destination: ReportDestination, action?: string) {
     // Opening management for the current item preserves its parameters and editor.
@@ -170,20 +170,20 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
       content: <a href={scheduleOverviewHref(serviceUrl)} onClick={navigateSchedules} aria-current={active && selected === SCHEDULES_NODE ? 'page' : undefined} className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/60 focus-visible:outline focus-visible:outline-ring"><CalendarClock aria-hidden className="size-4 shrink-0 text-muted-foreground" /><span className="truncate">Scheduled reports</span></a> }] : []),
     ...locations.filter(l => l.info).map(l => root(l.url, locationLabel(l, locations), nodes(reportDirectoryNodes(l.url,
       (remote[l.url]?.folders ?? []).map(f => ({ id: f.folder_id, name: f.name, parentId: f.parent_folder_id })),
-      (remote[l.url]?.reports ?? []).map(r => ({ id: r.report_id, name: r.envelope?.title ?? 'Redacted report', folderId: r.folder_id })))), `Worker: ${l.url}`)),
+      (remote[l.url]?.reports ?? []).map(r => ({ id: r.report_id, name: r.title ?? 'Redacted report', folderId: r.folder_id })))), `Worker: ${l.url}`)),
     root('local', 'Local', nodes(reportDirectoryNodes('local', library.folders, [...local.map(r => ({ id: r.id, name: r.title, folderId: library.entries[r.id]?.folderId ?? null })), ...localObjects.map(d => ({ id: d.id, name: d.envelope.title, folderId: library.entries[d.id]?.folderId ?? null }))]), true), 'Saved in this browser'),
   ];
   const filter = (items: FileTreeNode[]): FileTreeNode[] => items.flatMap(node => {
     const source = sources.get(node.id);
-    const metadata = source?.kind === 'worker' ? source.record.envelope : source?.kind === 'document' ? source.document.envelope : source ? library.entries[source.report.id]?.metadata : undefined;
-    if (matchesReport(node.name, metadata, search)) return [node];
+    const metadata = source?.kind === 'worker' ? undefined : source?.kind === 'document' ? source.document.envelope : source ? library.entries[source.report.id]?.metadata : undefined;
+    if (source?.kind === 'worker' || matchesReport(node.name, metadata, search)) return [node];
     const children = filter(node.children ?? []); return children.length ? [{ ...node, children }] : [];
   });
   const errors = [...locations.filter(l => l.error).map(l => `${l.name}: ${l.error}`), ...locations.filter(l => remote[l.url]?.error).map(l => `${l.name}: ${remote[l.url].error}`)];
   const items = [
     ...localObjects.map(d => ({ id: d.id, title: d.envelope.title, href: href({ location: 'local', reportId: d.id }) })),
     ...local.map(r => ({ id: r.id, title: r.title, href: href({ location: 'local', reportId: r.id }) })),
-    ...locations.flatMap(l => (remote[l.url]?.reports ?? []).map(r => ({ id: `${l.url}:${r.report_id}`, title: r.envelope?.title ?? 'Redacted report', href: href({ location: l.url, reportId: r.report_id }) }))),
+    ...locations.flatMap(l => (remote[l.url]?.reports ?? []).map(r => ({ id: `${l.url}:${r.report_id}`, title: r.title ?? 'Redacted report', href: href({ location: l.url, reportId: r.report_id }) }))),
   ];
   return <section className="mt-2 border-t border-border pt-2">
     <SavedDocumentsSidebar title="Library" documentKind="report" icon={FileChartColumn} itemIcon={FileText} openKey="cupola.sidebar.reports-open" testId="sidebar-reports-toggle"
@@ -198,6 +198,7 @@ export function ReportsSidebar({ serviceUrl, workspaceId, search = '', active }:
         dragDrop={{ canDrag, canDrop, onDrop: (source, destination) => void move(source, destination) }}
         onSelect={id => { if (id === SCHEDULES_NODE) { openScheduleActivity(serviceUrl); return; } const destination = destinations.get(id); if (destination) open(destination); }} onNavigate={(event, id) => { if (id === SCHEDULES_NODE) { navigateSchedules(event); return; } const destination = destinations.get(id); if (destination) navigate(event, destination); }} />
       {(locations.some(l => l.loading) || Object.values(remote).some(r => r.loading)) && <p role="status" className="px-2 py-1 text-xs text-muted-foreground">Loading library…</p>}
+      {Object.values(remote).some(r => r.reports.length >= 100 || r.folders.length >= 200) && <p className="px-2 py-1 text-xs text-muted-foreground">Showing a limited library view. Search or open a library folder for more.</p>}
       {errors.length > 0 && <div className="px-2 py-1 text-xs text-destructive"><p role="alert">{errors.join(' ')}</p><button className="underline" onClick={refresh}>Retry report libraries</button></div>}
       {actionError && <p role="alert" className="px-2 py-1 text-xs text-destructive">{actionError}</p>}
     </SavedDocumentsSidebar>

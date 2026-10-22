@@ -91,8 +91,8 @@ test('HTTP owner lookup resolves worker identities and duplicate folder errors r
   const { envelope, body } = encodeReport(report('Owner lookup'), { description: 'Searchable forecast', tags: ['budget'] });
   const created = await c.call('create_report', { request_id: crypto.randomUUID(), envelope, body });
   const options = await c.call('find_owners', { resource_kind: 'report', resource_id: created.report_id, query: 'bob@example.test' });
-  expect(options.candidates).toHaveLength(1);
-  expect(options.candidates[0].ownership.owner_ref.id).toBe('bob');
+  expect(options).toHaveLength(1);
+  expect(options[0].ownership.owner_ref.id).toBe('bob');
   expect((await c.call('list_reports', { query: 'FORECAST', tags: ['budget'] })).some(r => r.report_id === created.report_id)).toBe(true);
   await c.call('create_folder', { request_id: crypto.randomUUID(), name: 'Unique HTTP folder' });
   const journal = new MutationJournal(c, await c.recoveryScope(), 'duplicate-folder', memoryStorage());

@@ -25,13 +25,13 @@ export function TransferDialog({ source, move, locations, scope, serviceUrl, wor
   const target = locations.find(l => l.url === destination);
   useEffect(() => {
     setFolders([]); setError('');
-    if (destination === 'local') { setLoading(false); return; }
+    if (destination === 'local' || !folderId) { setLoading(false); return; }
     const abort = new AbortController(); setLoading(true);
-    void new ReportClient(destination).call('list_folders', {}, abort.signal).then(rows => { if (!abort.signal.aborted) setFolders(rows); })
+    void new ReportClient(destination).call('get_folder', { folder_id: folderId }, abort.signal).then(row => { if (!abort.signal.aborted) setFolders([row]); })
       .catch(e => { if (!abort.signal.aborted) setError(reportError(e)); })
       .finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
-  }, [destination]);
+  }, [destination, folderId]);
   const writable = destination === 'local' || Boolean(target?.info?.writable && (folderId ? folders.find(f => f.folder_id === folderId)?.allowed_actions : target.info.root_allowed_actions)?.includes('create_report'));
   const sameStore = transferLocation(source) === destination;
   const mayRemove = !move || source.kind !== 'worker' || source.record.allowed_actions.includes(sameStore ? 'move' : 'delete');

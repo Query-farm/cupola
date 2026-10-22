@@ -3,11 +3,11 @@ import { listLocalObjects, saveLocalObject, deleteLocalObject, type LocalObject 
 import { deleteEvidenceReport, listEvidenceReports, reportScope, saveEvidenceReport, type EvidenceReport } from '../evidence/reports';
 import { BODY_FORMAT, decodeReport, encodeReport } from './body';
 import { ReportClient } from './client';
-import type { ReportEnvelope, ReportRow } from './contracts.generated';
+import type { ReportEnvelope, ReportRow, ReportSummary } from './contracts.generated';
 import { parseJournal, serializeJournal } from './journal';
 import { localReportEntry, placeLocalReport } from './local-library';
 
-export type TransferSource = { kind: 'local'; report: EvidenceReport } | { kind: 'document'; scope: string; document: LocalObject } | { kind: 'worker'; url: string; record: ReportRow };
+export type TransferSource = { kind: 'local'; report: EvidenceReport } | { kind: 'document'; scope: string; document: LocalObject } | { kind: 'worker'; url: string; record: ReportRow | ReportSummary };
 export interface TransferDestination { url: string | null; folderId: string | null; name: string }
 export interface TransferJob {
   id: string; scope: string; createdAt: number; move: boolean; source: TransferSource; destination: TransferDestination;
@@ -184,5 +184,5 @@ export async function resumeTransfer(input: TransferJob, client: ClientFactory =
 
 export const transferLocation = (source: TransferSource) => source.kind === 'worker' ? source.url : 'local';
 export const transferId = (source: TransferSource) => source.kind === 'worker' ? source.record.report_id : source.kind === 'local' ? source.report.id : source.document.id;
-export const transferTitle = (source: TransferSource) => source.kind === 'worker' ? source.record.envelope?.title ?? 'Document' : source.kind === 'local' ? source.report.title : source.document.envelope.title;
+export const transferTitle = (source: TransferSource) => source.kind === 'worker' ? ('title' in source.record ? source.record.title : source.record.envelope?.title) ?? 'Document' : source.kind === 'local' ? source.report.title : source.document.envelope.title;
 export const transferFolder = (source: TransferSource, scope: string) => source.kind === 'worker' ? source.record.folder_id : localReportEntry(scope, { id: transferId(source) } as EvidenceReport).folderId;

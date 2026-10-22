@@ -44,7 +44,7 @@ test('Library shows scheduled reports only when accessible schedules exist and u
     await sidebar.getByRole('treeitem', { name: 'Scheduled reports', exact: true }).focus();
     await page.keyboard.press('Enter');
     await expect(activity.getByRole('heading', { name: 'Sidebar scheduled report', exact: true })).toBeVisible();
-    await activity.getByRole('link', { name: 'Manage schedule', exact: true }).click();
+    await activity.getByRole('button', { name: 'Manage schedule', exact: true }).click();
     await page.getByRole('button', { name: 'Delete schedule', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm deletion', exact: true }).click();
     await expect(entry).toHaveCount(0);
@@ -75,7 +75,7 @@ test('schedule drafts survive reload and status polling never overwrites a concu
   await page.getByRole('button', { name: 'Back to schedule', exact: true }).click();
   await page.getByRole('button', { name: 'Delete schedule', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm deletion', exact: true }).click();
-  await expect.poll(async () => (await c.listSchedulesForSource(scheduler.url, saved.report_id)).length).toBe(0);
+  await expect.poll(async () => (await c.listSchedulesForSource(scheduler.url, saved.report_id)).records.length).toBe(0);
 });
 
 test('saved reports remain usable when their worker does not implement schedules', async ({ page }) => {
@@ -111,7 +111,8 @@ test('floating schedules send grouped failure alerts and surface recovery in the
   await expect(page.getByText('Authorized until', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: 'Create schedule', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Edit schedule', exact: true })).toBeVisible();
-  const [schedule] = await c.listSchedulesForSource(scheduler.url, saved.report_id);
+  const { records: [summary] } = await c.listSchedulesForSource(scheduler.url, saved.report_id);
+  const schedule = await c.call('schedules.get_schedule', { schedule_id: summary.schedule_id });
   expect(schedule.definition.alerts?.destinations).toEqual([{ kind: 'email', address: 'owner@example.test' }]);
   expect(await scheduler.capturedMailCount()).toBe(beforeMail);
   // The schedule was created before this saved revision; head tracking must pick it up.
@@ -121,16 +122,19 @@ test('floating schedules send grouped failure alerts and surface recovery in the
   await expect(page.getByRole('heading', { name: 'Failed', exact: true })).toBeVisible({ timeout: 120_000 });
   await expect.poll(() => scheduler.capturedMailCount()).toBe(beforeMail + 1);
   const [run] = await c.call('schedules.list_runs', { schedule_id: schedule.schedule_id });
-  expect(run.revision_id).toBe(revision.head_revision_id);
+  expect((await c.call('schedules.get_run', { run_id: run.run_id })).revision_id).toBe(revision.head_revision_id);
   const message = (await scheduler.capturedMail()).find(text => text.includes('owner@example.test'))!;
   expect(message).toContain('Report schedule failed'); expect(message).not.toContain('missing_alert_test_table');
   await page.goto(`reports?service=${encodeURIComponent(scheduler.url)}&report_view=activity&report_service=all`);
   const activity = page.getByRole('region', { name: 'Schedules & alerts', exact: true });
   const row = activity.getByRole('listitem').filter({ has: page.getByRole('heading', { name: 'Floating alert report', exact: true }) });
   await expect(row.getByText('Needs attention', { exact: true })).toBeVisible();
-  await expect(row.getByRole('link', { name: 'View run', exact: true })).toHaveAttribute('href', new RegExp(run.run_id));
+  await row.getByRole('button', { name: 'View run', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(run.run_id));
+  await page.goBack();
+  await expect(row).toBeVisible();
   await page.screenshot({ path: '/tmp/cupola-alert-attention.png', fullPage: true });
-  await row.getByRole('link', { name: 'Manage schedule', exact: true }).click();
+  await row.getByRole('button', { name: 'Manage schedule', exact: true }).click();
   await page.getByRole('button', { name: 'Run now', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Failed', exact: true })).toBeVisible({ timeout: 120_000 });
   expect(await scheduler.capturedMailCount()).toBe(beforeMail + 1);
@@ -178,7 +182,7 @@ test('attention combines workers and renewal links clear missing and expiring ac
     await activity.getByLabel('Schedule worker', { exact: true }).selectOption('');
     await expect(activity.getByRole('heading', { name: 'Access expires soon', exact: true })).toBeVisible();
     const row = activity.getByRole('listitem').filter({ has: page.getByRole('heading', { name: 'Access expires soon', exact: true }) });
-    await row.getByRole('link', { name: 'Renew access', exact: true }).click();
+    await row.getByRole('button', { name: 'Renew access', exact: true }).click();
     await expect(page.locator('#scheduled-access')).toHaveAttribute('open', '');
     await page.getByRole('button', { name: 'Authorize / renew access', exact: true }).click();
     await expect.poll(async () => (await second.client().call('schedules.get_schedule', { schedule_id: created[1].id })).issues.length).toBe(0);
@@ -227,11 +231,12 @@ test('create, authorize, preview without mail, send once after a lost reply, edi
   expect(await scheduler.capturedMailCount()).toBe(beforeMail);
   await page.getByRole('button', { name: 'Create schedule', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Edit schedule', exact: true })).toBeVisible();
-  const schedules = await c.listSchedulesForSource(scheduler.url, saved.report_id);
+  const { records: schedules } = await c.listSchedulesForSource(scheduler.url, saved.report_id);
   expect(schedules).toHaveLength(1); const scheduleId = schedules[0].schedule_id;
-  expect(schedules[0].definition.enabled).toBe(false);
-  expect(schedules[0].definition.deliveries[0].inline).toBe('report');
-  expect(schedules[0].definition.deliveries[0].attach).toEqual(['application/pdf']);
+  const schedule = await c.call('schedules.get_schedule', { schedule_id: scheduleId });
+  expect(schedule.definition.enabled).toBe(false);
+  expect(schedule.definition.deliveries[0].inline).toBe('report');
+  expect(schedule.definition.deliveries[0].attach).toEqual(['application/pdf']);
   let drop = true;
   await page.route('**/run_now', async route => { const response = await route.fetch(); if (drop) { drop = false; await route.abort('failed'); } else await route.fulfill({ response }); });
   await page.getByRole('button', { name: 'Run & send now', exact: true }).click();
@@ -242,7 +247,7 @@ test('create, authorize, preview without mail, send once after a lost reply, edi
   await expect(page.getByText('reader@example.test', { exact: true })).toBeVisible();
   expect(await c.call('schedules.list_runs', { schedule_id: scheduleId })).toHaveLength(1);
   const [run] = await c.call('schedules.list_runs', { schedule_id: scheduleId });
-  expect(run.destination_results[0].status).toBe('accepted');
+  expect((await c.call('schedules.list_run_destinations', { run_id: run.run_id }))[0].status).toBe('accepted');
   expect(await scheduler.capturedMailCount()).toBe(beforeMail + 1);
   await page.screenshot({ path: '/tmp/cupola-scheduling-run.png', fullPage: true });
   await page.getByRole('button', { name: 'Back to schedule', exact: true }).click();
