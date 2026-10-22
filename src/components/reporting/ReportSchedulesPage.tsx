@@ -13,6 +13,7 @@ import { MutationJournal } from '../../lib/reporting/journal';
 import { NOTIFY_PROTOCOL, SCHEDULES_PROTOCOL, type NotifyInfo, type ReportResult, type Schedule, type ScheduleRecord, type SchedulerInfo, type ScheduleRun, type ScheduleSummary, type ScheduleRunSummary } from '../../lib/reporting/contracts.generated';
 import { dateLabel, requiredDelegations, sameService, statusLabel, scheduleIssues } from '../../lib/reporting/schedules';
 import { REPORT_ROUTE_CHANGED } from '../../lib/reporting/navigation';
+import { nextPollDelay, pollAfter } from '../../lib/reporting/poll';
 import type { CatalogData } from '../../lib/service';
 
 const readRoute = () => { const p = new URLSearchParams(location.search); return { host: p.get('report_scheduler'), schedule: p.get('report_schedule'), run: p.get('report_run'), edit: p.get('report_schedule_edit') === '1', access: p.get('report_schedule_access') === '1' }; };
@@ -55,7 +56,7 @@ export function ReportSchedulesPage({ report, reportClient, catalogs, workspaceI
   }, [client, reportClient, report.report_id, connectionGeneration]);
   useEffect(() => {
     if (!info) return;
-    const abort = new AbortController(); let timer: ReturnType<typeof setTimeout>;
+    const abort = new AbortController(); let failures = 0, delay: number | null = 5000;
     // Sequential polling avoids overlapping reads and stale responses after navigation.
     async function refresh() {
       try {
@@ -73,11 +74,13 @@ export function ReportSchedulesPage({ report, reportClient, catalogs, workspaceI
           if (!abort.signal.aborted) setRuns(history.sort((a, b) => b.admitted_at - a.admitted_at));
           if (route.run) { const value = await client.call('schedules.get_run', { run_id: route.run }, abort.signal); if (!abort.signal.aborted && value.schedule_id === route.schedule) setRun(value); }
         }
-      } catch (e) { if (!abort.signal.aborted) { setError(reportError(e)); setRecords([]); setSelected(undefined); setRuns([]); setRun(null); } }
-      finally { if (!abort.signal.aborted) { setListLoading(false); timer = setTimeout(refresh, 5000); } }
+        failures = 0; delay = nextPollDelay(5000, 0);
+      } catch (e) { delay = nextPollDelay(5000, ++failures, e); if (!abort.signal.aborted) { setError(reportError(e)); setRecords([]); setSelected(undefined); setRuns([]); setRun(null); } }
+      // Refresh (and Refresh status) restart polling that stopped on an auth error.
+      finally { if (!abort.signal.aborted) { setListLoading(false); if (delay !== null) pollAfter(delay, () => void refresh(), abort.signal); } }
     }
     setSelected(undefined); setRun(null); setRuns([]); setListLoading(true); void refresh();
-    return () => { abort.abort(); clearTimeout(timer); };
+    return () => abort.abort();
   }, [client, info, report.report_id, reportClient, route.schedule, route.run, generation, listLimit, runLimit]);
   useEffect(() => { if (!route.access || !selected) return; const frame = requestAnimationFrame(() => document.getElementById('scheduled-access')?.scrollIntoView({ block: 'start' })); return () => cancelAnimationFrame(frame); }, [route.access, selected?.schedule_id]);
   async function perform(action: () => Promise<void>) {
