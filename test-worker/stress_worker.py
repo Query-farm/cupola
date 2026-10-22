@@ -23,12 +23,13 @@
 #     # 0.39.0 speaks VGI protocol 2.1.0, which the extension build of
 #     # 2026-10-05 (vgi 99b3893) requires: against a 2.0 worker it refuses the
 #     # ATTACH with "ProtocolVersionError: … server is too old". The sidebar
-#     # still renders over HTTP, so the shell is what looks dead. 0.40.0 needs
-#     # vgi-rpc 0.48.
-#     "vgi-python[http]>=0.40.0,<0.41",
+#     # still renders over HTTP, so the shell is what looks dead. The current
+#     # extension build refuses a 0.40 worker the same way ("protocol_version
+#     # mismatch for protocol 'vgi.v2'"); 0.46 speaks it and needs vgi-rpc 0.52.
+#     "vgi-python[http]>=0.46.1,<0.47",
 #     # The oauth extra (joserfc) validates JWTs when VGI_JWT_ISSUER is set,
 #     # e.g. Google ID tokens; without it the worker exits at startup.
-#     "vgi-rpc[oauth]>=0.48.0,<0.49",
+#     "vgi-rpc[oauth]>=0.52.0,<0.53",
 #     "numpy",
 #     "pyarrow",
 # ]

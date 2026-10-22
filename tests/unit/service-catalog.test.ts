@@ -9,7 +9,7 @@ const attachId = new Uint8Array([1]);
 const bytes = new Uint8Array([2, 3]);
 const nestedPath = ["region", "public"];
 const schemaInfo = (path: string[]): SchemaInfo => ({
-  path, attach_opaque_data: attachId, comment: "Schema docs", tags: { "vgi.doc_md": "Schema help" },
+  path, comment: "Schema docs", tags: { "vgi.doc_md": "Schema help" },
 });
 const fn = (name: string, function_type: FunctionInfo["function_type"]): FunctionInfo => ({
   name, function_type, schema_path: nestedPath, tags: { "vgi.doc_llm": "Function help" },

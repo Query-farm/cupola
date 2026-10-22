@@ -50,7 +50,7 @@ function catalog(tables: TestTable[]): CatalogData {
     catalogTags: {},
     defaultSchema: "main",
     schemas: [{
-      info: { name: "main", comment: null, tags: {}, attach_opaque_data: new Uint8Array() },
+      info: { name: "main", comment: null, tags: {} },
       tables,
       views: [],
       functions: [],

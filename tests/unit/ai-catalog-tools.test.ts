@@ -20,7 +20,6 @@ function catalog(name: string, table: string, category = "reference"): CatalogDa
         name: "main",
         comment: "Main schema",
         tags: { "vgi.categories": JSON.stringify([{ name: category, description: "Reference data" }]) },
-        attach_opaque_data: new Uint8Array(),
       },
       tables: [{
         name: table,

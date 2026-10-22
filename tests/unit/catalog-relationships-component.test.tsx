@@ -25,7 +25,7 @@ function testCatalog(): CatalogData {
   return {
     catalogName: "sales", catalogComment: null, catalogTags: {}, defaultSchema: "main",
     schemas: [{
-      info: { name: "main", comment: null, tags: {}, attach_opaque_data: new Uint8Array() },
+      info: { name: "main", comment: null, tags: {} },
       tables: [
         table("customers", ["id", "name"]),
         table("orders", ["id", "customer_id"], [{ columns: ["customer_id"], referencedSchema: "main", referencedTable: "customers", referencedColumns: ["id"], constraintName: "orders_customer_fk" }]),

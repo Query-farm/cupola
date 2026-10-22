@@ -107,7 +107,7 @@ type AttachedFunctionInfo = FunctionInfo & {
 };
 
 function schemaInfo(name: string, comment: string | null, tags: unknown = null): SchemaInfo {
-  return { name, comment, tags: normalizeTags(tags), attach_opaque_data: new Uint8Array(0) };
+  return { name, comment, tags: normalizeTags(tags) };
 }
 
 function normalizeExamples(value: unknown): FunctionInfo["examples"] {
