@@ -5,11 +5,12 @@
 // Import the client-only entry point to avoid bundling Node.js server code.
 // astro.config.mjs resolves this to the browser artifact from the npm package.
 import { httpConnect } from "@query-farm/vgi-rpc/connect";
-import { VgiClient, Arguments, deserializeSchema, deserializeBatch, iterRows } from "vgi/client";
+import { VgiClient, Arguments, deserializeSchema } from "vgi/client";
 // The catalog types are Cupola's flat ones, not the wire types: a VGI schema
 // is a path now, and it is flattened to a name here at the boundary. See
 // ./vgi-catalog-types.
 import type {
+  ForeignKeyInfo,
   SchemaInfo,
   TableInfo,
   ViewInfo,
@@ -47,17 +48,6 @@ export interface ColumnInfo {
   tags?: Record<string, string>;
 }
 
-/** Parsed foreign key constraint. */
-export interface ForeignKeyInfo {
-  columns: string[];
-  referencedTable: string;
-  referencedSchema: string;
-  referencedColumns: string[];
-  /** Catalog-qualified targets are possible for attached DuckDB databases. */
-  referencedCatalog?: string;
-  /** Stable database constraint name, when the catalog exposes one. */
-  constraintName?: string;
-}
 
 /** Fully resolved schema with its tables, views, and functions. */
 export interface ResolvedSchema {
@@ -106,6 +96,7 @@ export { getServiceUrl, hasExplicitService, getAttachOptionsFromUrl } from "./ur
 // component wanting a TableInfo should get the one with `schema_name` on it,
 // without having to know that the wire type spells it `schema_path`.
 export type {
+  ForeignKeyInfo,
   SchemaInfo,
   TableInfo,
   ViewInfo,
@@ -145,30 +136,11 @@ export {
   formatFunctionSignature,
 } from "./function-info";
 
-/** Parse foreign key constraints from a TableInfo. */
+/** Foreign key constraints of a TableInfo (decoded at the RPC boundary). */
 export function getForeignKeys(table: TableInfo): ForeignKeyInfo[] {
   const override = (table as TableWithMetadataOverrides)._foreignKeys;
   if (Array.isArray(override)) return override;
-
-  try {
-    return (table.foreign_key_constraints ?? []).map((bytes) => {
-      const batch = deserializeBatch(bytes);
-      const rows = [...iterRows(batch)];
-      const row = rows[0];
-      if (!row) return null;
-      // fk_columns and pk_columns are list<utf8> — extract as arrays
-      const fkCols = row.fk_columns;
-      const pkCols = row.pk_columns;
-      return {
-        columns: Array.isArray(fkCols) ? fkCols : fkCols?.toArray?.() ?? [],
-        referencedTable: row.referenced_table ?? "",
-        referencedSchema: row.referenced_schema ?? "",
-        referencedColumns: Array.isArray(pkCols) ? pkCols : pkCols?.toArray?.() ?? [],
-      };
-    }).filter((fk): fk is ForeignKeyInfo => fk !== null);
-  } catch {
-    return [];
-  }
+  return table.foreign_key_constraints ?? [];
 }
 
 /** A catalog as discovered over RPC, with what is needed to attach it. */

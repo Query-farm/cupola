@@ -2,8 +2,8 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const MOBILE_COI_WORKER = 'duckdb-browser-coi-mobile.worker.js';
-const originalWorker = 'duckdb-browser-coi.worker.js';
+export const MOBILE_COI_WORKER = 'duckdb-browser-threads-mobile.worker.js';
+const originalWorker = 'duckdb-browser-threads.worker.js';
 const poolInitializer = /initMainThread\(\)\{for\(var ([a-zA-Z_$][\w$]*)=8;\1--;\)PThread\.allocateUnusedWorker\(\);/g;
 
 /** Keep the exact COI WASM and pthread implementation, but prewarm four workers

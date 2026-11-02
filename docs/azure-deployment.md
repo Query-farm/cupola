@@ -132,7 +132,7 @@ frontend one — it already works for the Cloudflare-hosted frontend.
 ## Verification performed
 Built the image and confirmed against a running container:
 - COOP/COEP/CORP present on `/`, `/_astro/*` JS, and wasm responses
-- `duckdb-coi.wasm` served as `application/wasm` (~32 MB), COI worker JS, and
+- `duckdb-threads.wasm` served as `application/wasm` (~32 MB), COI worker JS, and
   the VGI extension wasm (~2.4 MB) all `200`
 - flat asset paths with zero leftover `/v{version}/` references
 - extensionless routes (`/sign-out`) and `/oauth-callback.html` resolve `200`

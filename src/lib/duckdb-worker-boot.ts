@@ -86,20 +86,20 @@ async function doBoot(opts: DuckDBBootOptions): Promise<void> {
   const runtime = selectDuckDBRuntime(platform);
   const bundle: duckdb.DuckDBBundle = runtime === 'coi'
     ? {
-      mainModule: `${absBase}haybarn/duckdb-coi.wasm`,
-      mainWorker: `${absBase}haybarn/duckdb-browser-coi${ios ? '-mobile' : ''}.worker.js`,
-      pthreadWorker: `${absBase}haybarn/duckdb-browser-coi.pthread.worker.js`,
+      mainModule: `${absBase}haybarn/duckdb-threads.wasm`,
+      mainWorker: `${absBase}haybarn/duckdb-browser-threads${ios ? '-mobile' : ''}.worker.js`,
+      pthreadWorker: `${absBase}haybarn/duckdb-browser-threads.pthread.worker.js`,
     }
     : {
-      mainModule: `${absBase}haybarn/duckdb-eh.wasm`,
-      mainWorker: `${absBase}haybarn/duckdb-browser-eh.worker.js`,
+      mainModule: `${absBase}haybarn/duckdb-base.wasm`,
+      mainWorker: `${absBase}haybarn/duckdb-browser-base.worker.js`,
       pthreadWorker: null,
     };
   mark("select-bundle");
 
   // Bypass haybarn's `createWorker(url)` which fetches the worker.js and
   // wraps it as a Blob URL. The Blob form has a null origin in WebKit, so
-  // the worker script's `//# sourceMappingURL=duckdb-browser-coi.worker.js.map`
+  // the worker script's `//# sourceMappingURL=duckdb-browser-threads.worker.js.map`
   // comment resolves to a `blob://null...` URL that Safari refuses with
   // "Not allowed to load local resource". Our worker is served same-origin
   // from /haybarn/ (R2 via the Cloudflare Worker), so plain `new Worker(url)`

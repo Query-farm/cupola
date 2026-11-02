@@ -10,6 +10,9 @@ const extensionVersion = `v${pkg.dependencies["@haybarn/haybarn-wasm"].split("-"
 // list so an engine upgrade cannot silently remove capabilities from the app.
 test.use({ storageState: { cookies: [], origins: [] } });
 
+// Haybarn 2.0 names the bundles after what they are: `threads` (COI) and `base` (EH).
+const bundleFile = { coi: "threads", eh: "base" } as const;
+
 for (const variant of ["coi", "eh"] as const) {
   test(`Haybarn ${variant.toUpperCase()} and every startup extension load together`, async ({ page }) => {
     if (variant === "eh") {
@@ -34,7 +37,7 @@ for (const variant of ["coi", "eh"] as const) {
     await page.evaluate(() => (window as any).__bridge.attached);
     expect(await page.evaluate(() => crossOriginIsolated)).toBe(variant === "coi");
     expect(engineRequests.filter(path => path.endsWith(".wasm"))).toEqual([
-      expect.stringContaining(`/haybarn/duckdb-${variant}.wasm`),
+      expect.stringContaining(`/haybarn/duckdb-${bundleFile[variant]}.wasm`),
     ]);
 
     // The engine's SQL version can include commits beyond the upstream tag;

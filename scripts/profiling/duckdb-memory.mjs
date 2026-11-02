@@ -48,7 +48,7 @@ process.on('exit', () => rmSync(temp, { recursive: true, force: true }));
 const samplerExecutable = `${temp}/process-memory`;
 execFileSync('xcrun', ['clang', '-O2', '-Wall', '-Wextra', '-o', samplerExecutable,
   fileURLToPath(new URL('./process-memory.c', import.meta.url))]);
-const originalWorker = readFileSync(new URL('../../node_modules/@haybarn/haybarn-wasm/dist/duckdb-browser-coi.worker.js', import.meta.url), 'utf8');
+const originalWorker = readFileSync(new URL('../../node_modules/@haybarn/haybarn-wasm/dist/duckdb-browser-threads.worker.js', import.meta.url), 'utf8');
 
 const configs = process.env.PROFILE_APP_URL ? [{ name: 'full-app', appUrl: process.env.PROFILE_APP_URL }] : [
   { name: 'original-8', pool: 8 },
@@ -111,7 +111,7 @@ for (let repeat = 0; repeat < repeats; repeat++) {
           }, 25);
         });
       } else {
-        await page.route('**/haybarn/duckdb-browser-coi.worker.js', route => route.fulfill({
+        await page.route('**/haybarn/duckdb-browser-threads.worker.js', route => route.fulfill({
           contentType: 'application/javascript', body: config.pool === 4 ? mobileCoiWorker(originalWorker) : originalWorker,
         }));
       }
@@ -180,9 +180,9 @@ for (let repeat = 0; repeat < repeats; repeat++) {
         await stage('COI instantiate', () => page.evaluate(async base => {
           if (!crossOriginIsolated) throw new Error('Harness must be cross-origin isolated.');
           const duckdb = window.profileDuckDB;
-          const worker = new Worker(`${base}haybarn/duckdb-browser-coi.worker.js`);
+          const worker = new Worker(`${base}haybarn/duckdb-browser-threads.worker.js`);
           window.profileDb = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), worker);
-          await window.profileDb.instantiate(`${base}haybarn/duckdb-coi.wasm`, `${base}haybarn/duckdb-browser-coi.pthread.worker.js`);
+          await window.profileDb.instantiate(`${base}haybarn/duckdb-threads.wasm`, `${base}haybarn/duckdb-browser-threads.pthread.worker.js`);
         }, base));
         await stage('database open', () => page.evaluate(async config => {
           await window.profileDb.open({ arrowLosslessConversion: true, ...(config.maximumThreads ? { maximumThreads: config.maximumThreads } : {}) });

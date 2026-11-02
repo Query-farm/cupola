@@ -21,10 +21,10 @@ test('iOS keeps COI and cancellation while skipping heavyweight optional extensi
   await page.evaluate(() => (window as any).__bridge.attached);
   expect(await page.evaluate(() => crossOriginIsolated)).toBe(true);
   expect(requests.filter(path => /\/haybarn\/duckdb-.*\.wasm$/.test(path))).toEqual([
-    expect.stringContaining('/haybarn/duckdb-coi.wasm'),
+    expect.stringContaining('/haybarn/duckdb-threads.wasm'),
   ]);
-  expect(requests).toContainEqual(expect.stringContaining('/haybarn/duckdb-browser-coi-mobile.worker.js'));
-  expect(requests.some(path => path.includes('duckdb-eh') || path.includes('duckdb-browser-eh'))).toBe(false);
+  expect(requests).toContainEqual(expect.stringContaining('/haybarn/duckdb-browser-threads-mobile.worker.js'));
+  expect(requests.some(path => path.includes('duckdb-base') || path.includes('duckdb-browser-base'))).toBe(false);
   expect(await page.evaluate(() => (window as any).__bridge.interruptsRunningQueries)).toBe(true);
 
   const extensions = await shellQuery(page, 'SELECT extension_name FROM duckdb_extensions() WHERE loaded');
@@ -68,8 +68,8 @@ test.describe('desktop startup', () => {
     await waitForShellBridge(page, 60_000);
     await page.evaluate(() => (window as any).__bridge.attached);
     expect(await page.evaluate(() => crossOriginIsolated)).toBe(true);
-    expect(requests).toContainEqual(expect.stringContaining('/haybarn/duckdb-browser-coi.worker.js'));
-    expect(requests.some(path => path.includes('duckdb-browser-coi-mobile.worker.js'))).toBe(false);
+    expect(requests).toContainEqual(expect.stringContaining('/haybarn/duckdb-browser-threads.worker.js'));
+    expect(requests.some(path => path.includes('duckdb-browser-threads-mobile.worker.js'))).toBe(false);
     const extensions = await shellQuery(page, 'SELECT extension_name FROM duckdb_extensions() WHERE loaded');
     expect(extensions.ok, extensions.error).toBe(true);
     expect(extensions.rows?.map(row => row.extension_name)).toEqual(expect.arrayContaining(SHELL_EXTENSIONS.map(({ name }) => name)));

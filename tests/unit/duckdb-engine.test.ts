@@ -42,7 +42,8 @@ describe("SHELL_EXTENSIONS", () => {
     expect(extensionInstallSql(vgi!)).toBe("INSTALL vgi FROM community");
   });
 
-  test("grainlift installs optional and unpinned from the community repo", () => {
+  // Off until grainlift is published for Haybarn 2.0 (see SHELL_EXTENSIONS).
+  test.skip("grainlift installs optional and unpinned from the community repo", () => {
     // Optional: a missing grainlift build must never block VGI catalogs.
     const grainlift = SHELL_EXTENSIONS.find((e) => e.name === "grainlift");
     expect(grainlift).toMatchObject({ source: "community" });
@@ -91,7 +92,7 @@ describe("SHELL_EXTENSIONS", () => {
 describe("runtime startup extensions", () => {
   test("iOS retains catalog, timezone, JSON, network and completion support without the heavyweight optional extensions", () => {
     const extensions = shellExtensionsForRuntime(shellExtensionsForVgiVersion("v1.2.3"), true);
-    expect(extensions.map(({ name }) => name)).toEqual(["icu", "json", "httpfs", "parquet", "avro", "vgi", "grainlift", "autocomplete"]);
+    expect(extensions.map(({ name }) => name)).toEqual(["icu", "json", "httpfs", "parquet", "avro", "vgi", "autocomplete"]);
     expect(extensions.find(({ name }) => name === "vgi")).toMatchObject({ required: true, version: "v1.2.3" });
   });
 

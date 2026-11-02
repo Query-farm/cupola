@@ -221,14 +221,22 @@ export function parseExampleQueries(tags: Tags): NormalizedExample[] {
 /**
  * `vgi_required_filters` (extension-injected): a JSON array of arrays of column
  * paths — an AND of OR-groups. `[["a"],["b","c"]]` means `a AND (b OR c)`.
- * Malformed → `[]` (no enforcement can be inferred).
+ * vgi.v3 writes each path as its components (`[[["bbox","xmin"]]]`); those are
+ * joined to the dotted form (`bbox.xmin`). Malformed → `[]` (no enforcement
+ * can be inferred).
  */
 export function parseRequiredFilters(tags: Tags): string[][] {
   const parsed = parseJsonTag(tags, TAG_REQUIRED_FILTERS);
   if (!Array.isArray(parsed)) return [];
+  const pathName = (path: unknown): string =>
+    typeof path === "string"
+      ? path.trim()
+      : Array.isArray(path) && path.length > 0 && path.every((part) => typeof part === "string" && part)
+        ? path.join(".")
+        : "";
   return parsed
     .filter(Array.isArray)
-    .map((group) => group.filter((path: unknown) => typeof path === "string" && path.trim()).map(String))
+    .map((group) => group.map(pathName).filter(Boolean))
     .filter((group) => group.length > 0);
 }
 

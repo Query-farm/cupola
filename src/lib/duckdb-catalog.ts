@@ -354,7 +354,6 @@ export async function fetchAttachedCatalog(databaseName: string, databaseType = 
   }
 
   const emptyColumns = new Uint8Array(0);
-  const emptyFkBytes: Uint8Array[] = [];
 
   interface ConstraintMetadata {
     notNull: number[];
@@ -442,7 +441,7 @@ export async function fetchAttachedCatalog(databaseName: string, databaseType = 
       unique_constraints: metadata.unique,
       check_constraints: metadata.checks,
       primary_key_constraints: metadata.primaryKey,
-      foreign_key_constraints: emptyFkBytes,
+      foreign_key_constraints: metadata.foreignKeys,
       // An attached DuckDB database is browsed read-only here; VGI 0.29
       // replaced the supports_insert/update/delete/returning booleans with a
       // per-operation result-mode map, and empty is the same statement.
@@ -480,6 +479,8 @@ export async function fetchAttachedCatalog(databaseName: string, databaseType = 
       tags,
       definition,
       column_comments: Object.fromEntries(cols.filter(c => c.comment).map(c => [c.name, c.comment!])),
+      aliases: [],
+      security: "",
       _columnInfo: cols.map((c) => ({
         name: c.name,
         arrowType: c.duckdbType,
@@ -534,7 +535,6 @@ export async function fetchAttachedCatalog(databaseName: string, databaseType = 
         schema_name: schemaName,
         macro_type: macroType,
         parameters,
-        parameter_default_values: null,
         definition,
         comment,
         tags,

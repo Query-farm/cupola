@@ -26,10 +26,14 @@
 #     # still renders over HTTP, so the shell is what looks dead. The current
 #     # extension build refuses a 0.40 worker the same way ("protocol_version
 #     # mismatch for protocol 'vgi.v2'"); 0.46 speaks it and needs vgi-rpc 0.52.
-#     "vgi-python[http]>=0.46.1,<0.47",
+#     #
+#     # 0.48 speaks vgi.v3, the only protocol the Haybarn 2.0 extension speaks
+#     # (a 0.46 worker fails ATTACH). Keys are constraint records there; 0.48.2
+#     # is the first release that installs without the [http] extra's crypto.
+#     "vgi-python[http]>=0.48.2,<0.49",
 #     # The oauth extra (joserfc) validates JWTs when VGI_JWT_ISSUER is set,
 #     # e.g. Google ID tokens; without it the worker exits at startup.
-#     "vgi-rpc[oauth]>=0.52.0,<0.53",
+#     "vgi-rpc[oauth]>=0.52.3,<0.53",
 #     "numpy",
 #     "pyarrow",
 # ]
@@ -58,7 +62,7 @@ from vgi_rpc import ArrowSerializableDataclass
 
 from vgi import Arg, Worker
 from vgi.arguments import Arguments
-from vgi.catalog import Catalog, Schema, Table, View
+from vgi.catalog import Catalog, Schema, Table, View, constraint_record
 from vgi.catalog.attach_option import AttachOption
 from vgi.table_function import (
     OutputCollector,
@@ -856,7 +860,10 @@ ORDERS_DOC = (
     "peak. Joins to small.products on product_id, small.stores on store_id, small.regions on region. "
     "revenue = quantity * unit_price * (1 - discount_pct). status 'returned' rows have is_returned = true."
 )
-ORDER_KEYS = {"not_null": ("order_id",), "primary_key": (("order_id",),)}
+def primary_key(schema_name: str, table: str, column: str) -> dict[str, Any]:
+    """The worker's own attestation that ``column`` is a key: every row it serves is unique and non-null."""
+    return {"constraints": (constraint_record((schema_name,), table, "pk", "PRIMARY_KEY", ((column,),),
+                                              enforcement="ENFORCED", validation="ALL_ROWS"),)}
 
 # Free-form tags. `filterDisplayTags` strips every reserved `vgi.*` key, so a
 # catalog carrying only vgi.* tags renders an empty Tags section — these are
@@ -869,16 +876,16 @@ SMALL = schema(
     tags={"vgi.title": "Small reference data"},
     functions=[RegionsScan, ProductsScan, StoresScan, MonthlyTargetsScan],
     tables=[
-        Table(name="regions", function=RegionsScan, comment="Sales regions (8 rows)", primary_key=(("region",),),
+        Table(name="regions", function=RegionsScan, comment="Sales regions (8 rows)", **primary_key("small", "regions", "region"),
               tags={"vgi.title": "Regions", "vgi.doc_llm": "The 8 sales regions with a manager and a map center."}),
-        Table(name="products", function=ProductsScan, comment="Product catalog (200 rows)", primary_key=(("product_id",),),
+        Table(name="products", function=ProductsScan, comment="Product catalog (200 rows)", **primary_key("small", "products", "product_id"),
               tags={"domain": "retail", "provider": "merchandising", "vgi.title": "Products", "vgi.doc_llm": "200 products across 12 categories with a list price."}),
-        Table(name="stores", function=StoresScan, comment="Stores with point geometry (250 rows)", primary_key=(("store_id",),),
+        Table(name="stores", function=StoresScan, comment="Stores with point geometry (250 rows)", **primary_key("small", "stores", "store_id"),
               tags={"domain": "retail", "provider": "facilities", "vgi.title": "Stores", "vgi.doc_llm": "250 stores with region, latitude/longitude and a GEOMETRY point. Good for map blocks."}),
         Table(name="monthly_targets", function=MonthlyTargetsScan, comment="Target vs actual revenue by month and region (288 rows)",
               tags={"vgi.title": "Monthly targets", "vgi.doc_llm": "36 months x 8 regions of target_revenue and actual_revenue. Good for bullet, slopegraph, sparkline and KPI blocks.",
                     "vgi.example_queries": examples(("Attainment by region", "SELECT region, sum(actual_revenue) / sum(target_revenue) AS attainment FROM cupola_test.small.monthly_targets GROUP BY region ORDER BY attainment DESC"))}),
-        sized("orders_1k", GenerateOrders, 1_000, "Orders, 1k", ORDERS_DOC, tags={"vgi.category": "orders", **ORDER_TAGS}, **ORDER_KEYS),
+        sized("orders_1k", GenerateOrders, 1_000, "Orders, 1k", ORDERS_DOC, tags={"vgi.category": "orders", **ORDER_TAGS}, **primary_key("small", "orders_1k", "order_id")),
     ],
 )
 
@@ -888,13 +895,13 @@ LARGE = schema(
     tags={"vgi.title": "Large stress data"},
     functions=[GenerateOrders, GenerateWide, GenerateEvents, GenerateParcels],
     tables=[
-        sized("orders_100k", GenerateOrders, 100_000, "Orders, 100k", ORDERS_DOC, tags=ORDER_TAGS, **ORDER_KEYS),
-        sized("orders_400k", GenerateOrders, 400_000, "Orders, 400k", ORDERS_DOC + " This size killed the tab in a report Perspective block.", **ORDER_KEYS,
+        sized("orders_100k", GenerateOrders, 100_000, "Orders, 100k", ORDERS_DOC, tags=ORDER_TAGS, **primary_key("large", "orders_100k", "order_id")),
+        sized("orders_400k", GenerateOrders, 400_000, "Orders, 400k", ORDERS_DOC + " This size killed the tab in a report Perspective block.", **primary_key("large", "orders_400k", "order_id"),
               tags={**ORDER_TAGS, "vgi.example_queries": examples(
                   ("Monthly revenue by region", "SELECT date_trunc('month', order_date) AS month, region, sum(revenue) AS revenue FROM cupola_test.large.orders_400k GROUP BY ALL ORDER BY month, region"),
                   ("Everything, for Perspective", "SELECT * FROM cupola_test.large.orders_400k"),
               )}),
-        sized("orders_2m", GenerateOrders, 2_000_000, "Orders, 2M", ORDERS_DOC, tags=ORDER_TAGS, **ORDER_KEYS),
+        sized("orders_2m", GenerateOrders, 2_000_000, "Orders, 2M", ORDERS_DOC, tags=ORDER_TAGS, **primary_key("large", "orders_2m", "order_id")),
         sized("wide_400k", GenerateWide, 400_000, "Wide, 400k x 60", "400k rows by 60 columns. dimension_00..08 have 2..512 distinct values."),
         sized("events_1m", GenerateEvents, 1_000_000, "Events, 1M", "Clickstream with a ~190 character payload_json, a LIST tags column and a STRUCT client column."),
         sized("parcels_400k", GenerateParcels, 400_000, "Parcels, 400k", "Land parcels with a WKB polygon GEOMETRY per row; latitude/longitude are the polygon center."),

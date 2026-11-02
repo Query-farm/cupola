@@ -1,7 +1,8 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import * as transport from "@query-farm/vgi-rpc/connect";
-import { VgiClient } from "vgi/client";
-import type { FunctionInfo, SchemaInfo } from "vgi/client";
+import { Field, Float64, Schema, Utf8 } from "@query-farm/apache-arrow";
+import { VgiClient, constraintRecord, serializeSchema } from "vgi/client";
+import type { FunctionInfo, MacroOverload, SchemaInfo } from "vgi/client";
 import { fetchCatalog } from "../../src/lib/service";
 
 type Contents = Awaited<ReturnType<VgiClient["catalogContents"]>>["schemas"][number];
@@ -26,23 +27,42 @@ const emptyContents = (path: string[]): Contents => ({
   schema: schemaInfo(path), tables: [], views: [], scalar_functions: [], aggregate_functions: [],
   table_functions: [], scalar_macros: [], table_macros: [], indexes: [],
 });
+const columns = serializeSchema(new Schema([
+  new Field("ticker", new Utf8(), false),
+  new Field("price", new Float64(), true),
+  new Field("issuer", new Utf8(), true),
+]) as never);
+const record = (spec: Omit<Parameters<typeof constraintRecord>[0], "schemaPath" | "table" | "enforcement" | "validation">) =>
+  constraintRecord({ schemaPath: ["public"], table: "prices", enforcement: "ENFORCED", validation: "ALL_ROWS", ...spec });
+const context = { timezone: "UTC", collation: "binary", default_order: "asc", default_null_order: "nulls_last", preserve_insertion_order: true };
+const overload = (parameters: string[], definition: string, macro_type: string): MacroOverload => ({
+  parameters: parameters.map((name) => ({ name })), definition, profile: "duckdb", schema_path: nestedPath, macro_type,
+  evaluation_context: context,
+});
 const contents: Contents = {
   ...emptyContents(nestedPath),
   tables: [{
-    name: "prices", schema_path: nestedPath, columns: bytes, comment: "Table docs",
-    tags: { "vgi.semantic_entity": "prices" }, not_null_constraints: [0], unique_constraints: [[0]],
-    check_constraints: ["price > 0"], primary_key_constraints: [[0]], foreign_key_constraints: [bytes],
-    write_result_modes: {}, supports_column_statistics: true, required_filters: [["ticker"]],
+    name: "prices", schema_path: nestedPath, columns, comment: "Table docs",
+    tags: { "vgi.semantic_entity": "prices" },
+    constraints: [
+      record({ id: "nn_ticker", kind: "NOT_NULL", columns: [["ticker"]] }),
+      record({ id: "pk", kind: "PRIMARY_KEY", columns: [["ticker"]] }),
+      record({ id: "uq", kind: "UNIQUE", columns: [["price"], ["issuer"]] }),
+      record({ id: "positive", kind: "CHECK", columns: [], checkSql: "price > 0" }),
+      record({ id: "fk_issuer", kind: "FOREIGN_KEY", columns: [["issuer"]], declaredName: "issuer_fk",
+        references: { schemaPath: ["public"], table: "issuers", columns: [["id"]], constraintId: "pk" } }),
+    ],
+    write_result_modes: {}, supports_column_statistics: true, required_filters: [[["ticker"]], [["bbox", "xmin"], ["isin"]]],
   }],
   views: [{
     name: "latest", schema_path: nestedPath, tags: {}, definition: "SELECT * FROM prices",
-    column_comments: { price: "Price in USD" },
+    column_comments: { price: "Price in USD" }, aliases: [], security: "",
   }],
   scalar_functions: [fn("convert", "SCALAR")],
   aggregate_functions: [fn("total", "AGGREGATE")],
   table_functions: [fn("history", "TABLE")],
-  scalar_macros: [{ name: "usd", schema_path: nestedPath, tags: {}, macro_type: "SCALAR", parameters: ["price"], definition: "price" }],
-  table_macros: [{ name: "recent", schema_path: nestedPath, tags: {}, macro_type: "TABLE", parameters: [], definition: "SELECT * FROM prices" }],
+  scalar_macros: [{ name: "usd", schema_path: nestedPath, tags: {}, macro_type: "SCALAR", overloads: [overload(["price"], "price", "SCALAR")] }],
+  table_macros: [{ name: "recent", schema_path: nestedPath, tags: {}, macro_type: "TABLE", overloads: [overload([], "SELECT * FROM prices", "TABLE")] }],
 };
 const allContents = [emptyContents(["zebra"]), contents, emptyContents(["main"]), emptyContents(["alpha"])];
 
@@ -109,13 +129,18 @@ test("capable catalogs load once and preserve metadata, schema paths and all cal
   const schema = catalog.schemas[2];
   expect(schema.info).toMatchObject({ name: "region.public", comment: "Schema docs", tags: { "vgi.doc_md": "Schema help" } });
   expect(schema.info).not.toHaveProperty("path");
-  expect(schema.tables[0]).toMatchObject({ schema_name: "region.public", comment: "Table docs", tags: { "vgi.semantic_entity": "prices" }, required_filters: [["ticker"]], primary_key_constraints: [[0]] });
-  expect(schema.tables[0].columns).toBe(bytes);
-  expect(schema.tables[0].foreign_key_constraints[0]).toBe(bytes);
+  expect(schema.tables[0]).toMatchObject({ schema_name: "region.public", comment: "Table docs", tags: { "vgi.semantic_entity": "prices" }, required_filters: [["ticker"], ["bbox.xmin", "isin"]] });
+  expect(schema.tables[0].columns).toBe(columns);
+  expect(schema.tables[0]).toMatchObject({
+    not_null_constraints: [0], primary_key_constraints: [[0]], unique_constraints: [[1, 2]], check_constraints: ["price > 0"],
+    foreign_key_constraints: [{ columns: ["issuer"], referencedSchema: "public", referencedTable: "issuers", referencedColumns: ["id"], constraintName: "issuer_fk" }],
+  });
+  expect(schema.tables[0]).not.toHaveProperty("constraints");
   expect(schema.tables[0]).not.toHaveProperty("schema_path");
   expect(schema.views[0]).toMatchObject({ schema_name: "region.public", column_comments: { price: "Price in USD" } });
   expect(schema.functions.map(f => f.function_type)).toEqual(["SCALAR", "AGGREGATE", "TABLE"]);
   expect(schema.macros.map(m => m.macro_type)).toEqual(["SCALAR", "TABLE"]);
+  expect(schema.macros.map(m => [m.parameters, m.definition])).toEqual([[["price"], "price"], [[], "SELECT * FROM prices"]]);
   for (const child of [...schema.functions, ...schema.macros]) expect(child.schema_name).toBe("region.public");
   expect(calls.detach).toHaveBeenCalledTimes(1);
   expect(calls.detach).toHaveBeenCalledWith(attachId);

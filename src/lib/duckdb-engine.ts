@@ -53,11 +53,11 @@ export const SHELL_EXTENSIONS: readonly DuckDBExtension[] = [
   // VGI servers it could talk to. `?vgi_version=<build>` pins per tab when a
   // specific build has to be reproduced — see shellExtensionsForVgiVersion.
   { name: "vgi", source: "community", required: true },
-  // Grainlift: databases behind a Grainlift ADBC gateway, attached with
-  // `ATTACH 'grainlift+https://…' AS db (TYPE grainlift, target '…', …)` and
-  // then browsed like any other attached catalog. Optional: a failed install
-  // must never stop VGI catalogs from working.
-  { name: "grainlift", source: "community" },
+  // Grainlift (databases behind a Grainlift ADBC gateway, attached with
+  // `ATTACH 'grainlift+https://…' AS db (TYPE grainlift, target '…', …)`) is
+  // off until it is published for Haybarn 2.0: the community repository has no
+  // v2.0.0 wasm build yet, so INSTALL/LOAD would 404 on every boot. Restore
+  // `{ name: "grainlift", source: "community" }` here once it is.
   { name: "iceberg" },
   { name: "spatial" },
   { name: "ducklake" },

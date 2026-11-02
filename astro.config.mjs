@@ -163,7 +163,7 @@ export default defineConfig({
       },
       tailwindcss(),
       // Serve shell/wasm files directly, bypassing Vite's transform pipeline.
-      // Without this, pthread sub-worker requests for duckdb-coi.js hang because
+      // Without this, pthread sub-worker requests for duckdb-threads.js hang because
       // Vite's middleware holds the connection open for JS transform processing.
       {
         name: 'shell-wasm-direct-serve',
@@ -206,7 +206,7 @@ export default defineConfig({
             if (stripped?.startsWith('/haybarn/')) {
               const relPath = stripped.split('?')[0].slice('/haybarn/'.length);
               const mobileWorker = relPath === MOBILE_COI_WORKER || relPath === `${MOBILE_COI_WORKER}.map`;
-              const sourcePath = mobileWorker ? relPath.replace('coi-mobile', 'coi') : relPath;
+              const sourcePath = mobileWorker ? relPath.replace('threads-mobile', 'threads') : relPath;
               let filePath = resolve('node_modules/@haybarn/haybarn-wasm/dist/' + sourcePath);
               try { filePath = realpathSync(filePath); } catch {}
               if (existsSync(filePath)) {

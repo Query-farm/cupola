@@ -31,13 +31,13 @@ HAYBARN_EXT_VERSION="v${HAYBARN_VERSION%%-*}"
 echo "==> Staging Haybarn ${HAYBARN_VERSION} runtime from ${HAYBARN_SRC}..."
 mkdir -p dist/haybarn
 for file in \
-  duckdb-coi.wasm duckdb-eh.wasm \
-  duckdb-browser-coi.worker.js \
-  duckdb-browser-coi.worker.js.map \
-  duckdb-browser-coi.pthread.worker.js \
-  duckdb-browser-coi.pthread.worker.js.map \
-  duckdb-browser-eh.worker.js \
-  duckdb-browser-eh.worker.js.map; do
+  duckdb-threads.wasm duckdb-base.wasm \
+  duckdb-browser-threads.worker.js \
+  duckdb-browser-threads.worker.js.map \
+  duckdb-browser-threads.pthread.worker.js \
+  duckdb-browser-threads.pthread.worker.js.map \
+  duckdb-browser-base.worker.js \
+  duckdb-browser-base.worker.js.map; do
   if [ -e "${HAYBARN_SRC}/${file}" ]; then
     cp "${HAYBARN_SRC}/${file}" "dist/haybarn/${file}"
   elif [[ "$file" != *.map ]]; then

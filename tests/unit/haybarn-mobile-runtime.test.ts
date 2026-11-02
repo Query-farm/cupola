@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { MOBILE_COI_WORKER, mobileCoiWorker, mobileCoiSourceMap } from '../../scripts/haybarn-mobile-runtime.mjs';
 
-const workerName = 'duckdb-browser-coi.worker.js';
+const workerName = 'duckdb-browser-threads.worker.js';
 const packageDist = new URL('../../node_modules/@haybarn/haybarn-wasm/dist/', import.meta.url);
 const original = readFileSync(new URL(workerName, packageDist), 'utf8');
 const originalMap = readFileSync(new URL(`${workerName}.map`, packageDist), 'utf8');

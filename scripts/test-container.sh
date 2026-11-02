@@ -29,7 +29,7 @@ grep -qi '^Cross-Origin-Embedder-Policy: require-corp' <<<"$root_headers"
 grep -qi '^Cross-Origin-Resource-Policy: cross-origin' <<<"$root_headers"
 
 curl -fsS -o /dev/null "${BASE_URL}/sign-out"
-wasm_headers=$(curl -fsSI "${BASE_URL}/haybarn/duckdb-coi.wasm")
+wasm_headers=$(curl -fsSI "${BASE_URL}/haybarn/duckdb-threads.wasm")
 grep -qi '^Content-Type: application/wasm' <<<"$wasm_headers"
 curl -fsSI "${BASE_URL}/haybarn/extensions/${HAYBARN_EXT_VERSION}/wasm_threads/vgi.duckdb_extension.wasm" >/dev/null
 

@@ -247,7 +247,7 @@ export function initShell(
    *  via BroadcastChannel, then writes it into the shared SAB so the
    *  extension's blocking _duckdb_wasm_open_auth_url() returns it.
    *
-   *  SAB protocol (see duckdb-coi.js, _duckdb_wasm_open_auth_url):
+   *  SAB protocol (see duckdb-threads.js, _duckdb_wasm_open_auth_url):
    *    flag = 1   → byte[4..7] holds length, byte[8..] holds the code
    *    flag = -1  → byte[4..7] holds length, byte[8..] holds the error msg
    *    flag = 0   → extension is still waiting (Atomics.wait on this)
