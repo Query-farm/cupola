@@ -26,15 +26,21 @@ export async function loadSnapshotRenderer(fonts: PdfFont[]): Promise<SnapshotRe
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     }
     let canvas: HTMLCanvasElement;
-    const overlays = await overlaySandboxFrames(frames);
+    const pictures = await captureSandboxFrames(frames.filter(frame => !exclude.some(node => node.contains(frame))));
     try {
       canvas = await toCanvas(el, {
         pixelRatio: 2, fontEmbedCSS, cacheBust: false,
         filter: node => !(node instanceof Element && exclude.includes(node)),
       });
+      const box = el.getBoundingClientRect();
+      const context = canvas.getContext('2d');
+      const scale = canvas.width / box.width;
+      for (const { image, frame } of pictures) {
+        const at = frame.getBoundingClientRect();
+        context?.drawImage(image, (at.left - box.left) * scale, (at.top - box.top) * scale, at.width * scale, at.height * scale);
+      }
     } finally {
       if (reflow) el.style.cssText = previous;
-      for (const restore of overlays) restore();
     }
     const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
     if (!blob || !canvas.width || !canvas.height) return null;
@@ -50,20 +56,19 @@ function sandboxFrames(el: Element): HTMLIFrameElement[] {
 /** How long a sandbox gets to finish its first render before the export gives up on it. */
 const SANDBOX_RENDER_WAIT_MS = 20_000;
 
-/** Cover each sandboxed iframe with a picture of itself, so the capture shows its contents.
+/** A picture of each sandboxed iframe, to draw over the element's capture.
  *
  * The iframe runs at an opaque origin, which html-to-image cannot read: on its own it captures
  * a blank box. Each sandbox can rasterize itself on request (the core's capture-png protocol,
- * as Evidence's own PNG download uses), so its PNG goes over the iframe while the element is
- * captured. The iframe stays in place: moving it would reload its document. A sandbox that
- * hasn't rendered yet (one in a section just opened for the export) is asked again until it
- * has. Returns the cleanup for each overlay. */
-async function overlaySandboxFrames(frames: HTMLIFrameElement[]): Promise<(() => void)[]> {
-  const restores: (() => void)[] = [];
+ * as Evidence's own PNG download uses). Its picture is drawn onto the finished canvas, not placed
+ * in the DOM for html-to-image: an image inside the SVG it rasterizes decodes on its own time, so
+ * the capture came out blank or mid-paint at random. A sandbox that hasn't rendered yet (one in a
+ * section just opened for the export) is asked again until it has. */
+async function captureSandboxFrames(frames: HTMLIFrameElement[]): Promise<{ image: HTMLImageElement; frame: HTMLIFrameElement }[]> {
+  const pictures: { image: HTMLImageElement; frame: HTMLIFrameElement }[] = [];
   for (const frame of frames) {
-    const parent = frame.parentElement;
     const capture = getSandboxFrameCapture(frame);
-    if (!parent || !capture) continue;
+    if (!capture) continue;
     let dataUrl: string | null = null;
     for (const deadline = performance.now() + SANDBOX_RENDER_WAIT_MS; ;) {
       try { dataUrl = await capture(2); break; } catch (error) {
@@ -72,20 +77,12 @@ async function overlaySandboxFrames(frames: HTMLIFrameElement[]): Promise<(() =>
       }
     }
     if (!dataUrl) continue;
-    const img = new Image();
-    img.src = dataUrl;
-    await img.decode().catch(() => {});
-    const position = parent.style.position;
-    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
-    const frameBox = frame.getBoundingClientRect(), parentBox = parent.getBoundingClientRect();
-    Object.assign(img.style, {
-      position: 'absolute', left: `${frameBox.left - parentBox.left}px`, top: `${frameBox.top - parentBox.top}px`,
-      width: `${frameBox.width}px`, height: `${frameBox.height}px`, zIndex: '2147483647', pointerEvents: 'none',
-    });
-    parent.appendChild(img);
-    restores.push(() => { img.remove(); parent.style.position = position; });
+    const image = new Image();
+    image.src = dataUrl;
+    try { await image.decode(); } catch { continue; }
+    pictures.push({ image, frame });
   }
-  return restores;
+  return pictures;
 }
 
 const WEIGHTS: Record<string, number> = { Regular: 400, Italic: 400, SemiBold: 600, Bold: 700, BoldItalic: 700 };
