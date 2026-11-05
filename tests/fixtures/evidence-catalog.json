@@ -140,6 +140,11 @@
     "skip": "reads data it does not define (state_growth)"
    },
    {
+    "title": "Data Labels",
+    "source": "{% map %}\n    {% area_layer\n        geography=\"us_states\"\n        match_by=\"abbr\"\n        data=\"state_sales\"\n        area_id=\"state_abbr\"\n        value=\"sum(sales)\"\n        data_labels={ fmt=\"usd0k\" }\n    /%}\n{% /map %}",
+    "skip": "reads data it does not define (state_sales)"
+   },
+   {
     "title": "Custom Breakpoints",
     "source": "{% map %}\n    {% area_layer\n        geography=\"us_states\"\n        match_by=\"abbr\"\n        data=\"state_sales\"\n        area_id=\"state_abbr\"\n        value=\"sum(sales)\"\n        color_stops=[\n            { value=0 color=\"#ffffff\" },\n            { value=10000 color=\"#f59e0b\" },\n            { value=50000 color=\"#1a9850\" }\n        ]\n    /%}\n{% /map %}",
     "skip": "reads data it does not define (state_sales)"
