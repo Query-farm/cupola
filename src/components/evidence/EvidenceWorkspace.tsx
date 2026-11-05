@@ -594,9 +594,11 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
     // Save on the way out; ask only when the draft can't be saved (it is kept for recovery either way).
     const unload = (event: BeforeUnloadEvent) => { if (!exportingRef.current) autosaveRef.current(); if (unsavedRef.current() || remoteRef.current?.pending) { event.preventDefault(); event.returnValue = ''; } };
     const pop = () => {
-      if (remoteRef.current || onLibrary) return; // The unified browser owns this route.
-      if (isLibraryUrl()) { setRun(null); setLibrary(true); reloadList(); return; }
+      if (remoteRef.current) return; // The unified browser owns this route.
       const id = new URLSearchParams(window.location.search).get('evidence_report');
+      // It also owns moves between reports, but not between this report's parameter views.
+      if (onLibrary && (isLibraryUrl() || id !== reportRef.current.id)) return;
+      if (isLibraryUrl()) { setRun(null); setLibrary(true); reloadList(); return; }
       const search = new URLSearchParams(window.location.search);
       if (!id || id === reportRef.current.id) {
         // Back/Forward between parameter views: the URL names every value that isn't a default.

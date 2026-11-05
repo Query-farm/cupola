@@ -3,6 +3,7 @@ import type { LibraryDocumentKind } from './LibraryNewMenu';
 import { listLocalObjects, localObjectRecord, saveLocalObject } from '../../lib/reporting/local-objects';
 import { LibraryDocumentOpener } from './LibraryDocumentOpener';
 import { useEffect, useRef, useState } from 'react';
+import { PARAMETER_URL_PREFIX } from '../../lib/evidence/parameter-url';
 import { Button } from '../ui/button';
 import { EvidenceWorkspace } from '../evidence/EvidenceWorkspace';
 import { ReportLibrary } from './ReportLibrary';
@@ -58,7 +59,7 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     read(); window.addEventListener(REPORT_TRANSFERS_CHANGED, read); window.addEventListener('storage', read);
     return () => { window.removeEventListener(REPORT_TRANSFERS_CHANGED, read); window.removeEventListener('storage', read); };
   }, [scope, generation]);
-  const routeIdentity = () => { const url = new URL(location.href); for (const key of ['report_view', 'report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit', 'report_schedule_access']) url.searchParams.delete(key); return url.pathname + url.search; };
+  const routeIdentity = () => { const url = new URL(location.href); for (const key of ['report_view', 'report_scheduler', 'report_schedule', 'report_run', 'report_schedule_edit', 'report_schedule_access']) url.searchParams.delete(key); for (const key of [...url.searchParams.keys()]) if (key.startsWith(PARAMETER_URL_PREFIX)) url.searchParams.delete(key); return url.pathname + url.search; };
   const activeRoute = useRef(routeIdentity());
   useEffect(() => {
     const track = () => {

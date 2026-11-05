@@ -121,16 +121,25 @@ test('the drilldown example runs cleanly, and the parameter editor shows depende
   test.setTimeout(150_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
+  // The example's button lived on the old report list, which the unified browser replaced. Its
+  // module imports a `?raw` file, so it is loaded through the dev server, not by Playwright.
   await page.goto(evidencePath('evidence/reports'));
+  const id = await page.evaluate(async ([base, serviceUrl]) => {
+    const { newDrillExampleReport } = await import(`${base}src/lib/evidence/templates.ts`);
+    const report = newDrillExampleReport(serviceUrl);
+    localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(serviceUrl)}:${report.id}`, JSON.stringify(report));
+    return report.id as string;
+  }, [new URL('.', page.url()).pathname.replace(/evidence\/$/, ''), EVIDENCE_SERVICE_URL]);
+  await page.goto(evidencePath(`evidence?evidence_report=${id}`));
   const panel = page.getByTestId('evidence-panel');
-  await panel.getByRole('button', { name: 'Use drilldown example' }).click({ timeout: 90_000 });
   const document = panel.getByTestId('evidence-document');
   await expect(document.getByRole('heading', { name: 'Sales by place' })).toBeVisible({ timeout: 90_000 });
   await expect(document.locator('[data-render="table"] tbody tr')).toHaveCount(2, { timeout: 60_000 });
   await expect(document.getByRole('button', { name: 'Drill into United States' })).toBeVisible();
   await expect(panel.getByTestId('report-problem-count')).toHaveCount(0);
 
-  // The example opens for editing; its Parameters tab explains the cascade and previews choices.
+  // Its Parameters tab explains the cascade and previews choices.
+  await panel.getByRole('button', { name: 'Edit report', exact: true }).click();
   await panel.getByRole('tab', { name: 'Parameters', exact: true }).click();
   await expect(panel.getByLabel('Parameter 2 dependencies')).toHaveText('Choices depend on Country. Changing it updates the choices of City.');
   await panel.getByRole('button', { name: 'Preview choices' }).nth(1).click();
