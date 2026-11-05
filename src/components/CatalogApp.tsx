@@ -401,6 +401,7 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
   // The single source of truth for which top-level surface is showing. Replaces
   // the old appView toggle + shell-drawer mode. Persisted (migrating the old
   // vgi-app-view key) so a reload returns to the same tab.
+  const leftReportRoute = useRef<{ scope: string; pathname: string; params: [string, string][] } | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>(() => {
     const mobileView = mobileViewFromUrl();
     // Saved queries and notebooks are resolved by the library before opening
@@ -1680,10 +1681,23 @@ export function CatalogApp({ initialTab, defaultServiceUrl }: CatalogAppProps = 
       window.dispatchEvent(new CustomEvent<OpenReportDetail>(OPEN_REPORT_EVENT, { detail: { serviceUrl, workspaceId: workspaceId || undefined, href: href.toString() } }));
     } else {
       if (mobileNavigation) selectMobileTab(tab);
+      const scope = workspaceId || serviceUrl;
       if (!['editor', 'notebooks', 'reports', 'evidence'].includes(tab)) {
+        // The report stays mounted behind other tabs, so its route comes back with it: without
+        // this, the URL names the library while the report is on screen, and a reload loses it.
+        const openReport = activeTab === 'reports' && (search.has('evidence_report') || search.has('report_id'));
+        leftReportRoute.current = openReport ? { scope, pathname: location.pathname, params: [...search].filter(([key]) => key.startsWith('report_') || key.startsWith('evidence_')) } : null;
         const url = new URL(location.href); url.pathname = appBase;
         for (const key of [...url.searchParams.keys()]) if (key.startsWith('report_') || key.startsWith('evidence_') || key === 'notebook' || key === 'local_report_folder') url.searchParams.delete(key);
         history.replaceState(history.state, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
+      } else if (tab === 'reports' && leftReportRoute.current) {
+        const { scope: leftScope, pathname, params } = leftReportRoute.current;
+        leftReportRoute.current = null;
+        if (leftScope === scope && !search.has('evidence_report') && !search.has('report_id') && !search.has('evidence_new')) {
+          const url = new URL(location.href); url.pathname = pathname;
+          for (const [key, value] of params) url.searchParams.set(key, value);
+          history.replaceState(history.state, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED));
+        }
       }
       setActiveTab(tab);
     }

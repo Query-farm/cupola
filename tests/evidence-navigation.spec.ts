@@ -7,7 +7,7 @@ test('Reports starts at the list and preserves an opened report across tab switc
   await waitForShellBridge(page);
   await page.getByTestId('tab-reports').click();
   const panel = page.getByTestId('evidence-panel');
-  const list = panel.getByRole('heading', { name: /^(All reports|Local)$/ });
+  const list = panel.getByRole('heading', { name: /^(Saved reports|Folder contents)$/ });
   await expect(list).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Back to report', exact: true })).toHaveCount(0);
   await expect(panel.getByTestId('evidence-document')).toHaveCount(0);
@@ -92,7 +92,7 @@ test('sidebar report links open reports without reloading the page', async ({ pa
   }, EVIDENCE_SERVICE_URL);
   // The catalog page, before the Reports tab has ever been opened.
   await page.goto(evidencePath(''));
-  const sidebar = page.getByRole('navigation', { name: 'Saved reports' });
+  const sidebar = page.getByRole('navigation', { name: 'Saved library' });
   await expect(sidebar.getByRole('link', { name: 'First report' })).toBeVisible({ timeout: 90_000 });
   await page.evaluate(() => { (window as { __sameDocument?: boolean }).__sameDocument = true; });
   const sameDocument = () => page.evaluate(() => (window as { __sameDocument?: boolean }).__sameDocument === true);
@@ -114,7 +114,7 @@ test('sidebar report links open reports without reloading the page', async ({ pa
   await expect(page).toHaveURL(/evidence_report=first/);
 
   // The list, and Back to the report it left.
-  await sidebar.getByRole('link', { name: 'Reports' }).click();
+  await sidebar.getByRole('link', { name: 'Library', exact: true }).click();
   await expect(page).toHaveURL(/reports(?:\/saved)?/);
   await expect(panel.getByRole('row').filter({ hasText: 'Second report' })).toBeVisible();
   await page.goBack();
@@ -128,14 +128,14 @@ test('sidebar report links open reports without reloading the page', async ({ pa
   await popup.close();
 
   // Headings open the libraries even when their lists are collapsed or already mounted.
-  await sidebar.getByRole('button', { name: 'Collapse reports', exact: true }).click();
+  await sidebar.getByRole('button', { name: 'Collapse library', exact: true }).click();
   await expect(sidebar.getByRole('link', { name: 'First report', exact: true })).toBeHidden();
-  await sidebar.getByRole('link', { name: 'Reports', exact: true }).click();
+  await sidebar.getByRole('link', { name: 'Library', exact: true }).click();
   await expect(panel.getByRole('region', { name: 'Report browser' })).toBeVisible();
-  await expect(sidebar.getByRole('button', { name: 'Expand reports', exact: true })).toBeVisible();
-  await page.getByRole('navigation', { name: 'Saved notebook drafts' }).getByRole('link', { name: 'Notebook drafts', exact: true }).click();
+  await expect(sidebar.getByRole('button', { name: 'Expand library', exact: true })).toBeVisible();
+  await page.getByTestId('tab-notebooks').click();
   await expect(page.getByTestId('notebook-library')).toBeVisible();
-  await sidebar.getByRole('link', { name: 'Reports', exact: true }).click();
+  await sidebar.getByRole('link', { name: 'Library', exact: true }).click();
   await expect(page).toHaveURL(/reports(?:\/saved)?/);
   await page.reload();
   await expect(panel.getByRole('region', { name: 'Report browser' })).toBeVisible();

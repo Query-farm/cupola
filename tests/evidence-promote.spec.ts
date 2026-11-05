@@ -16,11 +16,11 @@ test('a query added to a report is saved without editing it', async ({ page }) =
   const panel = page.getByTestId('evidence-panel');
   await expect(panel.getByRole('status', { name: 'Save status' })).toHaveText('Saved', { timeout: 30_000 });
   await expect(page).toHaveURL(/evidence_report=/);
-  const sidebar = page.getByRole('navigation', { name: 'Saved reports' });
+  const sidebar = page.getByRole('navigation', { name: 'Saved library' });
   await expect(sidebar.getByRole('link', { name: 'Query 1' })).toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole('navigation', { name: 'Saved reports' }).getByRole('link', { name: 'Query 1' })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('navigation', { name: 'Saved library' }).getByRole('link', { name: 'Query 1' })).toBeVisible({ timeout: 30_000 });
 });
 
 test('a blank new report is saved locally before its first edit', async ({ page }) => {
