@@ -1,6 +1,7 @@
 import { appBase } from "../../lib/app-base";
 import { sessionCatalogs } from "@/lib/catalog-store";
 import { EvidenceQueryRun } from '../../lib/evidence/query-run';
+import { LINK_REFUSED_EVENT, linkRefusedNotice } from '../../lib/evidence/link-refusal';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { Code2, Copy, FileText, FolderOpen, Plus, RefreshCw, Save, Search, Trash2, Eye, Minimize2, Square, FileDown, Loader2, Check, ChevronRight, Download, Upload } from 'lucide-react';
 import { Button, buttonVariants } from '../ui/button';
@@ -155,6 +156,11 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
   const workspace = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(initial.error);
   const [notice, setNotice] = useState('');
+  useEffect(() => {
+    const refused = (event: Event) => setNotice(linkRefusedNotice((event as CustomEvent<string>).detail));
+    window.addEventListener(LINK_REFUSED_EVENT, refused);
+    return () => window.removeEventListener(LINK_REFUSED_EVENT, refused);
+  }, []);
   /** The draft on screen was recovered, not saved; said until it saves. */
   const [recovered, setRecovered] = useState(initial.recovered);
   const [status, setStatus] = useState('Ready to run');

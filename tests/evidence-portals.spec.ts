@@ -15,6 +15,8 @@ const SOURCE = `# Portals
 {% big_value data="demo.daily_orders" value="count(*)" title="Rows" filters=["category_filter"] /%}
 
 {% range_calendar id="date_filter" /%}
+
+{% table_filter id="my_filter" data="demo.daily_orders" /%}
 `;
 
 test('report popups render inside the report and can be used', async ({ page }) => {
@@ -51,15 +53,38 @@ test('report popups render inside the report and can be used', async ({ page }) 
   await page.keyboard.press('Escape');
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
 
-  // A click outside closes it, though events from a shadow root retarget to its host.
+  // Without the search box in the way, focus stays on the trigger and the keyboard reopens it.
   await trigger.click();
   await expect(trigger).toHaveAttribute('aria-expanded', 'true');
-  await page.mouse.click(700, 960);
+  await page.keyboard.press('Escape');
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await page.keyboard.press('Escape');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+  // A click outside closes it, though events from a shadow root retarget to its host. Retried
+  // because the dismiss listener attaches just after the popup opens.
+  await trigger.click();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(async () => {
+    await page.mouse.click(700, 960);
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false', { timeout: 500 });
+  }).toPass();
 
   // Popover content takes the same route.
   await report_.locator('[data-render=range_calendar] button').first().click();
   await portals.getByRole('button', { name: 'Last 7 Days' }).click();
   await page.keyboard.press('Escape');
   await expect(page).toHaveURL(/date_filter=last\+7\+days/);
+
+  // Popovers trap focus, and the trap must not read a move inside the report as an escape.
+  await report_.locator('[data-render=table_filter] button').first().click();
+  await portals.getByRole('button', { name: 'Category', exact: true }).or(portals.getByText('Category', { exact: true })).first().click();
+  const search = portals.locator('input').first();
+  await search.click();
+  await expect(search).toBeFocused();
+  await page.keyboard.type('Boo');
+  await expect(search).toHaveValue('Boo');
 });
