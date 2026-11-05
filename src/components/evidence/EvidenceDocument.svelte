@@ -14,6 +14,7 @@
   import { createInlineQueriesContext } from '@evidence/core/user-components/common/inline-queries';
   import { setShowErrorsContext } from '@evidence/core/show-errors.context';
   import * as Tooltip from '@evidence/core/shadcn/components/ui/tooltip';
+  import { BitsConfig } from 'bits-ui';
   import { setMetadataContext } from '@evidence/core/metadata';
   import { CupolaMetadata } from '../../lib/evidence/catalog-metadata.svelte';
   import { InlineQueryMetadata, setInlineQueryMetadataContext } from '@evidence/core/metadata/inline-query-metadata.svelte';
@@ -91,6 +92,9 @@
     });
   });
   $effect(() => { props.onIssues(validationIssues(checkedErrors)); });
+  // Core's select, popover, tooltip and dialog content portals to document.body by default,
+  // outside the preview's shadow root and so outside every style the report has.
+  let portalTarget = $state<HTMLElement>();
 </script>
 
 <div class="prose max-w-none evidence-document" data-testid="evidence-document">
@@ -100,11 +104,14 @@
          Without it that throws "Context Tooltip.Provider not found", and the component's error
          boundary removes the component without a trace. Imported through the core, so it is
          the same bits-ui copy as the core's tooltips. -->
-    <Tooltip.Provider>
-      <Renderer tree={processed.tree} validationErrors={checkedErrors} />
-    </Tooltip.Provider>
+    <BitsConfig defaultPortalTo={portalTarget}>
+      <Tooltip.Provider>
+        <Renderer tree={processed.tree} validationErrors={checkedErrors} />
+      </Tooltip.Provider>
+    </BitsConfig>
     {#snippet failed(error)}
       <p role="alert">This preview could not render: {error instanceof Error ? error.message : String(error)}. Correct the document and update the preview.</p>
     {/snippet}
   </svelte:boundary>
 </div>
+<div bind:this={portalTarget} data-testid="evidence-portals"></div>
