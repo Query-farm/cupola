@@ -52,6 +52,11 @@ test('report popups render inside the report and can be used', async ({ page }) 
   await expect(trigger).toHaveAttribute('aria-expanded', 'true');
   await page.keyboard.press('Escape');
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await page.keyboard.press('Escape');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
 
   // Without the search box in the way, focus stays on the trigger and the keyboard reopens it.
   await trigger.click();

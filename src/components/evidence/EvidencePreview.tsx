@@ -1,4 +1,5 @@
 import { manageReportChartTooltips } from '../../lib/evidence/chart-tooltips';
+import { returnPopupFocus } from '../../lib/evidence/popup-focus';
 import { getInstanceByDom } from 'echarts';
 import { attachDrill, type DrillChart } from '../../lib/evidence/drill';
 import { preserveReportCharts } from './useReportPrint';
@@ -45,6 +46,7 @@ export function EvidencePreview({ run, onQuery, onError, onIssues, onData, onInp
     themeStyle.current = appearanceStyle; themeTarget.current = target;
     root.replaceChildren(style, appearanceStyle, target);
     const cleanupTooltips = manageReportChartTooltips(host.current!, root);
+    const cleanupPopupFocus = returnPopupFocus(root);
     const drilling = attachDrill(root, {
       match: text => callbacks.current.drill?.match(text) ?? false,
       onDrill: text => callbacks.current.drill?.onDrill(text),
@@ -72,7 +74,7 @@ export function EvidencePreview({ run, onQuery, onError, onIssues, onData, onInp
         cleanup = () => { void unmount(instance); };
       } catch (error) { if (!disposed) callbacks.current.onError(error instanceof Error ? error.message : String(error)); }
     })();
-    return () => { disposed = true; drillScan.current = null; drilling.dispose(); cleanupTooltips(); cleanupPrint(); run.execution.stop(); cleanup?.(); };
+    return () => { disposed = true; drillScan.current = null; drilling.dispose(); cleanupTooltips(); cleanupPopupFocus(); cleanupPrint(); run.execution.stop(); cleanup?.(); };
   }, [run]);
   useEffect(() => { drillScan.current?.(); }, [drill?.version]);
   useEffect(() => {
