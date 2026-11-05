@@ -93,3 +93,33 @@ test('report popups render inside the report and can be used', async ({ page }) 
   await page.keyboard.type('Boo');
   await expect(search).toHaveValue('Boo');
 });
+
+test('closing a dropdown from its search box gives focus back, however it was opened', async ({ page }) => {
+  test.setTimeout(120_000);
+  const report = { version: 1, id: 'portal-focus', title: 'Focus', serviceUrl: EVIDENCE_SERVICE_URL, setupSql: '', createdAt: 1, updatedAt: 1, parameters: [], values: {}, source: '# Focus\n\n{% dropdown id="category_filter" data="demo.daily_orders" value_column="category" /%}\n' };
+  await page.addInitScript(saved => {
+    try { localStorage.setItem(`cupola.evidence.report.v2:${encodeURIComponent(saved.serviceUrl)}:${saved.id}`, JSON.stringify(saved)); } catch { /* sandboxed frame */ }
+  }, report);
+  await page.goto(evidencePath('evidence?evidence_report=portal-focus'));
+  const panel = page.getByTestId('evidence-panel');
+  const trigger = panel.getByTestId('evidence-document').locator('[data-render=dropdown] button[data-slot=select-trigger]');
+  await expect(trigger).toBeEnabled({ timeout: 90_000 });
+
+  await trigger.click();
+  const search = panel.getByTestId('evidence-portals').locator('input').first();
+  await search.click();
+  await page.keyboard.type('Spo');
+  await expect(search).toHaveValue('Spo');
+  await page.keyboard.press('Escape');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(trigger).toBeFocused();
+  // Clearing the search reruns the options query a moment later. Its timing varies (the production
+  // build does it about half a second after closing), so the test disables the button as the
+  // query does: that drops its focus again, and focus must come back, not just be returned once.
+  await trigger.evaluate(button => { (button as HTMLButtonElement).disabled = true; });
+  await expect(trigger).not.toBeFocused();
+  await trigger.evaluate(button => { (button as HTMLButtonElement).disabled = false; });
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+});
