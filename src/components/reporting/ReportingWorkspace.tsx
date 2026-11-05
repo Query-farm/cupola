@@ -15,7 +15,8 @@ import { useReportLocations } from './ReportLocations';
 import { REPORT_ROUTE_CHANGED } from '../../lib/reporting/navigation';
 import { OPEN_REPORT_EVENT, pushReportRoute, reportHref, type OpenReportDetail } from '../../lib/evidence/open-report';
 import { saveEvidenceReport, type EvidenceReport } from '../../lib/evidence/reports';
-import { newEvidenceReport } from '../../lib/evidence/templates';
+import { newDrillExampleReport, newEvidenceReport } from '../../lib/evidence/templates';
+import { isWeatherService, WEATHER_TEST_SERVICE } from '../../lib/evidence/weather';
 import { placeLocalReport, localLibrary } from '../../lib/reporting/local-library';
 import { forgetTransfer, resumeTransfer, transferJobs, REPORT_TRANSFERS_CHANGED, type TransferJob, type TransferSource } from '../../lib/reporting/transfers';
 import type { CatalogData } from '../../lib/service';
@@ -113,11 +114,19 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
         saveLocalObject(scope, object); placeLocalReport(scope, object.id, view.selected === 'local' ? view.localFolder : null);
         const url = reportHref(props.serviceUrl, object.id); history.pushState({}, '', url); window.dispatchEvent(new Event(REPORT_ROUTE_CHANGED)); setView(route()); setEditorKey(n => n + 1); return;
       }
-      const report = saveEvidenceReport({ ...newEvidenceReport(props.serviceUrl, props.catalogName), workspaceId: props.workspaceId });
-      if (view.selected === 'local' && view.localFolder) placeLocalReport(scope, report.id, view.localFolder);
-      openLocal(report, true);
+      createReport(newEvidenceReport(props.serviceUrl, props.catalogName));
     } catch (e) { setError(`Could not save locally: ${reportError(e)}`); }
   }
+  function createReport(draft: EvidenceReport) {
+    const report = saveEvidenceReport({ ...draft, workspaceId: props.workspaceId });
+    if (view.selected === 'local' && view.localFolder) placeLocalReport(scope, report.id, view.localFolder);
+    openLocal(report, true);
+  }
+  /** Worked examples for the services that can run them. */
+  const examples = [
+    ...(isWeatherService(props.serviceUrl) ? [{ label: 'Use weather example', draft: () => newEvidenceReport(props.serviceUrl, props.catalogName, true) }] : []),
+    ...(props.serviceUrl === WEATHER_TEST_SERVICE ? [{ label: 'Use drilldown example', draft: () => newDrillExampleReport(props.serviceUrl) }] : []),
+  ].map(({ label, draft }) => ({ label, create: () => { try { createReport(draft()); } catch (e) { setError(`Could not save locally: ${reportError(e)}`); } } }));
   function transferReport(source: TransferSource, move: boolean) {
     // Unmount the editor after its save, before a move can remove its source.
     // Otherwise an editor's unmount autosave could recreate a deleted report.
@@ -133,7 +142,7 @@ export function ReportingWorkspace(props: ReportingWorkspaceProps) {
     {error && <p role="alert" className="shrink-0 px-5 py-2 text-sm text-destructive">{error}</p>}
     {jobs.length > 0 && <section aria-label="Pending report transfers" className="shrink-0 space-y-2 border-b px-5 py-3 text-sm">{jobs.map(job => <div key={job.id} className="flex flex-wrap items-center gap-2"><span>Unconfirmed {job.move ? 'move' : 'copy'}: {job.envelope.title} → {job.destination.name}</span><Button size="sm" disabled={retrying} onClick={async () => { setRetrying(true); setError(''); try { completed(await resumeTransfer(job)); } catch (e) { setError(reportError(e)); } finally { setRetrying(false); } }}>Retry transfer</Button><Button size="sm" variant="ghost" disabled={retrying} onClick={() => { if (confirm('Stop retrying this transfer? Its copy or move may already have completed. Check both locations before deleting anything.')) { forgetTransfer(job); refresh(); } }}>Stop retrying…</Button></div>)}</section>}
     <div className="min-h-0 flex-1">{view.activity ? <ScheduleActivity serviceUrl={props.serviceUrl} onBack={() => choose('all')} /> : view.selected === 'all' || view.selected === 'local' && !view.localEditor
-      ? <ReportOverview key={`${view.selected}:${view.localFolder ?? ''}:${editorKey}`} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} localOnly={view.selected === 'local'} folderId={view.localFolder} onAllReports={() => choose('all')} onFolder={id => choose('local', undefined, id)} onNew={createLocal} onLocal={openLocal} onWorker={(url, id) => choose(url, id)} onTransfer={transferReport} onRefresh={refresh} />
+      ? <ReportOverview key={`${view.selected}:${view.localFolder ?? ''}:${editorKey}`} locations={services} scope={scope} serviceUrl={props.serviceUrl} workspaceId={props.workspaceId} localOnly={view.selected === 'local'} folderId={view.localFolder} onAllReports={() => choose('all')} onFolder={id => choose('local', undefined, id)} onNew={createLocal} examples={examples} onLocal={openLocal} onWorker={(url, id) => choose(url, id)} onTransfer={transferReport} onRefresh={refresh} />
       : view.selected === 'local'
         ? localObject ? <LibraryDocumentOpener key={editorKey} record={{ ...localObjectRecord(localObject), folder_id: localLibrary(scope).entries[localObject.id]?.folderId ?? null }} libraryUrl="local" localScope={scope} pinned={false} /> : <EvidenceWorkspace key={editorKey} {...props} onLibrary={() => choose('local')} onTransfer={(report, move) => transferReport({ kind: 'local', report }, move)} />
         : <ReportLibrary key={view.selected + ':' + editorKey} {...props} libraryUrl={view.selected} onAllReports={() => choose('all')} onCreateLocal={() => createLocal()} onTransferReport={transferReport} />}</div>

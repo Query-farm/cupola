@@ -140,3 +140,14 @@ test('sidebar report links open reports without reloading the page', async ({ pa
   await page.reload();
   await expect(panel.getByRole('region', { name: 'Report browser' })).toBeVisible();
 });
+
+test('a weather service offers its worked example from the report list', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto(evidencePath('evidence/reports'));
+  const panel = page.getByTestId('evidence-panel');
+  await panel.getByRole('button', { name: 'Use weather example', exact: true }).click({ timeout: 90_000 });
+  await expect(page).toHaveURL(/evidence_report=/);
+  await expect(panel.getByRole('textbox', { name: 'Report title', exact: true })).toHaveValue('Your week outdoors');
+  await expect(panel.getByTestId('evidence-document').locator('[data-render]').first()).toBeVisible({ timeout: 90_000 });
+  await expect(panel.getByTestId('report-problem-count')).toHaveCount(0);
+});

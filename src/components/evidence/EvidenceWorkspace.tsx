@@ -10,7 +10,7 @@ import { Input } from '../ui/input';
 import { engine, waitForEngineReady } from '../../lib/shell-bridge';
 import { hasSqlStatements, materializeReportQuery } from '../../lib/reports/parameters';
 import { compilerParameters, deleteEvidenceReport, listEvidenceReports, resolveParameters, saveEvidenceReport, validateEvidenceReport, describeReportError, saveRecoveryDraft, clearRecoveryDraft, loadRecoveryDraft, listUnsavedDrafts, titled, isQuotaError, UNTITLED_REPORT, STORAGE_FULL_MESSAGE, STORAGE_PREFIX, LEGACY_STORAGE_PREFIX, EVIDENCE_REPORTS_CHANGED, type EvidenceReport, type ParameterValues } from '../../lib/evidence/reports';
-import { newDrillExampleReport, newEvidenceReport } from '../../lib/evidence/templates';
+import { newEvidenceReport } from '../../lib/evidence/templates';
 import { reportScope } from '../../lib/evidence/reports';
 import { getWorkspace, hostOf, listWorkspaces, subscribeWorkspaces, workspaceLabel, type Workspace } from '../../lib/workspace/store';
 import { resolveRequires, rewriteReportAliases, withDerivedRequires, type RequireCatalog } from '../../lib/evidence/report-requires';
@@ -21,7 +21,7 @@ import { REPORT_ROUTE_CHANGED } from '../../lib/reporting/navigation';
 import { parseReportFile, planImport, reportFileName, serializeReportFile, REPORT_FILE_EXTENSION } from '../../lib/evidence/report-file';
 import { emptyHistory, loadReportHistory, mergeHistories, recordRevision, removeRevision, revisionReport, saveReportHistory, shrinkStoredHistory, specOf, type ReportHistory, type Revision, type RevisionMeta } from '../../lib/evidence/revisions';
 import type { ProposalEvent } from './EvidenceAgent';
-import { isWeatherService, WEATHER_TEST_SERVICE } from '../../lib/evidence/weather';
+import { isWeatherService } from '../../lib/evidence/weather';
 import { quoteIdentifier } from '../../lib/evidence/data-browser';
 import type { EvidenceDataContext } from '../../lib/evidence/data-browser';
 import type { QueryLogEntry } from '../../lib/evidence/haybarn-query-service';
@@ -1155,10 +1155,6 @@ export function EvidenceWorkspace({ catalogName, serviceUrl, workspaceId, catalo
         </td><td className="px-4 py-3 text-xs text-muted-foreground">{item.parameters.map(p => p.label).join(', ') || 'None'}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">{new Date(item.updatedAt).toLocaleString()}</td>
         <td className="px-4 py-3"><div className="flex justify-end gap-2"><Button variant="outline" disabled={busy} onClick={() => openReport(item)}>Open report</Button><Button variant="ghost" size="icon" aria-label={`Export ${item.title}`} title="Export report file" onClick={() => exportReports([item])}><Download /></Button><Button variant="ghost" size="icon" aria-label={`Copy ${item.title}`} title="Copy report" onClick={() => copySavedReport(item)}><Copy /></Button>{workspaceId && <CopyToWorkspaceMenu currentId={workspaceId} title={item.title} onCopy={target => copyToWorkspace(item, target)} />}<Button variant="ghost" size="icon" aria-label={`Delete ${item.title}`} onClick={() => remove(item)}><Trash2 /></Button></div></td>
       </tr>)}</tbody></table></div> : <div className="rounded-lg border border-dashed p-12 text-center"><FileText className="mx-auto mb-3 size-7 text-muted-foreground" /><h2 className="text-sm font-semibold">{reports.length ? 'No matching reports' : 'No saved reports yet'}</h2><p className="mt-2 text-xs text-muted-foreground">{reports.length ? 'Try a different search.' : 'Create a report and choose a sample layout, or describe what you want to the report assistant. Your edits save automatically in this browser.'}</p></div>}
-      <div className="flex flex-wrap gap-2">
-        {isWeatherService(serviceUrl) && <Button variant="outline" disabled={busy} onClick={() => openReport(stamp(newEvidenceReport(serviceUrl, catalogName, true)), true, true)}>Use weather example</Button>}
-        {serviceUrl === WEATHER_TEST_SERVICE && <Button variant="outline" disabled={busy} onClick={() => openReport(stamp(newDrillExampleReport(serviceUrl)), true, true)}>Use drilldown example</Button>}
-      </div>
     </section>
     <main hidden={library} className="min-h-0 flex-1 flex-col" style={{ display: library ? 'none' : 'flex' }}>
       {editing && !editorOnly && <div className="flex shrink-0 gap-2 border-b p-2 lg:hidden" role="group" aria-label="Report workspace view">
