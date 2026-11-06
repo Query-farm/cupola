@@ -98,6 +98,10 @@ function QueryBlock({ query, onOpenShell }: { query: ExampleQuery; index: number
   );
 }
 
+function exampleSqlKey(sql: string): string {
+  return sql.trim().replace(/\s+/g, " ");
+}
+
 /** The examples an object offers: structured ones first, then the
  *  `vgi.example_queries` tag's, deduplicated by SQL. */
 export function collectExampleQueries(exampleQueriesJson?: string | null, queriesProp?: ExampleQuery[], defaultSql?: string): ExampleQuery[] {
@@ -105,14 +109,24 @@ export function collectExampleQueries(exampleQueriesJson?: string | null, querie
   const fromProp = queriesProp && queriesProp.length > 0 ? queriesProp : null;
   // Merge with prop-supplied examples first (they're typically the structured
   // first-class source like FunctionInfo.examples), then tag-derived. Dedupe
-  // by exact SQL match so the same query doesn't appear twice when the
-  // server populates both channels.
+  // on whitespace-normalized SQL so the same query doesn't appear twice when
+  // the server populates both channels — but a duplicate still fills in a
+  // missing name/description. The vgi extension exposes only the SQL through
+  // `duckdb_functions().examples` and carries the descriptions in a
+  // synthesized `vgi.example_queries` tag, so first-wins would drop them.
   const merged: ExampleQuery[] = [];
-  const seen = new Set<string>();
+  const byKey = new Map<string, ExampleQuery>();
   for (const q of [...(fromProp || []), ...(fromTag || [])]) {
-    if (seen.has(q.sql)) continue;
-    seen.add(q.sql);
-    merged.push(q);
+    const key = exampleSqlKey(q.sql);
+    const existing = byKey.get(key);
+    if (existing) {
+      if (!existing.name && q.name) existing.name = q.name;
+      if (!existing.description && q.description) existing.description = q.description;
+      continue;
+    }
+    const copy = { ...q };
+    byKey.set(key, copy);
+    merged.push(copy);
   }
   return merged.length > 0 ? merged : defaultSql ? [{ sql: defaultSql }] : [];
 }

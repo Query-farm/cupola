@@ -297,19 +297,28 @@ export function examplesForAI(
   tags: Tags,
   native: ReadonlyArray<{ sql: string; description?: string | null }> = [],
 ): AIExample[] {
-  const seen = new Set<string>();
+  const seen = new Map<string, AIExample>();
   const out: AIExample[] = [];
   for (const candidate of [...native, ...parseExampleQueries(tags), ...parseExecutableExamples(tags)]) {
     const sql = (candidate.sql || "").trim();
     if (!sql) continue;
     const key = sql.replace(/\s+/g, " ").toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({
+    const existing = seen.get(key);
+    if (existing) {
+      // Native examples from `duckdb_functions()` carry only SQL; the vgi
+      // extension keeps their descriptions in `vgi.example_queries`.
+      if (!existing.description) existing.description = candidate.description?.trim() || null;
+      continue;
+    }
+    if (out.length >= MAX_AI_EXAMPLES) continue;
+    const entry: AIExample = {
       description: candidate.description?.trim() || null,
       sql: sql.length > DETAIL_TAG_VALUE_CHAR_LIMIT ? `${sql.slice(0, DETAIL_TAG_VALUE_CHAR_LIMIT)}… [truncated]` : sql,
-    });
-    if (out.length >= MAX_AI_EXAMPLES) break;
+    };
+    seen.set(key, entry);
+    out.push(entry);
+    // No early break at the cap: later tag entries may still supply the
+    // description of an example already taken.
   }
   return out;
 }

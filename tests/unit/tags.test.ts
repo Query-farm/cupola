@@ -85,6 +85,13 @@ describe("examplesForAI", () => {
     expect(out[0].description).toBe("native");
     expect(out).toHaveLength(5);
   });
+  it("fills a description-less native example from the vgi.example_queries tag", () => {
+    // The vgi extension exposes only SQL in duckdb_functions().examples and
+    // carries the descriptions in a synthesized vgi.example_queries tag.
+    const tags = { [TAG_EXAMPLE_QUERIES]: JSON.stringify([{ sql: "SELECT  1", description: "One" }]) };
+    const out = examplesForAI(tags, [{ sql: "SELECT 1", description: "" }]);
+    expect(out).toEqual([{ sql: "SELECT 1", description: "One" }]);
+  });
   it("bounds each example body", () => {
     const out = examplesForAI({ [TAG_EXAMPLE_QUERIES]: JSON.stringify([{ sql: "x".repeat(5_000) }]) });
     expect(out[0].sql.length).toBeLessThan(4_050);
