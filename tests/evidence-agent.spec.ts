@@ -14,6 +14,95 @@ function stream(tool?: { name: string; input: unknown }) {
   return events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
 }
 
+for (const ending of ['apply', 'stop', 'disconnect', 'discard', 'incomplete', 'invalid', 'follow-up'] as const) {
+  test(`a long report proposal remains reviewable during an interrupted response: ${ending}`, async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.addInitScript(({ ending }) => {
+      localStorage.setItem('vgi-frontend-settings', JSON.stringify({ anthropicApiKey: 'test-key-not-real', aiModel: 'claude-sonnet-4-6' }));
+      const realFetch = window.fetch;
+      let requests = 0;
+      window.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+        if (String(url) !== 'https://api.anthropic.com/v1/messages') return realFetch(url, init);
+        requests++;
+        const body = new ReadableStream({ start(controller) {
+          (window as any).__interruptProposal = () => controller.error(new TypeError('Connection timed out'));
+          const emit = (event: unknown) => controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+          emit({ type: 'message_start', message: { usage: { input_tokens: 10 } } });
+          if (requests > 1) {
+            // The proposal's tool result was delivered, but its explanation never arrives.
+            (window as any).__proposalFollowUp = true;
+            return;
+          }
+          const input = JSON.stringify({ summary: 'A complete long report', changes: {
+            title: 'Reviewable report',
+            source: '# Reviewable report\n\n' + 'Details for the report.\n\n'.repeat(3000) + (ending === 'invalid' ? '\n{% no_such_component /%}' : ''),
+          } });
+          emit({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'proposal', name: 'propose_report_edit' } });
+          const raw = ending === 'incomplete' ? input.slice(0, -20) : input;
+          for (let i = 0; i < raw.length; i += 1024) emit({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: raw.slice(i, i + 1024) } });
+          emit({ type: 'content_block_stop', index: 0 });
+          if (ending === 'follow-up') {
+            emit({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 100 } });
+            emit({ type: 'message_stop' });
+          }
+          // Leave the HTTP stream open, even on abort: the reader must cancel it.
+        }, cancel() { (window as any).__proposalStreamCancelled = true; } });
+        return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+      }) as typeof window.fetch;
+    }, { ending });
+    await page.goto(evidencePath('evidence/reports'));
+    const panel = page.getByTestId('evidence-panel');
+    await panel.getByRole('button', { name: 'New report', exact: true }).click();
+    await expect(panel.getByRole('button', { name: 'Update preview', exact: true })).toBeEnabled({ timeout: 90_000 });
+    const input = panel.getByRole('textbox', { name: 'Chat message input' });
+    await input.fill('Rewrite the report'); await input.press('Enter');
+    const proposal = panel.getByRole('region', { name: 'Proposed report changes' });
+    const progress = panel.getByRole('status', { name: 'Agent progress' });
+    if (ending === 'incomplete' || ending === 'invalid') {
+      await expect(progress).toContainText(ending === 'incomplete' ? 'characters received' : 'Proposal needs correction');
+      await page.evaluate(() => (window as any).__interruptProposal());
+      await expect(panel.getByRole('alert')).toBeVisible();
+      await expect(proposal).toHaveCount(0);
+      await expect(panel.getByRole('button', { name: 'Retry request' })).toBeEnabled();
+    } else {
+      await expect(proposal.getByRole('button', { name: 'Apply and preview' })).toBeEnabled();
+      await expect(progress).toBeVisible();
+      await expect(panel.getByRole('textbox', { name: 'Report title' })).toHaveValue('Untitled report');
+      if (ending === 'follow-up') await expect.poll(() => page.evaluate(() => Boolean((window as any).__proposalFollowUp))).toBe(true);
+      if (ending === 'disconnect') {
+        await page.evaluate(() => (window as any).__interruptProposal());
+        await expect(panel.getByRole('alert')).toBeVisible();
+      }
+      if (ending === 'stop') {
+        await panel.getByRole('button', { name: 'Stop generation' }).click();
+        await expect(panel.getByRole('log')).toContainText('Completed proposals are still available');
+      }
+      await expect(proposal.getByRole('button', { name: 'Apply and preview' })).toBeEnabled();
+      if (ending === 'apply') {
+        await panel.getByRole('textbox', { name: 'Report title' }).fill('My newer draft');
+        await expect(proposal.getByRole('button', { name: 'Apply and preview' })).toBeDisabled();
+        await panel.getByRole('textbox', { name: 'Report title' }).fill('Untitled report');
+        await input.fill('Also add a chart'); await input.press('Enter');
+        await expect(panel.getByRole('log')).toContainText('Queued');
+      }
+      if (ending === 'discard') {
+        await proposal.getByRole('button', { name: 'Discard', exact: true }).click();
+        await expect(proposal).toContainText('Discarded');
+        await expect(panel.getByRole('textbox', { name: 'Report title' })).toHaveValue('Untitled report');
+      } else {
+        await proposal.getByRole('button', { name: 'Apply and preview' }).click();
+        await expect(panel.getByRole('textbox', { name: 'Report title' })).toHaveValue('Reviewable report');
+        await expect(proposal).toContainText('Applied and');
+      }
+      if (ending === 'apply') await expect(input).toHaveValue('Also add a chart');
+    }
+    await expect(progress).toHaveCount(0);
+    if (ending !== 'disconnect' && ending !== 'incomplete' && ending !== 'invalid') {
+      expect(await page.evaluate(() => (window as any).__proposalStreamCancelled)).toBe(true);
+    }
+  });
+}
+
 test('report agent grounds tools, reviews edits, protects newer drafts and shares the preview engine', async ({ page }) => {
   test.setTimeout(180_000);
   const errors: string[] = [];
@@ -46,6 +135,7 @@ test('report agent grounds tools, reviews edits, protects newer drafts and share
   const review = panel.getByRole('log').getByRole('region', { name: 'Proposed report changes' }).last();
   await expect(review).toBeVisible({ timeout: 30_000 });
   await expect(review.getByRole('button', { name: 'Apply and preview' })).toBeEnabled();
+  await expect(panel.getByRole('status', { name: 'Agent progress' })).toHaveCount(0);
   expect(requests[0].tools.map((t: any) => t.name)).toEqual(expect.arrayContaining(['get_report', 'list_components', 'get_component', 'propose_report_edit', 'compile_semantic_query', 'list_catalogs']));
   const referenceResult = requests[2].messages.at(-1).content[0].content;
   expect(referenceResult).toContain('attributes');
@@ -61,6 +151,7 @@ test('report agent grounds tools, reviews edits, protects newer drafts and share
   await review.getByRole('button', { name: 'Discard', exact: true }).click();
   await input.fill('Revise against my current draft'); await input.press('Enter');
   await expect(review.getByRole('button', { name: 'Apply and preview' })).toBeEnabled();
+  await expect(panel.getByRole('status', { name: 'Agent progress' })).toHaveCount(0);
   expect(JSON.stringify(requests[4].messages)).toContain('Manual edit');
   await review.getByRole('button', { name: 'Apply and preview' }).click();
   await expect(panel.getByRole('textbox', { name: 'Report title' })).toHaveValue('Agent overview');

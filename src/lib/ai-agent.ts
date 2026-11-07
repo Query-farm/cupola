@@ -148,6 +148,10 @@ export interface AgentCallbacks {
    *  surface that clears its indicator on the first text delta would otherwise
    *  show nothing at all for the duration. */
   onToolInputStart?: (name: string) => void;
+  /** A complete, parseable tool input, before the rest of the response finishes.
+   *  For staging review UI only: tools must still execute through executeTool
+   *  after the response completes. Incomplete inputs never reach this callback. */
+  onToolInputComplete?: (name: string, input: any) => void | Promise<void>;
   /** Streamed thinking text. Supplying it asks for `display: "summarized"`, so the
    *  model's reasoning arrives as a readable summary; without it, thinking stays
    *  `"omitted"` (blocks with no text) and nothing extra streams. */
@@ -791,27 +795,37 @@ async function* parseSSEStream(
 ): AsyncGenerator<any> {
   const decoder = new TextDecoder();
   let buffer = "";
+  // Explicitly cancel a pending read on Stop, including streams whose transport
+  // does not propagate the fetch signal to the reader.
+  const cancel = () => { void reader.cancel().catch(() => {}); };
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    while (true) {
+      if (signal?.aborted) return;
+      const { done, value } = await reader.read();
+      if (done) break;
 
-  while (true) {
-    if (signal?.aborted) return;
-    const { done, value } = await reader.read();
-    if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop()!;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop()!;
-
-    for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        const data = line.slice(6).trim();
-        if (data === "[DONE]") return;
-        try {
-          yield JSON.parse(data);
-        } catch (e) {
-          console.warn("SSE parse error:", data.slice(0, 200), e);
+      for (const line of lines) {
+        if (signal?.aborted) return;
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6).trim();
+          if (data === "[DONE]") return;
+          try {
+            yield JSON.parse(data);
+          } catch (e) {
+            console.warn("SSE parse error:", data.slice(0, 200), e);
+          }
         }
       }
     }
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+    cancel();
+    reader.releaseLock();
   }
 }
 
@@ -1050,7 +1064,11 @@ async function streamOneRequestInner(
           // non-empty payload that won't parse yields the __parseError
           // sentinel so the dispatch loop returns a self-correctable error
           // (a silent {} would run a tool with undefined arguments).
-          currentBlock.input = parseStreamedToolInput(currentToolInput).input;
+          const parsed = parseStreamedToolInput(currentToolInput);
+          currentBlock.input = parsed.input;
+          if (!parsed.parseError && !signal?.aborted) {
+            await callbacks.onToolInputComplete?.(currentBlock.name!, currentBlock.input);
+          }
         }
         content.push(currentBlock);
         currentBlock = null;
@@ -1059,6 +1077,9 @@ async function streamOneRequestInner(
       streamComplete ||= Boolean(event.delta?.stop_reason);
       stopReason = event.delta?.stop_reason || stopReason;
       if (event.usage?.output_tokens) outputTokens = event.usage.output_tokens;
+    } else if (event.type === "message_stop") {
+      // The provider has finished. Don't keep approval UI waiting for HTTP EOF.
+      break;
     }
   }
 
@@ -1237,7 +1258,7 @@ async function runAgentTurnInner(
     messages.push({ role: "assistant", content });
 
     // Gate on the PRESENCE of tool_use blocks, NOT on stopReason. A response
-    // can stop with stopReason "max_tokens" (we cap max_tokens at 4096) or
+    // can stop with stopReason "max_tokens" (the configured output cap) or
     // "pause_turn" while still carrying a complete tool_use block. If we keyed
     // off stopReason === "tool_use" and skipped execution, that tool_use would
     // be left without a tool_result and EVERY later request would 400 with
@@ -1302,7 +1323,10 @@ async function runAgentTurnInner(
       callbacks.onToolCall(block.name, block.input);
       if (block.input && typeof block.input === "object" && "__parseError" in block.input) {
         const raw = String(block.input.__parseError ?? "");
-        const errMsg = `Tool input was not valid JSON. Raw partial input: ${raw.slice(0, 500)}`;
+        const errMsg = request.stopReason === 'max_tokens'
+          ? 'The response reached its output token limit before the tool input was complete. Retry with a smaller input.' +
+            (block.name === 'propose_report_edit' ? ' Use sourceEdits or setupSqlEdits for targeted changes instead of repeating the whole report; propose a smaller coherent edit if necessary.' : '')
+          : `Tool input was not valid JSON. Raw partial input: ${raw.slice(0, 500)}`;
         callbacks.onToolResult(block.name, `Error: ${errMsg}`);
         toolResults.push({
           type: "tool_result",

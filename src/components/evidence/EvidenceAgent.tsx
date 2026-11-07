@@ -29,7 +29,7 @@ import { isReadOnlySql, testSetupSql } from '../../lib/evidence/setup-test';
 import type { EvidenceIssue } from '../../lib/evidence/editor-support';
 import { describeIssues, introducedIssues, sourceValidationIssues } from '../../lib/evidence/source-check';
 
-type ProposalState = 'pending' | 'applied' | 'discarded' | 'superseded' | 'undone' | 'stopped';
+type ProposalState = 'pending' | 'applied' | 'discarded' | 'superseded' | 'undone';
 /** `preview`: once an applied proposal's preview is on screen, the parts of the report it changed. */
 type Message = { id: string; role: 'user' | 'assistant'; text: string; attachments?: AttachmentSummary[]; proposal?: ReportProposal; state?: ProposalState; blocks?: ContentBlock[]; queued?: boolean; preview?: RevealedChanges | 'failed' };
 type Request = { text: string; attachments: AiAttachment[] };
@@ -140,6 +140,41 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
       setError(message); setRetryRequest(activeRequest.current); progress('Request stopped before completion');
       setMessages(previous => previous.map(m => m.id === assistantId ? { ...m, blocks: [...(m.blocks || []), { type: 'text', id: uid(), content: 'The request was interrupted. No changes were applied by this request.' }] } : m));
     };
+    // A completed input can be reviewed before the stream ends. Reuse its
+    // validation result when normal tool dispatch reaches the same input, so
+    // it cannot stage twice or reset a proposal the user already reviewed.
+    const preparedProposals = new Map<unknown, Promise<string>>();
+    const prepareProposal = (input: unknown): Promise<string> => {
+      const prepared = preparedProposals.get(input);
+      if (prepared) return prepared;
+      const result = (async () => {
+        try {
+          const next = createReportProposal(snapshot, input);
+          if (queryMode === 'semantic-only' &&
+            (next.after.setupSql !== snapshot.setupSql || JSON.stringify(sourceQueries(next.after.source)) !== JSON.stringify(sourceQueries(snapshot.source)))) {
+            throw new Error('Semantic-only mode does not allow creating or modifying raw SQL. Use semanticDatasets and reference them directly in Evidence components.');
+          }
+          let checked = '', warnings = '';
+          if (next.fields.includes('source')) {
+            // Only new problems block staging: a broken report can still be edited.
+            const introduced = await sourceValidationIssues(next.after.source)
+              .then(async after => introducedIssues(await sourceValidationIssues(snapshot.source), after))
+              .then(issues => { checked = ' Its source passed Evidence\'s structural validation (tags, attributes, nesting), but data references and query errors show only in the preview.'; return issues; })
+              .catch(e => { console.warn('[evidence agent] source validation unavailable', e); return []; });
+            const errors = introduced.filter(issue => issue.severity === 'error');
+            if (errors.length) throw new Error(`The proposal was not staged: Evidence validation found ${errors.length === 1 ? 'an error' : `${errors.length} errors`} this edit introduces into the source. Fix ${errors.length === 1 ? 'it' : 'them'} and propose again.\n${describeIssues(errors)}`);
+            const found = introduced.filter(issue => issue.severity === 'warning');
+            if (found.length) warnings = `\nEvidence validation warnings this edit introduces (staged anyway; fix them if they matter):\n${describeIssues(found)}`;
+          }
+          if (active()) setMessages(previous => previous.map(m => m.id === assistantId ? { ...m, proposal: next, state: 'pending' } : m.state === 'pending' ? { ...m, state: 'superseded' } : m));
+          return 'Proposal staged for review. It has NOT been applied, executed, rendered, or saved.' + checked + warnings;
+        } catch (e) {
+          return `Error: ${e instanceof Error ? e.message : String(e)}`;
+        }
+      })();
+      preparedProposals.set(input, result);
+      return result;
+    };
     try {
       await runAgentTurn(
         { apiKey: config.anthropicApiKey, workspaceId: config.anthropicWorkspaceId || '' },
@@ -170,28 +205,7 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
               if (typeof input?.name !== 'string') throw new Error('Component name is required.');
               return JSON.stringify(await componentReference(input.name));
             }
-            if (name === 'propose_report_edit') {
-              const next = createReportProposal(snapshot, input);
-              if (normalizeAIQueryMode(config.aiQueryMode) === 'semantic-only' &&
-                (next.after.setupSql !== snapshot.setupSql || JSON.stringify(sourceQueries(next.after.source)) !== JSON.stringify(sourceQueries(snapshot.source)))) {
-                throw new Error('Semantic-only mode does not allow creating or modifying raw SQL. Use semanticDatasets and reference them directly in Evidence components.');
-              }
-              let checked = '', warnings = '';
-              if (next.fields.includes('source')) {
-                // Catch a broken document before the user applies it, not after. Only what this
-                // edit introduces counts: a report that was already broken can still be edited.
-                const introduced = await sourceValidationIssues(next.after.source)
-                  .then(async after => introducedIssues(await sourceValidationIssues(snapshot.source), after))
-                  .then(issues => { checked = ' Its source passed Evidence\'s structural validation (tags, attributes, nesting), but data references and query errors show only in the preview.'; return issues; })
-                  .catch(e => { console.warn('[evidence agent] source validation unavailable', e); return []; });
-                const errors = introduced.filter(issue => issue.severity === 'error');
-                if (errors.length) throw new Error(`The proposal was not staged: Evidence validation found ${errors.length === 1 ? 'an error' : `${errors.length} errors`} this edit introduces into the source. Fix ${errors.length === 1 ? 'it' : 'them'} and propose again.\n${describeIssues(errors)}`);
-                const found = introduced.filter(issue => issue.severity === 'warning');
-                if (found.length) warnings = `\nEvidence validation warnings this edit introduces (staged anyway; fix them if they matter):\n${describeIssues(found)}`;
-              }
-              if (active()) setMessages(previous => previous.map(m => m.id === assistantId ? { ...m, proposal: next, state: 'pending' } : m.state === 'pending' ? { ...m, state: 'superseded' } : m));
-              return 'Proposal staged for review. It has NOT been applied, executed, rendered, or saved.' + checked + warnings;
-            }
+            if (name === 'propose_report_edit') return await prepareProposal(input);
             return 'Error: Unknown report tool';
           } catch (e) {
             if (controller.signal.aborted || (e as { fatal?: boolean })?.fatal) throw e;
@@ -233,6 +247,12 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
             return { ...m, blocks };
           })); },
           onToolInputStart: name => { if (active()) { setReceived(0); progress(toolInputLabel(name) + '…'); } },
+          onToolInputComplete: async (name, input) => {
+            if (name !== 'propose_report_edit' || !active()) return;
+            progress('Checking proposed report changes…');
+            const result = await prepareProposal(input);
+            progress(result.startsWith('Error:') ? 'Proposal needs correction…' : 'Proposal ready to review · finishing the response…');
+          },
           onToolCall: (name, input) => {
             if (!active()) return;
             setReceived(0); progress(toolActivityLabel(name, input) + '…');
@@ -274,12 +294,14 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
   function stop() {
     returnQueued();
     abort.current?.abort(); setRetryRequest(activeRequest.current);
-    setMessages(previous => [...previous.map(m => m.id === activeMessage.current && m.state === 'pending' ? { ...m, state: 'stopped' as const } : m), { id: uid(), role: 'assistant', text: 'Generation stopped. Your report has not changed.' }]);
+    setMessages(previous => [...previous, { id: uid(), role: 'assistant', text: 'Generation stopped. Your report has not changed.' + (previous.some(m => m.state === 'pending') ? ' Completed proposals are still available to review and apply.' : '') }]);
   }
   async function apply(message: Message) {
-    if (!message.proposal || busy || applying || previewBusy) return;
+    if (!message.proposal || message.state !== 'pending' || applying || previewBusy) return;
     try {
       const next = applyReportProposal(latest.current, message.proposal);
+      returnQueued();
+      abort.current?.abort(); setRetryRequest(null);
       setApplying(true); setError('');
       onChange(next);
       onProposal?.({ type: 'applied', id: message.id, proposal: message.proposal });
@@ -324,8 +346,9 @@ export function EvidenceAgent({ report, onChange, issues, stale, onApplyPreview,
       {proposal.fields.map(field => <details key={field}><summary className="cursor-pointer text-xs font-medium">Review {fieldLabel[field].toLowerCase()} changes</summary><div className="mt-2 grid gap-2"><div><h4 className="text-xs">Before</h4><pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2 text-xs">{printable(proposal.before[field]) || '(empty)'}</pre></div><div><h4 className="text-xs">After</h4><pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded border border-primary/30 p-2 text-xs">{printable(proposal.after[field]) || '(empty)'}</pre></div></div></details>)}
       {m.state === 'pending' ? <>
         {outdated && <p role="alert" className="text-xs text-destructive">Your draft changed. Ask me to revise this proposal before applying it.</p>}
-        <div className="flex flex-wrap gap-2"><Button size="sm" disabled={locked || outdated} onClick={() => void apply(m)}>Apply and preview</Button><Button size="sm" variant="ghost" disabled={locked} onClick={() => setMessages(previous => previous.map(item => item.id === m.id ? { ...item, state: 'discarded' } : item))}>Discard</Button></div>
-      </> : m.state === 'applied' ? appliedNote(m) : <p className="text-xs text-muted-foreground">{({ discarded: 'Discarded · your report was not changed.', superseded: 'Replaced by your follow-up request.', undone: 'Undone · previous draft restored.', stopped: 'Stopped · your report was not changed.' } as Record<string, string>)[m.state!]}</p>}
+        {busy && <p className="text-xs text-muted-foreground">These changes are ready to review. Applying or discarding them stops the remaining response.</p>}
+        <div className="flex flex-wrap gap-2"><Button size="sm" disabled={applying || previewBusy || outdated} onClick={() => void apply(m)}>Apply and preview</Button><Button size="sm" variant="ghost" disabled={applying || previewBusy} onClick={() => { returnQueued(); abort.current?.abort(); setRetryRequest(null); setMessages(previous => previous.map(item => item.id === m.id ? { ...item, state: 'discarded' } : item)); }}>Discard</Button></div>
+      </> : m.state === 'applied' ? appliedNote(m) : <p className="text-xs text-muted-foreground">{({ discarded: 'Discarded · your report was not changed.', superseded: 'Replaced by your follow-up request.', undone: 'Undone · previous draft restored.' } as Record<string, string>)[m.state!]}</p>}
       {m.state === 'applied' && undo?.id === m.id && <Button size="sm" variant="outline" disabled={locked || reportFingerprint(report) !== reportFingerprint(proposal.after)} onClick={() => void undoEdit()}>Undo last agent edit</Button>}
     </section>;
   }

@@ -169,3 +169,94 @@ test('provider errors within a successful HTTP stream are surfaced', async () =>
   globalThis.fetch = (async () => sseStream([{ type: 'error', error: { message: 'Overloaded' } }])) as unknown as typeof fetch;
   await expect(runAgentTurn({ apiKey: 'key' }, 'claude-sonnet-4-6', [{ role: 'user', content: 'hi' }], 'system', async () => 'ok', recorder().callbacks)).rejects.toThrow('AI stream error: Overloaded');
 });
+
+test('complete tool inputs can be reviewed before EOF and survive a later stream error without executing', async () => {
+  const input = { summary: 'Rewrite the report', changes: { source: '# Report\n\n' + 'A long report section.\n'.repeat(10_000) } };
+  const raw = JSON.stringify(input);
+  const events = [
+    { type: 'content_block_start', content_block: { type: 'tool_use', id: 'proposal', name: 'propose_report_edit' } },
+    ...Array.from({ length: Math.ceil(raw.length / 1024) }, (_, i) => ({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: raw.slice(i * 1024, (i + 1) * 1024) } })),
+    { type: 'content_block_stop' },
+    { type: 'error', error: { message: 'Timed out' } },
+  ];
+  globalThis.fetch = (async () => sseStream(events)) as unknown as typeof fetch;
+  const reviewed: unknown[] = [];
+  let executions = 0;
+  await expect(runAgentTurn({ apiKey: 'key' }, 'claude-sonnet-4-6', [{ role: 'user', content: 'Rewrite' }], 'system', async () => { executions++; return 'ok'; }, {
+    ...recorder().callbacks,
+    onToolInputComplete: (name, value) => { reviewed.push({ name, input: value }); },
+  })).rejects.toThrow('Timed out');
+  expect(reviewed).toEqual([{ name: 'propose_report_edit', input }]);
+  expect(executions).toBe(0);
+});
+
+test('a partial JSON input is never offered for review, even when its block stops', async () => {
+  const events = textThenToolUse('SELECT 1');
+  events.splice(5, 1); // Only the opening JSON fragment remains.
+  globalThis.fetch = (async () => sseStream(events.slice(0, -1))) as unknown as typeof fetch;
+  const reviewed: unknown[] = [];
+  await expect(runAgentTurn({ apiKey: 'key' }, 'claude-sonnet-4-6', [{ role: 'user', content: 'hi' }], 'system', async () => 'ok', {
+    ...recorder().callbacks, onToolInputComplete: (_name, input) => { reviewed.push(input); },
+  })).rejects.toThrow('before the AI response finished');
+  expect(reviewed).toEqual([]);
+});
+
+test('review callbacks preserve input identity for normal dispatch and do not execute tools early', async () => {
+  const responses = [sseStream(textThenToolUse('SELECT 1')), sseStream(endTurn)];
+  globalThis.fetch = (async () => responses.shift()!) as unknown as typeof fetch;
+  let reviewed: unknown;
+  let executions = 0;
+  await runAgentTurn({ apiKey: 'key' }, 'claude-sonnet-4-6', [{ role: 'user', content: 'hi' }], 'system', async (_name, input) => {
+    expect(input).toBe(reviewed); executions++; return 'ok';
+  }, {
+    ...recorder().callbacks, onToolInputComplete: (_name, input) => { expect(executions).toBe(0); reviewed = input; },
+  });
+  expect(executions).toBe(1);
+});
+
+test('stopping a stalled reader cancels it promptly without transport abort support', async () => {
+  let connected!: () => void;
+  const ready = new Promise<void>(resolve => { connected = resolve; });
+  let cancelled = false;
+  globalThis.fetch = (async () => new Response(new ReadableStream({ cancel() { cancelled = true; } }))) as unknown as typeof fetch;
+  const abort = new AbortController();
+  const turn = runAgentTurn({ apiKey: 'key' }, 'claude-sonnet-4-6', [{ role: 'user', content: 'hi' }], 'system', async () => 'ok', {
+    ...recorder().callbacks, onProgress: event => { if (event.stage === 'connected') connected(); },
+  }, abort.signal);
+  await ready;
+  abort.abort();
+  await expect(turn).rejects.toThrow('Aborted');
+  expect(cancelled).toBe(true);
+});
+
+test('message_stop finishes a response even if its HTTP stream stays open', async () => {
+  let cancelled = false;
+  globalThis.fetch = (async () => new Response(new ReadableStream({
+    async start(controller) {
+      controller.enqueue(new TextEncoder().encode(await sseStream([...endTurn, { type: 'message_stop' }]).text()));
+    },
+    cancel() { cancelled = true; },
+  }))) as unknown as typeof fetch;
+  const { callbacks, trace } = recorder();
+  await runAgentTurn({ apiKey: 'key' }, 'claude-sonnet-4-6', [{ role: 'user', content: 'hi' }], 'system', async () => 'ok', callbacks);
+  expect(trace).toContain('done');
+  expect(cancelled).toBe(true);
+});
+
+test('an edit cut off by the output limit asks for a smaller targeted proposal', async () => {
+  const responses = [sseStream([
+    { type: 'content_block_start', content_block: { type: 'tool_use', id: 'proposal', name: 'propose_report_edit' } },
+    { type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: '{"summary":"Rewrite","changes":{"source":"' } },
+    { type: 'content_block_stop' },
+    { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 100 } },
+  ]), sseStream(endTurn)];
+  const requests: any[] = [];
+  globalThis.fetch = (async (_url: unknown, init: RequestInit) => { requests.push(JSON.parse(String(init.body))); return responses.shift()!; }) as unknown as typeof fetch;
+  let executed = false;
+  await runAgentTurn({ apiKey: 'key' }, 'claude-sonnet-4-6', [{ role: 'user', content: 'Rewrite' }], 'system', async () => { executed = true; return 'ok'; }, recorder().callbacks);
+  const result = requests[1].messages.at(-1).content[0];
+  expect(result.is_error).toBe(true);
+  expect(result.content).toContain('output token limit');
+  expect(result.content).toContain('sourceEdits');
+  expect(executed).toBe(false);
+});
